@@ -120,8 +120,9 @@ Rules
 V3_RULES = """
 
 Working efficiently
-- When you need several independent facts (file ranges, greps, versions, listings), get them in ONE bash_many call \
-instead of one command per step.
+- When you need several independent facts, ask for them in the same turn: several read_file, grep, glob or fetch \
+calls in one message run at the same time, and bash_many runs several shell commands in one call. One fact per turn \
+is the slowest way to work.
 - For any request with more than one step, list its concrete requirements and your steps with todo_write first, and \
 mark items completed as you go. Before you end your turn, every item should be completed, or say why it is not."""
 
@@ -543,6 +544,29 @@ def _drop_images(messages: list, keep: int = 0) -> None:
                 m["content"] = new
 
 
+# Built-in tools that only read: when the model asks for several at once they run at the same time (a turn with five
+# file reads and two greps takes as long as the slowest, not the sum). Edits, commands and MCP tools keep their order.
+PARALLEL_SAFE = {"read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "diagnostics", "find_skill",
+                 "use_skill"}
+PARALLEL = os.environ.get("MH_PARALLEL_TOOLS", "1") != "0"
+
+
+def _batches(calls: list) -> list:
+    """Consecutive read-only calls grouped together; everything else on its own, in order."""
+    out, run = [], []
+    for c in calls:
+        if PARALLEL and (c.get("function") or {}).get("name") in PARALLEL_SAFE:
+            run.append(c)
+            continue
+        if run:
+            out.append(run)
+            run = []
+        out.append([c])
+    if run:
+        out.append(run)
+    return out
+
+
 # Fields a model may refuse with HTTP 400 ("does not support the `temperature` field", "Unsupported parameter:
 # 'max_tokens'..."). The fix is known for each: drop it, or swap max_tokens for max_completion_tokens. What a model
 # refused is remembered for the process, so the next request is right the first time. (Same class of problem as
@@ -933,12 +957,18 @@ class Agent:
                     break
                 said = ""
                 shots = []
-                for c in calls:
+                for batch in _batches(calls):
                     self._check_stop()
-                    out = self._run_tool(c, cut=c["id"] in cut)
-                    self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                    if len(batch) > 1:               # independent lookups: run together, answer in the asked order
+                        from concurrent.futures import ThreadPoolExecutor
+                        with ThreadPoolExecutor(max_workers=min(6, len(batch))) as ex:
+                            outs = list(ex.map(lambda c: self._run_tool(c, cut=c["id"] in cut), batch))
+                    else:
+                        outs = [self._run_tool(batch[0], cut=batch[0]["id"] in cut)]
+                    for c, out in zip(batch, outs):
+                        self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
-                        shots += [(c.get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
+                        shots += [(batch[-1].get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)

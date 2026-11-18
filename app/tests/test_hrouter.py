@@ -389,3 +389,42 @@ def test_no_receipt_without_changes(tmp_path, monkeypatch):
     from meshpool_harness import run_task
     _scripted(monkeypatch, [{"role": "assistant", "content": "Canberra."}])
     assert run_task("capital of Australia?", workdir=str(tmp_path), engine="agent-work")["answer"] == "Canberra."
+
+
+def test_independent_reads_run_together_and_answer_in_order(tmp_path, monkeypatch):
+    import time as _t
+    from meshpool_harness import run_task
+    from meshpool_harness.core.tools import Workspace
+    for n in "abc":
+        (tmp_path / f"{n}.txt").write_text(n * 3)
+    real = Workspace.read_file
+
+    def slow(self, path, start=None, end=None):
+        _t.sleep(0.4)
+        return real(self, path, start, end)
+    monkeypatch.setattr(Workspace, "read_file", slow)
+    calls = {"role": "assistant", "content": "", "tool_calls": [
+        {"id": f"c{n}", "type": "function", "function": {"name": "read_file", "arguments": json.dumps({"path": f"{n}.txt"})}}
+        for n in "abc"]}
+    seen = {}
+
+    def capture(self, turn):
+        if "msgs" not in seen:
+            seen["msgs"] = True
+            return calls, False
+        seen["tools"] = [m for m in self.messages if m.get("role") == "tool"]
+        return {"role": "assistant", "content": "ok"}, False
+    from meshpool_harness.agent import core as A
+    monkeypatch.setattr(A.Agent, "_chat", capture)
+    t0 = _t.time()
+    run_task("read them", workdir=str(tmp_path), engine="agent")
+    assert _t.time() - t0 < 1.0                                            # 3 x 0.4 s sequentially would be 1.2 s
+    assert [m["tool_call_id"] for m in seen["tools"]] == ["ca", "cb", "cc"]
+    assert "aaa" in seen["tools"][0]["content"] and "ccc" in seen["tools"][2]["content"]
+
+
+def test_edits_and_commands_keep_their_order():
+    from meshpool_harness.agent.core import _batches
+    c = lambda n, i: {"id": i, "function": {"name": n}}   # noqa: E731
+    b = _batches([c("read_file", 1), c("grep", 2), c("edit", 3), c("read_file", 4), c("bash", 5), c("bash", 6)])
+    assert [[x["id"] for x in g] for g in b] == [[1, 2], [3], [4], [5], [6]]
