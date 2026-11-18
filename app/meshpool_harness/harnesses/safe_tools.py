@@ -5,6 +5,7 @@ from __future__ import annotations
 SAFE_MCP = frozenset({
     "mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
     "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__memory_save",
+    "mcp__meshpool_assistant__project_note",
     # memory_forget and schedule_task ask in Supervised: one deletes, the other starts runs later on its own
     "mcp__meshpool_assistant__list_scheduled_tasks", "mcp__meshpool_assistant__search_chats",
     "mcp__meshpool_assistant__run_subtasks", "mcp__meshpool_office__read_document",

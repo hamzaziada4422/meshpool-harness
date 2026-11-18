@@ -891,6 +891,10 @@ class Agent:
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 cut = {calls[i]["id"] for i in cut}
                 content = msg.get("content") or ""
+                self._scrubber = None                  # the next reply starts a fresh stream scrubber
+                if "<memory-context>" in content:
+                    from meshpool_harness.assistant import scrub
+                    content = scrub(content)
                 keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
                 if calls:
                     keep["tool_calls"] = calls
@@ -1040,6 +1044,16 @@ class Agent:
         self.messages.append({"role": "user", "content": parts})
 
     # ---------- model ------------------------------------------------------------------------------------------
+    def _delta(self, t: str):
+        """Stream reply text, without any recalled-memory block the model echoed (assistant.scrub)."""
+        sc = getattr(self, "_scrubber", None)
+        if sc is None:
+            from meshpool_harness.assistant import StreamScrubber
+            sc = self._scrubber = StreamScrubber()
+        t = sc.feed(t)
+        if t:
+            self.emit({"type": "text_delta", "text": t})
+
     def _check_stop(self):
         if self._stop:
             raise Interrupted()
@@ -1117,7 +1131,7 @@ class Agent:
                     def on_text(t):
                         nonlocal streamed
                         streamed = True
-                        self.emit({"type": "text_delta", "text": t})
+                        self._delta(t)
                     resp = from_responses(self._wait(CG.chat, body, task_id=self.id, on_text=on_text,
                                                      idle=int(os.environ.get("MH_AGENT_IDLE_S", "120"))))
                 elif wire == "responses":
@@ -1468,7 +1482,7 @@ class Agent:
                                     t = (ch.get("delta") or {}).get("content")
                                     if t:
                                         got_text = True
-                                        self.emit({"type": "text_delta", "text": t})
+                                        self._delta(t)
                             except ValueError:
                                 pass
                         yield raw

@@ -282,3 +282,39 @@ def test_the_agent_says_so_instead_of_a_codec_error(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     r = run_task("hello", workdir=str(tmp_path), engine="agent-work")
     assert "masked" in (r.get("error") or ""), r
+
+
+# ---------- memory v2 ----------------------------------------------------------------------------------------------
+def test_recall_keeps_core_facts_and_picks_the_relevant_ones(tmp_path, monkeypatch):
+    from meshpool_harness import assistant as AS
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    facts = ["My name is Hamza and I work at Meshpool.", "I prefer short answers."] + [
+        f"Client {i} uses Salesforce for pipeline {i}." for i in range(80)] + ["Our pricing page lists three tiers."]
+    AS.set_memory("\n".join(facts))
+    got = AS.recall("update the pricing tiers copy", limit=400)
+    assert "My name is Hamza" in got and "short answers" in got and "pricing page" in got
+    assert "Client 5 " not in got and len(got) <= 400
+
+
+def test_project_memory_lives_outside_the_project(tmp_path, monkeypatch):
+    from meshpool_harness import assistant as AS
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    assert "Saved" in AS.remember_project(str(proj), "Run the tests with make test.")
+    assert "Already" in AS.remember_project(str(proj), "run the tests with make test.")
+    assert AS.project_memory(str(proj)) == "Run the tests with make test."
+    assert not any(proj.iterdir())
+    block = AS.context_block("fix the failing test", str(proj))
+    assert "<memory-context>" in block and "make test" in block
+
+
+def test_scrub_removes_memory_blocks_even_when_split_across_deltas():
+    from meshpool_harness import assistant as AS
+    text = "Sure.\n<memory-context>\nsecret-ish fact\n</memory-context>\nThe answer is 4."
+    assert AS.scrub(text) == "Sure.\nThe answer is 4." or "fact" not in AS.scrub(text)
+    sc, out = AS.StreamScrubber(), ""
+    for i in range(0, len(text), 3):
+        out += sc.feed(text[i:i + 3])
+    out += sc.flush()
+    assert "fact" not in out and "memory-context" not in out and "The answer is 4." in out and out.startswith("Sure.")

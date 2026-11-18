@@ -592,7 +592,7 @@ class Session:
                     self.ctx_pending = False
                     try:
                         from meshpool_harness import assistant as AS
-                        body += "\n\n\u200b" + AS.context_block()
+                        body += "\n\n\u200b" + AS.context_block(text, self.workdir)
                     except Exception:  # noqa: BLE001
                         pass
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
