@@ -80,7 +80,7 @@ def test_model_call_only_when_unsure():
 def test_addon_carries_method_and_language_pack():
     r = route("fix this: SyntaxError: invalid syntax in app.py", kind="code")
     text = addon(r)
-    assert "[Harness: Debug · Python]" in text and "Reproduce first" in text and "pytest" in text
+    assert "[Harness: Debug · Python]" in text and "Reproduce" in text and "pytest" in text
 
 
 # ---------- diagnostics ----------------------------------------------------------------------------------------------
@@ -188,3 +188,25 @@ def test_outcomes_log_and_refit(tmp_path, monkeypatch):
     OUT.mark("c1", "undo")
     got = OUT.refit()["chat|meshpool-work"]
     assert got["turns"] == 3 and got["fail_rate"] == 1.0 and got["median_secs"] == 5
+
+
+# ---------- zero-call checks ---------------------------------------------------------------------------------------
+def test_quick_check_flags_a_broken_edit_and_stays_quiet_on_a_clean_one(tmp_path):
+    ws = _ws(tmp_path)
+    ws.write_file("a.py", "def f(x)\n    return x\n")
+    assert "a.py:1:" in packs.quick_check(ws, "a.py") and "expected ':'" in packs.quick_check(ws, "a.py")
+    ws.write_file("b.py", "import os\n\nx = 1\n")
+    assert packs.quick_check(ws, "b.py") == ""          # an unused import is not worth a mid-edit warning
+    ws.write_file("c.json", '{"a": 1,}')
+    assert "JSONDecodeError" in packs.quick_check(ws, "c.json")
+    assert packs.quick_check(ws, "notes.md") == ""
+
+
+def test_reproduce_runs_the_named_command_only_when_its_file_exists(tmp_path):
+    (tmp_path / "test_x.py").write_text("assert 1 == 2, 'boom'\n")
+    ws = _ws(tmp_path)
+    assert packs.repro_commands("test_x.py fails, fix it", tmp_path)[0].endswith("test_x.py")
+    assert packs.repro_commands("run `python missing.py`", tmp_path) == []
+    assert packs.repro_commands("`rm -rf / && python test_x.py`", tmp_path) == [packs.repro_commands("test_x.py", tmp_path)[0]]
+    out = packs.reproduce(ws, "test_x.py fails")
+    assert "<reproduction>" in out and "boom" in out and "[exit 1]" in out

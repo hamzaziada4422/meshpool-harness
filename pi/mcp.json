@@ -1,0 +1,27 @@
+{
+ "mcpServers": {
+  "meshpool-office": {
+   "command": "/Users/hamzaziada/.venvs/meshpool/bin/python",
+   "args": [
+    "-m",
+    "meshpool_harness.agent.office_mcp_server"
+   ],
+   "env": {
+    "PYTHONPATH": "/Users/hamzaziada/Downloads/meshpool-harness/app",
+    "MESHPOOL_PROJECT": "/private/var/folders/qg/54q_fdcn38b5nfpqkszqhtnm0000gn/T/mhloop-dbg-py-regression-b6fva4io",
+    "MESHPOOL_HOME": "/Users/hamzaziada/Downloads/meshpool-harness",
+    "MESHPOOL_CONFIG": "/Users/hamzaziada/Downloads/meshpool-harness/meshpool.config",
+    "PYTHONUTF8": "1",
+    "PYTHONIOENCODING": "utf-8",
+    "MESHPOOL_API_KEY": "test-key-1234",
+    "MESHPOOL_BASE_URL": "http://127.0.0.1:18765/v1",
+    "MH_MODEL": "deepseek-v4.1-flash",
+    "PATH": "/Users/hamzaziada/.pi/agent/bin:/Users/hamzaziada/.local/share/o11-wallet/bin:/Users/hamzaziada/.bun/bin:/Users/hamzaziada/.bun/bin:/Users/hamzaziada/.openclaw/bin:/Users/hamzaziada/.openclaw/tmp/agent-cli:/Users/hamzaziada/.local/bin:/Users/hamzaziada/.openclaw/bin:/Users/hamzaziada/.local/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Users/hamzaziada/.openclaw/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/opt/homebrew/bin",
+    "PYTHONDONTWRITEBYTECODE": "1"
+   },
+   "timeout": 300,
+   "exposure": "direct"
+  }
+ },
+ "autoEnableCodemode": false
+}

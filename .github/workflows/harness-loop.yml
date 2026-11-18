@@ -43,7 +43,7 @@ permissions:
 jobs:
   loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 150
     env:
       MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
       MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
@@ -81,6 +81,9 @@ jobs:
           PY
         env:
           INPUTS: ${{ toJSON(inputs) }}
+      - name: Pi (for the pi and pi-routed arms), where the app looks for it
+        if: contains(steps.cfg.outputs.arms, 'pi')
+        run: mkdir -p app/vendor/pi && npm install --prefix app/vendor/pi --no-audit --no-fund "@earendil-works/pi-coding-agent@1.5.2" >/dev/null
       - name: Probe the endpoint's models (chat + tool call, a few tokens each)
         run: |
           python testkit/loop/models.py --out loop-out --only "${{ steps.cfg.outputs.probe_filter }}" | tail -n 200

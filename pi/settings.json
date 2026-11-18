@@ -1,0 +1,13 @@
+{
+ "defaultProvider": "meshpool",
+ "defaultModel": "deepseek-v4.1-flash",
+ "defaultTools": [
+  "read",
+  "bash",
+  "edit",
+  "write",
+  "grep",
+  "find",
+  "ls"
+ ]
+}

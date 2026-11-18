@@ -780,6 +780,16 @@ class Agent:
         self._todo_touched = False
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
+        route = getattr(self, "route", None)
+        if (route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
+                and not self.plan and isinstance(self.messages[-1].get("content"), str)):
+            try:                                     # reproduce before the first call: one model round saved
+                rep = _PACKS.reproduce(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
+            except Exception:  # noqa: BLE001
+                rep = ""
+            if rep:
+                self.messages[-1]["content"] += "\n\n" + rep
+                self.emit({"type": "status", "text": "Reproduced the problem before starting."})
         if V3 and len(self.messages) <= 2 and not self.plan:
             snap = _env_snapshot(self.root)
             if snap and isinstance(self.messages[-1].get("content"), str):
@@ -1612,6 +1622,9 @@ class Agent:
                 out = f"Plan updated: {done} of {len(items)} done."
             else:
                 out = getattr(self.ws, name)(**args)
+                route = getattr(self, "route", None)
+                if name in ("edit", "write_file") and route is not None and route.family == "code":
+                    out += _PACKS.quick_check(self.ws, args.get("path", ""))   # a broken edit shows now, at no call
                 if name == "bash":
                     m = re.match(r"\[exit (\d+)\]", out)
                     ok = bool(m) and m.group(1) == "0"

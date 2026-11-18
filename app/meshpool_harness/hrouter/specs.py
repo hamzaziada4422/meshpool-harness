@@ -35,21 +35,23 @@ SPECS = {s.id: s for s in [
          "or an action. Short questions get short answers (one to four sentences, or a tight list). " + ANSWER_FIRST),
 
     Spec("code.debug", "Debug", "code", "code",
-         "Debugging method:\n"
-         "1. Reproduce first: run the failing command, test or snippet the user gave (or write the smallest script "
-         "that shows the bug) before reading much code. If it does not fail, say so and ask for the missing step.\n"
-         "2. Locate: run diagnostics for syntax and type errors; read the traceback from the deepest project frame. "
-         "Form one hypothesis at a time and test it with a command, not by rereading code.\n"
-         "3. Fix the cause with the smallest edit, not the symptom. Do not change tests to make them pass.\n"
-         "4. Verify: rerun the reproduction and the nearest existing tests. For a regression, `git log -p` or "
+         "Debugging: match the effort to the bug. If the error and the code it points to make the cause clear, fix "
+         "it now and run the failing command once to confirm. Otherwise:\n"
+         "1. Reproduce: run the failing command or test (or the smallest script that shows the bug). If a "
+         "<reproduction> block is in the request, that run is done: start from its output.\n"
+         "2. Locate: read the traceback from the deepest project frame; test one hypothesis at a time with a command, "
+         "not by rereading code. diagnostics finds syntax and type errors across files.\n"
+         "3. Fix the cause with the smallest edit. Never change a test to make it pass.\n"
+         "4. Verify: rerun the reproduction and the nearest tests. For a regression, `git log -p` or "
          "`git bisect run <check>` finds the change that broke it.\n"
-         "Reply with: the cause (one or two sentences, file:line), the fix, and the command that now passes.",
+         "Edits to code files come back with a syntax and bug check; fix what it reports first. Reply in two or "
+         "three lines: the cause (file:line), the fix, and the command that now passes.",
          ("diagnostics",)),
     Spec("code.build", "Build", "code", "code",
-         "Building method: find the closest existing pattern in the project (grep for a similar feature) and follow "
-         "it. Make the change in small edits, run diagnostics after each file, then the relevant tests or the "
-         "program itself. Do not add dependencies, files or abstractions the task does not need. Reply with what "
-         "you built and how you checked it, in a few lines.", ("diagnostics",)),
+         "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
+         "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
+         "once. Do not add dependencies, files or abstractions the task does not need. Reply in a few lines: what "
+         "you built and the command that shows it works.", ("diagnostics",)),
     Spec("code.refactor", "Refactor", "code", "code",
          "Refactoring method: behaviour must not change. Run the tests before you start and after each step. For "
          "mechanical changes across many files (renames, API migrations) prefer one scripted change (sed, a short "

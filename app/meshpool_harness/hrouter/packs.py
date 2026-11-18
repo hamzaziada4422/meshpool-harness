@@ -384,3 +384,110 @@ SCHEMA = {"type": "function", "function": {
 
 def strip_ansi(s: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", s)
+
+
+# ---------- zero-call checks: after an edit, and before the first turn of a debug task ---------------------------------
+QUICK_EXTS = (".py", ".pyi", ".js", ".mjs", ".cjs", ".json", ".toml", ".yml", ".yaml", ".sh", ".bash")
+
+
+def quick_check(ws, path: str) -> str:
+    """Problems in one just-edited file (syntax, undefined names, config syntax), or "" when it is clean.
+    Appended to the edit's result, so the model sees a broken edit at once without spending a call on it."""
+    if getattr(ws, "container", None) or not str(path).endswith(QUICK_EXTS):
+        return ""
+    try:
+        p = ws._path(path)
+        rel = os.path.relpath(p, ws.root)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not p.is_file() or p.stat().st_size > 1_000_000:
+        return ""
+    lines: list[str] = []
+    try:
+        if rel.endswith((".py", ".pyi")):
+            exe = newest_python()
+            if exe:
+                r = subprocess.run([exe, _script(ws, "py_syntax.py", PY_SYNTAX), rel], cwd=ws.root,
+                                   capture_output=True, text=True, timeout=15)
+                lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+            ruff = _tool(ws, "ruff")
+            if ruff and not lines:
+                r = subprocess.run([ruff, "check", "--no-fix", "--output-format", "concise", "--select", "F821,F822,F823,F811,F632,F401,E9",
+                                    "--quiet", rel], cwd=ws.root, capture_output=True, text=True, timeout=15)
+                lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+        elif rel.endswith((".js", ".mjs", ".cjs")):
+            node = shutil.which("node")
+            if node:
+                r = subprocess.run([node, "--check", rel], cwd=ws.root, capture_output=True, text=True, timeout=15)
+                if r.returncode:
+                    err = next((l.strip() for l in r.stderr.splitlines() if re.match(r"\s*\w*Error:", l)), "syntax error")
+                    loc = next((l.strip() for l in r.stderr.splitlines() if re.search(r":\d+$", l.strip())), rel)
+                    lines.append(f"{loc}: {err}")
+        elif rel.endswith((".json", ".toml", ".yml", ".yaml")):
+            exe = newest_python()
+            if exe:
+                r = subprocess.run([exe, _script(ws, "config_syntax.py", CONFIG_SYNTAX), rel], cwd=ws.root,
+                                   capture_output=True, text=True, timeout=15)
+                lines += [l for l in r.stdout.splitlines() if re.match(r".+:\d+:\d+: ", l)]
+        elif rel.endswith((".sh", ".bash")) and shutil.which("bash"):
+            r = subprocess.run(["bash", "-n", rel], cwd=ws.root, capture_output=True, text=True, timeout=15)
+            lines += [l.strip() for l in r.stderr.splitlines() if l.strip()][:3]
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if not lines:
+        return ""
+    unused_only = all(" F401 " in l for l in lines)
+    if unused_only:
+        return ""                                     # an unused import is not worth the model's attention mid-edit
+    return "\n[check after this edit: fix before moving on]\n" + "\n".join(l for l in lines if " F401 " not in l)[:1200]
+
+
+_RUNNER = re.compile(r"`([^`\n]{2,160})`|(?<![\w/.-])((?:python3?|node|deno|ruby|bash|sh)\s+[\w./-]+\.(?:py|js|mjs|cjs|ts|rb|sh)"
+                     r"(?:\s+--?[\w-]+(?:[ =][\w./-]+)?)*|pytest(?:\s+[\w./:-]+)*|npm (?:run )?test|yarn test|pnpm test|"
+                     r"cargo (?:test|run|build)|go (?:test|run|build)(?:\s+\./\.\.\.)?)")
+_TESTFILE = re.compile(r"(?<![\w/.-])((?:[\w./-]*/)?test_[\w-]+\.py|(?:[\w./-]*/)?[\w-]+_test\.py|(?:[\w./-]*/)?[\w-]+\.test\.[jt]s)\b")
+_STARTS = ("python", "python3", "node", "deno", "ruby", "bash", "sh", "pytest", "npm", "yarn", "pnpm", "cargo", "go",
+           "make", "./")
+
+
+def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
+    """Commands the user named for reproducing the problem, when the files they refer to exist."""
+    cmds: list[str] = []
+    py = "python3" if shutil.which("python3") else "python"
+    for m in _RUNNER.finditer(text or ""):
+        c = (m.group(1) or m.group(2) or "").strip()
+        if not c or not c.split()[0].startswith(_STARTS) or any(ch in c for ch in ";&|><$"):
+            continue
+        files = [t for t in c.split()[1:] if re.search(r"\.\w{1,4}$", t)]
+        if files and not all((root / f).exists() for f in files):
+            continue
+        c = re.sub(r"^python\b(?!3)", py, c)
+        if c not in cmds:
+            cmds.append(c)
+    for m in _TESTFILE.finditer(text or ""):
+        f = m.group(1)
+        if not (root / f).is_file():
+            continue
+        if f.endswith(".py"):
+            body = (root / f).read_text(errors="replace")
+            c = f"{py} -m pytest -x -q {f}" if re.search(r"^\s*def test_", body, re.M) and shutil.which("pytest") \
+                else f"{py} {f}"
+        else:
+            continue
+        if not any(f in x for x in cmds):
+            cmds.append(c)
+    return cmds[:limit]
+
+
+def reproduce(ws, text: str) -> str:
+    """Run the commands the user named before the model's first turn; their output, ready to read."""
+    if getattr(ws, "container", None):
+        return ""
+    blocks = []
+    for c in repro_commands(text, ws.root):
+        out, code = ws._run(c, 30, "check")
+        blocks.append(f"$ {c}\n{out.strip()[:2500]}")
+    if not blocks:
+        return ""
+    return ("<reproduction>\nMeshpool ran the command(s) you named before you started, so you need not run them "
+            "again before your first fix:\n\n" + "\n\n".join(blocks) + "\n</reproduction>")

@@ -61,10 +61,17 @@ def setup_workdir(task: dict) -> str:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(body)
     if task.get("git", True):
+        git = ["git", "-c", "user.email=l@l", "-c", "user.name=loop"]
         subprocess.run(["git", "init", "-q"], cwd=d)
         subprocess.run(["git", "add", "-A"], cwd=d)
-        subprocess.run(["git", "-c", "user.email=l@l", "-c", "user.name=loop", "commit", "-qm", "task", "--allow-empty"],
-                       cwd=d)
+        subprocess.run(git + ["commit", "-qm", "task", "--allow-empty"], cwd=d)
+        for step in task.get("history") or []:          # later commits: e.g. the one that introduced a regression
+            for rel, body in step["files"].items():
+                p = Path(d) / rel
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(body)
+            subprocess.run(["git", "add", "-A"], cwd=d)
+            subprocess.run(git + ["commit", "-qm", step["msg"]], cwd=d)
     return d
 
 
@@ -99,7 +106,10 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     wd = setup_workdir(task)
     t0 = time.time()
     engine = "agent" if task.get("mode", "code") == "code" else "agent-work"
-    res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", 30))
+    if arm.split("@")[0] in ("pi", "pi-routed"):
+        res = run_pi_agent(task, wd, routed=arm.startswith("pi-routed"))
+    else:
+        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", 30))
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
            "secs": round(time.time() - t0, 1), "route": res.get("route"), "model": res.get("model"),
@@ -108,6 +118,36 @@ def child(task_json: str, arm: str, out_path: str) -> None:
                                                             "model_calls")}}
     Path(out_path).write_text(json.dumps(row))
     shutil.rmtree(wd, ignore_errors=True)
+
+
+def run_pi_agent(task: dict, wd: str, routed: bool) -> dict:
+    """Pi through Meshpool's own Pi integration (what users run), on the same endpoint and model. routed: the harness
+    router's method rides on the first message, as the app sends it."""
+    from meshpool_harness.harnesses import PI
+    from meshpool_harness.harnesses.pi_rpc import PiAgent
+    events: list = []
+    a = PiAgent(dict(PI), wd, mode="auto", emit=events.append)
+    if os.environ.get("MH_MODEL"):
+        a.model = os.environ["MH_MODEL"]
+    body, route = task["prompt"], None
+    if routed:
+        from meshpool_harness import hrouter as HRR
+        from meshpool_harness.hrouter.route import addon
+        r = HRR.route(task["prompt"], kind="code" if task.get("mode", "code") == "code" else "cowork", workdir=wd)
+        route = r.spec
+        if addon(r):
+            body += "\n\n\u200b" + addon(r).strip()
+    try:
+        answer = a.send(body)
+    finally:
+        try:
+            a.close()
+        except Exception:  # noqa: BLE001
+            pass
+    errors = [e.get("text", "") for e in events if e.get("type") == "error"]
+    return {"answer": answer, "route": route, "model": a.model, "error": errors[-1][:500] if errors else None,
+            "usage": {"prompt_tokens": a.usage["in"], "cached_tokens": a.usage["cached"],
+                      "completion_tokens": a.usage["out"], "model_calls": a.usage["calls"]}}
 
 
 def run_pi(task: dict, arm: str) -> dict:
@@ -175,10 +215,10 @@ def run(args) -> int:
             return
         if spent[0] >= args.budget:
             return
-        if arm in ("pi", "codex"):
+        if arm == "codex":
             row = run_pi(task, arm)
         else:
-            env = dict(os.environ, **ARMS.get(arm, {}))
+            env = dict(os.environ, **ARMS.get(arm, {"MH_HROUTER": "1"}))
             if model:
                 env["MH_MODEL"] = model
             if arm == "routed-fast" and args.fast_model:
@@ -303,7 +343,7 @@ def main():
     ap.add_argument("--arms", default="base,routed")
     ap.add_argument("--suites", default="chat,debug,build")
     ap.add_argument("--out", default="/tmp/mhloop")
-    ap.add_argument("--parallel", type=int, default=4)
+    ap.add_argument("--parallel", type=int, default=6)
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--budget", type=float, default=1.5)
     ap.add_argument("--slack", type=int, default=1)
