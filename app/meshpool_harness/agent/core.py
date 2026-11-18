@@ -847,6 +847,15 @@ class Agent:
             if rep:
                 self.messages[-1]["content"] += "\n\n" + rep
                 self.emit({"type": "status", "text": "Reproduced the problem before starting."})
+        if (route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
+                and isinstance(self.messages[-1].get("content"), str)):
+            try:                                     # the data's shape before the first call: no exploring round
+                prev = _PACKS.data_preview(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
+            except Exception:  # noqa: BLE001
+                prev = ""
+            if prev:
+                self.messages[-1]["content"] += "\n\n" + prev
+                self.emit({"type": "status", "text": "Read the data files' structure before starting."})
         if V3 and len(self.messages) <= 2 and not self.plan:
             snap = _env_snapshot(self.root)
             if snap and isinstance(self.messages[-1].get("content"), str):

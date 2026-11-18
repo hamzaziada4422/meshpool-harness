@@ -2,6 +2,7 @@
 name: tests
 on:
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md", "testkit/loop/**", ".github/workflows/harness-loop.yml"]   # no app change
   push:
     branches: [main]
   workflow_dispatch:

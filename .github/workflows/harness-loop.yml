@@ -3,11 +3,11 @@
 # loop-history branch so the trend is visible. Needs the repository secrets MESHPOOL_API_KEY and MESHPOOL_BASE_URL.
 name: harness-loop
 on:
+  # Model spend is real money, so nothing runs on its own: a push runs only with "[loop]" (or "[probe]", "[swe]") in
+  # its commit message, otherwise the jobs are skipped before a runner starts. No schedule until the work is merged.
   push:
-    branches: [harness-router]     # until merged: every push probes the models; "[loop]" in the message runs the loop
-    paths: ["app/**", "testkit/loop/**", ".github/workflows/harness-loop.yml"]
-  schedule:
-    - cron: "30 12 * * *"        # 12:30 UTC: DeepSeek off-peak (peak is 01-04 and 06-10 UTC on weekdays)
+    branches: [harness-router]
+    paths: ["app/**", "testkit/**", ".github/workflows/harness-loop.yml"]
   workflow_dispatch:
     inputs:
       arms:
@@ -48,13 +48,14 @@ permissions:
   contents: write
 jobs:
   loop:
+    if: ${{ github.event_name != 'push' || contains(github.event.head_commit.message, '[loop]') || contains(github.event.head_commit.message, '[probe]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
     env:
       MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
       MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
       MH_MODEL: ${{ inputs.model || vars.MH_MODEL || 'deepseek-v4.1-flash' }}
-      RUN_LOOP: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch' && !inputs.probe_only) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[loop]')) }}
+      RUN_LOOP: ${{ (github.event_name == 'workflow_dispatch' && !inputs.probe_only) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[loop]')) }}
       MESHPOOL_HOME: ${{ github.workspace }}/.mhhome
     steps:
       - uses: actions/checkout@v4

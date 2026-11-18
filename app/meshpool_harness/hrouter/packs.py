@@ -491,3 +491,54 @@ def reproduce(ws, text: str) -> str:
         return ""
     return ("<reproduction>\nMeshpool ran the command(s) you named before you started, so you need not run them "
             "again before your first fix:\n\n" + "\n\n".join(blocks) + "\n</reproduction>")
+
+
+# ---------- data: the files' shape before the first turn ---------------------------------------------------------------
+DATA_EXTS = (".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".json", ".jsonl")
+
+
+def data_preview(ws, text: str = "", limit: int = 5) -> str:
+    """Columns, types, row counts and three sample rows of the data files the task is about (named in the request,
+    else the ones at the top of the folder), so the model starts analysing instead of exploring."""
+    if getattr(ws, "container", None):
+        return ""
+    try:
+        import pandas as pd
+    except ImportError:
+        return ""
+    named = [m for m in re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|xlsx|xls|jsonl?)\b", text or "")
+             if (ws.root / m).is_file()]
+    files = named or sorted(p.name for p in ws.root.iterdir() if p.is_file() and p.suffix.lower() in DATA_EXTS)
+    blocks = []
+    for f in files[:limit]:
+        p = ws.root / f
+        if p.stat().st_size > 200_000_000:
+            blocks.append(f"{f}: {p.stat().st_size // 1_000_000} MB (too big to preview; query it with DuckDB)")
+            continue
+        try:
+            ext = p.suffix.lower()
+            if ext in (".csv", ".tsv"):
+                df = pd.read_csv(p, sep="\t" if ext == ".tsv" else ",", low_memory=False)
+            elif ext == ".parquet":
+                df = pd.read_parquet(p)
+            elif ext in (".xlsx", ".xls"):
+                sheets = pd.read_excel(p, sheet_name=None)
+                name, df = next(iter(sheets.items()))
+                if len(sheets) > 1:
+                    f = f"{f} (sheet '{name}' of {len(sheets)}: {', '.join(list(sheets)[:6])})"
+            else:
+                df = pd.read_json(p, lines=ext == ".jsonl")
+        except Exception as e:  # noqa: BLE001
+            blocks.append(f"{f}: could not read ({type(e).__name__}: {str(e)[:120]})")
+            continue
+        cols = ", ".join(f"{c} ({t})" for c, t in list(df.dtypes.astype(str).items())[:40])
+        nulls = {c: int(n) for c, n in df.isna().sum().items() if n}
+        sample = df.head(3).to_csv(index=False).strip()
+        blocks.append(f"{f}: {len(df):,} rows x {df.shape[1]} columns\ncolumns: {cols}"
+                      + (f"\nmissing values: {dict(list(nulls.items())[:12])}" if nulls else "")
+                      + f"\nfirst rows:\n{sample[:1500]}")
+    if not blocks:
+        return ""
+    return ("<data_preview>\nMeshpool read these files before you started (pandas). Compute every number you report "
+            "with code; for large files use DuckDB SQL (`import duckdb; duckdb.sql(\"select ... from 'file.csv'\")`).\n\n"
+            + "\n\n".join(blocks) + "\n</data_preview>")
