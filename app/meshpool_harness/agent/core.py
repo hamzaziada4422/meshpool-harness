@@ -882,6 +882,15 @@ class Agent:
             if rep:
                 self.messages[-1]["content"] += "\n\n" + rep
                 self.emit({"type": "status", "text": "Reproduced the problem before starting."})
+        if (route is not None and route.spec in ("code.build", "code.refactor", "code.explain", "code.test")
+                and len(self.messages) <= 2 and not self.plan and isinstance(self.messages[-1].get("content"), str)
+                and os.environ.get("MH_REPO_MAP", "1") != "0"):
+            try:                                     # the project's symbols up front: no exploring rounds
+                rm = _PACKS.repo_map(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
+            except Exception:  # noqa: BLE001
+                rm = ""
+            if rm:
+                self.messages[-1]["content"] += "\n\n" + rm
         if (route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
                 and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # the data's shape before the first call: no exploring round

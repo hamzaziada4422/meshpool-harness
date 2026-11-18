@@ -542,3 +542,71 @@ def data_preview(ws, text: str = "", limit: int = 5) -> str:
     return ("<data_preview>\nMeshpool read these files before you started (pandas). Compute every number you report "
             "with code; for large files use DuckDB SQL (`import duckdb; duckdb.sql(\"select ... from 'file.csv'\")`).\n\n"
             + "\n\n".join(blocks) + "\n</data_preview>")
+
+
+# ---------- repo map: the project's symbols before the first turn (build, refactor, explain) ---------------------------
+MAP_EXTS = (".py", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx")
+_JS_SYM = re.compile(r"^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function\s*\*?\s*(\w+)\s*(\([^)]*\))|class\s+(\w+)|"
+                     r"(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?(?:\([^)]*\)|\w+)\s*=>|(\w+)\s*(\([^)]*\))\s*\{)", re.M)
+
+
+def _py_symbols(src: str) -> list[str]:
+    import ast
+    try:
+        tree = ast.parse(src)
+    except (SyntaxError, ValueError):
+        return []
+    out = []
+    for n in tree.body:
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out.append(f"def {n.name}({', '.join(a.arg for a in n.args.args)})")
+        elif isinstance(n, ast.ClassDef):
+            meths = [m.name for m in n.body if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef))
+                     and (not m.name.startswith("_") or m.name == "__init__")]
+            out.append(f"class {n.name}" + (f": {', '.join(meths[:12])}" if meths else ""))
+    return out
+
+
+def _js_symbols(src: str) -> list[str]:
+    out = []
+    for m in _JS_SYM.finditer(src):
+        if m.group(1):
+            out.append(f"function {m.group(1)}{m.group(2)}")
+        elif m.group(3):
+            out.append(f"class {m.group(3)}")
+        elif m.group(4):
+            out.append(f"const {m.group(4)} = (...) =>")
+        elif m.group(5) and m.group(5) not in ("if", "for", "while", "switch", "catch", "function", "return"):
+            out.append(f"{m.group(5)}{m.group(6)}")
+    return out[:30]
+
+
+def repo_map(ws, text: str = "", limit: int = 3500, max_files: int = 400) -> str:
+    """A compact map of the project's files and top-level symbols, files that match the request first."""
+    if getattr(ws, "container", None):
+        return ""
+    files = project_files(ws, MAP_EXTS)[:max_files]
+    if len(files) < 3:
+        return ""                                     # a tiny project: the model reads it directly
+    q = {w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", text or "")}
+    rows = []
+    for f in files:
+        try:
+            src = (ws.root / f).read_text(errors="replace")
+        except OSError:
+            continue
+        syms = _py_symbols(src) if f.endswith((".py", ".pyi")) else _js_symbols(src)
+        words = {w.lower() for w in re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", f + " " + " ".join(syms))}
+        score = len(q & words) * 3 + (0 if "test" in f.lower() else 1)
+        rows.append((-score, f, syms))
+    rows.sort()
+    out, used = [], 0
+    for _, f, syms in rows:
+        line = f + (": " + "; ".join(syms[:14]) if syms else "")
+        if used + len(line) > limit:
+            out.append(f"... and {len(rows) - len(out)} more files")
+            break
+        out.append(line)
+        used += len(line) + 1
+    return ("<repo_map>\nMeshpool listed the project's files and top-level symbols (files matching your request first), "
+            "so you can go straight to the right file:\n" + "\n".join(out) + "\n</repo_map>")

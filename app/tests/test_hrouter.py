@@ -428,3 +428,14 @@ def test_edits_and_commands_keep_their_order():
     c = lambda n, i: {"id": i, "function": {"name": n}}   # noqa: E731
     b = _batches([c("read_file", 1), c("grep", 2), c("edit", 3), c("read_file", 4), c("bash", 5), c("bash", 6)])
     assert [[x["id"] for x in g] for g in b] == [[1, 2], [3], [4], [5], [6]]
+
+
+def test_repo_map_ranks_the_files_the_request_names(tmp_path):
+    (tmp_path / "billing.py").write_text("class Invoice:\n    def total(self):\n        pass\n\ndef refund(order, amount):\n    pass\n")
+    (tmp_path / "users.py").write_text("def create_user(name):\n    pass\n")
+    (tmp_path / "web.js").write_text("export function render(page) {}\nclass Router {}\nconst go = (x) => x\n")
+    m = packs.repo_map(_ws(tmp_path), "add a discount to the invoice total in billing")
+    lines = m.splitlines()
+    assert lines[2].startswith("billing.py: class Invoice: total; def refund(order, amount)")
+    assert "web.js: function render(page); class Router; const go = (...) =>" in m
+    assert packs.repo_map(_ws(tmp_path / "missing" if False else tmp_path), "") .startswith("<repo_map>")
