@@ -87,6 +87,12 @@ jobs:
           PY
         env:
           INPUTS: ${{ toJSON(inputs) }}
+      - name: Hermes (for the hermes arm), the same commit and patch the app ships
+        if: contains(steps.cfg.outputs.arms, 'hermes')
+        run: |
+          git clone -q https://github.com/NousResearch/hermes-agent app/vendor/hermes
+          (cd app/vendor/hermes && git checkout -q b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a && git apply --ignore-whitespace ../../../packaging/hermes-acp-server.patch && rm -rf .git)
+          python packaging/hermes_requirements.py app/vendor/hermes > /tmp/hermes-req.txt && pip install -q -r /tmp/hermes-req.txt
       - name: Pi (for the pi and pi-routed arms), where the app looks for it
         if: contains(steps.cfg.outputs.arms, 'pi')
         run: mkdir -p app/vendor/pi && npm install --prefix app/vendor/pi --no-audit --no-fund "@earendil-works/pi-coding-agent@1.5.2" >/dev/null
@@ -129,6 +135,7 @@ jobs:
           fi
           mkdir -p hist/runs
           cp loop-out/summary.md "hist/runs/$stamp-$MH_MODEL.md"
+          cp loop-out/summary.md hist/LEADERBOARD.md
           cp loop-out/results.jsonl "hist/runs/$stamp-$MH_MODEL.jsonl"
           (cd hist && ls -1 runs/*.md | sort -r | sed 's/^/- /' > INDEX.md && git add -A \
             && git commit -qm "loop $stamp $MH_MODEL" && git push origin HEAD:loop-history)

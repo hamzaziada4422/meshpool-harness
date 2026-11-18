@@ -109,6 +109,8 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     engine = "agent" if task.get("mode", "code") == "code" else "agent-work"
     if arm.split("@")[0] in ("pi", "pi-routed"):
         res = run_pi_agent(task, wd, routed=arm.startswith("pi-routed"))
+    elif arm.split("@")[0] in ACP_ARMS:
+        res = run_acp_agent(arm.split("@")[0], task, wd)
     else:
         res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", 30))
     ok, why = grade(task, res.get("answer", ""), wd)
@@ -149,6 +151,39 @@ def run_pi_agent(task: dict, wd: str, routed: bool) -> dict:
     return {"answer": answer, "route": route, "model": a.model, "error": errors[-1][:500] if errors else None,
             "usage": {"prompt_tokens": a.usage["in"], "cached_tokens": a.usage["cached"],
                       "completion_tokens": a.usage["out"], "model_calls": a.usage["calls"]}}
+
+
+ACP_ARMS = ("codex", "opencode", "hermes")
+
+
+def run_acp_agent(hid: str, task: dict, wd: str) -> dict:
+    """Codex, OpenCode or Hermes through Meshpool's own ACP integration (what users run), set up by the app for the
+    same endpoint and model. Tokens come from the metering proxy, not from the agent."""
+    from meshpool_harness import harnesses as HR
+    from meshpool_harness.harnesses.acp import ACPAgent
+    model = os.environ.get("MH_MODEL") or None
+    events: list = []
+    man = HR.get(hid, model)
+    a = ACPAgent(man, wd, mode="auto", emit=events.append, approve=lambda *a, **k: ("yes", ""))
+    if model and hasattr(a, "set_model"):
+        try:
+            a.set_model(model)
+        except Exception:  # noqa: BLE001
+            a.model = model
+    try:
+        answer = a.send(task["prompt"])
+    finally:
+        try:
+            a.close()
+        except Exception:  # noqa: BLE001
+            pass
+    errors = [e.get("text", "") for e in events if e.get("type") == "error"]
+    if not answer:
+        answer = "".join(e.get("text", "") for e in events if e.get("type") == "assistant")
+    if not errors and re.search(r"stream disconnected|error sending request|unexpected status \d{3}|"
+                                r"Exceeded retry limit", answer or ""):
+        errors = [answer.strip()[-300:]]               # the agent printed its failure as its reply
+    return {"answer": answer, "model": model, "error": errors[-1][:500] if errors else None, "usage": {}}
 
 
 def run_pi(task: dict, arm: str) -> dict:
@@ -192,6 +227,8 @@ def cost(row: dict, prices: dict) -> float:
 
 def run(args) -> int:
     tasks = load_suites(args.suites.split(","))
+    if args.tasks:
+        tasks = [t for t in tasks if t["id"] in set(args.tasks.split(","))]
     arms = args.arms.split(",")
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -216,12 +253,16 @@ def run(args) -> int:
             return
         if spent[0] >= args.budget:
             return
-        if arm == "codex":
-            row = run_pi(task, arm)
+        if False:
+            pass
         else:
             env = dict(os.environ, **ARMS.get(arm, {"MH_HROUTER": "1"}))
             if model:
                 env["MH_MODEL"] = model
+            if args.meter_port:
+                env["MESHPOOL_BASE_URL"] = f"http://127.0.0.1:{args.meter_port}/m/{task['id']}/{label}/{rep}/v1"
+            home = tempfile.mkdtemp(prefix="mhhome-")    # one data folder per run: agents never share state
+            env["MESHPOOL_HOME"] = home
             if arm == "routed-fast" and args.fast_model:
                 env["MH_MODEL_FAST"] = args.fast_model
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -235,7 +276,15 @@ def run(args) -> int:
                        "secs": args.timeout}
             finally:
                 Path(tmp).unlink(missing_ok=True)
+                shutil.rmtree(env.get("MESHPOOL_HOME", ""), ignore_errors=True) if env.get("MESHPOOL_HOME", "").startswith(
+                    tempfile.gettempdir()) else None
         row["arm"], row["base_arm"], row["rep"] = label, arm, rep
+        if args.meter_port:                            # the meter's count, the same for every harness
+            import meter
+            m = meter.totals(meter_log).get((task["id"], label, str(rep)))
+            if m:
+                row.update(prompt_tokens=m["prompt"], cached_tokens=m["cached"], completion_tokens=m["completion"],
+                           model_calls=m["calls"], metered=True)
         row.setdefault("model", model)
         row["usd"] = round(cost(row, prices), 6)
         with LOCK:
@@ -246,6 +295,17 @@ def run(args) -> int:
               f"${row['usd']:.4f}  {row.get('route') or ''}  {'' if row['pass'] else row.get('why', '')[:80]}",
               flush=True)
 
+    meter_log = str(out / "meter.jsonl")
+    if args.meter_port and os.environ.get("MESHPOOL_BASE_URL", "").startswith("http"):
+        import meter
+        meter.start(args.meter_port, os.environ["MESHPOOL_BASE_URL"], meter_log)   # every arm measured alike
+    for a in arms:                                     # download npx agents now, not inside a timed run
+        base = a.split("@")[0]
+        if base in ("codex", "opencode"):
+            sys.path.insert(0, str(APP))
+            from meshpool_harness import harnesses as HR
+            man = HR.CODEX if base == "codex" else HR.OPENCODE
+            subprocess.run([man["command"], *man["args"][:2], "--version"], capture_output=True, timeout=600)
     spend_path = out / "spend.json"
     actual = json.loads(spend_path.read_text()) if spend_path.exists() else {}
     for m in models:                                   # one model at a time, so the key's spend can be split
@@ -379,20 +439,34 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
                     flaky.append(f"{a}: {t} {sum(ps)}/{len(ps)}")
         lines += ["", "Flaky (solved in some repeats only): " + ("; ".join(flaky) or "none")]
     code = 0
-    pairs = [("routed", "base", "")] + [(a, a.replace("routed@", "base@", 1), a.split("@", 1)[1])
-                                        for a in arms if a.startswith("routed@")]
-    pairs += [("routed", "pi", "")] + [(a, a.replace("routed@", "pi@", 1), a.split("@", 1)[1])
-                                       for a in arms if a.startswith("routed@")]
+    pairs = []                                         # Meshpool (routed) against every other harness, per model
+    for a in arms:
+        if a.split("@")[0] != "routed":
+            continue
+        model = a.split("@", 1)[1] if "@" in a else ""
+        for b in arms:
+            if b != a and b.split("@")[0] != "routed" and (b.split("@", 1)[1] if "@" in b else "") == model:
+                pairs.append((a, b, model))
+        for b in arms:                                 # and the routed variants against each other (A/B of a change)
+            if b != a and b.split("@")[0].startswith("routed-") and (b.split("@", 1)[1] if "@" in b else "") == model:
+                pairs.append((a, b, model))
+    head = ["", "## Meshpool against each harness, same model", "",
+            "| Model | vs | Quality | Cost (Meshpool / them) | Time (Meshpool / them) |", "|---|---|---|---|---|"]
     for a, b, model in pairs:
         if a not in stats or b not in stats:
             continue
         c = compare(by, keys, a, b)
         f = lambda t: "n/a" if t[0] != t[0] else f"{t[0]:.2f}x ({t[1]:.2f}-{t[2]:.2f})"   # noqa: E731
+        head.append(f"| {model or '-'} | {b.split('@')[0]} | {c['quality']} ({c['only_a']} vs {c['only_b']}, "
+                    f"p={c['p']:.2f}) | {c['cheaper']} {f(c['cost'])} | {c['faster']} {f(c['secs'])} |")
         lines += ["", f"**{a} vs {b}**{' on ' + model if model else ''}: quality {c['quality'].upper()} "
                       f"({c['only_a']} pairs only {a} solved, {c['only_b']} only {b}, p={c['p']:.3f}); "
                       f"cost {c['cheaper']} {f(c['cost'])}; time {c['faster']} {f(c['secs'])}"]
         if b.split("@")[0] == "base" and c["quality"] == "worse":
             code = 1                                   # a real quality regression fails the run
+    if len(head) > 5:                                  # the head-to-head first, the detail after
+        at = next(i for i, l in enumerate(lines) if l.startswith("| Arm |"))
+        lines[at:at] = head[1:] + ["", "## Every harness in detail", ""]
     broken = [a for a in arms if stats[a].get("errors", 0) >= max(2, stats[a]["n"] // 2)]
     if broken:
         lines += ["", "Not comparable (most tasks ended on an endpoint or model error): " + ", ".join(broken)]
@@ -414,11 +488,13 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--budget", type=float, default=1.5)
     ap.add_argument("--slack", type=int, default=1)
+    ap.add_argument("--tasks", default="", help="comma list of task ids (default: every task in the suites)")
     ap.add_argument("--repeats", type=int, default=1, help="run every task this many times per arm")
     ap.add_argument("--fast-model", default="")
     ap.add_argument("--models", default="", help="comma list: every arm runs on each model")
     ap.add_argument("--prices", default="", help="models.json from models.py (per-model prices)")
     ap.add_argument("--no-spend", action="store_true", help="do not read the key's billed spend")
+    ap.add_argument("--meter-port", type=int, default=18990, help="metering proxy port (0: trust each harness)")
     ap.add_argument("--spend-wait", type=int, default=45)
     ap.add_argument("--price-in", type=float, default=0.15)
     ap.add_argument("--price-cached", type=float, default=0.003)

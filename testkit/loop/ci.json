@@ -1,8 +1,8 @@
 {
- "arms": "base,routed,pi",
+ "arms": "routed,routed-full,base,pi,codex,opencode,hermes",
  "suites": "chat,debug,build,hard",
- "budget": "7.00",
- "models": "deepseek-v4.1-flash,gpt-6-luna,claude-haiku-5.5,kimi-k3",
+ "budget": "6.00",
+ "models": "deepseek-v4.1-flash,gpt-6-luna",
  "fast_model": "",
  "probe_filter": "",
  "swe": {
