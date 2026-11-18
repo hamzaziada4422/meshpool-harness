@@ -476,6 +476,21 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     return code
 
 
+def load_key_file(path: str = os.path.expanduser("~/.meshpool-bench.env")) -> bool:
+    """Local runs: the endpoint and key from a private file (never printed). Its values win over the environment,
+    whose key may be a masked copy."""
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return False
+    for line in lines:
+        k, _, v = line.strip().partition("=")
+        v = v.strip().strip('"').strip("'")
+        if k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL") and v:
+            os.environ[k] = v
+    return True
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--child":
         child(sys.argv[2], sys.argv[3], sys.argv[4])
@@ -501,6 +516,7 @@ def main():
     ap.add_argument("--price-out", type=float, default=0.60)
     ap.add_argument("--report", default="")
     a = ap.parse_args()
+    load_key_file()
     if a.report:
         sys.exit(report(Path(a.report)))
     sys.exit(run(a))
