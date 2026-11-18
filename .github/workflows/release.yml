@@ -153,6 +153,11 @@ jobs:
           python -m zipfile -e "$MG" git-win && rm "$MG"
           mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
           mkdir -p win/Meshpool
+          # Meshpool.exe carries the version: rewrite winres.json from __version__ and recompile its resource here,
+          # so a release never needs a Windows PC for this step.
+          (cd .. && python packaging/build_all.py --winres)
+          go install github.com/tc-hib/go-winres@v0.3.3
+          (cd ../packaging/win/launcher && "$(go env GOPATH)/bin/go-winres" make --arch amd64)
           (cd ../packaging/win/launcher && GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o ../../../deps/win/Meshpool/Meshpool.exe .)
       - name: Build the app tree
         run: python packaging/build_all.py --only=win
