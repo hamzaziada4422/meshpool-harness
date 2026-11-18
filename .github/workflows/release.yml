@@ -26,7 +26,7 @@ env:
 
 jobs:
   mac:
-    runs-on: macos-latest
+    runs-on: macos-14   # macos-latest (15) kept failing to get a runner: "capacity constraints"
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
