@@ -48,7 +48,7 @@ _CONTEXT_RX = None
 
 def classify_error(msg: str) -> str:
     """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
-    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
     at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
     context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
     connection lost, timeout) or 'fatal'."""
@@ -69,6 +69,10 @@ def classify_error(msg: str) -> str:
         return "model_missing"                      # an old chat on a model the endpoint no longer serves
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
+    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
+                 r"insufficient[_ ](credits?|balance|funds|quota)|quota[_ ]exhausted|out of credits|"
+                 r"credit balance is too low|max budget", m, re.I):
+        return "quota"                              # spent: waiting or retrying cannot help (UHP: quota_exhausted)
     if "HTTP 429" in m:
         return "rate_limit"
     if "rejected as invalid" in m:

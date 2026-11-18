@@ -452,12 +452,11 @@ class Session:
 
     def _body(self, text: str, images: list | None) -> str:
         body = text
-        if self.harness["type"] in ("acp", "pi"):
-            try:
-                from meshpool_harness import skills as SK
-                body = SK.expand_mentions(text)
-            except Exception:  # noqa: BLE001
-                body = text
+        try:                                         # every agent: a skill named with $ is attached now, so the
+            from meshpool_harness import skills as SK  # built-in agents do not spend a call on use_skill
+            body = SK.expand_mentions(text)
+        except Exception:  # noqa: BLE001
+            body = text
         if images:
             body += _image_text(images)
         return body
@@ -656,6 +655,26 @@ class Session:
                         _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
                                 + (self.agent.title or "task")[:60], last.strip()[:200])
         threading.Thread(target=go, daemon=True).start()
+
+    def set_route(self, spec: str):
+        """The user picked the harness for this chat (the route chip). Applies from the next message; on the
+        built-in agents the system prompt changes once, so one request misses the prompt cache."""
+        from meshpool_harness import hrouter as HRR
+        from meshpool_harness.hrouter.route import addon
+        from meshpool_harness.hrouter.specs import SPECS
+        if spec not in SPECS:
+            raise ValueError(f"Unknown harness {spec!r}.")
+        first = next((e.get("text") for e in self.events if e.get("type") == "user"), "") or ""
+        r = HRR.route(first, kind=self.kind, workdir=self.workdir, force=spec)
+        if hasattr(self.agent, "route"):
+            self.agent.route = r
+            if self.agent.messages:
+                self.agent.messages[0] = {"role": "system", "content": self.agent.system_prompt()}
+            self.agent.save()
+        else:
+            self.route_addon = addon(r)           # an outside agent: rides on the next message
+        write_meta(self.id, route=r.spec, route_label=r.label)
+        self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
     def set_model(self, model: str):
         model = (model or "").strip()

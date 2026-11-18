@@ -543,6 +543,49 @@ def _drop_images(messages: list, keep: int = 0) -> None:
                 m["content"] = new
 
 
+# Fields a model may refuse with HTTP 400 ("does not support the `temperature` field", "Unsupported parameter:
+# 'max_tokens'..."). The fix is known for each: drop it, or swap max_tokens for max_completion_tokens. What a model
+# refused is remembered for the process, so the next request is right the first time. (Same class of problem as
+# HarnessRouter's measured reasoning table, runner/reasoning.py: a field a model lacks is refused, not ignored.)
+_REFUSED: dict[str, set] = {}
+_ADAPTABLE = ("temperature", "top_p", "tool_choice", "parallel_tool_calls", "stream_options", "reasoning_effort",
+              "max_tokens", "response_format", "seed", "presence_penalty", "frequency_penalty")
+
+
+def _refused_field(msg: str) -> str | None:
+    low = (msg or "").lower()
+    if not re.search(r"http 4(00|22)", low):
+        return None
+    for f in _ADAPTABLE:
+        if re.search(r"(not support|unsupported|unknown|unrecognized|not allowed|invalid|extra inputs?|not permitted)"
+                     r"[^.]{0,80}\W" + f + r"\W|\W" + f + r"\W[^.]{0,80}(not supported|unsupported|is not allowed|"
+                     r"not permitted|unknown|unrecognized|use 'max_completion_tokens'|instead)", low):
+            return f
+    return None
+
+
+def _adapt_params(body: dict, msg: str) -> bool:
+    """Fix a request a model refused for one of its fields. True when the body changed (try again)."""
+    f = _refused_field(msg)
+    if not f or f not in body and not (f == "max_tokens" and "max_tokens" in body):
+        return False
+    _REFUSED.setdefault(str(body.get("model", "")), set()).add(f)
+    if f == "max_tokens":
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    else:
+        body.pop(f, None)
+    return True
+
+
+def _apply_refused(body: dict) -> dict:
+    for f in _REFUSED.get(str(body.get("model", "")), ()):
+        if f == "max_tokens" and "max_tokens" in body:
+            body["max_completion_tokens"] = body.pop("max_tokens")
+        else:
+            body.pop(f, None)
+    return body
+
+
 class Agent:
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
@@ -883,6 +926,9 @@ class Agent:
                 head = msg.split(" (HTTP", 1)[0]         # already says what to do; keep only the status
                 code = re.search(r"HTTP \d+", msg)
                 msg = raw = head + (f" ({code.group(0)})" if code else "")
+            elif msg.startswith("QUOTA: "):
+                msg = ("Your key's budget or quota is used up, so the model refused the request. Add credit or raise "
+                       "the key's limit, or pick another model or key in Settings, then send \"continue\".")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
@@ -992,6 +1038,16 @@ class Agent:
         if os.environ.get("MH_CACHE_KEY", "1") == "1":
             body["prompt_cache_key"] = self.route_id()
             body["user"] = self.route_id()
+        try:
+            from meshpool_harness import providers as PV
+            bare = PV.split(body.get("model"))[1]
+            for f in _REFUSED.get(bare, ()):           # what this model refused before: right the first time
+                if f == "max_tokens" and "max_tokens" in body:
+                    body["max_completion_tokens"] = body.pop("max_tokens")
+                else:
+                    body.pop(f, None)
+        except Exception:  # noqa: BLE001
+            pass
         return body
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
@@ -1109,6 +1165,12 @@ class Agent:
                     self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left out. "
                                                          "For computer use, choose a vision model in Settings."})
                     continue
+                if kind == "quota":                        # spent: a retry or a wait cannot help
+                    raise RuntimeError("QUOTA: " + msg)
+                if kind in ("bad_request", "vision") and _adapt_params(body, msg):
+                    self.emit({"type": "status", "text": "This model refused a request setting; Meshpool adjusted "
+                                                         "it and tried again."})
+                    continue                               # a refused field (temperature, tool_choice...): fixed
                 if kind in ("bad_request", "vision", "context"):
                     if cleaned:
                         raise

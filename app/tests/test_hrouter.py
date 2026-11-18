@@ -210,3 +210,26 @@ def test_reproduce_runs_the_named_command_only_when_its_file_exists(tmp_path):
     assert packs.repro_commands("`rm -rf / && python test_x.py`", tmp_path) == [packs.repro_commands("test_x.py", tmp_path)[0]]
     out = packs.reproduce(ws, "test_x.py fails")
     assert "<reproduction>" in out and "boom" in out and "[exit 1]" in out
+
+
+# ---------- robustness: refused fields and spent quotas ---------------------------------------------------------------
+def test_a_refused_field_is_removed_and_remembered():
+    from meshpool_harness.agent import core as A
+    A._REFUSED.clear()
+    body = {"model": "kimi-x", "temperature": 0.2, "max_tokens": 10}
+    assert A._adapt_params(body, 'HTTP 400: {"error":"This model does not support the `temperature` field."}')
+    assert "temperature" not in body and A._REFUSED["kimi-x"] == {"temperature"}
+    body = {"model": "o-x", "max_tokens": 10}
+    assert A._adapt_params(body, "HTTP 400: Unsupported parameter: 'max_tokens' is not supported with this model. "
+                                 "Use 'max_completion_tokens' instead.")
+    assert body == {"model": "o-x", "max_completion_tokens": 10}
+    assert not A._adapt_params({"model": "m", "temperature": 1}, "HTTP 400: messages[3] is invalid")
+    assert not A._adapt_params({"model": "m", "temperature": 1}, "HTTP 500: temperature unsupported")
+
+
+def test_spent_quota_is_not_retried():
+    from meshpool_harness.core.client import classify_error
+    for m in ("HTTP 400: Budget has been exceeded! Current cost: 20.01, Max budget: 20.0",
+              "HTTP 429: You exceeded your current quota, please check your plan", "HTTP 402: Insufficient credits"):
+        assert classify_error(m) == "quota", m
+    assert classify_error("HTTP 429: Rate limit reached for requests") == "rate_limit"

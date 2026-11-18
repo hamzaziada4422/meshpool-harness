@@ -49,7 +49,7 @@ jobs:
       MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
       MH_MODEL: ${{ inputs.model || vars.MH_MODEL || 'deepseek-v4.1-flash' }}
       RUN_LOOP: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch' && !inputs.probe_only) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[loop]')) }}
-      MH_HOME: ${{ github.workspace }}/.mhhome
+      MESHPOOL_HOME: ${{ github.workspace }}/.mhhome
     steps:
       - uses: actions/checkout@v4
       - name: Key present

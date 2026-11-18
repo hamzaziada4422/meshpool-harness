@@ -168,6 +168,7 @@ def instructions(name: str) -> str:
 # find_skill. With ~100 skills the full list was ~30k characters (~7.5k tokens) on every model call of every chat:
 # slower first tokens and more for the model to wade through. MH_SKILLS=full keeps the full list.
 ON_DEMAND_MIN = 15
+NAMES_MAX = 60
 _WORD = re.compile(r"[a-z0-9]+")
 _STOP = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "my", "me", "i", "is", "it", "this",
          "that", "be", "use", "when", "from", "by", "as", "at", "your", "you", "can", "do", "how", "what"}
@@ -222,8 +223,10 @@ def catalog_text(task: str = "") -> str:
         return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
                 "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
     text = (f"\n\nSkills: {len(rows)} saved instruction sets for specific jobs. Before a task that may match one, "
-            "call find_skill with a few words; load a match with use_skill. When the user writes $name, load that "
-            "skill first. Names: " + ", ".join(s["name"] for s in rows) + ".")
+            "call find_skill with a few words; load a match with use_skill. A skill the user names with $name is "
+            "attached to their message already.")
+    if len(rows) <= NAMES_MAX:                    # a few dozen names are cheap; hundreds (imported) are not
+        text += " Names: " + ", ".join(s["name"] for s in rows) + "."
     hits = search(task, k=5, rows=rows) if task else []
     if hits:
         text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {s['description'][:240]}" for s in hits)

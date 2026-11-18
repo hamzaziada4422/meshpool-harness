@@ -727,11 +727,13 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route)", u.path)
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "model":
                     s_.set_model(b.get("model", ""))
+                elif act == "route":
+                    s_.set_route(b.get("spec", ""))
                 elif act == "plan":
                     s_.set_plan(bool(b.get("on")))
                 elif act == "goal":

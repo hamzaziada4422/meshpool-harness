@@ -7,8 +7,34 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const fmt = n => Number(n || 0).toLocaleString("en-US");
 const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
 const MOD = isMac ? "⌘" : "Ctrl+";
+// The route chip's menu: pick the harness for this chat (applies from the next message).
+const ROUTES = [["chat", "Chat", "Quick answers, rewrites, questions"], ["research", "Research", "Sourced answers from the web"],
+  ["data", "Data", "Analyse files and numbers"], ["docs", "Documents", "Word, Excel, PowerPoint, PDF"],
+  ["code.debug", "Debug", "Find and fix what is broken"], ["code.build", "Build", "Write new code"],
+  ["code.review", "Review", "Review changes, no edits"], ["code.refactor", "Refactor", "Restructure without changing behaviour"],
+  ["code.test", "Tests", "Write and run tests"], ["code.terminal", "Terminal", "Install, configure, deploy"],
+  ["browser", "Browser", "Websites, forms, sign-ins"], ["automation", "Automation", "Scheduled and repeating work"]];
+function routeMenu(anchor) {
+  document.querySelector(".routemenu")?.remove();
+  const m = document.createElement("div"); m.className = "routemenu"; m.setAttribute("role", "menu");
+  m.innerHTML = ROUTES.map(([id, name, d]) => `<button role="menuitem" data-spec="${id}"><b>${name}</b><small>${d}</small></button>`).join("");
+  anchor.appendChild(m);
+  const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
+  setTimeout(() => document.addEventListener("mousedown", close), 0);
+  m.addEventListener("keydown", e => { if (e.key === "Escape") m.remove(); });
+  m.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    m.remove();
+    const c = S.cur; if (!c) return;
+    try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
+    catch (e) { toast(e.message); }
+  });
+  m.querySelector("button")?.focus();
+}
 function ago(t) {
-  const s = Math.max(0, Date.now() / 1000 - (t || 0));
+  if (typeof t === "string") t = isNaN(Number(t)) ? Date.parse(t) / 1000 : Number(t);   // ISO or numeric text
+  if (!t || isNaN(t)) return "";
+  if (t > 1e12) t = t / 1000;                                                           // milliseconds
+  const s = Math.max(0, Date.now() / 1000 - t);
   if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m"; if (s < 86400) return Math.floor(s / 3600) + "h";
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
@@ -1200,7 +1226,13 @@ function applyEv(ev) {
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
-    case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
+    case "status": {
+      if (ev.route) {                       // the harness router's pick, as a chip the user can change
+        const r = ev.route, why = String(ev.text || "").replace(/^Harness: [^(]*\(?|\)?\.?$/g, "");
+        const n = add(`<button class="routechip" title="Change how Meshpool handles this chat">${esc(String(ev.text || "").replace(/^Harness: /, "").replace(/ \(.*$/, ""))}</button><span class="routewhy">${esc(why)}</span>`, "note route");
+        $(".routechip", n).onclick = () => routeMenu(n);
+        break; }
+      if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
@@ -2361,7 +2393,9 @@ function prStateBadge(p) {
   const [cl, w] = p.draft && p.state === "open" ? ["draft", "Draft"] : ({open: ["open", "Open"], merged: ["merged", "Merged"], closed: ["closed", "Closed"]}[p.state] || ["", p.state]);
   return `<span class="prv-state ${cl}">${w}</span>`;
 }
-function ago(t) { if (!t) return ""; const s = (Date.now() - Date.parse(t)) / 1000; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; }
+// Pull requests, comments: ISO dates from GitHub. (Named apart from ago(): two functions of one name meant the
+// later won, and every chat in the sidebar read "NaN d ago".)
+function agoIso(t) { const ms = Date.parse(t); if (!t || isNaN(ms)) return ""; const s = (Date.now() - ms) / 1000; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; }
 function diffHTML(patch) {
   // a GitHub patch: hunks of "@@ -a,b +c,d @@", then lines starting with space, + or -
   let o = 0, n = 0; const rows = [];
@@ -2410,7 +2444,7 @@ async function prLoad(fresh) {
   if (!PRV.n || !d.prs.some(p => p.number === PRV.n)) PRV.n = d.current || d.prs[0].number;
   const group = (t, rows) => rows.length ? `<div class="prv-grp">${t}</div>` + rows.map(p => `<button class="prv-item${p.number === PRV.n ? " on" : ""}" data-n="${p.number}">
       <span class="prv-it-top">${prStateBadge(p)}<span class="stat">#${p.number}</span>${p.checks ? `<span class="cidot ${({passing: "ok", failing: "bad", running: "run"})[p.checks] || ""}" title="${esc(p.checks)}"></span>` : ""}</span>
-      <span class="prv-it-t">${esc(p.title)}</span><span class="stat">${esc(p.head)} · ${ago(p.updated)}</span></button>`).join("") : "";
+      <span class="prv-it-t">${esc(p.title)}</span><span class="stat">${esc(p.head)} · ${agoIso(p.updated)}</span></button>`).join("") : "";
   L.innerHTML = (d.connected ? "" : `<div class="pnote">Connect GitHub to see private repositories and to merge. <button class="linkbtn" id="prvConn">Connect</button></div>`)
     + group("Open", d.prs.filter(p => p.state === "open")) + group("Recently closed", d.prs.filter(p => p.state !== "open"));
   $("#prvConn")?.addEventListener("click", () => { closePRView(); openSettings("connectors"); });
@@ -2430,7 +2464,7 @@ async function prDetail() {
   const tot = Math.max(1, p.additions + p.deletions);
   M.innerHTML = `<header class="prv-head">
       <div class="prv-title">${prStateBadge(p)}<h2>${esc(p.title)} <span class="stat">#${p.number}</span></h2></div>
-      <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${ago(p.updated)}</div>
+      <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${agoIso(p.updated)}</div>
       <div class="prv-acts"><a class="btn" href="${esc(p.url)}" target="_blank" rel="noopener">Open on GitHub</a>
         ${p.preview_url ? `<button class="btn" id="prvPrev" title="${esc(p.preview_url)}">Preview</button>` : ""}
         <button class="btn" id="prvRev">Review with the agent</button>
@@ -2449,7 +2483,7 @@ async function prDetail() {
       ${fails.length ? `<div class="row" style="margin-top:10px"><button class="btn" id="prvFix">Ask the agent to fix the failing checks</button></div>` : ""}</section>
     <section class="prv-sec"><h4>Conversation <span class="stat">${p.comments.length}</span></h4>
       ${p.body ? `<div class="prv-cm"><div class="stat"><b>${esc(p.author)}</b> opened it</div><div class="prv-cmb">${esc(p.body).slice(0, 4000)}</div></div>` : ""}
-      ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${ago(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
+      ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${agoIso(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
       ${p.connected ? `<div class="prv-cmnew"><textarea id="prvCm" rows="3" placeholder="Comment on GitHub"></textarea><button class="btn" id="prvCmGo">Comment</button></div>` : `<div class="stat">Connect GitHub to comment.</div>`}</section>
     <section class="prv-sec"><h4>Files changed <span class="stat">${p.files.length}${p.files.length < p.changed_files ? ` of ${p.changed_files}` : ""}</span><span class="sp"></span><button class="linkbtn" id="prvAll">Expand all</button></h4>
       ${p.files.map((f, i) => { const [cl, w] = CH_BADGE[f.status === "removed" ? "deleted" : f.status === "modified" ? "changed" : f.status] || CH_BADGE.changed;
