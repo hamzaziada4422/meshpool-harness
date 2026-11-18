@@ -28,11 +28,17 @@ TOOL = {"type": "function", "function": {"name": "add", "description": "Add two 
     "type": "object", "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}}, "required": ["a", "b"]}}}
 
 
-def req(path: str, body: dict | None = None, timeout: int = 60) -> dict:
+LAST_HEADERS: dict = {}
+
+
+def req(path: str, body: dict | None = None, timeout: int = 90, headers_out: dict | None = None) -> dict:
     data = json.dumps(body).encode() if body is not None else None
     r = urllib.request.Request(BASE + path, data=data, method="POST" if body is not None else "GET",
                                headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
     with urllib.request.urlopen(r, timeout=timeout) as resp:
+        if headers_out is not None:
+            headers_out.update({k.lower(): v for k, v in resp.headers.items()
+                                if k.lower().startswith(("x-litellm", "x-meshpool", "x-ratelimit"))})
         return json.loads(resp.read().decode("utf-8", "replace"))
 
 
@@ -65,18 +71,26 @@ def probe(mid: str) -> dict:
     row = {"id": mid, "chat": False, "tools": False}
     t0 = time.time()
     try:
-        r = req("/chat/completions", {"model": mid, "max_tokens": 16, "temperature": 0,
-                                      "messages": [{"role": "user", "content": "Reply with just: OK"}]})
-        txt = (r["choices"][0]["message"].get("content") or "").strip()
+        hdr: dict = {}
+        r = req("/chat/completions", {"model": mid, "max_tokens": 600,       # room for a reasoning model's thinking
+                                      "messages": [{"role": "user", "content": "Reply with just: OK"}]}, headers_out=hdr)
+        msg = r["choices"][0]["message"]
+        txt = (msg.get("content") or "").strip()
         row["chat"] = bool(txt)
         row["chat_s"] = round(time.time() - t0, 2)
         row["reply"] = txt[:40]
+        row["reasoning"] = bool(msg.get("reasoning_content") or msg.get("reasoning")
+                                or ((r.get("usage") or {}).get("completion_tokens_details") or {}).get("reasoning_tokens"))
+        row["usage"] = r.get("usage")
+        row["headers"] = hdr
+        if not txt:
+            row["error"] = "empty reply: " + json.dumps(r["choices"][0])[:200]
     except Exception as e:  # noqa: BLE001
         row["error"] = err_text(e)
         return row
     t0 = time.time()
     try:
-        r = req("/chat/completions", {"model": mid, "max_tokens": 200, "temperature": 0, "tools": [TOOL],
+        r = req("/chat/completions", {"model": mid, "max_tokens": 600, "tools": [TOOL],
                                       "tool_choice": "auto",
                                       "messages": [{"role": "user", "content": "Use the add tool to add 2 and 3."}]})
         calls = r["choices"][0]["message"].get("tool_calls") or []
@@ -116,13 +130,18 @@ def main():
     (out / "models_raw_sample.json").write_text(json.dumps(items[:3] if items else [], indent=1)[:4000])
     good = sorted([r for r in rows if r["chat"] and r["tools"]],
                   key=lambda r: (r["price"].get("out", 1e9), r.get("tools_s", 99)))
-    lines = ["# Models on the endpoint", "", f"{len(good)} of {len(rows)} probed models answer and call tools.", "",
-             "| Model | Chat | Tools | Chat s | Tool s | $ in / out per 1M | Error |", "|---|---|---|---|---|---|---|"]
+    sample = next((r for r in rows if r.get("headers")), None)
+    lines = ["# Models on the endpoint", "",
+             "Cost headers seen: " + (", ".join(sorted(sample["headers"])) if sample else "none"), "", f"{len(good)} of {len(rows)} probed models answer and call tools.", "",
+             "| Model | Chat | Tools | Reasoning | Chat s | Tool s | Call cost header | Error |",
+             "|---|---|---|---|---|---|---|---|"]
     for r in sorted(rows, key=lambda r: (not (r["chat"] and r["tools"]), r["id"])):
         p = r["price"]
+        h = r.get("headers") or {}
+        cost_h = h.get("x-litellm-response-cost", "")
         lines.append(f"| {r['id']} | {'yes' if r['chat'] else 'no'} | {'yes' if r['tools'] else 'no'} | "
-                     f"{r.get('chat_s', '')} | {r.get('tools_s', '')} | "
-                     f"{p.get('in', '?')} / {p.get('out', '?')} | {(r.get('error') or '')[:90].replace('|', '/')} |")
+                     f"{'yes' if r.get('reasoning') else ''} | {r.get('chat_s', '')} | {r.get('tools_s', '')} | "
+                     f"{cost_h} | {(r.get('error') or '')[:90].replace('|', '/')} |")
     text = "\n".join(lines) + "\n"
     (out / "models.md").write_text(text)
     print(text)
