@@ -764,3 +764,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .routemenu button{all:unset;cursor:pointer;padding:7px 10px;border-radius:7px;display:flex;flex-direction:column;gap:1px}
 .routemenu button:hover,.routemenu button:focus-visible{background:var(--bg-2,#f3f4f6)}
 .routemenu b{font-size:var(--fs-s);font-weight:600}.routemenu small{color:var(--ink-3);font-size:11px}
+
+/* the review receipt after a turn that changed files */
+.note.receipt{border-left:3px solid var(--line,#e5e7eb);padding:4px 10px;color:var(--ink-2)}
+.note.receipt p{margin:2px 0}

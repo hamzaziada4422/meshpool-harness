@@ -1,0 +1,103 @@
+[
+ {
+  "id": "deep-kvstore-ttl",
+  "mode": "code",
+  "prompt": "Our little key-value store (kv/) needs two features: (1) put(key, value, ttl=None): when ttl seconds pass the key is gone (get returns None, keys() skips it, len() excludes it); (2) save(path) and Store.load(path) to persist to JSON, keeping expiry times. Keep the existing API working. Use time.time() so tests can patch it.",
+  "files": {
+   "kv/__init__.py": "from .store import Store\n",
+   "kv/store.py": "class Store:\n    def __init__(self):\n        self._d = {}\n\n    def put(self, key, value):\n        self._d[key] = value\n\n    def get(self, key, default=None):\n        return self._d.get(key, default)\n\n    def delete(self, key):\n        self._d.pop(key, None)\n\n    def keys(self):\n        return list(self._d)\n\n    def __len__(self):\n        return len(self._d)\n",
+   "README.md": "# kv\nA tiny in-memory key-value store.\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_kv.py": "import time, json, tempfile, os\nimport kv.store as m\nfrom kv import Store\nnow=[1000.0]\nm.time.time=lambda: now[0]\ns=Store(); s.put('a',1); s.put('b',2,ttl=10); s.put('c',3,ttl=100)\nassert s.get('b')==2 and len(s)==3\nnow[0]+=11\nassert s.get('b') is None and sorted(s.keys())==['a','c'] and len(s)==2\nassert s.get('b','d')=='d'\np=os.path.join(tempfile.mkdtemp(),'s.json'); s.save(p)\nt=Store.load(p); assert t.get('a')==1 and t.get('c')==3\nnow[0]+=100\nassert t.get('c') is None and t.keys()==['a']\ns.put('a',5,ttl=1); now[0]+=0.5; assert s.get('a')==5\ns.delete('a'); assert s.get('a') is None\nprint('ok')\n"
+   },
+   "check": "python3 hidden_test_kv.py",
+   "timeout": 120
+  }
+ },
+ {
+  "id": "deep-cli-json",
+  "mode": "code",
+  "prompt": "Add a `--json` flag to every command of tasks.py (list, add, done) that prints machine-readable JSON instead of text, and add a new `stats` command that prints how many tasks are open and done (text: 'open: N, done: M'; with --json: {\"open\": N, \"done\": M}). The data file is tasks.json next to the script (or TASKS_FILE env var).",
+  "files": {
+   "tasks.py": "import json, os, sys\n\nPATH = os.environ.get('TASKS_FILE') or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'tasks.json')\n\n\ndef load():\n    if not os.path.exists(PATH):\n        return []\n    return json.load(open(PATH))\n\n\ndef save(ts):\n    json.dump(ts, open(PATH, 'w'))\n\n\ndef cmd_list(args):\n    for i, t in enumerate(load()):\n        print(f\"{i+1}. [{'x' if t['done'] else ' '}] {t['title']}\")\n\n\ndef cmd_add(args):\n    ts = load()\n    ts.append({'title': ' '.join(args), 'done': False})\n    save(ts)\n    print(f'added {len(ts)}')\n\n\ndef cmd_done(args):\n    ts = load()\n    n = int(args[0])\n    ts[n-1]['done'] = True\n    save(ts)\n    print(f'done {n}')\n\n\nif __name__ == '__main__':\n    cmd, rest = sys.argv[1], sys.argv[2:]\n    {'list': cmd_list, 'add': cmd_add, 'done': cmd_done}[cmd](rest)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_cli.sh": "set -e\nexport TASKS_FILE=$(mktemp -d)/t.json\npython3 tasks.py add buy milk >/dev/null\npython3 tasks.py add --json write report | python3 -c \"import json,sys; d=json.load(sys.stdin); assert d\"\npython3 tasks.py done 1 >/dev/null\npython3 tasks.py list --json | python3 -c \"import json,sys; d=json.load(sys.stdin); assert len(d)==2 and d[0]['done'] is True and d[1]['title']=='write report', d\"\npython3 tasks.py stats | grep -q 'open: 1, done: 1'\npython3 tasks.py stats --json | python3 -c \"import json,sys; d=json.load(sys.stdin); assert d=={'open':1,'done':1}, d\"\npython3 tasks.py list | grep -q 'buy milk'\necho ok\n"
+   },
+   "check": "bash hidden_test_cli.sh",
+   "timeout": 120
+  }
+ },
+ {
+  "id": "deep-payroll-bugs",
+  "mode": "code",
+  "prompt": "Customers report payslips are wrong: overtime above 40 hours should pay 1.5x, the 10% bonus applies only to base pay (not overtime), tax is 20% of gross above a 1000 allowance (no tax at or below it), and amounts must be rounded to cents only at the end. Find and fix every bug in payroll/ so payslip() matches these rules.",
+  "files": {
+   "payroll/__init__.py": "from .calc import payslip\n",
+   "payroll/calc.py": "from .rates import OVERTIME, BONUS, TAX, ALLOWANCE\n\n\ndef payslip(hours, rate, bonus=False):\n    base = round(min(hours, 40) * rate, 2)\n    over = round(max(0, hours - 40) * rate * OVERTIME, 2)\n    gross = base + over\n    if bonus:\n        gross += gross * BONUS\n    taxable = gross - ALLOWANCE\n    tax = taxable * TAX\n    return {'gross': round(gross, 2), 'tax': round(tax, 2), 'net': round(gross - tax, 2)}\n",
+   "payroll/rates.py": "OVERTIME = 1.25\nBONUS = 0.10\nTAX = 0.20\nALLOWANCE = 1000\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_payroll.py": "from payroll import payslip\nr=payslip(45, 20.0)\nassert r=={'gross':950.0,'tax':0.0,'net':950.0}, r\nr=payslip(50, 33.333, bonus=True)\ng=40*33.333*1.1+10*33.333*1.5\nt=(g-1000)*0.2\nassert r=={'gross':round(g,2),'tax':round(t,2),'net':round(g-t,2)}, (r,g,t)\nr=payslip(40, 25.0)\nassert r['tax']==0.0 and r['gross']==1000.0\nprint('ok')\n"
+   },
+   "check": "python3 hidden_test_payroll.py",
+   "timeout": 120
+  }
+ },
+ {
+  "id": "deep-api-migration",
+  "mode": "code",
+  "prompt": "http_client.fetch(url, callback) is deprecated. Migrate every caller in the project to the new http_client.get(url) (returns the body string or raises http_client.HttpError), then delete fetch(). Behaviour must not change: report.py still prints the same output, and errors still produce the same messages.",
+  "files": {
+   "http_client.py": "class HttpError(Exception):\n    pass\n\nPAGES = {'/a': 'alpha', '/b': 'beta', '/c': 'gamma'}\n\n\ndef get(url):\n    if url not in PAGES:\n        raise HttpError(f'404 {url}')\n    return PAGES[url]\n\n\ndef fetch(url, callback):\n    try:\n        callback(None, get(url))\n    except HttpError as e:\n        callback(e, None)\n",
+   "loaders/__init__.py": "",
+   "loaders/one.py": "import http_client\n\n\ndef load_a():\n    out = {}\n    def cb(err, body):\n        out['v'] = 'ERR' if err else body.upper()\n    http_client.fetch('/a', cb)\n    return out['v']\n",
+   "loaders/two.py": "from http_client import fetch\n\n\ndef load_many(urls):\n    res = []\n    for u in urls:\n        fetch(u, lambda e, b: res.append(f'missing:{u}' if e else b))\n    return res\n",
+   "loaders/three.py": "import http_client as hc\n\n\ndef first_ok(urls):\n    found = []\n    for u in urls:\n        hc.fetch(u, lambda e, b: None if e else found.append(b))\n        if found:\n            return found[0]\n    return None\n",
+   "report.py": "from loaders.one import load_a\nfrom loaders.two import load_many\nfrom loaders.three import first_ok\n\nif __name__ == '__main__':\n    print(load_a())\n    print(','.join(load_many(['/b', '/x', '/c'])))\n    print(first_ok(['/x', '/c', '/a']))\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_migration.sh": "set -e\ntest \"$(python3 report.py)\" = \"$(printf 'ALPHA\\nbeta,missing:/x,gamma\\ngamma')\"\n! grep -rn 'fetch' --include=*.py . | grep -v hidden_\npython3 -c \"import http_client as h; assert not hasattr(h,'fetch')\"\necho ok\n"
+   },
+   "check": "bash hidden_test_migration.sh",
+   "timeout": 120
+  }
+ },
+ {
+  "id": "deep-perf-dedupe",
+  "mode": "code",
+  "prompt": "find_duplicates() in dedupe.py is far too slow on our real data (hundreds of thousands of records). Make it fast while returning exactly the same result: groups of record ids whose normalised email (lowercase, stripped, dots removed from the local part of gmail.com addresses) is equal, each group sorted, groups sorted by first id; only groups of 2 or more.",
+  "files": {
+   "dedupe.py": "def norm(email):\n    e = email.strip().lower()\n    local, _, domain = e.partition('@')\n    if domain == 'gmail.com':\n        local = local.replace('.', '')\n    return local + '@' + domain\n\n\ndef find_duplicates(records):\n    groups = []\n    seen = set()\n    for i, (rid, email) in enumerate(records):\n        if rid in seen:\n            continue\n        g = [rid]\n        for rid2, email2 in records[i + 1:]:\n            if norm(email2) == norm(email):\n                g.append(rid2)\n                seen.add(rid2)\n        if len(g) > 1:\n            groups.append(sorted(g))\n    return sorted(groups, key=lambda g: g[0])\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_perf.py": "import random, time\nfrom dedupe import find_duplicates\nsmall=[(1,'A.b@gmail.com'),(2,'ab@gmail.com '),(3,'x@y.com'),(4,'X@Y.com'),(5,'a.b@other.com'),(6,'ab@other.com')]\nassert find_duplicates(small)==[[1,2],[3,4]], find_duplicates(small)\nrnd=random.Random(1)\nrecs=[(i, f\"user{rnd.randint(0,150000)}@{rnd.choice(['gmail.com','x.org'])}\") for i in range(300000)]\nt=time.time(); r=find_duplicates(recs); dt=time.time()-t\nassert dt<5, dt\nassert all(len(g)>1 and g==sorted(g) for g in r) and r==sorted(r,key=lambda g:g[0])\nprint('ok', round(dt,2))\n"
+   },
+   "check": "python3 hidden_test_perf.py",
+   "timeout": 180
+  }
+ },
+ {
+  "id": "deep-js-pagination",
+  "mode": "code",
+  "prompt": "Add cursor pagination to listItems in src/store.js: listItems({limit, cursor}) returns {items, nextCursor}. Items stay sorted by id ascending; nextCursor is null on the last page; an invalid cursor throws an Error whose message contains 'invalid cursor'. limit defaults to 20 and is capped at 100. Keep src/api.js working (it should pass limit and cursor through from the query).",
+  "files": {
+   "package.json": "{\"name\":\"shop\",\"version\":\"1.0.0\",\"type\":\"commonjs\"}\n",
+   "src/store.js": "const items = []\nfor (let i = 1; i <= 237; i++) items.push({ id: i, name: `item ${i}` })\n\nfunction listItems() {\n  return items.slice()\n}\n\nmodule.exports = { listItems }\n",
+   "src/api.js": "const { listItems } = require('./store')\n\nfunction handle(query) {\n  return { status: 200, body: listItems() }\n}\n\nmodule.exports = { handle }\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_test_pages.js": "const assert=require('assert')\nconst {listItems}=require('./src/store')\nconst {handle}=require('./src/api')\nlet all=[],c=undefined,n=0\ndo{const r=listItems({limit:50,cursor:c});all.push(...r.items);c=r.nextCursor;n++}while(c!==null&&n<20)\nassert.strictEqual(all.length,237);assert.deepStrictEqual(all.map(x=>x.id),[...Array(237).keys()].map(i=>i+1))\nassert.strictEqual(listItems({}).items.length,20)\nassert.strictEqual(listItems({limit:1000}).items.length,100)\nassert.throws(()=>listItems({cursor:'garbage!!'}),/invalid cursor/)\nconst r=handle({limit:'5'});assert.strictEqual(r.status,200);assert.strictEqual(r.body.items.length,5);assert.ok(r.body.nextCursor)\nconst r2=handle({limit:'5',cursor:r.body.nextCursor});assert.strictEqual(r2.body.items[0].id,6)\nconsole.log('ok')\n"
+   },
+   "check": "node hidden_test_pages.js",
+   "timeout": 120
+  }
+ }
+]

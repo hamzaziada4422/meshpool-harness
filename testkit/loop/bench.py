@@ -88,8 +88,16 @@ def grade(task: dict, answer: str, workdir: str) -> tuple[bool, str]:
     for pat in g.get("must_not", []):
         if re.search(pat, answer or "", re.I | re.S):
             return False, f"has /{pat}/"
+    for rel, body in (g.get("hidden") or {}).items():   # tests the agent never saw: written only now
+        hp = Path(workdir) / rel
+        hp.parent.mkdir(parents=True, exist_ok=True)
+        hp.write_text(body)
     if g.get("check"):
-        r = subprocess.run(g["check"], shell=True, cwd=workdir, capture_output=True, text=True, timeout=120)
+        try:
+            r = subprocess.run(g["check"], shell=True, cwd=workdir, capture_output=True, text=True,
+                               timeout=g.get("timeout", 120))
+        except subprocess.TimeoutExpired:
+            return False, f"check timed out after {g.get('timeout', 120)}s"
         if r.returncode != 0:
             return False, "check failed: " + (r.stdout + r.stderr).strip()[-300:]
     for rel, pat in (g.get("file_must") or {}).items():

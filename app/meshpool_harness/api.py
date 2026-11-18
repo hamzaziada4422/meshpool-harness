@@ -83,7 +83,8 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
              "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
              **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
-           "usage": usage, "route": route.spec if route else None, "model": a.current_model()}
+           "usage": usage, "route": route.spec if route else None, "model": a.current_model(),
+           "receipt": getattr(a, "last_receipt", "")}
     if errors and not capped:
         out["error"] = errors[-1][:500]
     return out

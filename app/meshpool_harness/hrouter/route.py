@@ -27,6 +27,7 @@ class Route:
     spec: str                         # chat, code.debug, research, ...
     family: str                       # chat, code, research, data, docs, browser, automation, general
     sub: str = ""                     # debug, build, ... for code
+    variant: str = ""                 # the kind of debug or build job: syntax, test, exception, regression, perf...
     language: str = ""                # a pack id when one applies
     lane: str = "task"                # chat (answer fast), task, deep
     difficulty: str = "normal"        # easy | normal | hard
@@ -44,6 +45,9 @@ class Route:
     def label(self) -> str:
         """Short text for the chat's route chip: "Debug · Python"."""
         parts = [get(self.spec).name]
+        if self.variant:
+            parts.append({"perf": "Performance", "cli": "CLI", "api": "API", "ui": "UI"}.get(
+                self.variant, self.variant.capitalize()))
         if self.language:
             parts.append({"typescript": "TypeScript", "javascript": "JavaScript", "csharp": "C#", "cpp": "C++"}.get(
                 self.language, self.language.capitalize()))
@@ -83,7 +87,7 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
     else:
         fam, why, conf = ("chat", "a short question", 0.75) if lane == "chat" else ("general", "no strong signal", 0.45)
 
-    sub, language = "", ""
+    sub, language, var = "", "", ""
     if fam == "code":
         sub, _ = S.code_sub(text, bool(err))
         if lane == "chat" and sub == "build" and not err:
@@ -92,6 +96,7 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
         language = err or best or (S.project_language(workdir) or "")
         language = language if language in PACKS else ""
         spec = f"code.{sub}"
+        var = S.variant(sub, text)
     elif fam in ("chat", "writing"):
         spec, fam = "chat", "chat"
         if lane == "task" and not files:
@@ -112,6 +117,7 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
                   "hard" if lane == "deep" or n > 250 or len(files) > 3 or len([v for v in fams.values() if v]) > 2
                   else "normal")
     return Route(spec=spec, family=fam if fam in ("chat", "code") or fam in SPECS else "general", sub=sub,
+                 variant=var if fam == "code" else "",
                  language=language, lane=lane, difficulty=difficulty, base=get(spec).base, confidence=round(conf, 2),
                  reason=why, signals=sig)
 
@@ -162,16 +168,49 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
     return r
 
 
+def _keys(r: Route) -> list[str]:
+    """Spec keys from general to most specific: code.debug, code.debug.perf, code.debug.python, code.debug.perf.python."""
+    ks = [r.spec]
+    if r.variant:
+        ks.append(f"{r.spec}.{r.variant}")
+    if r.language:
+        ks.append(f"{r.spec}.{r.language}")
+        if r.variant:
+            ks.append(f"{r.spec}.{r.variant}.{r.language}")
+    return ks
+
+
 def addon(r: Route) -> str:
-    """The prompt text a route adds to the agent's system prompt: the spec's method plus the language pack."""
-    sp = get(r.spec)
-    parts = []
-    if sp.addon:
-        parts.append(sp.addon)
+    """The prompt text a route adds: the spec's method, the sub-subtask's method, the language pack, and any
+    data-driven overrides (most specific wins for "addon"; every "addon_extra" adds up)."""
+    from .specs import VARIANT_ADDON, overrides
+    sp, ov = get(r.spec), overrides()
+    base = sp.addon
+    for k in _keys(r):
+        if ov.get(k, {}).get("addon") is not None:
+            base = ov[k]["addon"]
+    parts = [base] if base else []
+    if r.variant and VARIANT_ADDON.get(f"{r.spec}.{r.variant}"):
+        parts.append(VARIANT_ADDON[f"{r.spec}.{r.variant}"])
     if r.language and r.family == "code":
         parts.append(PACKS[r.language].prompt)
+    parts += [ov[k]["addon_extra"] for k in _keys(r) if ov.get(k, {}).get("addon_extra")]
     return ("\n\n[Harness: " + r.label + "]\n" + "\n".join(parts)) if parts else ""
 
 
+def dropped(r: Route) -> set:
+    from .specs import overrides
+    drop, ov = set(get(r.spec).drop), overrides()
+    for k in _keys(r):
+        if "drop" in ov.get(k, {}):
+            drop = set(ov[k]["drop"])
+    return drop
+
+
 def tools(r: Route) -> list[str]:
-    return list(get(r.spec).tools)
+    from .specs import overrides
+    t, ov = list(get(r.spec).tools), overrides()
+    for k in _keys(r):
+        if "tools" in ov.get(k, {}):
+            t = list(ov[k]["tools"])
+    return t

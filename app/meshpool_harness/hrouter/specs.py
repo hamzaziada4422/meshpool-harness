@@ -104,3 +104,49 @@ SPECS = {s.id: s for s in [
 
 def get(sid: str) -> Spec:
     return SPECS.get(sid) or SPECS["general"]
+
+
+# ---------- sub-subtask methods: added to the sub-task's method when the router detects the variant ------------------
+VARIANT_ADDON = {
+    "code.debug.syntax": "This is a syntax problem: the cause is at or just before the reported line (a missing ':', "
+                         "bracket, quote, comma or indent). Fix it there, run the program or diagnostics once, done.",
+    "code.debug.test": "A test fails: read its assertion and the code under test. The test states the intended "
+                       "behaviour; never change the test or loosen its assertion.",
+    "code.debug.exception": "A runtime error: start at the deepest project frame. Check what the data really looks like "
+                            "there (print or a one-line probe) before changing code.",
+    "code.debug.regression": "It used to work: find what changed before reading code. `git log --oneline -15`, then "
+                             "`git diff <commit>~1 <commit> -- <file>` on the likely commit (or `git bisect run "
+                             "<check>`). Restore the intended behaviour at the change, do not patch around it.",
+    "code.debug.perf": "Too slow: time the slow call on realistic input first, find the hot spot (nested loops over the "
+                       "data, repeated work, N+1 calls), replace it with a dict/set index, sorting once or batching, "
+                       "keep the output identical, then time it again and report both numbers.",
+    "code.build.cli": "A command-line change: follow the existing argument parsing and output style, keep current "
+                      "outputs unchanged, and run two or three real invocations (including the default) to check.",
+    "code.build.api": "An API change: follow the existing handlers and response shapes, validate inputs at the "
+                      "boundary with clear errors, and call the function or endpoint with a normal case, an edge case "
+                      "and a bad input.",
+    "code.build.ui": "A UI change: follow the existing components and styles; keep markup accessible (labels, focus, "
+                     "keyboard).",
+    "code.build.function": "A new function or class: match the module's style, handle the edge cases the request "
+                           "names (empty, invalid, boundary), and run a few calls that show it works.",
+}
+
+
+# ---------- data-driven overrides: the harness optimizer (testkit/loop/optimize.py) edits these, not the code --------
+def overrides() -> dict:
+    """{spec or spec.variant or spec.variant.language: {"addon": str, "addon_extra": str, "drop": [...],
+    "tools": [...]}} from app/defaults/specs.json, then <data folder>/specs.json, then MH_SPECS_FILE (later wins)."""
+    import json
+    import os
+    from pathlib import Path
+    from meshpool_harness import config as C
+    out: dict = {}
+    for p in (C.APP / "defaults" / "specs.json", C.home() / "specs.json", os.environ.get("MH_SPECS_FILE") or ""):
+        try:
+            d = json.loads(Path(p).read_text(encoding="utf-8")) if p else {}
+        except (OSError, ValueError):
+            continue
+        for k, v in (d.get("specs") or {}).items():
+            if isinstance(v, dict):
+                out.setdefault(k, {}).update(v)
+    return out

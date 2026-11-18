@@ -195,6 +195,7 @@ class Workspace:
         self.edits = 0
         self.written: set[str] = set()
         self.created: set[str] = set()        # files the agent created (new tests are allowed)
+        self.turn_files: set[str] = set()     # files changed in the current turn (the review receipt)
         self._n = 0
 
     # -- helpers
@@ -402,6 +403,7 @@ class Workspace:
             self.seen[key] = self._hash(text)
             self.edits += 1
             self.written.add(key)
+            self.turn_files.add(key)
             return f"edited {path}"
         p = self._path(path, write=True)
         if not p.exists():
@@ -427,6 +429,7 @@ class Workspace:
         self.seen[key] = self._hash(new_text)
         self.edits += 1
         self.written.add(key)
+        self.turn_files.add(key)
         return f"edited {path}"
 
     def write_file(self, path, content, append=False):
@@ -439,6 +442,7 @@ class Workspace:
             self.seen[self._cpath(path)] = self._hash(self._cread(path))
             self.edits += 1
             self.written.add(self._cpath(path))
+            self.turn_files.add(self._cpath(path))
             return f"wrote {path} ({len(content)} chars{', appended' if append else ''}) in the container"
         p = self._path(path, write=True)
         if not p.exists():
@@ -455,6 +459,7 @@ class Workspace:
         self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
+        self.turn_files.add(str(p))
         bad = self._syntax_error(p, p.read_text(encoding="utf-8", errors="replace")) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")

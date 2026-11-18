@@ -1226,6 +1226,7 @@ function applyEv(ev) {
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
+    case "receipt": { closeGroup(); add(md(ev.text || ""), "note receipt"); break; }   // what changed, how it was checked
     case "status": {
       if (ev.route) {                       // the harness router's pick, as a chip the user can change
         const r = ev.route, why = String(ev.text || "").replace(/^Harness: [^(]*\(?|\)?\.?$/g, "");

@@ -677,8 +677,8 @@ class Agent:
         route = getattr(self, "route", None)
         if route is None or self.plan or os.environ.get("MH_LEAN_TOOLS", "1") == "0":
             return set()
-        from meshpool_harness.hrouter.specs import get as spec_of
-        return set(spec_of(route.spec).drop)
+        from meshpool_harness.hrouter.route import dropped
+        return dropped(route)
 
     def tool_schemas(self) -> list:
         if self.plan:
@@ -845,6 +845,7 @@ class Agent:
         turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
+        self.ws.turn_files = set()
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
         route = getattr(self, "route", None)
@@ -986,6 +987,13 @@ class Agent:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
         finally:
+            try:
+                rec = self.receipt()
+                self.last_receipt = rec
+                if rec:
+                    self.emit({"type": "receipt", "text": rec})
+            except Exception:  # noqa: BLE001 - a receipt must never break a turn
+                pass
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
             self.save()
         return final
@@ -1044,6 +1052,41 @@ class Agent:
         self.messages.append({"role": "user", "content": parts})
 
     # ---------- model ------------------------------------------------------------------------------------------
+    def receipt(self) -> str:
+        """What this turn changed and how it was checked, from what the tools recorded (no model tokens), so the user
+        can review it at a glance. Says so plainly when nothing ran after the last change."""
+        files = sorted(getattr(self.ws, "turn_files", set()))
+        if not files:
+            return ""
+        import subprocess
+        rel = []
+        for f in files:
+            try:
+                rel.append(os.path.relpath(f, self.root))
+            except ValueError:
+                rel.append(f)
+        stats = {}
+        try:
+            r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *rel], cwd=self.root, capture_output=True,
+                               text=True, timeout=10)
+            for line in r.stdout.splitlines():
+                a, d, name = line.split("\t", 2)
+                stats[name] = f"+{a} -{d}"
+        except Exception:  # noqa: BLE001 - not a git repo, or git missing
+            pass
+        created = {os.path.relpath(c, self.root) for c in getattr(self.ws, "created", set()) if os.path.isabs(c)}
+        parts = [f"{r} ({stats[r]})" if r in stats else f"{r} (new)" if r in created else r for r in rel[:12]]
+        more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
+        after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        if after:
+            last = after[-1]
+            cmd = last["cmd"].splitlines()[0][:80]
+            check = (f"`{cmd}` passed" if last["code"] == 0 else f"`{cmd}` FAILED (exit {last['code']})")
+            check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
+        else:
+            check = "nothing was run after the last change, so it is not verified"
+        return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
     def _delta(self, t: str):
         """Stream reply text, without any recalled-memory block the model echoed (assistant.scrub)."""
         sc = getattr(self, "_scrubber", None)

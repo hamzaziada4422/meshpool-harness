@@ -58,7 +58,10 @@ _ERR = [(lang, re.compile(p, re.M)) for lang, p in ERRORS]
 SUB = [  # (sub, pattern, weight). Checked in order; the heaviest total wins.
     ("debug", r"\b(bug|debug\w*|fix(es|ing)?|broken|crash\w*|fails?|failing|failure|error|exception|traceback|"
               r"stack ?trace|doesn'?t work|not working|wrong (output|result)|regression|segfault|panic|hangs?|"
-              r"infinite loop|flaky|why (does|is|do) .{0,40}(fail|error|crash|break))\b", 1.0),
+              r"infinite loop|flaky|why (does|is|do) .{0,40}(fail|error|crash|break)|returns? the wrong|wrong (value|"
+              r"result|answer|month|date|total|number)s?|worked (before|last (week|month|time)|yesterday)|used to work|"
+              r"too slow|far too slow|slow(er)? (on|with|than)|times? out|timed out|performance|speed (it )?up|"
+              r"memory leak)\b", 1.0),
     ("test", r"\b(write|add|generate|increase) (unit |integration |e2e )?tests?\b|\btest coverage\b|"
              r"\bcoverage\b", 1.5),
     ("refactor", r"\b(refactor\w*|clean ?up|restructure|rename (all|every)|extract (a |the )?(function|method|class|"
@@ -217,3 +220,35 @@ def size(text: str) -> str:
 
 def env_fast_model() -> str:
     return os.environ.get("MH_MODEL_FAST", "").strip()
+
+
+# ---------- sub-subtasks: the kind of debug or build job --------------------------------------------------------------
+VARIANTS = {
+    "debug": [
+        ("perf", r"\b(too slow|slow(er|ly)?|takes? (too )?long|timeouts?|timed out|performance|speed (it )?up|faster|"
+                 r"memory (usage|leak)|o\(n\^?2\)|quadratic|hangs?)\b"),
+        ("regression", r"\b(worked (before|last (week|month|time)|yesterday|until)|used to work|regression|broke "
+                       r"(after|since|when)|since (the |our |my )?(update|upgrade|commit|release|merge|deploy)|"
+                       r"stopped working)\b"),
+        ("syntax", r"SyntaxError|IndentationError|TabError|unexpected token|syntax error|parse error|error TS1\d{3}|"
+                   r"(fails|won't|doesn't|does not) (to )?(start|compile|parse|build)\b"),
+        ("test", r"\b(failing tests?|tests? (fail|fails|failed|failing|is red|are red)|test_\w+\.py|\w+\.test\.[jt]s|"
+                 r"spec fails|assertion(error)?|pytest|jest|vitest)\b"),
+        ("exception", r"Traceback|Exception|\w+Error\b|panic:|segfault|crash(es|ed)?|stack ?trace|undefined is not"),
+    ],
+    "build": [
+        ("cli", r"\b(flag|--[\w-]+|option|sub-?command|argparse|click|cli|command[- ]line)\b"),
+        ("api", r"\b(endpoint|route|api|handler|rest|graphql|webhook|pagination|cursor)\b"),
+        ("ui", r"\b(page|component|button|form|css|layout|modal|react|vue|svelte|html)\b"),
+        ("function", r"\b(function|method|class|helper|util|module)\b"),
+    ],
+}
+_VAR = {k: [(n, re.compile(p, re.I)) for n, p in v] for k, v in VARIANTS.items()}
+
+
+def variant(sub: str, text: str) -> str:
+    """The most specific kind of job within a sub-task (first match wins; order is by how decisive the signal is)."""
+    for name, rx in _VAR.get(sub, []):
+        if rx.search(text or ""):
+            return name
+    return ""

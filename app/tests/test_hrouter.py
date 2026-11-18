@@ -80,7 +80,7 @@ def test_model_call_only_when_unsure():
 def test_addon_carries_method_and_language_pack():
     r = route("fix this: SyntaxError: invalid syntax in app.py", kind="code")
     text = addon(r)
-    assert "[Harness: Debug · Python]" in text and "Reproduce" in text and "pytest" in text
+    assert "[Harness: Debug · Syntax · Python]" in text and "Reproduce" in text and "pytest" in text
 
 
 # ---------- diagnostics ----------------------------------------------------------------------------------------------
@@ -318,3 +318,74 @@ def test_scrub_removes_memory_blocks_even_when_split_across_deltas():
         out += sc.feed(text[i:i + 3])
     out += sc.flush()
     assert "fact" not in out and "memory-context" not in out and "The answer is 4." in out and out.startswith("Sure.")
+
+
+@pytest.mark.parametrize("text,label", [
+    ("parse_date worked last week and now returns the wrong month", "Debug · Regression"),
+    ("find_duplicates is far too slow on our real data", "Debug · Performance"),
+    ("python calc.py crashes with a SyntaxError", "Debug · Syntax · Python"),
+    ("test_stats.py fails", "Debug · Test · Python"),
+    ("Add a --count option to cli.py", "Build · CLI · Python"),
+    ("Add cursor pagination to listItems", "Build · API"),
+])
+def test_sub_subtask_variants(text, label):
+    assert route(text, kind="code").label == label
+
+
+def test_data_driven_overrides_most_specific_wins(tmp_path, monkeypatch):
+    import json
+    from meshpool_harness.hrouter.route import dropped
+    f = tmp_path / "specs.json"
+    f.write_text(json.dumps({"specs": {
+        "code.debug": {"addon_extra": "EXTRA-GENERAL"},
+        "code.debug.perf": {"addon": "PERF-ONLY method", "drop": ["delegate_task"]},
+        "code.debug.perf.python": {"addon_extra": "EXTRA-PY"}}}))
+    monkeypatch.setenv("MH_SPECS_FILE", str(f))
+    r = route("dedupe.py is far too slow", kind="code")
+    text = addon(r)
+    assert "PERF-ONLY method" in text and "EXTRA-GENERAL" in text and "EXTRA-PY" in text
+    assert "Debugging: match the effort" not in text            # the variant's override replaced the base method
+    assert dropped(r) == {"delegate_task"}
+
+
+# ---------- the review receipt ---------------------------------------------------------------------------------------
+def _scripted(monkeypatch, msgs):
+    from meshpool_harness.agent import core as A
+    it = iter(msgs)
+
+    def fake_chat(self, turn):
+        return next(it), False
+    monkeypatch.setattr(A.Agent, "_chat", fake_chat)
+
+
+def _call(name, args, cid):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": cid, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+def test_receipt_lists_changes_and_the_check_that_ran_after_them(tmp_path, monkeypatch):
+    from meshpool_harness import run_task
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    (tmp_path / "a.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path)
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=t", "commit", "-qm", "init"], cwd=tmp_path)
+    _scripted(monkeypatch, [_call("read_file", {"path": "a.py"}, "c1"),
+                            _call("edit", {"path": "a.py", "old": "x = 1", "new": "x = 2"}, "c2"),
+                            _call("bash", {"command": "true"}, "c3"),
+                            {"role": "assistant", "content": "Done."}])
+    r = run_task("change x", workdir=str(tmp_path), engine="agent")
+    assert "**Changed:** a.py (+1 -1)" in r["receipt"] and "`true` passed" in r["receipt"] and r["answer"] == "Done.", r
+
+
+def test_receipt_says_so_when_nothing_verified_the_change(tmp_path, monkeypatch):
+    from meshpool_harness import run_task
+    _scripted(monkeypatch, [_call("write_file", {"path": "new.py", "content": "y = 1\n"}, "c1"),
+                            {"role": "assistant", "content": "Wrote it."}])
+    r = run_task("make new.py", workdir=str(tmp_path), engine="agent")
+    assert "new.py" in r["receipt"] and "not verified" in r["receipt"], r
+
+
+def test_no_receipt_without_changes(tmp_path, monkeypatch):
+    from meshpool_harness import run_task
+    _scripted(monkeypatch, [{"role": "assistant", "content": "Canberra."}])
+    assert run_task("capital of Australia?", workdir=str(tmp_path), engine="agent-work")["answer"] == "Canberra."
