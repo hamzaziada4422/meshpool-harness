@@ -240,6 +240,9 @@ def cap_left(model: str) -> float | None:
     now = key_spend(model)
     if now is None:
         return None
+    if os.environ.get("MH_BENCH_START_SPEND"):        # CI: the starting spend is committed in ci.json
+        led = {"start_spend": float(os.environ["MH_BENCH_START_SPEND"]), "cap_usd": CAP_USD}
+        return float(led["cap_usd"]) - (now - led["start_spend"])
     try:
         led = json.load(open(LEDGER))
     except (OSError, ValueError):
@@ -565,6 +568,10 @@ def main():
         k, _, v = kv.partition("=")
         EXTRA_ENV.setdefault(arm, {})[k] = v
     load_key_file()
+    if not os.environ.get("MH_BENCH_START_SPEND") and not os.path.exists(LEDGER):
+        start = key_spend(os.environ.get("MH_MODEL", "deepseek-v4.1-flash"))
+        if start is not None:                         # first run anywhere: say the starting point loudly
+            print(f"CAP START: key spend is ${start:.4f}; the ${CAP_USD:g} cap counts from here", flush=True)
     if a.cap_status:
         left = cap_left(os.environ.get("MH_MODEL", "deepseek-v4.1-flash"))
         led = json.load(open(LEDGER)) if os.path.exists(LEDGER) else {}

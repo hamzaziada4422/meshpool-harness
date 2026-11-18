@@ -82,7 +82,8 @@ jobs:
           import json, os
           c = json.load(open("testkit/loop/ci.json"))
           ins = json.loads(os.environ["INPUTS"] or "{}")
-          for k in ("arms", "suites", "budget", "models", "fast_model", "probe_filter", "repeats"):
+          for k in ("arms", "suites", "budget", "models", "fast_model", "probe_filter", "repeats", "cap_start_spend",
+                    "cap_usd"):
               v = ins.get(k) or c.get(k, "")
               print(f"{k}={v}")
           PY
@@ -106,6 +107,9 @@ jobs:
         if: env.RUN_LOOP == 'true'
         run: |
           set +e
+          export MH_BENCH_START_SPEND="${{ steps.cfg.outputs.cap_start_spend }}"
+          [ "$MH_BENCH_START_SPEND" = "None" ] && unset MH_BENCH_START_SPEND
+          export MH_BENCH_CAP_USD="${{ steps.cfg.outputs.cap_usd || 25 }}"
           python testkit/loop/bench.py \
             --arms "${{ steps.cfg.outputs.arms }}" \
             --suites "${{ steps.cfg.outputs.suites }}" \

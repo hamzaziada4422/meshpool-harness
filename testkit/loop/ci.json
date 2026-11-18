@@ -1,7 +1,7 @@
 {
  "arms": "routed,pi,codex,opencode,hermes",
- "suites": "chat,debug,build,hard,data",
- "budget": "2.50",
+ "suites": "chat,debug,build,hard,data,deep",
+ "budget": "4.00",
  "models": "deepseek-v4.1-flash",
  "fast_model": "",
  "probe_filter": "",
@@ -10,5 +10,7 @@
   "model": "deepseek-v4.1-flash",
   "arms": "routed,base,pi"
  },
- "repeats": 2
+ "repeats": 2,
+ "cap_usd": 25,
+ "cap_start_spend": null
 }
