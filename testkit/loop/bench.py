@@ -45,6 +45,9 @@ ARMS = {
 
 
 # ---------- tasks --------------------------------------------------------------------------------------------------
+EXTRA_ENV: dict = {}       # arm -> extra environment (--arm-env), e.g. a candidate harness's MH_SPECS_FILE
+
+
 def load_suites(names: list[str]) -> list[dict]:
     out = []
     for n in names:
@@ -264,7 +267,7 @@ def run(args) -> int:
         if False:
             pass
         else:
-            env = dict(os.environ, **ARMS.get(arm, {"MH_HROUTER": "1"}))
+            env = dict(os.environ, **ARMS.get(arm, {"MH_HROUTER": "1"}), **EXTRA_ENV.get(arm, {}))
             if model:
                 env["MH_MODEL"] = model
             if args.meter_port:
@@ -523,7 +526,12 @@ def main():
     ap.add_argument("--price-cached", type=float, default=0.003)
     ap.add_argument("--price-out", type=float, default=0.60)
     ap.add_argument("--report", default="")
+    ap.add_argument("--arm-env", action="append", default=[], help="ARM:KEY=VAL (repeatable): extra env for one arm")
     a = ap.parse_args()
+    for spec in a.arm_env:
+        arm, _, kv = spec.partition(":")
+        k, _, v = kv.partition("=")
+        EXTRA_ENV.setdefault(arm, {})[k] = v
     load_key_file()
     if a.report:
         sys.exit(report(Path(a.report)))

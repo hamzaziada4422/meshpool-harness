@@ -43,6 +43,22 @@ Changes since run 3, aimed at calls and output (not yet measured):
 - A masked or mangled API key now gives one clear message. Before, it failed five different cryptic ways.
 - The skills list is loaded on demand, and the names-only list is capped at 60 (a real install had 584 skills).
 
+## Built since (all measured offline only, by tests; none on a model yet)
+- Sub-subtask harnesses: debug (syntax, test, exception, regression, perf) and build (cli, api, ui, function), each
+  with its own method. Specs resolve from most specific to general (spec.variant.language down to spec).
+- Data-driven specs (`app/defaults/specs.json`) and the harness optimizer (`testkit/loop/optimize.py`: propose, probe,
+  compose, after Harness²). Edits are adopted only when the stats say they help; lessons go to `lessons.jsonl`.
+- A review receipt after every turn that changes files: what changed (with git line counts), the command that
+  checked it, or a plain "not verified". It costs no model tokens.
+- Parallel tools: independent read-only calls in one message run together. Order is kept.
+- Memory v2: relevant recall, per-project notes outside the project, a fenced and scrubbed `<memory-context>`.
+- Data harness: the files' shape is read before the first call; DuckDB.
+- Deep suite: 6 multi-file tasks with hidden tests (checked solvable with reference fixes).
+
+## CI
+All GitHub workflows are disabled (spend control). Local suite: 933 passed. The 47 failures are all environmental
+on this Mac (no LibreOffice app, Chromium path, case-insensitive disk); CI installs those. Re-enable once, at the end.
+
 ## Next, in order
 1. Measure the lean changes, ideally with routed vs Pi vs Codex vs OpenCode vs Hermes on the same model. This needs
    the team budget raised.
