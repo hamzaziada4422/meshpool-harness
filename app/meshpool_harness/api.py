@@ -66,6 +66,14 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
               sessions_dir=os.path.join(workdir, ".run", "agent"))
     if model:
         a.model = model
+    route = None
+    if os.environ.get("MH_HROUTER", "1") != "0":   # the specialised harness, as the app picks it (0: the base agent)
+        from meshpool_harness import hrouter as HRR
+        from meshpool_harness import pace as PACE
+        route = HRR.route(task, kind="code" if profile == "code" else "cowork", workdir=workdir)
+        a.set_route(route, task)
+        a.lane = "chat" if route.lane == "chat" and PACE.classify(task) == "quick" else \
+            (route.lane if route.lane != "chat" else "task")
     answer = a.send(task)
     errors = [e.get("text", "") for e in events if e.get("type") == "error"]
     steps = sum(1 for e in events if e.get("type") == "assistant")
@@ -75,7 +83,7 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
              "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
              **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
-           "usage": usage}
+           "usage": usage, "route": route.spec if route else None, "model": a.current_model()}
     if errors and not capped:
         out["error"] = errors[-1][:500]
     return out

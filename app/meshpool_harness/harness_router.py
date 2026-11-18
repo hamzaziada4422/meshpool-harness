@@ -67,11 +67,13 @@ def _money(v: float) -> str:
     return f"${v:.4f}".rstrip("0").rstrip(".") if v < 0.1 else f"${v:.2f}"
 
 
-def route(text: str, kind: str = "cowork") -> dict:
-    """{harness, name, category, reason, score, ranking} for a task."""
+def route(text: str, kind: str = "cowork", category: str | None = None) -> dict:
+    """{harness, name, category, reason, score, ranking} for a task. category: already decided (hrouter's spec)."""
     from meshpool_harness import harnesses as HR
     t = table()
     cat, hits = classify(text, t)
+    if category and category in t["categories"]:
+        cat = category
     c = t["categories"].get(cat) or t["categories"].get("general") or {}
     quality = {h: float(s) for h, s in (c.get("scores") or {}).items()}
     for hid, bonus in ((t.get("mode_bonus") or {}).get(kind) or {}).items():

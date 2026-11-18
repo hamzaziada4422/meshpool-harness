@@ -1,0 +1,44 @@
+[
+ {
+  "id": "bld-py-fn",
+  "mode": "code",
+  "prompt": "Add a function is_palindrome(s) to text.py that ignores case, spaces and punctuation.",
+  "files": {
+   "text.py": "def shout(s):\n    return s.upper()\n"
+  },
+  "grade": {
+   "check": "python3 -c \"from text import is_palindrome as p; assert p('A man, a plan, a canal: Panama'); assert not p('abc'); assert p('')\""
+  }
+ },
+ {
+  "id": "bld-py-cli-flag",
+  "mode": "code",
+  "prompt": "Add a --count N option to cli.py that repeats the greeting N times (default 1).",
+  "files": {
+   "cli.py": "import argparse\n\np = argparse.ArgumentParser()\np.add_argument('name')\na = p.parse_args()\nprint(f'Hello, {a.name}')\n"
+  },
+  "grade": {
+   "check": "test \"$(python3 cli.py Bo --count 3 | grep -c 'Hello, Bo')\" = 3 && test \"$(python3 cli.py Bo | grep -c Hello)\" = 1"
+  }
+ },
+ {
+  "id": "bld-js-fn",
+  "mode": "code",
+  "prompt": "In utils.js, add and export a function chunk(arr, n) that splits an array into chunks of size n.",
+  "files": {
+   "utils.js": "function first(a) { return a[0] }\nmodule.exports = { first }\n"
+  },
+  "grade": {
+   "check": "node -e \"const {chunk}=require('./utils');const r=JSON.stringify(chunk([1,2,3,4,5],2));if(r!=='[[1,2],[3,4],[5]]'){console.log(r);process.exit(1)}\""
+  }
+ },
+ {
+  "id": "bld-py-class",
+  "mode": "code",
+  "prompt": "Create stack.py with a Stack class: push, pop (raises IndexError when empty), peek and __len__.",
+  "files": {},
+  "grade": {
+   "check": "python3 -c \"from stack import Stack; s=Stack(); s.push(1); s.push(2); assert s.peek()==2 and len(s)==2; assert s.pop()==2; s.pop()\nimport sys\ntry:\n s.pop(); sys.exit(1)\nexcept IndexError: pass\""
+  }
+ }
+]

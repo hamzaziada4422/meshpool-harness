@@ -40,7 +40,7 @@ SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user"}
+             "ask_user", "diagnostics", "find_skill"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -65,6 +65,11 @@ WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
+from meshpool_harness.hrouter import packs as _PACKS  # noqa: E402  language packs: the diagnostics tool
+T.SCHEMAS.setdefault("diagnostics", _PACKS.SCHEMA)
+T.SCHEMAS.setdefault("find_skill", T._fn(
+    "find_skill", "Search the user's skills (saved instructions for specific jobs) by a few words describing the task. "
+    "Returns the best matches with their descriptions; load one with use_skill.", {"query": T.S}, ["query"]))
 T.SCHEMAS.setdefault("use_skill", T._fn(
     "use_skill", "Load a skill's full instructions by name (from the skills list in your instructions). Do this before "
     "a task that matches a skill, and whenever the user writes $skill-name.", {"name": T.S}, ["name"]))
@@ -158,7 +163,9 @@ Environment
 - Shell for the bash tool: {shell}
 
 How to work
-1. Understand the job, then ask before you build (see "Asking the user" below).
+0. Match the effort to the request. A question, a rewrite or a quick lookup gets a direct answer, with a tool only \
+when the answer needs a file, a current fact or an action. Only a real deliverable gets the full process below.
+1. Understand the job. Ask only when a choice that changes the result is open (see "Asking the user" below).
 2. For a multi-step job, keep a short plan with todo_write and update it as you go.
 3. Gather material: read the user's files (read_file, glob, grep), research the web with web_research and \
 web_search, read pages and PDFs with fetch_url, and use connected apps (mcp__ tools) when they fit. For a big \
@@ -182,11 +189,21 @@ twice to clear check results; failures marked /renderer are the engine's own and
 6. Finish with a short reply: what you made, where the files are, and anything the user should check. Do not call \
 a tool in that reply.
 
+Answer style
+- Lead with the answer or the result in the first sentence. No preamble ("Great question", "Sure, I can help"), \
+no restating the request, no closing recap of what you just said, no offers of further help unless one is useful.
+- Be as short as the content allows: a quick question gets one to four sentences or a tight list. Use headings \
+and tables only for long or structured answers.
+- Do not narrate your tool calls; the user already sees them. Between tool calls write nothing, or one short line \
+when it helps the user follow along.
+
 Asking the user (ask_user)
 The user wants the result they had in mind, not a good guess. ask_user shows them clickable options; they can also \
 type their own answer.
-- Before you build a deliverable (deck, workbook, document, report, analysis), make ONE ask_user call with the 2 to \
-4 questions whose answers change the result most and that the request and files do not already answer. Typical ones: \
+- Before you build a large deliverable (deck, workbook, long document, report), make ONE ask_user call only if \
+choices that change the result most are still open after reading the request and files: at most 3 questions. If the \
+request already says what it wants, or it is small, build it now with your recommendations and list them in one \
+line at the end. Waiting on questions costs the user time; ask only what you cannot reasonably choose. Typical ones: \
 audience and purpose; density, with the options "present" (visual, few words, to present live), "balanced" and \
 "read" (a dense pre-read); length (e.g. number of slides or pages); look or theme (navy, ocean, forest, burgundy, \
 graphite, mono); sources to use or leave out. Give every question 2 to 5 short options, mark the one you recommend \
@@ -552,6 +569,8 @@ class Agent:
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
         self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self.route = None                      # hrouter.Route: the specialised harness this chat runs as
+        self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.title = ""
 
@@ -581,11 +600,23 @@ class Agent:
                 break
         try:
             from meshpool_harness import skills as SK
-            text += SK.catalog_text()
+            text += SK.catalog_text(getattr(self, "_route_text", ""))
         except Exception:
             pass
+        route = getattr(self, "route", None)
+        if route is not None:
+            from meshpool_harness.hrouter.route import addon
+            text += addon(route)
         from meshpool_harness.assistant import HONESTY, PLAIN
         return text + "\n\n" + PLAIN + "\n\n" + HONESTY
+
+    def set_route(self, route, text: str = "") -> None:
+        """Run this chat as a specialised harness (hrouter). Only before the first message: afterwards the system
+        prompt stays byte-stable so the provider's prompt cache keeps hitting."""
+        self.route = route
+        self._route_text = text or ""
+        if len(self.messages) <= 1:
+            self.messages = [{"role": "system", "content": self.system_prompt()}]
 
     def tool_schemas(self) -> list:
         if self.plan:
@@ -599,10 +630,27 @@ class Agent:
                                    if self.mcp else [])
 
     def _tool_names(self) -> list:
-        return PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
+        names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
+        extra = []
+        route = getattr(self, "route", None)
+        if route is not None and not self.plan:
+            from meshpool_harness.hrouter.route import tools as route_tools
+            extra += [t for t in route_tools(route) if t not in names]
+        try:
+            from meshpool_harness import skills as SK
+            if SK.on_demand() and "find_skill" not in names:
+                extra.append("find_skill")
+        except Exception:  # noqa: BLE001
+            pass
+        return names + extra if extra else names
 
     def current_model(self) -> str:
-        return self.model or os.environ.get("MH_MODEL") or DEFAULT_MODEL
+        if self.model:
+            return self.model
+        fast = os.environ.get("MH_MODEL_FAST", "").strip()
+        if fast and getattr(self, "lane", "task") == "chat":
+            return fast                        # a quick message on the fast tier; the user's own pick always wins
+        return os.environ.get("MH_MODEL") or DEFAULT_MODEL
 
     # ---------- public -----------------------------------------------------------------------------------------
     def stop(self):
@@ -1549,6 +1597,12 @@ class Agent:
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))
+            elif name == "find_skill":
+                from meshpool_harness import skills as SK
+                out = SK.search_text(str(args.get("query", "")))
+            elif name == "diagnostics":
+                out = self._wait(_PACKS.diagnostics, self.ws, args.get("paths"), args.get("language"),
+                                 bool(args.get("deep")))
             elif name == "todo_write":
                 items = [{"content": str(i.get("content", "")), "status": i.get("status", "pending")}
                          for i in args.get("items") or [] if isinstance(i, dict)]
@@ -1721,6 +1775,8 @@ class Agent:
                 "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
                 "kind": "cowork" if self.profile == "work" else "code",
                 "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False)),
+                "route": self.route.to_dict() if getattr(self, "route", None) is not None else None,
+                "route_text": getattr(self, "_route_text", ""),
                 "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
         except OSError:
             pass
@@ -1749,6 +1805,14 @@ class Agent:
             return None
         kw.setdefault("profile", "work" if best.get("harness") == "meshpool-work" else "code")
         a = cls(best["workdir"], session_id=best["id"], **kw)
+        if isinstance(best.get("route"), dict):
+            try:
+                from meshpool_harness.hrouter.route import Route
+                a.route = Route(**best["route"])
+                a._route_text = best.get("route_text") or ""
+                a.messages = [{"role": "system", "content": a.system_prompt()}]
+            except TypeError:
+                a.route = None
         a.messages = [a.messages[0]] + best.get("messages", [])
         a.usage = best.get("usage") or a.usage
         a.title = best.get("title", "")

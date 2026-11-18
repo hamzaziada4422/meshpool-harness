@@ -547,6 +547,21 @@ class Session:
                 from meshpool_harness import pace as PACE
                 quick = (not self.plan and not self.scheduled and not self.goal
                          and PACE.classify(text, bool(images)) == "quick")
+                self._turn_route = None
+                try:                                    # per message: the lane (and, on Auto, the fast model)
+                    from meshpool_harness import hrouter as HRR
+                    rr = HRR.route(text, kind=self.kind, workdir=self.workdir)
+                    self._turn_route = rr
+                    if hasattr(self.agent, "lane"):
+                        self.agent.lane = "chat" if quick and rr.lane == "chat" else rr.lane if rr.lane != "chat" \
+                            else "task"
+                    pending = getattr(self, "route_addon", "")
+                    if pending and self.harness["type"] in ("acp", "pi"):
+                        self.route_addon = ""           # an outside agent: the method rides on its first message
+                        body += "\n\n\u200b" + pending.strip()
+                except Exception:  # noqa: BLE001 - routing never blocks a message
+                    pass
+                u0 = dict(getattr(self.agent, "usage", {}) or {})
                 if self.goal:
                     body += GOAL_NOTE.format(goal=self.goal)
                 if quick:
@@ -580,6 +595,11 @@ class Session:
                     self.agent.send(body, images=images)
                 else:
                     self.agent.send(body)
+                try:
+                    from meshpool_harness.hrouter import outcomes as OUT
+                    OUT.log_turn(self, getattr(self, "_turn_route", None), u0)
+                except Exception:  # noqa: BLE001
+                    pass
             finally:
                 with _ACTIVE_LOCK:
                     _ACTIVE.get(root, set()).discard(self)
@@ -863,9 +883,18 @@ def create(body: dict) -> dict:
         Path(wd).mkdir(parents=True, exist_ok=True)
     harness, routed = body.get("harness") or None, None
     kind = body.get("kind") or "code"
+    task = body.get("task") or ""
+    hr = None
+    try:                                            # the specialised harness: a few ms, no model call
+        from meshpool_harness import hrouter as HRR
+        from meshpool_harness.hrouter.specs import get as spec_of
+        hr = HRR.route(task, files=body.get("files") or [], workdir=wd, kind=kind,
+                       force=body.get("spec") or None) if (task or body.get("spec")) else None
+    except Exception:  # noqa: BLE001
+        hr = None
     if (harness or HR.default_for(kind)) == "meshpool-auto":
         from meshpool_harness import harness_router as HRT
-        routed = HRT.route(body.get("task") or "", kind)
+        routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None)
         harness = routed["harness"]
     model = body.get("model") or None
     try:
@@ -877,6 +906,20 @@ def create(body: dict) -> dict:
         pass
     s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
                 kind=kind, model=model, plan=bool(body.get("plan")))
+    if hr is not None:
+        try:
+            from meshpool_harness.hrouter.route import addon
+            if hasattr(s.agent, "set_route"):
+                s.agent.set_route(hr, task)
+                s.agent.save()
+            else:
+                s.route_addon = addon(hr)
+            write_meta(s.id, route=hr.spec, route_label=hr.label)
+            if hr.spec not in ("general", "docs"):
+                s.emit({"type": "status", "route": hr.to_dict(),
+                        "text": f"Harness: {hr.label} ({hr.reason})."})
+        except Exception:  # noqa: BLE001
+            pass
     if routed:
         s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']}. {routed['reason']}"})
         write_meta(s.id, routed=routed["harness"])
