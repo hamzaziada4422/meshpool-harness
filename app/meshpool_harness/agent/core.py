@@ -665,6 +665,10 @@ class Agent:
         prompt stays byte-stable so the provider's prompt cache keeps hitting."""
         self.route = route
         self._route_text = text or ""
+        # Code harnesses: a failing command shows the project lines it points to, counted as read, so the fix needs no
+        # read_file call first (core/errctx.py). MH_ERROR_CONTEXT=0 turns it off.
+        self.ws.error_context = (route is not None and route.family == "code"
+                                 and os.environ.get("MH_ERROR_CONTEXT", "") != "0")
         if len(self.messages) <= 1:
             self.messages = [{"role": "system", "content": self.system_prompt()}]
 
@@ -1916,6 +1920,7 @@ class Agent:
                 from meshpool_harness.hrouter.route import Route
                 a.route = Route(**best["route"])
                 a._route_text = best.get("route_text") or ""
+                a.ws.error_context = a.route.family == "code" and os.environ.get("MH_ERROR_CONTEXT", "") != "0"
                 a.messages = [{"role": "system", "content": a.system_prompt()}]
             except TypeError:
                 a.route = None

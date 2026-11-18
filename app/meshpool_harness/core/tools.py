@@ -550,7 +550,8 @@ class Workspace:
     def _where(self, out, code, command) -> str:
         """MH_ERROR_CONTEXT: excerpts of the project code a failing command points to (core/errctx.py)."""
         from . import errctx
-        return errctx.context(out, self, command) if code not in (0, 124) and errctx.enabled() else ""
+        on = errctx.enabled() or getattr(self, "error_context", False)   # the routed code harnesses turn it on
+        return errctx.context(out, self, command) if code not in (0, 124) and on else ""
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
