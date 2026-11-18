@@ -199,7 +199,7 @@ def run(args) -> int:
     if res_path.exists():
         for line in res_path.read_text().splitlines():
             r = json.loads(line)
-            done.add((r["task"], r["arm"]))
+            done.add((r["task"], r["arm"], r.get("rep", 0)))
     prices = {"in": args.price_in, "cached": args.price_cached, "out": args.price_out, "by_model": {}}
     if args.prices and Path(args.prices).exists():           # models.json from models.py: each model's own prices
         for m in json.loads(Path(args.prices).read_text()):
@@ -209,9 +209,9 @@ def run(args) -> int:
     models = [m for m in (args.models or "").split(",") if m.strip()] or [os.environ.get("MH_MODEL", "")]
     spent = [sum(cost(json.loads(l), prices) for l in res_path.read_text().splitlines())] if res_path.exists() else [0.0]
 
-    def one(task, arm, model):
+    def one(task, arm, model, rep=0):
         label = f"{arm}@{model}" if len(models) > 1 else arm
-        if (task["id"], label) in done:
+        if (task["id"], label, rep) in done:
             return
         if spent[0] >= args.budget:
             return
@@ -234,7 +234,7 @@ def run(args) -> int:
                        "secs": args.timeout}
             finally:
                 Path(tmp).unlink(missing_ok=True)
-        row["arm"], row["base_arm"] = label, arm
+        row["arm"], row["base_arm"], row["rep"] = label, arm, rep
         row.setdefault("model", model)
         row["usd"] = round(cost(row, prices), 6)
         with LOCK:
@@ -252,7 +252,8 @@ def run(args) -> int:
             print(f"budget reached (${spent[0]:.2f}); skipping {m}", flush=True)
             continue
         s0 = key_spend(m) if m and not args.no_spend else None
-        jobs = [(t, a, m) for t in tasks for a in arms]   # arms of one task side by side: same hour
+        # arms of one task side by side (same hour, same cache state), repeated to tell a real difference from luck
+        jobs = [(t, a, m, k) for k in range(args.repeats) for t in tasks for a in arms]
         with ThreadPoolExecutor(args.parallel) as ex:
             list(ex.map(lambda j: one(*j), jobs))
         if s0 is not None:
@@ -269,6 +270,62 @@ def run(args) -> int:
     return report(out, labels, args.slack)
 
 
+def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """95% confidence interval for a solve rate (Wilson score)."""
+    if not n:
+        return 0.0, 0.0
+    p = k / n
+    d = 1 + z * z / n
+    c = (p + z * z / (2 * n)) / d
+    h = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / d
+    return max(0.0, c - h), min(1.0, c + h)
+
+
+def mcnemar_p(b: int, c: int) -> float:
+    """Exact two-sided McNemar p: b = pairs only arm A solved, c = pairs only arm B solved."""
+    from math import comb
+    n = b + c
+    if not n:
+        return 1.0
+    k = min(b, c)
+    return min(1.0, 2 * sum(comb(n, i) for i in range(k + 1)) / 2 ** n)
+
+
+def ratio_ci(pairs: list[tuple[float, float]], iters: int = 2000) -> tuple[float, float, float]:
+    """Ratio of totals (A/B) with a paired bootstrap 95% interval; pairs are (a, b) per task and repeat."""
+    import random
+    pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
+    if not pairs or not sum(b for _, b in pairs):
+        return float("nan"), float("nan"), float("nan")
+    rnd = random.Random(11)
+    est = sum(a for a, _ in pairs) / sum(b for _, b in pairs)
+    vals = []
+    for _ in range(iters):
+        smp = [pairs[rnd.randrange(len(pairs))] for _ in pairs]
+        sb = sum(b for _, b in smp)
+        if sb:
+            vals.append(sum(a for a, _ in smp) / sb)
+    vals.sort()
+    return est, vals[int(0.025 * len(vals))], vals[int(0.975 * len(vals)) - 1]
+
+
+def compare(by: dict, keys: list, a: str, b: str) -> dict:
+    """Arm a against arm b over the (task, repeat) pairs both ran: quality by McNemar, cost and time by paired
+    bootstrap. A difference counts only when it is beyond chance (p < 0.05, or the 95% interval excludes 1)."""
+    pairs = [(by[(t, a, r)], by[(t, b, r)]) for t, r in keys if (t, a, r) in by and (t, b, r) in by]
+    only_a = sum(x["pass"] and not y["pass"] for x, y in pairs)
+    only_b = sum(y["pass"] and not x["pass"] for x, y in pairs)
+    p = mcnemar_p(only_a, only_b)
+    solved = [(x, y) for x, y in pairs if x["pass"] and y["pass"]]     # cost and time where both solved
+    cost = ratio_ci([(x.get("usd", 0), y.get("usd", 0)) for x, y in solved])
+    secs = ratio_ci([(x.get("secs", 0), y.get("secs", 0)) for x, y in solved])
+    quality = ("better" if only_a > only_b and p < 0.05 else "worse" if only_b > only_a and p < 0.05 else "tie")
+    cheaper = "cheaper" if cost[2] < 1 else "costlier" if cost[1] > 1 else "same cost"
+    faster = "faster" if secs[2] < 1 else "slower" if secs[1] > 1 else "same speed"
+    return {"n": len(pairs), "only_a": only_a, "only_b": only_b, "p": p, "quality": quality, "cost": cost,
+            "secs": secs, "cheaper": cheaper, "faster": faster}
+
+
 def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     rows = [json.loads(l) for l in (out / "results.jsonl").read_text().splitlines()]
     sp = out / "spend.json"
@@ -279,56 +336,65 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
             for r in rows:
                 if r.get("model") == m:
                     r["usd"] = r.get("usd", 0) * real / est
+    for r in rows:
+        r.setdefault("rep", 0)
     arms = arms or sorted({r["arm"] for r in rows})
-    tasks = sorted({r["task"] for r in rows})
-    by = {(r["task"], r["arm"]): r for r in rows}
-    both = [t for t in tasks if all((t, a) in by for a in arms)]   # paired: only tasks every arm finished
+    by = {(r["task"], r["arm"], r["rep"]): r for r in rows}
+    keys = sorted({(r["task"], r["rep"]) for r in rows})
+    keys = [k for k in keys if all((k[0], a, k[1]) in by for a in arms)]   # paired: every arm ran it
+    reps = len({r for _, r in keys}) or 1
     lines = [f"# Harness loop: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}", "",
-             f"{len(both)} tasks run by every arm ({', '.join(arms)}). Same model, same hour, graded by code.",
+             f"{len({t for t, _ in keys})} tasks x {reps} repeat(s), run by every arm ({', '.join(arms)}). Same model "
+             "and hour per pair, graded by code. Intervals are 95%; a difference counts only when it is beyond chance.",
              ("Cost: billed key spend per model, split between arms by tokens: "
               + ", ".join(f"{m} ${v:.4f}" for m, v in actual.items())) if actual else
              "Cost: estimated from tokens at list prices (no billed spend available).", "",
-             "| Arm | Solved | Errors | $ per solved | s per solved | Out tokens per task | Model calls per task |",
-             "|---|---|---|---|---|---|---|"]
+             "| Arm | Solved | Solve rate (95% CI) | Errors | $ per solved | s per solved | Out tokens | Calls |",
+             "|---|---|---|---|---|---|---|---|"]
     stats = {}
     for a in arms:
-        rs = [by[(t, a)] for t in both]
-        solved = sum(r["pass"] for r in rs)
-        usd = sum(r.get("usd", 0) for r in rs)
-        secs = sum(r.get("secs", 0) for r in rs)
-        outt = sum(r.get("completion_tokens", 0) for r in rs)
-        calls = sum(r.get("model_calls", 0) for r in rs)
-        stats[a] = {"solved": solved, "usd": usd, "secs": secs}
+        rs = [by[(t, a, r)] for t, r in keys]
+        k = sum(x["pass"] for x in rs)
+        lo, hi = wilson(k, len(rs))
+        usd, secs = sum(x.get("usd", 0) for x in rs), sum(x.get("secs", 0) for x in rs)
+        errs = sum(bool(x.get("error")) or x.get("why") == "timeout" for x in rs)
+        stats[a] = {"solved": k, "usd": usd, "secs": secs, "errors": errs, "n": len(rs)}
         n = max(1, len(rs))
-        errs = sum(bool(r.get("error")) or r.get("why") == "timeout" for r in rs)
-        stats[a]["errors"] = errs
-        lines.append(f"| {a} | {solved}/{len(rs)} | {errs} | ${usd / max(1, solved):.4f} | {secs / max(1, solved):.1f} | "
-                     f"{outt / n:.0f} | {calls / n:.1f} |")
+        lines.append(f"| {a} | {k}/{len(rs)} | {k / n:.0%} ({lo:.0%}-{hi:.0%}) | {errs} | ${usd / max(1, k):.4f} | "
+                     f"{secs / max(1, k):.1f} | {sum(x.get('completion_tokens', 0) for x in rs) / n:.0f} | "
+                     f"{sum(x.get('model_calls', 0) for x in rs) / n:.1f} |")
     suites = sorted({r["suite"] for r in rows})
-    lines += ["", "Per suite (solved):", "", "| Suite | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
-    for s in suites:
-        ts = [t for t in both if by[(t, arms[0])]["suite"] == s]
-        lines.append(f"| {s} | " + " | ".join(f"{sum(by[(t, a)]['pass'] for t in ts)}/{len(ts)}" for a in arms) + " |")
-    only = {a: [t for t in both if by[(t, a)]["pass"] and not all(by[(t, b)]["pass"] for b in arms)] for a in arms}
-    lines += ["", "Solved by some arms but not all: " + "; ".join(f"{a}: {', '.join(v) or 'none'}" for a, v in only.items())]
+    lines += ["", "Solved per suite:", "", "| Suite | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
+    for s_ in suites:
+        ks = [k for k in keys if by[(k[0], arms[0], k[1])]["suite"] == s_]
+        lines.append(f"| {s_} | " + " | ".join(f"{sum(by[(t, a, r)]['pass'] for t, r in ks)}/{len(ks)}" for a in arms)
+                     + " |")
+    if reps > 1:                                       # one-offs: tasks an arm solved in some repeats, not all
+        flaky = []
+        for a in arms:
+            for t in sorted({t for t, _ in keys}):
+                ps = [by[(t, a, r)]["pass"] for tt, r in keys if tt == t]
+                if 0 < sum(ps) < len(ps):
+                    flaky.append(f"{a}: {t} {sum(ps)}/{len(ps)}")
+        lines += ["", "Flaky (solved in some repeats only): " + ("; ".join(flaky) or "none")]
     code = 0
-    pairs = [("base", "routed", "")] + [(a, a.replace("base@", "routed@", 1), a.split("@", 1)[1])
-                                        for a in arms if a.startswith("base@")]
-    for b_arm, r_arm, model in pairs:
-        if b_arm not in stats or r_arm not in stats:
+    pairs = [("routed", "base", "")] + [(a, a.replace("routed@", "base@", 1), a.split("@", 1)[1])
+                                        for a in arms if a.startswith("routed@")]
+    pairs += [("routed", "pi", "")] + [(a, a.replace("routed@", "pi@", 1), a.split("@", 1)[1])
+                                       for a in arms if a.startswith("routed@")]
+    for a, b, model in pairs:
+        if a not in stats or b not in stats:
             continue
-        b, r = stats[b_arm], stats[r_arm]
-        verdict = ("BETTER" if r["solved"] > b["solved"] or (r["solved"] == b["solved"] and r["usd"] < b["usd"])
-                   else "WORSE" if r["solved"] < b["solved"] - slack else "SAME")
-        lines += ["", f"Verdict{' on ' + model if model else ''}, routed vs base: **{verdict}** (solved {r['solved']} "
-                      f"vs {b['solved']}, cost ${r['usd']:.4f} vs ${b['usd']:.4f}, time {r['secs']:.0f}s vs "
-                      f"{b['secs']:.0f}s)"]
-        code = 1 if verdict == "WORSE" else code
-    broken = [a for a in arms if stats[a].get("errors", 0) >= max(2, len(both) // 2)]
+        c = compare(by, keys, a, b)
+        f = lambda t: "n/a" if t[0] != t[0] else f"{t[0]:.2f}x ({t[1]:.2f}-{t[2]:.2f})"   # noqa: E731
+        lines += ["", f"**{a} vs {b}**{' on ' + model if model else ''}: quality {c['quality'].upper()} "
+                      f"({c['only_a']} pairs only {a} solved, {c['only_b']} only {b}, p={c['p']:.3f}); "
+                      f"cost {c['cheaper']} {f(c['cost'])}; time {c['faster']} {f(c['secs'])}"]
+        if b.split("@")[0] == "base" and c["quality"] == "worse":
+            code = 1                                   # a real quality regression fails the run
+    broken = [a for a in arms if stats[a].get("errors", 0) >= max(2, stats[a]["n"] // 2)]
     if broken:
         lines += ["", "Not comparable (most tasks ended on an endpoint or model error): " + ", ".join(broken)]
-        errs = sorted({str(by[(t, a)].get("error"))[:160] for a in broken for t in both if by[(t, a)].get("error")})
-        lines += [f"- {e}" for e in errs[:5]]
     text = "\n".join(lines) + "\n"
     (out / "summary.md").write_text(text)
     print(text)
@@ -347,6 +413,7 @@ def main():
     ap.add_argument("--timeout", type=int, default=600)
     ap.add_argument("--budget", type=float, default=1.5)
     ap.add_argument("--slack", type=int, default=1)
+    ap.add_argument("--repeats", type=int, default=1, help="run every task this many times per arm")
     ap.add_argument("--fast-model", default="")
     ap.add_argument("--models", default="", help="comma list: every arm runs on each model")
     ap.add_argument("--prices", default="", help="models.json from models.py (per-model prices)")

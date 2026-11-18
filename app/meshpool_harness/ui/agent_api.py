@@ -913,7 +913,8 @@ def create(body: dict) -> dict:
         hr = None
     if (harness or HR.default_for(kind)) == "meshpool-auto":
         from meshpool_harness import harness_router as HRT
-        routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None)
+        routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None,
+                           model=body.get("model") or None)
         harness = routed["harness"]
     model = body.get("model") or None
     try:

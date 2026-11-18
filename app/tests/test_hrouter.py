@@ -233,3 +233,19 @@ def test_spent_quota_is_not_retried():
               "HTTP 429: You exceeded your current quota, please check your plan", "HTTP 402: Insufficient credits"):
         assert classify_error(m) == "quota", m
     assert classify_error("HTTP 429: Rate limit reached for requests") == "rate_limit"
+
+
+def test_auto_prefers_measured_numbers_for_the_chat_model(monkeypatch):
+    from meshpool_harness import harness_router as HRT
+    t = HRT.table()
+    t["measured_min_n"] = 10
+    t["measured"] = {"m-1": {"code": {"pi": {"n": 40, "score": 90, "cost_usd": 0.0005, "seconds": 9},
+                                      "meshpool-code": {"n": 40, "score": 91, "cost_usd": 0.002, "seconds": 12}},
+                             "general": {"pi": {"n": 3, "score": 99}}}}
+    monkeypatch.setattr(HRT, "table", lambda: t)
+    monkeypatch.setattr(HRT, "_ready", lambda kind: {h: {"id": h, "name": h} for h in ("pi", "meshpool-code", "codex",
+                                                                                         "meshpool-work", "hermes")})
+    r = HRT.route("fix the bug", "code", category="code", model="m-1")
+    assert r["harness"] == "pi" and "measured on this model" in r["reason"]   # same quality band, cheaper
+    assert HRT.measured(t, "general", "m-1") == {}                            # 3 runs is not enough to trust
+    assert HRT.route("fix the bug", "code", category="code", model="other")["harness"] != "" 

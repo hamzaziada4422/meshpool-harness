@@ -503,6 +503,7 @@ class PiAgent:
         if self._text:
             txt = "".join(self._text)
             self._text = []
+            self._turn_reply = txt                       # the turn's last reply, for send()'s return value
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
 
     # ---------- model ------------------------------------------------------------------------------------------
@@ -541,6 +542,7 @@ class PiAgent:
                     "Do not change any files or run commands that change anything; the user will review the plan "
                     "first.\n\n" + text)
         self._text, self._denied = [], set()
+        self._turn_reply = ""
         self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         final = ""
         try:
@@ -571,6 +573,9 @@ class PiAgent:
                     break
             final = "".join(self._text)
             self._flush_text()
+            # Text is flushed into the chat at each message boundary, so the buffer is often empty by now: the
+            # answer is the turn's last flushed reply (send() returned "" before, to schedules and sub-agents).
+            final = final or self._turn_reply
             if self._stop:
                 self._emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
             try:

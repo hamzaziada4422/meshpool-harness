@@ -1,8 +1,14 @@
 {
-  "arms": "base,routed,pi,pi-routed",
-  "suites": "chat,debug,build,hard",
-  "budget": "5.00",
-  "models": "deepseek-v4.1-flash,gpt-6-luna,claude-haiku-5.5,kimi-k3",
-  "fast_model": "",
-  "probe_filter": ""
+ "arms": "base,routed,pi",
+ "suites": "chat,debug,build,hard",
+ "budget": "7.00",
+ "models": "deepseek-v4.1-flash,gpt-6-luna,claude-haiku-5.5,kimi-k3",
+ "fast_model": "",
+ "probe_filter": "",
+ "swe": {
+  "n": 12,
+  "model": "deepseek-v4.1-flash",
+  "arms": "routed,base,pi"
+ },
+ "repeats": 3
 }

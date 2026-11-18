@@ -481,8 +481,8 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
 
 def reproduce(ws, text: str) -> str:
     """Run the commands the user named before the model's first turn; their output, ready to read."""
-    if getattr(ws, "container", None):
-        return ""
+    if getattr(ws, "container", None) or re.search(r"\bdocker (exec|run)\b", text or ""):
+        return ""                                     # the code runs elsewhere: a host run would mislead
     blocks = []
     for c in repro_commands(text, ws.root):
         out, code = ws._run(c, 30, "check")

@@ -67,14 +67,32 @@ def _money(v: float) -> str:
     return f"${v:.4f}".rstrip("0").rstrip(".") if v < 0.1 else f"${v:.2f}"
 
 
-def route(text: str, kind: str = "cowork", category: str | None = None) -> dict:
-    """{harness, name, category, reason, score, ranking} for a task. category: already decided (hrouter's spec)."""
+def measured(t: dict, cat: str, model: str | None) -> dict:
+    """The loop's measurements for this model and category (testkit/loop/routing_fit.py): harness -> {score,
+    cost_usd, seconds, n}, only entries with enough tasks to trust."""
+    if not model:
+        return {}
+    from meshpool_harness import providers as PV
+    bare = PV.split(model)[1]
+    m = ((t.get("measured") or {}).get(bare) or {}).get(cat) or {}
+    need = int(t.get("measured_min_n", 10))
+    return {h: v for h, v in m.items() if isinstance(v, dict) and v.get("n", 0) >= need}
+
+
+def route(text: str, kind: str = "cowork", category: str | None = None, model: str | None = None) -> dict:
+    """{harness, name, category, reason, score, ranking} for a task. category: already decided (hrouter's spec).
+    model: the chat's model; where the loop measured harnesses on it, those numbers replace the hand-set ones."""
     from meshpool_harness import harnesses as HR
     t = table()
     cat, hits = classify(text, t)
     if category and category in t["categories"]:
         cat = category
-    c = t["categories"].get(cat) or t["categories"].get("general") or {}
+    c = dict(t["categories"].get(cat) or t["categories"].get("general") or {})
+    meas = measured(t, cat, model or os.environ.get("MH_MODEL") or C.read().get("MH_MODEL"))
+    if meas:                                    # measured on this model: those numbers win, per harness
+        c["scores"] = {**(c.get("scores") or {}), **{h: v["score"] for h, v in meas.items()}}
+        c["cost_usd"] = {**(c.get("cost_usd") or {}), **{h: v["cost_usd"] for h, v in meas.items() if "cost_usd" in v}}
+        c["seconds"] = {**(c.get("seconds") or {}), **{h: v["seconds"] for h, v in meas.items() if "seconds" in v}}
     quality = {h: float(s) for h, s in (c.get("scores") or {}).items()}
     for hid, bonus in ((t.get("mode_bonus") or {}).get(kind) or {}).items():
         if hid in quality:                      # a harness with no score in a category is never picked for it
@@ -92,7 +110,8 @@ def route(text: str, kind: str = "cowork", category: str | None = None) -> dict:
     order = lambda h: (cost.get(h, inf), secs.get(h, inf), -scored[h])   # noqa: E731
     pool = sorted((h for h, q in scored.items() if q >= best - band), key=order)
     hid = pool[0]
-    why = f"a {cat} task" + (f" ({', '.join(hits[:3])})" if hits else "")
+    why = f"a {cat} task" + (f" ({', '.join(hits[:3])})" if hits else "") + (
+        f", measured on this model ({sum(v['n'] for v in meas.values())} runs)" if meas else "")
     if len(pool) == 1 or hid not in cost:
         reason = f"Best benchmark quality for {why}."
     else:
