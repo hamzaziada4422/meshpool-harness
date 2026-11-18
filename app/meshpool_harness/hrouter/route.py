@@ -63,6 +63,8 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
     fam, why, conf = "", "", 0.5
     if err:
         fam, why, conf = "code", f"a pasted {err} error", 0.95
+    elif kind != "code" and not files and S.snippet_request(text):
+        fam, why, conf, lane = "chat", "a request for a short snippet", 0.85, "chat"
     elif kind == "code":
         other = {k: v for k, v in fams.items() if k not in ("code", "research")}
         top = max(other, key=other.get) if other else ""

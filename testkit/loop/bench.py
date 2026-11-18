@@ -127,6 +127,7 @@ def run_pi(task: dict, arm: str) -> dict:
 
 
 def cost(row: dict, prices: dict) -> float:
+    prices = (prices.get("by_model") or {}).get(row.get("model") or "", prices)
     fresh = max(0, row.get("prompt_tokens", 0) - row.get("cached_tokens", 0))
     return (fresh * prices["in"] + row.get("cached_tokens", 0) * prices["cached"]
             + row.get("completion_tokens", 0) * prices["out"]) / 1e6
@@ -143,11 +144,18 @@ def run(args) -> int:
         for line in res_path.read_text().splitlines():
             r = json.loads(line)
             done.add((r["task"], r["arm"]))
-    prices = {"in": args.price_in, "cached": args.price_cached, "out": args.price_out}
+    prices = {"in": args.price_in, "cached": args.price_cached, "out": args.price_out, "by_model": {}}
+    if args.prices and Path(args.prices).exists():           # models.json from models.py: each model's own prices
+        for m in json.loads(Path(args.prices).read_text()):
+            p = m.get("price") or {}
+            if "in" in p and "out" in p:
+                prices["by_model"][m["id"]] = {"in": p["in"], "out": p["out"], "cached": p.get("cached", p["in"] / 10)}
+    models = [m for m in (args.models or "").split(",") if m.strip()] or [os.environ.get("MH_MODEL", "")]
     spent = [sum(cost(json.loads(l), prices) for l in res_path.read_text().splitlines())] if res_path.exists() else [0.0]
 
-    def one(task, arm):
-        if (task["id"], arm) in done:
+    def one(task, arm, model):
+        label = f"{arm}@{model}" if len(models) > 1 else arm
+        if (task["id"], label) in done:
             return
         if spent[0] >= args.budget:
             return
@@ -155,6 +163,8 @@ def run(args) -> int:
             row = run_pi(task, arm)
         else:
             env = dict(os.environ, **ARMS.get(arm, {}))
+            if model:
+                env["MH_MODEL"] = model
             if arm == "routed-fast" and args.fast_model:
                 env["MH_MODEL_FAST"] = args.fast_model
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
@@ -168,6 +178,8 @@ def run(args) -> int:
                        "secs": args.timeout}
             finally:
                 Path(tmp).unlink(missing_ok=True)
+        row["arm"], row["base_arm"] = label, arm
+        row.setdefault("model", model)
         row["usd"] = round(cost(row, prices), 6)
         with LOCK:
             spent[0] += row["usd"]
@@ -177,10 +189,11 @@ def run(args) -> int:
               f"${row['usd']:.4f}  {row.get('route') or ''}  {'' if row['pass'] else row.get('why', '')[:80]}",
               flush=True)
 
-    jobs = [(t, a) for t in tasks for a in arms]     # arms of one task side by side: same hour, same cache state
+    jobs = [(t, a, m) for m in models for t in tasks for a in arms]   # arms of one task side by side: same hour
     with ThreadPoolExecutor(args.parallel) as ex:
-        list(ex.map(lambda ta: one(*ta), jobs))
-    return report(out, arms, args.slack)
+        list(ex.map(lambda j: one(*j), jobs))
+    labels = [f"{a}@{m}" if len(models) > 1 else a for m in models for a in arms]
+    return report(out, labels, args.slack)
 
 
 def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
@@ -191,8 +204,8 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     both = [t for t in tasks if all((t, a) in by for a in arms)]   # paired: only tasks every arm finished
     lines = [f"# Harness loop: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}", "",
              f"{len(both)} tasks run by every arm ({', '.join(arms)}). Same model, same hour, graded by code.", "",
-             "| Arm | Solved | $ per solved | s per solved | Out tokens per task | Model calls per task |",
-             "|---|---|---|---|---|---|"]
+             "| Arm | Solved | Errors | $ per solved | s per solved | Out tokens per task | Model calls per task |",
+             "|---|---|---|---|---|---|---|"]
     stats = {}
     for a in arms:
         rs = [by[(t, a)] for t in both]
@@ -203,7 +216,9 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
         calls = sum(r.get("model_calls", 0) for r in rs)
         stats[a] = {"solved": solved, "usd": usd, "secs": secs}
         n = max(1, len(rs))
-        lines.append(f"| {a} | {solved}/{len(rs)} | ${usd / max(1, solved):.4f} | {secs / max(1, solved):.1f} | "
+        errs = sum(bool(r.get("error")) or r.get("why") == "timeout" for r in rs)
+        stats[a]["errors"] = errs
+        lines.append(f"| {a} | {solved}/{len(rs)} | {errs} | ${usd / max(1, solved):.4f} | {secs / max(1, solved):.1f} | "
                      f"{outt / n:.0f} | {calls / n:.1f} |")
     suites = sorted({r["suite"] for r in rows})
     lines += ["", "Per suite (solved):", "", "| Suite | " + " | ".join(arms) + " |", "|---|" + "---|" * len(arms)]
@@ -213,13 +228,23 @@ def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     only = {a: [t for t in both if by[(t, a)]["pass"] and not all(by[(t, b)]["pass"] for b in arms)] for a in arms}
     lines += ["", "Solved by some arms but not all: " + "; ".join(f"{a}: {', '.join(v) or 'none'}" for a, v in only.items())]
     code = 0
-    if "base" in stats and "routed" in stats:
-        b, r = stats["base"], stats["routed"]
+    pairs = [("base", "routed", "")] + [(a, a.replace("base@", "routed@", 1), a.split("@", 1)[1])
+                                        for a in arms if a.startswith("base@")]
+    for b_arm, r_arm, model in pairs:
+        if b_arm not in stats or r_arm not in stats:
+            continue
+        b, r = stats[b_arm], stats[r_arm]
         verdict = ("BETTER" if r["solved"] > b["solved"] or (r["solved"] == b["solved"] and r["usd"] < b["usd"])
                    else "WORSE" if r["solved"] < b["solved"] - slack else "SAME")
-        lines += ["", f"Verdict, routed vs base: **{verdict}** (solved {r['solved']} vs {b['solved']}, "
-                      f"cost ${r['usd']:.4f} vs ${b['usd']:.4f}, time {r['secs']:.0f}s vs {b['secs']:.0f}s)"]
-        code = 1 if verdict == "WORSE" else 0
+        lines += ["", f"Verdict{' on ' + model if model else ''}, routed vs base: **{verdict}** (solved {r['solved']} "
+                      f"vs {b['solved']}, cost ${r['usd']:.4f} vs ${b['usd']:.4f}, time {r['secs']:.0f}s vs "
+                      f"{b['secs']:.0f}s)"]
+        code = 1 if verdict == "WORSE" else code
+    broken = [a for a in arms if stats[a].get("errors", 0) >= max(2, len(both) // 2)]
+    if broken:
+        lines += ["", "Not comparable (most tasks ended on an endpoint or model error): " + ", ".join(broken)]
+        errs = sorted({str(by[(t, a)].get("error"))[:160] for a in broken for t in both if by[(t, a)].get("error")})
+        lines += [f"- {e}" for e in errs[:5]]
     text = "\n".join(lines) + "\n"
     (out / "summary.md").write_text(text)
     print(text)
@@ -239,6 +264,8 @@ def main():
     ap.add_argument("--budget", type=float, default=1.5)
     ap.add_argument("--slack", type=int, default=1)
     ap.add_argument("--fast-model", default="")
+    ap.add_argument("--models", default="", help="comma list: every arm runs on each model")
+    ap.add_argument("--prices", default="", help="models.json from models.py (per-model prices)")
     ap.add_argument("--price-in", type=float, default=0.15)
     ap.add_argument("--price-cached", type=float, default=0.003)
     ap.add_argument("--price-out", type=float, default=0.60)

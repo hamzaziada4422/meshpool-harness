@@ -198,6 +198,17 @@ def families(text: str, files: list[str] | None = None) -> dict[str, float]:
     return w
 
 
+_SNIPPET = re.compile(r"\b((only|just) (the|a|an) (query|regex|command|code|answer|snippet|formula|function|"
+                      r"one[- ]liner|sql)|one[- ]liner|give (me )?(a|an|the) (regex|query|sql query|command|formula|"
+                      r"one[- ]liner|snippet|shell command|cron expression)|write (a|an|the) (sql query|regex|formula|"
+                      r"one[- ]liner|cron expression|shell command))\b", re.I)
+
+
+def snippet_request(text: str) -> bool:
+    """A request for one short piece of code or a formula, answered in the reply (no project, no files)."""
+    return bool(_SNIPPET.search(text or "")) and len((text or "").split()) <= 60
+
+
 def size(text: str) -> str:
     """short | medium | long, by how much the user wrote."""
     n = len((text or "").split())

@@ -21,6 +21,8 @@ CASES = [  # (kind, text, spec, lane)
     ("cowork", "Analyze sales.csv and tell me which region declined", "data", None),
     ("cowork", "Research the competitive landscape for AI coding agents with sources", "research", "task"),
     ("cowork", "what is the latest news on the fed?", "chat", "chat"),
+    ("cowork", "Give a regex that matches a 5-digit US ZIP code, only the regex.", "chat", "chat"),
+    ("cowork", "Write a SQL query that counts orders per customer_id in table orders. Only the query.", "chat", "chat"),
     ("cowork", "every monday morning send me a summary of my unread emails", "automation", None),
     ("cowork", "log in to my bank website and download last month's statement", "browser", None),
     ("code", "add a --verbose flag to the CLI", "code.build", None),

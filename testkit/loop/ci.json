@@ -1,0 +1,8 @@
+{
+  "arms": "base,routed",
+  "suites": "chat,debug,build",
+  "budget": "1.50",
+  "models": "",
+  "fast_model": "",
+  "probe_filter": ""
+}

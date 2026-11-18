@@ -3,6 +3,9 @@
 # loop-history branch so the trend is visible. Needs the repository secrets MESHPOOL_API_KEY and MESHPOOL_BASE_URL.
 name: harness-loop
 on:
+  push:
+    branches: [harness-router]     # until merged: every push probes the models; "[loop]" in the message runs the loop
+    paths: ["app/**", "testkit/loop/**", ".github/workflows/harness-loop.yml"]
   schedule:
     - cron: "30 12 * * *"        # 12:30 UTC: DeepSeek off-peak (peak is 01-04 and 06-10 UTC on weekdays)
   workflow_dispatch:
@@ -22,6 +25,16 @@ on:
       fast_model:
         description: "Fast model for the routed-fast arm's chat lane"
         default: ""
+      models:
+        description: "Comma list: run every arm on each of these models (blank: one model, see 'model')"
+        default: ""
+      probe_only:
+        description: "Only probe which models answer and call tools (a few tokens per model)"
+        type: boolean
+        default: false
+      probe_filter:
+        description: "Probe only model ids containing any of these comma-separated words (blank: all)"
+        default: ""
 concurrency:
   group: harness-loop
   cancel-in-progress: false
@@ -35,6 +48,7 @@ jobs:
       MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
       MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
       MH_MODEL: ${{ inputs.model || vars.MH_MODEL || 'deepseek-v4.1-flash' }}
+      RUN_LOOP: ${{ (github.event_name == 'schedule') || (github.event_name == 'workflow_dispatch' && !inputs.probe_only) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[loop]')) }}
       MH_HOME: ${{ github.workspace }}/.mhhome
     steps:
       - uses: actions/checkout@v4
@@ -54,23 +68,45 @@ jobs:
           node-version: "22"
       - name: Python packages
         run: pip install -r packaging/requirements-cli.txt ruff
+      - name: Settings (inputs when started by hand, else testkit/loop/ci.json)
+        id: cfg
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          c = json.load(open("testkit/loop/ci.json"))
+          ins = json.loads(os.environ["INPUTS"] or "{}")
+          for k in ("arms", "suites", "budget", "models", "fast_model", "probe_filter"):
+              v = ins.get(k) or c.get(k, "")
+              print(f"{k}={v}")
+          PY
+        env:
+          INPUTS: ${{ toJSON(inputs) }}
+      - name: Probe the endpoint's models (chat + tool call, a few tokens each)
+        run: |
+          python testkit/loop/models.py --out loop-out --only "${{ steps.cfg.outputs.probe_filter }}" | tail -n 200
+          cat loop-out/models.md >> "$GITHUB_STEP_SUMMARY"
       - name: Run the loop
         id: loop
+        if: env.RUN_LOOP == 'true'
         run: |
           set +e
           python testkit/loop/bench.py \
-            --arms "${{ inputs.arms || 'base,routed' }}" \
-            --suites "${{ inputs.suites || 'chat,debug,build' }}" \
-            --budget "${{ inputs.budget || '1.50' }}" \
-            --fast-model "${{ inputs.fast_model }}" \
+            --arms "${{ steps.cfg.outputs.arms }}" \
+            --suites "${{ steps.cfg.outputs.suites }}" \
+            --budget "${{ steps.cfg.outputs.budget }}" \
+            --fast-model "${{ steps.cfg.outputs.fast_model }}" \
+            --models "${{ steps.cfg.outputs.models }}" \
+            --prices loop-out/models.json \
             --out loop-out
           echo "code=$?" >> "$GITHUB_OUTPUT"
           cat loop-out/summary.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: harness-loop-${{ github.run_id }}
           path: loop-out
       - name: Keep the run on the loop-history branch
+        if: env.RUN_LOOP == 'true'
         run: |
           stamp=$(date -u +%Y-%m-%dT%H%M)
           git config user.name "harness-loop"
@@ -87,7 +123,7 @@ jobs:
           (cd hist && ls -1 runs/*.md | sort -r | sed 's/^/- /' > INDEX.md && git add -A \
             && git commit -qm "loop $stamp $MH_MODEL" && git push origin HEAD:loop-history)
       - name: Fail on a regression
-        if: steps.loop.outputs.code != '0'
+        if: env.RUN_LOOP == 'true' && steps.loop.outputs.code != '0'
         run: |
           echo "::error::The routed harnesses solved fewer tasks than the base agent. See the summary."
           exit 1
