@@ -66,6 +66,10 @@ def proposals(key: str, n: int, evidence: str, model: str) -> list[tuple[str, di
     """N rewrites of the method from a cheap model; empty on any failure (the catalogue still runs)."""
     if n <= 0:
         return []
+    left = bench.cap_left(model)
+    if left is not None and left < bench.MARGIN_USD:
+        print("proposer skipped: the spending cap is reached", flush=True)
+        return []
     import urllib.request
     base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
     cur = overrides().get(key, {}).get("addon") or spec_of(

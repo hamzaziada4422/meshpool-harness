@@ -229,6 +229,25 @@ def key_spend(model: str) -> float | None:
         return None
 
 
+LEDGER = os.path.expanduser("~/.meshpool-bench-ledger.json")
+CAP_USD = float(os.environ.get("MH_BENCH_CAP_USD", "25"))   # total for all runs from the ledger's start
+MARGIN_USD = 0.50                                            # stop before the cap, not after it
+
+
+def cap_left(model: str) -> float | None:
+    """Dollars left under the all-runs cap, from the key's billed spend (x-litellm-key-spend). The first call
+    records the starting spend. None when the endpoint does not report spend (then only --budget applies)."""
+    now = key_spend(model)
+    if now is None:
+        return None
+    try:
+        led = json.load(open(LEDGER))
+    except (OSError, ValueError):
+        led = {"start_spend": now, "cap_usd": CAP_USD, "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+        json.dump(led, open(LEDGER, "w"), indent=1)
+    return float(led.get("cap_usd", CAP_USD)) - (now - float(led["start_spend"]))
+
+
 def cost(row: dict, prices: dict) -> float:
     prices = (prices.get("by_model") or {}).get(row.get("model") or "", prices)
     fresh = max(0, row.get("prompt_tokens", 0) - row.get("cached_tokens", 0))
@@ -258,12 +277,23 @@ def run(args) -> int:
     models = [m for m in (args.models or "").split(",") if m.strip()] or [os.environ.get("MH_MODEL", "")]
     spent = [sum(cost(json.loads(l), prices) for l in res_path.read_text().splitlines())] if res_path.exists() else [0.0]
 
+    guard = {"n": 0, "stop": False}
+
     def one(task, arm, model, rep=0):
         label = f"{arm}@{model}" if len(models) > 1 else arm
         if (task["id"], label, rep) in done:
             return
-        if spent[0] >= args.budget:
+        if spent[0] >= args.budget or guard["stop"]:
             return
+        with LOCK:
+            guard["n"] += 1
+            check = guard["n"] % 10 == 1           # the all-runs cap, read from billed spend every 10 tasks
+        if check and not args.no_cap:
+            left = cap_left(model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash"))
+            if left is not None and left < MARGIN_USD:
+                guard["stop"] = True
+                print(f"STOP: ${left:.2f} left under the ${CAP_USD:g} cap; no more tasks start.", flush=True)
+                return
         if False:
             pass
         else:
@@ -520,6 +550,8 @@ def main():
     ap.add_argument("--models", default="", help="comma list: every arm runs on each model")
     ap.add_argument("--prices", default="", help="models.json from models.py (per-model prices)")
     ap.add_argument("--no-spend", action="store_true", help="do not read the key's billed spend")
+    ap.add_argument("--no-cap", action="store_true", help="skip the all-runs cap (mock endpoints only)")
+    ap.add_argument("--cap-status", action="store_true", help="show spend against the all-runs cap and exit")
     ap.add_argument("--meter-port", type=int, default=18990, help="metering proxy port (0: trust each harness)")
     ap.add_argument("--spend-wait", type=int, default=45)
     ap.add_argument("--price-in", type=float, default=0.15)
@@ -533,6 +565,13 @@ def main():
         k, _, v = kv.partition("=")
         EXTRA_ENV.setdefault(arm, {})[k] = v
     load_key_file()
+    if a.cap_status:
+        left = cap_left(os.environ.get("MH_MODEL", "deepseek-v4.1-flash"))
+        led = json.load(open(LEDGER)) if os.path.exists(LEDGER) else {}
+        print("endpoint does not report spend" if left is None else
+              f"spent ${float(led.get('cap_usd', CAP_USD)) - left:.2f} of ${float(led.get('cap_usd', CAP_USD)):g} "
+              f"since {led.get('set_at')}; ${left:.2f} left")
+        return
     if a.report:
         sys.exit(report(Path(a.report)))
     sys.exit(run(a))
