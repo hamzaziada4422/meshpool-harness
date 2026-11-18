@@ -629,8 +629,14 @@ class Agent:
             shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
+        if "todo_write" in self._dropped():          # no todo tool in this harness: no instruction to use it
+            text = re.sub(r"\n2\. For (work|a multi-step job)( with several steps)?, keep a short plan with todo_write[^\n]*",
+                          "\n2. Get several independent facts in one call (bash_many) rather than one call each.", text)
         if V3:
-            text += V3_RULES
+            rules = V3_RULES
+            if "todo_write" in self._dropped():     # a focused harness: no todo list, so no rule about one
+                rules = rules.split("\n- For any request with more than one step")[0]
+            text += rules
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "

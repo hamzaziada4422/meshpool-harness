@@ -30,6 +30,9 @@ class Spec:
 # Rarely useful when fixing, testing, refactoring, reviewing or explaining code in a project, and about 1,100 tokens of
 # schema on every call (sub-agents alone are 1,462 characters). fetch_url stays for reading docs.
 LEAN_CODE = ("delegate_task", "ask_user", "web_search", "web_research", "find_skill")
+# Focused fixes, tests, reviews and explanations also skip the todo list: on these tasks it cost an extra call or two
+# per task (writing the list, the follow-through nudge) against Pi, which has none. Build and refactor keep it.
+LEAN_FOCUSED = LEAN_CODE + ("todo_write",)
 
 ANSWER_FIRST = ("Lead with the answer or the result. No preamble, no restating the question, no closing summary of "
                 "what you just said.")
@@ -52,7 +55,7 @@ SPECS = {s.id: s for s in [
          "`git bisect run <check>` finds the change that broke it.\n"
          "Edits to code files come back with a syntax and bug check; fix what it reports first. Reply in two or "
          "three lines: the cause (file:line), the fix, and the command that now passes.",
-         ("diagnostics",), LEAN_CODE),
+         ("diagnostics",), LEAN_FOCUSED),
     Spec("code.build", "Build", "code", "code",
          "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
          "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
@@ -67,18 +70,18 @@ SPECS = {s.id: s for s in [
          "Review mode: read the diff (`git diff`, `git diff main...HEAD` or the PR) and the code around it. Do not "
          "edit files unless asked. Report only real problems: bugs, security issues, missing error handling, broken "
          "edge cases, missing tests, in order of severity, each as `file:line: problem -> suggested fix`. Skip "
-         "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",), LEAN_CODE),
+         "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.test", "Tests", "code", "code",
          "Testing method: find the project's test framework and an existing test file to copy the style from. Test "
          "behaviour through the public interface, including edge cases and the error path. Run the new tests and "
-         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_CODE),
+         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.terminal", "Terminal", "code", "terminal",
          "Terminal work: check the environment before changing it (versions, what is installed, existing config). "
          "Batch independent checks in one bash_many call. Prefer reversible steps and say what you changed outside "
          "the project folder. When a command fails, read its error before retrying a variant."),
     Spec("code.explain", "Explain", "code", "code",
          "Explaining: read only the code needed to answer. Answer the question asked, pointing at file:line, in a "
-         "few short paragraphs or a list. Do not edit files. " + ANSWER_FIRST, (), LEAN_CODE),
+         "few short paragraphs or a list. Do not edit files. " + ANSWER_FIRST, (), LEAN_FOCUSED),
 
     Spec("research", "Research", "work", "research",
          "Research: plan two to five varied queries, run them in one web_research call, read the key primary sources "
