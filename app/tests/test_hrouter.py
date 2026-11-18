@@ -249,3 +249,20 @@ def test_auto_prefers_measured_numbers_for_the_chat_model(monkeypatch):
     assert r["harness"] == "pi" and "measured on this model" in r["reason"]   # same quality band, cheaper
     assert HRT.measured(t, "general", "m-1") == {}                            # 3 runs is not enough to trust
     assert HRT.route("fix the bug", "code", category="code", model="other")["harness"] != "" 
+
+
+def test_lean_code_harness_drops_rarely_used_tools_and_keeps_the_prompt_consistent(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as A
+    monkeypatch.delenv("MH_LEAN_TOOLS", raising=False)
+    a = A.Agent(str(tmp_path), profile="code")
+    a.set_route(route("test_x.py fails, fix it", kind="code"), "test_x.py fails")
+    names = [s["function"]["name"] for s in a.tool_schemas()]
+    assert "diagnostics" in names and "edit" in names and "fetch_url" in names
+    assert not {"delegate_task", "ask_user", "web_search", "web_research", "find_skill"} & set(names)
+    assert "find_skill" not in a.system_prompt()
+    monkeypatch.setenv("MH_LEAN_TOOLS", "0")
+    assert "web_search" in [s["function"]["name"] for s in a.tool_schemas()]
+    b = A.Agent(str(tmp_path), profile="code")
+    b.set_route(route("add a --verbose flag to the CLI", kind="code"), "x")        # build keeps every tool
+    monkeypatch.delenv("MH_LEAN_TOOLS")
+    assert "web_search" in [s["function"]["name"] for s in b.tool_schemas()]

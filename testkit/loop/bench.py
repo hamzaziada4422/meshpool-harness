@@ -40,6 +40,7 @@ ARMS = {
     "base": {"MH_HROUTER": "0", "MH_SKILLS": "full"},
     "routed": {"MH_HROUTER": "1", "MH_SKILLS": ""},
     "routed-fast": {"MH_HROUTER": "1", "MH_SKILLS": ""},
+    "routed-full": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_LEAN_TOOLS": "0"},   # every tool: the lean A/B
 }
 
 

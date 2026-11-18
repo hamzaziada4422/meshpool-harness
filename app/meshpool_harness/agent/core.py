@@ -643,7 +643,8 @@ class Agent:
                 break
         try:
             from meshpool_harness import skills as SK
-            text += SK.catalog_text(getattr(self, "_route_text", ""))
+            text += SK.catalog_text(getattr(self, "_route_text", ""),
+                                    searchable="find_skill" not in self._dropped())
         except Exception:
             pass
         route = getattr(self, "route", None)
@@ -661,12 +662,23 @@ class Agent:
         if len(self.messages) <= 1:
             self.messages = [{"role": "system", "content": self.system_prompt()}]
 
+    def _dropped(self) -> set:
+        """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0."""
+        route = getattr(self, "route", None)
+        if route is None or self.plan or os.environ.get("MH_LEAN_TOOLS", "1") == "0":
+            return set()
+        from meshpool_harness.hrouter.specs import get as spec_of
+        return set(spec_of(route.spec).drop)
+
     def tool_schemas(self) -> list:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
         names = self._tool_names()
         if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
             names = names + ["delegate_task"]
+        drop = self._dropped()
+        if drop:
+            names = [n for n in names if n not in drop]
         return T.schemas(names) + ([x for x in self.mcp.schemas()
                                     if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
                                     and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
@@ -685,7 +697,9 @@ class Agent:
                 extra.append("find_skill")
         except Exception:  # noqa: BLE001
             pass
-        return names + extra if extra else names
+        names = names + extra if extra else names
+        drop = self._dropped()
+        return [n for n in names if n not in drop] if drop else names
 
     def current_model(self) -> str:
         if self.model:

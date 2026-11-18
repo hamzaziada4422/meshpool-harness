@@ -212,7 +212,7 @@ def search_text(query: str) -> str:
         f"- {s['name']}: {s['description'][:300]}" for s in hits)
 
 
-def catalog_text(task: str = "") -> str:
+def catalog_text(task: str = "", searchable: bool = True) -> str:
     """The skills list for an agent's system prompt: in full for a few skills, otherwise names only plus the
     ones that match the task the chat started with."""
     rows = enabled()
@@ -222,6 +222,10 @@ def catalog_text(task: str = "") -> str:
         lines = [f"- {s['name']}: {s['description']}" for s in rows]
         return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
                 "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
+    if not searchable:                            # a lean harness: only the skills that match its task
+        hits = search(task, k=3, rows=rows) if task else []
+        return ("\n\nSkills that may fit this task (load one with use_skill):\n" + "\n".join(
+            f"- {s['name']}: {s['description'][:200]}" for s in hits)) if hits else ""
     text = (f"\n\nSkills: {len(rows)} saved instruction sets for specific jobs. Before a task that may match one, "
             "call find_skill with a few words; load a match with use_skill. A skill the user names with $name is "
             "attached to their message already.")

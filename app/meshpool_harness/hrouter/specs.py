@@ -23,7 +23,13 @@ class Spec:
     backend: str                 # category in defaults/routing.json
     addon: str = ""
     tools: tuple = field(default_factory=tuple)
+    drop: tuple = field(default_factory=tuple)     # tools this kind of task does not need: their schemas cost
+                                                   # tokens on every call (MH_LEAN_TOOLS=0 keeps them)
 
+
+# Rarely useful when fixing, testing, refactoring, reviewing or explaining code in a project, and about 1,100 tokens of
+# schema on every call (sub-agents alone are 1,462 characters). fetch_url stays for reading docs.
+LEAN_CODE = ("delegate_task", "ask_user", "web_search", "web_research", "find_skill")
 
 ANSWER_FIRST = ("Lead with the answer or the result. No preamble, no restating the question, no closing summary of "
                 "what you just said.")
@@ -46,7 +52,7 @@ SPECS = {s.id: s for s in [
          "`git bisect run <check>` finds the change that broke it.\n"
          "Edits to code files come back with a syntax and bug check; fix what it reports first. Reply in two or "
          "three lines: the cause (file:line), the fix, and the command that now passes.",
-         ("diagnostics",)),
+         ("diagnostics",), LEAN_CODE),
     Spec("code.build", "Build", "code", "code",
          "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
          "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
@@ -56,23 +62,23 @@ SPECS = {s.id: s for s in [
          "Refactoring method: behaviour must not change. Run the tests before you start and after each step. For "
          "mechanical changes across many files (renames, API migrations) prefer one scripted change (sed, a short "
          "Python script, or ast-grep/codemod if installed) over many hand edits, then review the diff. Keep each "
-         "step small and green.", ("diagnostics",)),
+         "step small and green.", ("diagnostics",), LEAN_CODE),
     Spec("code.review", "Review", "code", "code",
          "Review mode: read the diff (`git diff`, `git diff main...HEAD` or the PR) and the code around it. Do not "
          "edit files unless asked. Report only real problems: bugs, security issues, missing error handling, broken "
          "edge cases, missing tests, in order of severity, each as `file:line: problem -> suggested fix`. Skip "
-         "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",)),
+         "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",), LEAN_CODE),
     Spec("code.test", "Tests", "code", "code",
          "Testing method: find the project's test framework and an existing test file to copy the style from. Test "
          "behaviour through the public interface, including edge cases and the error path. Run the new tests and "
-         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",)),
+         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_CODE),
     Spec("code.terminal", "Terminal", "code", "terminal",
          "Terminal work: check the environment before changing it (versions, what is installed, existing config). "
          "Batch independent checks in one bash_many call. Prefer reversible steps and say what you changed outside "
          "the project folder. When a command fails, read its error before retrying a variant."),
     Spec("code.explain", "Explain", "code", "code",
          "Explaining: read only the code needed to answer. Answer the question asked, pointing at file:line, in a "
-         "few short paragraphs or a list. Do not edit files. " + ANSWER_FIRST),
+         "few short paragraphs or a list. Do not edit files. " + ANSWER_FIRST, (), LEAN_CODE),
 
     Spec("research", "Research", "work", "research",
          "Research: plan two to five varied queries, run them in one web_research call, read the key primary sources "
