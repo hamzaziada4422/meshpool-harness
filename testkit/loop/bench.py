@@ -126,6 +126,22 @@ def run_pi(task: dict, arm: str) -> dict:
             "secs": round(time.time() - t0, 1), "answer_words": len(r.stdout.split())}
 
 
+def key_spend(model: str) -> float | None:
+    """The key's total spend so far (LiteLLM's x-litellm-key-spend header), from a one-token call. None if the
+    endpoint does not say. LiteLLM writes spend in the background, so read it again after a short wait."""
+    import urllib.request
+    base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
+    body = json.dumps({"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "1"}]}).encode()
+    r = urllib.request.Request(base + "/chat/completions", data=body, headers={
+        "Authorization": f"Bearer {os.environ.get('MESHPOOL_API_KEY', '')}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(r, timeout=60) as resp:
+            v = resp.headers.get("x-litellm-key-spend")
+            return float(v) if v not in (None, "") else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def cost(row: dict, prices: dict) -> float:
     prices = (prices.get("by_model") or {}).get(row.get("model") or "", prices)
     fresh = max(0, row.get("prompt_tokens", 0) - row.get("cached_tokens", 0))
@@ -189,21 +205,49 @@ def run(args) -> int:
               f"${row['usd']:.4f}  {row.get('route') or ''}  {'' if row['pass'] else row.get('why', '')[:80]}",
               flush=True)
 
-    jobs = [(t, a, m) for m in models for t in tasks for a in arms]   # arms of one task side by side: same hour
-    with ThreadPoolExecutor(args.parallel) as ex:
-        list(ex.map(lambda j: one(*j), jobs))
+    spend_path = out / "spend.json"
+    actual = json.loads(spend_path.read_text()) if spend_path.exists() else {}
+    for m in models:                                   # one model at a time, so the key's spend can be split
+        if spent[0] >= args.budget:
+            print(f"budget reached (${spent[0]:.2f}); skipping {m}", flush=True)
+            continue
+        s0 = key_spend(m) if m and not args.no_spend else None
+        jobs = [(t, a, m) for t in tasks for a in arms]   # arms of one task side by side: same hour
+        with ThreadPoolExecutor(args.parallel) as ex:
+            list(ex.map(lambda j: one(*j), jobs))
+        if s0 is not None:
+            time.sleep(args.spend_wait)                # LiteLLM books spend in the background
+            s1 = key_spend(m)
+            if s1 is not None:
+                actual[m] = round(actual.get(m, 0) + (s1 - s0), 6)
+                spend_path.write_text(json.dumps(actual, indent=1))
+                est = sum(json.loads(l).get("usd", 0) for l in res_path.read_text().splitlines()
+                          if json.loads(l).get("model") == m)
+                spent[0] += max(0.0, actual[m] - est)  # the budget follows real spend, not the estimate
+                print(f"{m}: key spend ${actual[m]:.4f} (estimate ${est:.4f})", flush=True)
     labels = [f"{a}@{m}" if len(models) > 1 else a for m in models for a in arms]
     return report(out, labels, args.slack)
 
 
 def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     rows = [json.loads(l) for l in (out / "results.jsonl").read_text().splitlines()]
+    sp = out / "spend.json"
+    actual = json.loads(sp.read_text()) if sp.exists() else {}
+    for m, real in actual.items():                     # scale each model's token estimates to the billed total
+        est = sum(r.get("usd", 0) for r in rows if r.get("model") == m)
+        if est > 0 and real > 0:
+            for r in rows:
+                if r.get("model") == m:
+                    r["usd"] = r.get("usd", 0) * real / est
     arms = arms or sorted({r["arm"] for r in rows})
     tasks = sorted({r["task"] for r in rows})
     by = {(r["task"], r["arm"]): r for r in rows}
     both = [t for t in tasks if all((t, a) in by for a in arms)]   # paired: only tasks every arm finished
     lines = [f"# Harness loop: {time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime())}", "",
-             f"{len(both)} tasks run by every arm ({', '.join(arms)}). Same model, same hour, graded by code.", "",
+             f"{len(both)} tasks run by every arm ({', '.join(arms)}). Same model, same hour, graded by code.",
+             ("Cost: billed key spend per model, split between arms by tokens: "
+              + ", ".join(f"{m} ${v:.4f}" for m, v in actual.items())) if actual else
+             "Cost: estimated from tokens at list prices (no billed spend available).", "",
              "| Arm | Solved | Errors | $ per solved | s per solved | Out tokens per task | Model calls per task |",
              "|---|---|---|---|---|---|---|"]
     stats = {}
@@ -266,6 +310,8 @@ def main():
     ap.add_argument("--fast-model", default="")
     ap.add_argument("--models", default="", help="comma list: every arm runs on each model")
     ap.add_argument("--prices", default="", help="models.json from models.py (per-model prices)")
+    ap.add_argument("--no-spend", action="store_true", help="do not read the key's billed spend")
+    ap.add_argument("--spend-wait", type=int, default=45)
     ap.add_argument("--price-in", type=float, default=0.15)
     ap.add_argument("--price-cached", type=float, default=0.003)
     ap.add_argument("--price-out", type=float, default=0.60)
