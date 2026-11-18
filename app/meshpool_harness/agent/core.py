@@ -1084,6 +1084,8 @@ class Agent:
         wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
         if not key and wire != "chatgpt":
             raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
+        if wire != "chatgpt" and PV.key_problem(key):
+            raise RuntimeError(PV.key_problem(key))
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None

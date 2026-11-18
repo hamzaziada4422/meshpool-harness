@@ -54,6 +54,24 @@ def key() -> str:
     return _cfg("MESHPOOL_API_KEY") or _openai_pair()[0]
 
 
+def key_problem(k: str | None) -> str:
+    """Why a key cannot work, in words the user can act on; "" when it looks usable. A key copied from a dashboard
+    that masks it ("sk-43Ux7•••••") carries characters no HTTP header can hold, and each agent then failed with its
+    own cryptic message ('latin-1' codec..., ByteString..., invalid header value)."""
+    k = (k or "").strip()
+    if not k:
+        return ""
+    bad = sorted({ch for ch in k if ord(ch) > 126 or ord(ch) < 33})
+    if not bad:
+        return ""
+    if set(bad) & set("\u2022\u25cf\u2026\u00b7*"):
+        return ("The API key looks masked (it contains \u2022 or \u2026), so it was copied as shown, not the key "
+                "itself. Copy the full key with your provider's Copy button, then paste it in Settings, Endpoint and "
+                "key.")
+    return ("The API key contains characters a key never has (" + " ".join(repr(c) for c in bad[:4]) + "). Paste it "
+            "again in Settings, Endpoint and key, straight from your provider.")
+
+
 def key_name() -> str:
     h = host(key_base())
     return "Meshpool" if "meshpool" in h else (h or "Your endpoint")

@@ -514,6 +514,16 @@ class Session:
 
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
+        try:                                        # a masked or mangled key: one clear message for every agent
+            from meshpool_harness import providers as PV
+            if self.harness.get("type") != "auto" and PV.split(getattr(self.agent, "model", None) or "")[0] == "key":
+                bad = PV.key_problem(PV.key())
+                if bad:
+                    self.emit({"type": "user", "text": text, "images": []})
+                    self.emit({"type": "error", "text": bad})
+                    return
+        except Exception:  # noqa: BLE001
+            pass
         self.state = "working"
         self._stop_req = False
         if hasattr(self.agent, "plan"):

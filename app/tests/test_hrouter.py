@@ -266,3 +266,19 @@ def test_lean_code_harness_drops_rarely_used_tools_and_keeps_the_prompt_consiste
     b.set_route(route("add a --verbose flag to the CLI", kind="code"), "x")        # build keeps every tool
     monkeypatch.delenv("MH_LEAN_TOOLS")
     assert "web_search" in [s["function"]["name"] for s in b.tool_schemas()]
+
+
+def test_a_masked_key_gets_one_clear_message():
+    from meshpool_harness import providers as PV
+    assert "masked" in PV.key_problem("sk-43Ux7\u2022\u2022\u2022\u2022")
+    assert "masked" in PV.key_problem("sk-abc\u2026")
+    assert PV.key_problem("sk-proj-AbC_123-xyz") == ""
+    assert "never has" in PV.key_problem("sk-a\u00e9b")
+
+
+def test_the_agent_says_so_instead_of_a_codec_error(tmp_path, monkeypatch):
+    from meshpool_harness import run_task
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-43Ux7\u2022\u2022\u2022\u2022")
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    r = run_task("hello", workdir=str(tmp_path), engine="agent-work")
+    assert "masked" in (r.get("error") or ""), r

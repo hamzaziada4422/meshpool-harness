@@ -157,6 +157,8 @@ def test_connection(values: dict | None = None) -> dict:
     key = v.get("MESHPOOL_API_KEY") or PV.key()
     if not key:
         return {"ok": False, "detail": "No API key saved yet."}
+    if PV.key_problem(key):
+        return {"ok": False, "detail": PV.key_problem(key)}
     return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
 
 
