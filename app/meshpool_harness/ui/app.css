@@ -7,22 +7,27 @@
 @font-face{font-family:"IBM Plex Mono";font-style:normal;font-weight:500;font-display:swap;src:url(/brand/fonts/ibm-plex-mono-latin-500-normal.woff2) format("woff2")}
 
 /* ---------- tokens ----------
-   Surfaces: --side (sidebar, settings nav), --bg (the page), --surface (cards, composer, panels, dialogs),
+   Neutral surfaces, one accent. Dark is the reference theme (app #191919, sidebar and dialogs #1F1F1F, raised surfaces
+   #303030, hover #404040, selected #3B3B3B); light is derived from it with the same roles.
+   Surfaces: --side (sidebar, settings nav, dialogs), --bg (the page), --surface (composer, cards, menus),
    --raise (menus and popovers). Fills: --hover, --sel (selected rows and tabs), --fill (code and quiet wells).
    Text: --ink, --ink-2 (secondary), --ink-3 (muted; AA on every surface). Lines: --line (dividers),
-   --line-2 (faint inner dividers), --line-3 (form controls). One accent: --pool (the Meshpool blue).
-   Type: 12 / 13 / 14 / 16 / 20 / 28. Space: 4 / 8 / 12 / 16 / 24. Radii: 6 / 8 / 12. */
+   --line-2 (faint inner dividers), --line-3 (form controls).
+   Accent: --pool (blue: toggles, progress, unread dots, links). Brand: --brand (the Meshpool teal from the logo's
+   highlight: running dots, the Code indicator, the waiting badge's companion). --warn is the amber "waiting" label.
+   Type: 12 / 13 / 14 / 16 / 20 / 28. Space: 4 / 8 / 12 / 16 / 24. Radii: 6 / 8 / 12 / 16. */
 :root{
-  --bg:#FFFFFF; --side:#F6F7F9; --surface:#FFFFFF; --raise:#FFFFFF;
-  --hover:#EEF0F3; --sel:#E8EBEF; --fill:#F3F4F6;
-  --ink:#16181D; --ink-2:#4B5260; --ink-3:#636B78;
-  --line:#E1E4E9; --line-2:#EBEDF0; --line-3:#CDD2D9;
-  --pool:#1670E8; --pool-btn:#1670E8; --pool-ink:#FFFFFF; --pool-text:#1259BF; --pool-soft:#EBF2FD; --focus:#1670E8;
-  --add:#1A7A47; --add-bg:#E7F4EC; --del:#B42318; --del-bg:#FCEBE9; --warn:#95600A; --warn-bg:#FBF1DF;
-  --shadow-s:0 1px 2px rgba(22,24,29,.05);
-  --shadow:0 1px 2px rgba(22,24,29,.04),0 6px 20px rgba(22,24,29,.07);
-  --scrim:rgba(22,24,29,.32);
-  --r-l:12px; --r-m:8px; --r-s:6px;
+  --bg:#FBFBFB; --side:#F3F3F3; --surface:#FFFFFF; --raise:#FFFFFF;
+  --hover:#E8E8E8; --sel:#E2E2E2; --fill:#F0F0F0;
+  --ink:#171717; --ink-2:#454545; --ink-3:#686868;
+  --line:#E0E0E0; --line-2:#EAEAEA; --line-3:#CBCBCB;
+  --pool:#1F6FD0; --pool-btn:#1F6FD0; --pool-ink:#FFFFFF; --pool-text:#1559B0; --pool-soft:#E9F1FC; --focus:#1F6FD0;
+  --brand:#0F8591; --brand-soft:#E3F4F6;
+  --add:#1A7A47; --add-bg:#E7F4EC; --del:#B42318; --del-bg:#FCEBE9; --warn:#946000; --warn-bg:#FBF1DF;
+  --shadow-s:0 1px 2px rgba(0,0,0,.05);
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 8px 24px rgba(0,0,0,.10);
+  --scrim:rgba(0,0,0,.40);
+  --r-xl:16px; --r-l:12px; --r-m:8px; --r-s:6px;
   --fs-xs:12px; --fs-s:13px; --fs-m:14px; --fs-l:16px; --fs-xl:20px; --fs-2xl:28px;
   --display:"Bricolage Grotesque","Segoe UI",system-ui,sans-serif;
   --body:"IBM Plex Sans","Segoe UI",system-ui,sans-serif;
@@ -30,31 +35,33 @@
   --ease:cubic-bezier(.16,1,.3,1);       /* slow out: quick start, gentle landing (things arriving) */
   --ease-in:cubic-bezier(.5,0,.75,0);    /* slow in: things leaving accelerate away */
   --spring:cubic-bezier(.34,1.56,.64,1); /* follow-through: a small overshoot that settles */
-  --t-press:70ms; --t-fast:120ms; --t-med:180ms; --t-slow:260ms;   /* all under the 400 ms Doherty threshold */
+  --t-press:70ms; --t-hover:100ms; --t-fast:120ms; --t-menu:150ms; --t-side:200ms; --t-med:180ms; --t-slow:260ms;   /* all under the 400 ms Doherty threshold */
   color-scheme:light;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#17191D; --side:#131518; --surface:#1D2025; --raise:#23262C;
-  --hover:#262A30; --sel:#2C3037; --fill:#22252B;
-  --ink:#E7E9EC; --ink-2:#B3B8C0; --ink-3:#8E949E;
-  --line:#30343C; --line-2:#272A31; --line-3:#3D424B;
-  --pool:#5B9BF0; --pool-btn:#2F6FD0; --pool-ink:#FFFFFF; --pool-text:#7FB2F5; --pool-soft:#1F2A3A; --focus:#5B9BF0;
-  --add:#5DBE8A; --add-bg:#1B2B22; --del:#EF8A7F; --del-bg:#33221F; --warn:#DDA94F; --warn-bg:#2F2717;
-  --shadow-s:0 1px 2px rgba(0,0,0,.25);
-  --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 24px rgba(0,0,0,.32);
-  --scrim:rgba(8,9,11,.55);
+  --bg:#191919; --side:#1F1F1F; --surface:#303030; --raise:#303030;
+  --hover:#404040; --sel:#3B3B3B; --fill:#262626;
+  --ink:#FFFFFF; --ink-2:#D9D9D9; --ink-3:#B7B7B7;
+  --line:#353535; --line-2:#2B2B2B; --line-3:#4A4A4A;
+  --pool:#237DE0; --pool-btn:#237DE0; --pool-ink:#FFFFFF; --pool-text:#6BAAF0; --pool-soft:#1B2E45; --focus:#5AA2EE;
+  --brand:#5FC4CC; --brand-soft:#1A3335;
+  --add:#5DBE8A; --add-bg:#1B2B22; --del:#EF8A7F; --del-bg:#33221F; --warn:#E8A33D; --warn-bg:#2F2717;
+  --shadow-s:0 1px 2px rgba(0,0,0,.30);
+  --shadow:0 1px 2px rgba(0,0,0,.30),0 10px 30px rgba(0,0,0,.45);
+  --scrim:rgba(0,0,0,.50);
   color-scheme:dark;
 }}
 :root[data-theme="dark"]{
-  --bg:#17191D; --side:#131518; --surface:#1D2025; --raise:#23262C;
-  --hover:#262A30; --sel:#2C3037; --fill:#22252B;
-  --ink:#E7E9EC; --ink-2:#B3B8C0; --ink-3:#8E949E;
-  --line:#30343C; --line-2:#272A31; --line-3:#3D424B;
-  --pool:#5B9BF0; --pool-btn:#2F6FD0; --pool-ink:#FFFFFF; --pool-text:#7FB2F5; --pool-soft:#1F2A3A; --focus:#5B9BF0;
-  --add:#5DBE8A; --add-bg:#1B2B22; --del:#EF8A7F; --del-bg:#33221F; --warn:#DDA94F; --warn-bg:#2F2717;
-  --shadow-s:0 1px 2px rgba(0,0,0,.25);
-  --shadow:0 1px 2px rgba(0,0,0,.25),0 8px 24px rgba(0,0,0,.32);
-  --scrim:rgba(8,9,11,.55);
+  --bg:#191919; --side:#1F1F1F; --surface:#303030; --raise:#303030;
+  --hover:#404040; --sel:#3B3B3B; --fill:#262626;
+  --ink:#FFFFFF; --ink-2:#D9D9D9; --ink-3:#B7B7B7;
+  --line:#353535; --line-2:#2B2B2B; --line-3:#4A4A4A;
+  --pool:#237DE0; --pool-btn:#237DE0; --pool-ink:#FFFFFF; --pool-text:#6BAAF0; --pool-soft:#1B2E45; --focus:#5AA2EE;
+  --brand:#5FC4CC; --brand-soft:#1A3335;
+  --add:#5DBE8A; --add-bg:#1B2B22; --del:#EF8A7F; --del-bg:#33221F; --warn:#E8A33D; --warn-bg:#2F2717;
+  --shadow-s:0 1px 2px rgba(0,0,0,.30);
+  --shadow:0 1px 2px rgba(0,0,0,.30),0 10px 30px rgba(0,0,0,.45);
+  --scrim:rgba(0,0,0,.50);
   color-scheme:dark;
 }
 :root[data-size="large"] body{font-size:15.5px}
