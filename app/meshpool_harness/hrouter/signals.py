@@ -187,6 +187,8 @@ _SYMPTOM = re.compile(r"\b(traceback|stack ?trace|crash\w*|segfault|panic|except
 _FEATURE = re.compile(r"\b(must|should|needs? to|add|support|implement|extend|allow|make \w+(\.\w+)? (do|return|accept|"
                       r"use|treat|behave)|let (users?|me)|introduce|enable)\b", re.I)
 _OTHER = ("refactor", "review", "explain")
+_LEAD_FEATURE = re.compile(r"\s*(please\s+)?(add|implement|create|build|support|introduce|write a new|make it possible)\b",
+                           re.I)
 
 
 def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
@@ -201,8 +203,14 @@ def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
         if ms:
             score[sub] = score.get(sub, 0) + weight * len(ms)
             hits.append(sub)
+    lead = re.split(r"(?<=[.:;!?])\s|\n", (text or "").strip(), 1)[0]
     if has_error:
         score["debug"] = score.get("debug", 0) + 3
+    elif (_LEAD_FEATURE.match(lead) and not re.search(r"\b(fix|bug|crash\w*|traceback|broken|regression)\b", lead, re.I)
+          and not any(score.get(o) for o in _OTHER)):
+        score["debug"] = 0           # "Add atomic bulk ordering: ... raises BulkError ...": a spec, not a bug report
+        score["build"] = score.get("build", 0) + 3
+        hits.append("build")
     elif (_FEATURE.search(text or "") and not _SYMPTOM.search(text or "")
           and not any(score.get(o) for o in _OTHER)):
         score["debug"] = 0           # "must/add/should" without a failing symptom is a feature request
@@ -223,6 +231,9 @@ def families(text: str, files: list[str] | None = None) -> dict[str, float]:
         n = len(rx.findall(text or ""))
         if n:
             w[fam] = w.get(fam, 0) + n
+    named = re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
+    if named and not files:              # "orders.csv", "events.jsonl" named in the question: a data file, as attached
+        w["data"] = w.get("data", 0) + 2
     for f in files or []:
         ext = Path(f).suffix.lower()
         if ext in OFFICE_EXT:

@@ -158,3 +158,29 @@ def test_trace_note_is_exception_safe():
     assert a.trace == [{"tool": "review", "s": 0, "ok": True, "arg": "LGTM"},
                        {"tool": "mutation", "s": 0, "ok": True, "arg": "0 of 5 survived"}]
     Agent.__new__(Agent)._trace_note("review", "x")      # no trace attribute: must not raise
+
+
+# Found on the second batch of dev tasks (with their real workspaces): domain words in a code project, a data file
+# named only in the question, and a feature spec that mentions exceptions.
+def test_code_project_scheduling_words_stay_code(tmp_path):
+    from meshpool_harness import hrouter as H
+    (tmp_path / "jobs.py").write_text("def upcoming():\n    pass\n")
+    r = H.route("Our daily 'digest' job (02:30 America/New_York) runs at the wrong local time for weeks after a "
+                "clock change. Fix the scheduling.", kind="code", workdir=str(tmp_path))
+    assert r.spec == "code.debug"
+
+
+def test_data_file_named_in_question_routes_to_data():
+    from meshpool_harness import hrouter as H
+    r = H.route("events.jsonl is our event log. How many distinct purchases were made on 2026-03-08, and what is "
+                "their total revenue in USD?", kind="cowork", workdir=None)
+    assert r.spec == "data"
+
+
+def test_leading_add_with_exception_words_is_build():
+    from meshpool_harness import hrouter as H
+    r = H.route("Add atomic bulk ordering: OrderService.place_bulk(items). Failures raise BulkError; a listener "
+                "that raises must never undo anything.", kind="code", workdir=None)
+    assert r.spec == "code.build"
+    r = H.route("Add a fix: the export crashes with KeyError when an order has no lines", kind="code", workdir=None)
+    assert r.spec == "code.debug"
