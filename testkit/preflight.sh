@@ -31,7 +31,7 @@ command -v makensis >/dev/null || apt-get install -y -q nsis >/dev/null 2>&1
 # ---------- 1. GitHub workflows: expressions, job conditions, inputs, and the shell inside run: steps ----------------
 if [ -x "$AL" ]; then
   # -ignore SC2086: the workflows split $RUNTIME_EXTRAS and `set -- $pair` on purpose
-  run workflows "$AL" -shellcheck="$(command -v shellcheck || true)" -ignore 'SC2086' .github/workflows/release.yml .github/workflows/tests.yml
+  run workflows "$AL" -config-file .github/actionlint.yaml -shellcheck="$(command -v shellcheck || true)" -ignore 'SC2086' .github/workflows/release.yml .github/workflows/tests.yml
 else fail "workflows (actionlint not available)"; fi
 
 # ---------- 2. packaging shell scripts (errors only; the known warnings are intentional) ----------------------------
