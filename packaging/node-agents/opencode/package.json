@@ -1,7 +1,0 @@
-{
-  "name": "meshpool-opencode",
-  "version": "0.0.0",
-  "private": true,
-  "description": "OpenCode, vendored into the app at build time (no download at runtime). Keep the version equal to OPENCODE_PKG in app/meshpool_harness/harnesses/__init__.py; tests/test_bundled_tools.py checks it.",
-  "dependencies": { "opencode-ai": "1.19.5" }
-}

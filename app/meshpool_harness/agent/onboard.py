@@ -211,17 +211,20 @@ def sub_step(st, which: str) -> bool:
         _use(which)
         return True
     from meshpool_harness import bundled
-    vend = bundled.node_agent_command("codex-login") if bundled.packaged() else None   # the app's own Codex, no npx
-    npx = shutil.which("npx") if not bundled.packaged() else None
-    if not (vend or npx):
+    if bundled.packaged():                        # Codex's sign-in is not part of the installed app
+        _p(st.amber(f"    Signing in to {name} needs Codex, which is not part of the Meshpool app."))
+        _p(st.dim("    Sign in once from a terminal with `npm install -g @openai/codex` and `codex login`, then run "
+                  "`meshpool setup` again, or choose the Meshpool API key."))
+        return False
+    npx = shutil.which("npx")
+    if not npx:
         _p(st.amber(f"    Signing in to {name} needs Node.js, which is not installed."))
         _p(st.dim("    Install it from https://nodejs.org (the LTS version), then run `meshpool setup` again."))
-        _p(st.dim("    The Meshpool desktop app includes it."))
         return False
     _p(f"  Usage comes out of your {plans} plan. No API key needed.")
     _p()
     _p(st.dim("    Your browser opens for the ChatGPT sign-in. Come back here when it says you are signed in."))
-    cmd = [vend[0], *vend[1], "login"] if vend else [npx, "-y", pkg, "login"]
+    cmd = [npx, "-y", pkg, "login"]
     if _ask(st, "Press Enter to sign in") is None:
         return False
     try:

@@ -19,7 +19,7 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `git-mac-arm64`, `git-mac-x64` | Git for the Mac apps (optional: built by `packaging/mac/build_git.sh` on a Mac when missing) | pinned source tarball, checksum in `packaging/bundled_tools.py` |
 | `download-cache` | Created by the build: the verified LibreOffice downloads | The Document Foundation, pins in `packaging/bundled_tools.py` |
 
-Also inside every installer, installed by `build_all.py` from the repo (no deps folder): LibreOffice (`app/vendor/libreoffice`), and Codex and OpenCode (`app/vendor/codex-acp`, `app/vendor/opencode`, from the lock files in `packaging/node-agents`; needs `npm` on the build machine). See `docs/plan/BUNDLED_TOOLS.md`.
+Also inside every installer, installed by `build_all.py` from the repo (no deps folder): LibreOffice (`app/vendor/libreoffice`), pruned to headless conversion by `packaging/lo_prune.py`, and Chromium (`app/vendor/browsers`, from `playwright install chromium --no-shell`, English only). Codex and OpenCode are not shipped. See `docs/plan/BUNDLED_TOOLS.md`.
 | `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
 
 ## Build
@@ -30,7 +30,7 @@ Also inside every installer, installed by `build_all.py` from the repo (no deps 
    python packaging/build_all.py
    ```
 
-   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and the oldest macOS each Mac app opens on into `Info.plist` (`MIN_MACOS`: 11.0 for Apple silicon, 10.15 for Intel; the release build compiles the launcher for the same and checks every bundled file with `packaging/mac/check_minos.py`), and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).
+   This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and the oldest macOS each Mac app opens on into `Info.plist` (`MIN_MACOS`: 11.0 for both Apple silicon and Intel; the release build compiles the launcher for the same and checks every bundled file with `packaging/mac/check_minos.py`), and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).
 
    In the Windows tree, the terminal command is `bin\meshpool.cmd` (from `packaging/win/meshpool.cmd`). The installer puts only that `bin` folder on PATH: next to `Meshpool.exe`, typing `meshpool` would start the app, because Windows tries `.exe` before `.cmd`.
 

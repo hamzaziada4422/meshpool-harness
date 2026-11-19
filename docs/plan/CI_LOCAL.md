@@ -69,9 +69,9 @@ No test was skipped, disabled or weakened. No source was changed.
 - `packaging/smoke.py --app app --version 0.0.7` with the venv Python: **PASSED** in 4.6 s (imports, Word and PDF,
   server start, mock-model chat). This is the same smoke the release runs against the built apps.
 - Not verifiable here: macOS and Windows jobs (`check_minos.py`, `repack.sh`, hdiutil, clang, NSIS, signing).
-  `release.yml` changed in the tree (extra `--exempt` for codex-acp and opencode vendor folders, and a note that
-  bundled LibreOffice may fail `check_minos` for 10.15); the note itself says that is an open decision. Expect the
-  Intel Mac job to be the one most likely to fail on a first run.
+  `release.yml` changed in the tree (Intel now needs macOS 11 like Apple silicon, so no Intel exemptions; Chromium is
+  the one `check_minos` exemption, at 13.0; each built tree also runs `packaging/verify_lo_prune.py` against its pruned
+  LibreOffice). Expect the first Mac job to be the one most likely to fail (Chromium and LibreOffice on a real Mac).
 
 ## 5. Estimated Actions minutes per run
 
@@ -101,8 +101,8 @@ retried twice can use all of it.
    level, not just by commit message.
 3. Keep `Release` manual (`workflow_dispatch`) until the Linux job has been green; do not leave `release: published`
    active until then, because one publish can cost 350-580 minutes. Before the first real release, run
-   `docs/plan/ci_local.sh` and `packaging/smoke.py` locally (both pass now) and decide the LibreOffice-on-10.15
-   question flagged in `release.yml`. Consider a Windows-only dry run first (about 60 minutes billed) and run the Mac job
+   `docs/plan/ci_local.sh` and `packaging/smoke.py` locally (both pass now) and read
+   "Open decisions" in `docs/plan/BUNDLED_TOOLS.md`. Consider a Windows-only dry run first (about 60 minutes billed) and run the Mac job
    last, once.
 4. Add `dist-src/` and `deps/` to `.gitignore`; consider caching the `playwright install --with-deps` browsers and
    the apt LibreOffice packages to save 2-3 minutes a run.

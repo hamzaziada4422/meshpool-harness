@@ -1,6 +1,7 @@
-"""Build-time helpers that fetch, verify and unpack the third-party programs Meshpool ships INSIDE its installers
-(nothing here runs in the installed app, and the app never downloads any of it). Standard library only; build_all.py
-loads this file by path.
+"""Build-time helpers that fetch, verify and unpack the third-party programs Meshpool ships INSIDE its installers:
+LibreOffice (pruned by lo_prune.py), Chromium, Git. Nothing here runs in the installed app, and the app never
+downloads any of it. Codex and OpenCode are not shipped (the benchmark in testkit/ runs them with npx).
+Standard library only; build_all.py loads this file by path.
 
 Everything is pinned: version, source URL and SHA-256. To move a pin, change the version and refresh the hash with the
 command printed next to it (or run `python packaging/build_all.py --check-pins`).
@@ -10,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import platform
 import re
 import shutil
 import subprocess
@@ -31,18 +31,19 @@ class BundleError(RuntimeError):
 # Refresh a hash:  curl -fsSL <url>.sha256     (The Document Foundation publishes one next to every file; also check
 # the .asc signature with gpg against https://www.documentfoundation.org/gpg/ before moving the pin.)
 LO_VERSION = "26.2.7"
-_BASE = "https://download.documentfoundation.org/libreoffice/stable/{v}/{d}/{n}"
-_ARCHIVE = "https://downloadarchive.documentfoundation.org/libreoffice/old/{v}/{d}/{n}"   # after it leaves "stable"
+LO_BUILD = "26.2.7.3"     # the archive names every build: these are the bytes download.documentfoundation.org served as 26.2.7
+# Only the permanent archive: "stable" moves on to the next release and its links then break old builds.
+_ARCHIVE = "https://downloadarchive.documentfoundation.org/libreoffice/old/{b}/{d}/{n}"
 LO_PINNED = {
     # key: (distribution folder, file name, sha256, size in bytes)
-    "mac-arm64": ("mac/aarch64", f"LibreOffice_{LO_VERSION}_MacOS_aarch64.dmg",
+    "mac-arm64": ("mac/aarch64", f"LibreOffice_{LO_BUILD}_MacOS_aarch64.dmg",
                   "58601808ae2b919c82dc7c4d6a26389de0e167f344ca48e5b6c9189218eb95ae", 297813809),
-    "mac-x64": ("mac/x86_64", f"LibreOffice_{LO_VERSION}_MacOS_x86-64.dmg",
+    "mac-x64": ("mac/x86_64", f"LibreOffice_{LO_BUILD}_MacOS_x86-64.dmg",
                 "26a830205c617cc624b2a83783ef46434a4d6c337c3a873f79c43012171f83de", 308070986),
-    "win-x64": ("win/x86_64", f"LibreOffice_{LO_VERSION}_Win_x86-64.msi",
+    "win-x64": ("win/x86_64", f"LibreOffice_{LO_BUILD}_Win_x86-64.msi",
                 "480fecf759fc6393bd614fbf43753eb95a8198fc1a065d41b727e3b664cd1e59", 373121024),
 }
-LO_SOURCE_URL = f"https://download.documentfoundation.org/libreoffice/src/{LO_VERSION}/"
+LO_SOURCE_URL = f"https://downloadarchive.documentfoundation.org/libreoffice/old/{LO_BUILD}/src/"     # libreoffice-{LO_BUILD}.tar.xz
 LO_EXE = {"mac-arm64": "LibreOffice.app/Contents/MacOS/soffice", "mac-x64": "LibreOffice.app/Contents/MacOS/soffice",
           "win-x64": "program/soffice.exe"}
 
@@ -123,7 +124,7 @@ def download_verified(urls: list[str], dest: Path, sha256: str, size: int = 0,
 
 def lo_urls(key: str) -> list[str]:
     d, name, _sha, _size = LO_PINNED[key]
-    return [_BASE.format(v=LO_VERSION, d=d, n=name), _ARCHIVE.format(v=LO_VERSION, d=d, n=name)]
+    return [_ARCHIVE.format(b=LO_BUILD, d=d, n=name)]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -173,6 +174,12 @@ def extract(archive: Path, dest: Path, key: str) -> Path:
             root = exe.parent.parent                        # <...>/LibreOffice  (program/, share/, presets/)
             for item in root.iterdir():
                 shutil.move(str(item), str(dest / item.name))
+            # The MSI keeps the Visual C++ runtime (vcruntime140.dll, msvcp140.dll ...) in System64, outside the
+            # LibreOffice folder, because the installer puts it in Windows' system folder. Without it a clean Windows
+            # cannot start soffice, so it goes next to the program files.
+            sysdir = out / "System64"
+            for dll in sysdir.glob("*.dll") if sysdir.is_dir() else ():
+                shutil.copy2(dll, dest / "program" / dll.name)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if not (dest / LO_EXE[key]).is_file():
@@ -186,7 +193,8 @@ def lo_marker(folder: Path, key: str) -> None:
     """MESHPOOL-LIBREOFFICE.json beside the bundled copy: which release it is and where its source is (MPL-2.0)."""
     _d, name, sha, _ = LO_PINNED[key]
     (folder / "MESHPOOL-LIBREOFFICE.json").write_text(
-        json.dumps({"version": LO_VERSION, "file": name, "sha256": sha, "source": LO_SOURCE_URL}, indent=1),
+        json.dumps({"version": LO_VERSION, "build": LO_BUILD, "file": name, "sha256": sha, "source": LO_SOURCE_URL,
+                    "pruned": "packaging/lo_prune.py (headless conversion only)"}, indent=1),
         encoding="utf-8")
 
 
@@ -204,35 +212,70 @@ def fetch_libreoffice(key: str, cache: Path, dest: Path) -> Path:
     return dest
 
 
-# ------------------------------------------------------------------------------------------------ Node agents
-# Codex (codex-acp), OpenCode and Pi are installed at build time from lock files (integrity hashes for every package),
-# so the installed app runs them with its own Node and never calls npx or the npm registry.
-NODE_AGENTS = {"codex-acp": ROOT / "packaging/node-agents/codex-acp", "opencode": ROOT / "packaging/node-agents/opencode"}
-NPM_PLATFORM = {"mac-arm64": ("darwin", "arm64"), "mac-x64": ("darwin", "x64"), "win": ("win32", "x64")}
+# ------------------------------------------------------------------------------------------------ Hermes (MIT)
+# The Hermes Agent checkout is a whole repository (tests, a website, desktop and mobile apps, docs, evals, a terminal
+# UI, optional skills ...). The ACP adapter Meshpool runs imports only its Python packages and reads the bundled skills,
+# so the build copies just those. Verified by running the adapter from the pruned copy (initialize, session/new and a
+# prompt answered by a local mock model): docs/plan/BUNDLED_TOOLS.md.
+HERMES_DROP_TOP = {"tests", "tests-js", "website", "apps", "docs", "evals", "contributors", "nix", "docker", "ui-tui",
+                   "web", "optional-skills", "assets", "datagen-config-examples", "mcp-research-data",
+                   "optional-mcps", "scripts"}
+HERMES_DROP_TOP_FILES = ("README*", "CONTRIBUTING*", "SECURITY*", "AGENTS.md", "Dockerfile*", "docker-compose*",
+                         "flake.*", "setup*", "eslint*", "uv.lock", "package-lock.json", "constraints-*.txt", "cli-config.yaml.example",
+                         "batch_runner.py", "mini_swe_runner.py", ".*")
+HERMES_DROP_ANYWHERE = {"tests", "__tests__", ".git", ".github", "__pycache__", ".pytest_cache", "node_modules"}
 
 
-def install_node_agent(name: str, plat: str, dest: Path) -> Path:
-    """`npm ci` the locked package for one target platform into dest/node_modules (scripts off; OpenCode's unused
-    `-baseline` builds, for CPUs without AVX2, are dropped to save about 200 MB)."""
-    src = NODE_AGENTS[name]
-    if not (src / "package-lock.json").is_file():
-        raise BundleError(f"{src}/package-lock.json is missing")
-    os_, cpu = NPM_PLATFORM[plat]
-    dest.mkdir(parents=True, exist_ok=True)
-    for f in ("package.json", "package-lock.json"):
-        shutil.copy2(src / f, dest / f)
-    npm = shutil.which("npm.cmd" if os.name == "nt" else "npm") or shutil.which("npm")
-    if not npm:
-        raise BundleError("npm is needed on the build machine to vendor Codex and OpenCode")
-    r = subprocess.run([npm, "ci", f"--os={os_}", f"--cpu={cpu}", "--ignore-scripts", "--omit=dev", "--no-audit",
-                        "--no-fund"], cwd=dest, capture_output=True, text=True, timeout=1800)
-    if r.returncode != 0:
-        raise BundleError(f"npm ci failed for {name}: {(r.stderr or r.stdout)[-500:]}")
-    for d in (dest / "node_modules").glob("opencode-*-baseline*"):
-        shutil.rmtree(d, ignore_errors=True)
-    for f in ("package.json", "package-lock.json"):
-        (dest / f).unlink(missing_ok=True)
-    return dest
+def hermes_ignore(root: Path):
+    """shutil.copytree ignore function that leaves out everything the bundled Hermes does not run (see above)."""
+    import fnmatch
+    root = Path(root).resolve()
+
+    def ignore(d, names):
+        top = Path(d).resolve() == root
+        out = set()
+        for n in names:
+            if n in HERMES_DROP_ANYWHERE or n.endswith(".pyc"):
+                out.add(n)
+            elif top and (n in HERMES_DROP_TOP or any(fnmatch.fnmatch(n, g) for g in HERMES_DROP_TOP_FILES)):
+                out.add(n)
+        return out
+    return ignore
+
+
+# ------------------------------------------------------------------------------------------------ Chromium
+# Browser use opens a real, visible window (agent/browser_mcp_server.py), so the full Chromium stays; the headless
+# shell that `playwright install chromium` adds next to it (about 280 MB) is skipped with --no-shell. Left out of the
+# copy that ships: the other languages' strings, the Widevine DRM module and Playwright's ffmpeg (video recording).
+def prune_chromium(folder: Path) -> int:
+    """Delete the UI languages except English, Widevine and the hyphenation data from an installed Playwright Chromium.
+    Returns the bytes removed."""
+    gone = 0
+    folder = Path(folder)
+
+    def rm(p: Path):
+        nonlocal gone
+        try:
+            gone += sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.is_dir() else p.stat().st_size
+            shutil.rmtree(p) if p.is_dir() else p.unlink()
+        except OSError:
+            pass
+    for loc in list(folder.rglob("locales")):                       # Linux, Windows: locales/<lang>.pak
+        if loc.is_dir():
+            for f in loc.glob("*.pak"):
+                if f.name not in ("en-US.pak", "en-GB.pak"):
+                    rm(f)
+            for f in loc.glob("*.pak.info"):
+                rm(f)
+    for lp in list(folder.rglob("*.lproj")):                        # macOS: Resources/<lang>.lproj
+        if lp.name not in ("en.lproj", "en_US.lproj", "en_GB.lproj", "Base.lproj"):
+            rm(lp)
+    for name in ("WidevineCdm", "hyphen-data"):
+        for p in list(folder.rglob(name)):
+            rm(p)
+    for p in list(folder.glob("ffmpeg-*")):                         # video recording only; the Mac build needs macOS 15
+        rm(p)
+    return gone
 
 
 # ------------------------------------------------------------------------------------------------ MinGit

@@ -1,17 +1,17 @@
 """The programs Meshpool ships inside its installers, and how the installed app finds them.
 
-Rule: in the packaged app (config.packaged(), or a frozen build) Meshpool uses ONLY its own copy of Node.js, Git, the
-Node agents (Codex, OpenCode, Pi) and LibreOffice (office_runtime.py). It never falls back to PATH, npx or a download.
-In a source checkout or command-line install nothing changes: PATH and npx still work.
+Rule: in the packaged app (config.packaged(), or a frozen build) Meshpool uses ONLY its own copy of Node.js, Git, Pi,
+Chromium and LibreOffice (office_runtime.py). It never falls back to PATH, npx or a download. Codex and OpenCode are not
+shipped at all (harnesses.NOT_SHIPPED). In a source checkout or command-line install nothing changes: PATH and npx
+still work.
 
 Layout (packaging/build_all.py), relative to config.APP.parent (macOS: Meshpool.app/Contents/Resources):
   node/            Node.js (bin/node, bin/npx; Windows: node.exe)
   git/             Windows: MinGit (cmd, mingw64, usr/bin).  macOS: bin/git and libexec/git-core
-  app/vendor/      hermes, pi, codex-acp, opencode (each with its own node_modules), libreoffice
+  app/vendor/      hermes, pi (with its node_modules), libreoffice, browsers
 """
 from __future__ import annotations
 
-import json
 import os
 import platform
 import sys
@@ -88,57 +88,28 @@ def use_bundled_tools() -> None:
     os.environ["PATH"] = os.pathsep.join(front + cur)
 
 
+CHROMIUM_NEEDS_MACOS = (13, 0)          # Playwright's Chromium 159 (the one in the app); packaging/mac/check_minos.py exempts it at 13
+
+
+def browser_needs_newer_macos() -> str:
+    """The app opens on macOS 11, but its Chromium needs macOS 13: on a Mac in between, why browser use cannot run
+    ("" everywhere else). Web search and page reading do not need a browser."""
+    if sys.platform != "darwin" or not packaged():
+        return ""
+    try:
+        v = tuple(int(x) for x in platform.mac_ver()[0].split(".")[:2])
+    except ValueError:
+        return ""
+    if len(v) < 2 or v >= CHROMIUM_NEEDS_MACOS:
+        return ""
+    return (f"Browser use needs macOS {CHROMIUM_NEEDS_MACOS[0]} or later; this Mac runs macOS {v[0]}.{v[1]}. "
+            "web_search, web_research and fetch_url read public pages without a browser.")
+
+
 def browsers_dir() -> Path:
     """Playwright's Chromium, installed into the app at build time (app/vendor/browsers)."""
     return C.APP / "vendor" / "browsers"
 
 
-# ---------- vendored Node packages (Codex, OpenCode) --------------------------------------------------------------
-
 def vendor_dir(name: str) -> Path:
     return C.APP / "vendor" / name
-
-
-def package_bin(vendor: str, pkg: str, bin_name: str | None = None) -> Path | None:
-    """The command file of an installed npm package (its package.json "bin"), under app/vendor/<vendor>/node_modules."""
-    pj = vendor_dir(vendor) / "node_modules" / Path(*pkg.split("/")) / "package.json"
-    try:
-        bins = json.loads(pj.read_text(encoding="utf-8")).get("bin")
-    except (OSError, ValueError):
-        return None
-    if isinstance(bins, str):
-        rel = bins
-    elif isinstance(bins, dict) and bins:
-        rel = bins.get(bin_name) or next(iter(bins.values()))
-    else:
-        return None
-    p = (pj.parent / rel).resolve()
-    return p if p.is_file() else None
-
-
-def _opencode_binary() -> Path | None:
-    """OpenCode's native program. Its npm package only links it in a postinstall step (which the build skips), so
-    take it straight from the platform package."""
-    osn = {"darwin": "darwin", "win32": "windows"}.get(sys.platform)
-    arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "x64"
-    if not osn:
-        return None
-    p = vendor_dir("opencode") / "node_modules" / f"opencode-{osn}-{arch}" / "bin" / ("opencode.exe" if osn == "windows" else "opencode")
-    return p if p.is_file() else None
-
-
-def node_agent_command(key: str) -> tuple[str, list[str]] | None:
-    """(command, leading args) that run a vendored Node agent with the bundled Node. key: codex, opencode, codex-login."""
-    node = bundled_node()
-    if key == "opencode":
-        exe = _opencode_binary()
-        return (str(exe), []) if exe else None
-    if not node:
-        return None
-    if key == "codex":
-        js = package_bin("codex-acp", "@agentclientprotocol/codex-acp")
-    elif key == "codex-login":
-        js = package_bin("codex-acp", "@openai/codex")
-    else:
-        return None
-    return (node, [str(js)]) if js else None

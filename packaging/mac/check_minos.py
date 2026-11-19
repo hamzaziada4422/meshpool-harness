@@ -1,7 +1,7 @@
 """Find Mac programs and libraries in an app that need a newer macOS than the app promises.
 
 Usage: python3 check_minos.py Meshpool.app MIN [--arch arm64|x86_64] [--exempt GLOB=VERSION ...]
-  MIN       the macOS the app promises (its LSMinimumSystemVersion): 11.0 for Apple silicon, 10.15 for Intel.
+  MIN       the macOS the app promises (its LSMinimumSystemVersion): 11.0 for Apple silicon and Intel.
   --arch    read that architecture's slice of universal (fat) files. A universal2 library's Apple silicon slice
             always needs macOS 11, while its Intel slice often runs on 10.13; without --arch the highest slice counts.
   --exempt  files matching GLOB (relative to the app, fnmatch: * also matches /) may need up to VERSION instead of

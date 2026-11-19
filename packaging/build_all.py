@@ -8,9 +8,12 @@ the launcher's .syso and rebuild Meshpool.exe (docs/RELEASING.md).
 
 Everything the app needs ships inside the installer; the installed app uses none of the customer's tools and downloads
 nothing (docs/plan/BUNDLED_TOOLS.md). This script therefore also puts in the bundle, each pinned and verified by
-packaging/bundled_tools.py: LibreOffice (<app>/vendor/libreoffice), Codex and OpenCode (<app>/vendor/codex-acp,
-<app>/vendor/opencode, from the lock files in packaging/node-agents), Chromium (<app>/vendor/browsers), Git (Windows: MinGit; macOS: packaging/mac/build_git.sh)
-next to the Node runtime and Pi it already carried. MH_BUNDLE_LIBREOFFICE=0 builds a slim test app without LibreOffice.
+packaging/bundled_tools.py: LibreOffice (<app>/vendor/libreoffice, pruned to headless conversion by
+packaging/lo_prune.py), Chromium (<app>/vendor/browsers, English only, no headless shell), Git (Windows: MinGit;
+macOS: packaging/mac/build_git.sh), and Hermes without its tests, website and apps, next to the Node runtime and Pi it
+already carried. Codex and OpenCode are NOT shipped (Meshpool's own agent is the product; the benchmark in testkit/
+runs them with npx). MH_BUNDLE_LIBREOFFICE=0 builds a slim test app without LibreOffice on a developer machine only:
+it is refused when CI is set, so a release can never ship without it.
 `python packaging/build_all.py --check-pins` compares the pinned checksums with the ones the publisher lists.
 
 Third-party runtimes are not in the repo. Put them in a deps folder (default: <repo>/deps, or set MESHPOOL_DEPS);
@@ -36,10 +39,10 @@ PI = DEPS / "pi/node_modules"                             # Pi coding agent (npm
 NODE = {"mac-arm64": DEPS / "node-mac-arm64", "mac-x64": DEPS / "node-mac-x64", "win": DEPS / "node-win"}
 PI_NATIVE = {"mac-arm64": "darwin-arm64", "mac-x64": "darwin-x64", "win": "win32-x64"}
 RT = {"mac-arm64": DEPS / "rt-mac/python", "mac-x64": DEPS / "rt-macx64/python", "win": DEPS / "rt-win/python"}
-# The oldest macOS each Mac app opens on (Info.plist's LSMinimumSystemVersion). No Apple silicon Mac runs older than
-# 11; the Intel app opens on 10.15, where the parts that need 11 (Node agents, browser use) say so. The launcher and
-# packaging/mac/check_minos.py use the same numbers (.github/workflows/release.yml, packaging/mac/repack.sh).
-MIN_MACOS = {"mac-arm64": "11.0", "mac-x64": "10.15"}
+# The oldest macOS each Mac app opens on (Info.plist's LSMinimumSystemVersion): 11 Big Sur on both. Node 22, Chromium and
+# LibreOffice need it, so the Intel app no longer promises 10.15. The launcher and packaging/mac/check_minos.py use the
+# same number (.github/workflows/release.yml, packaging/mac/repack.sh).
+MIN_MACOS = {"mac-arm64": "11.0", "mac-x64": "11.0"}
 WINRES = PKG / "win/launcher/winres/winres.json"
 
 
@@ -117,54 +120,73 @@ LO_KEY = {"mac-arm64": "mac-arm64", "mac-x64": "mac-x64", "win": "win-x64"}
 CACHE = DEPS / "download-cache"                           # downloads are kept here between builds (hash-checked each time)
 
 
+def _lo_prune():
+    """packaging/lo_prune.py loaded by path (stdlib only)."""
+    spec = importlib.util.spec_from_file_location("mp_lo_prune", PKG / "lo_prune.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def in_ci() -> bool:
+    return any(os.environ.get(v, "").lower() in ("1", "true", "yes") for v in ("CI", "GITHUB_ACTIONS"))
+
+
 def libreoffice(app_dir: Path, plat: str):
-    """The pinned LibreOffice for this platform, verified and unpacked into <app>/vendor/libreoffice: the app uses
-    only this copy. macOS: LibreOffice.app copied out of the dmg (hdiutil on a Mac, else 7z). Windows: `msiexec /a`
-    administrative extract (on a non-Windows build host: msiextract or 7z). MH_BUNDLE_LIBREOFFICE=0 builds a slim app
-    without it, for smoke tests only: that app has no Office conversion. Release builds must not set it."""
+    """The pinned LibreOffice for this platform, verified, unpacked and pruned to headless conversion
+    (packaging/lo_prune.py) into <app>/vendor/libreoffice: the app uses only this copy. macOS: LibreOffice.app copied
+    out of the dmg (hdiutil, so on a Mac). Windows: `msiexec /a` administrative extract (on a non-Windows build host:
+    msiextract or 7z). MH_BUNDLE_LIBREOFFICE=0 builds an app without it, for smoke tests on a developer machine
+    only; it is refused in CI, so no release can ship without LibreOffice."""
     if os.environ.get("MH_BUNDLE_LIBREOFFICE", "1") == "0":
-        print(f"build_all: MH_BUNDLE_LIBREOFFICE=0: {plat} is built WITHOUT LibreOffice (slim test build, not a release)")
+        if in_ci():
+            sys.exit("build_all: MH_BUNDLE_LIBREOFFICE=0 is not allowed in CI: a release must ship with LibreOffice. "
+                     "Unset it (it is for local test builds only).")
+        print(f"build_all: MH_BUNDLE_LIBREOFFICE=0: {plat} is built WITHOUT LibreOffice (local test build, not a release)")
         return
     bt = _bt()
     dest = app_dir / "vendor" / "libreoffice"
     bt.fetch_libreoffice(LO_KEY[plat], CACHE, dest)
-    mb = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) // 1_000_000
-    print(f"build_all: LibreOffice {bt.LO_VERSION} for {plat}: {mb} MB unpacked")
+    full = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file() and not f.is_symlink()) // 1_000_000
+    _lo_prune().prune(dest, "win" if plat == "win" else "mac")
+    mb = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file() and not f.is_symlink()) // 1_000_000
+    print(f"build_all: LibreOffice {bt.LO_VERSION} for {plat}: {full} MB unpacked, {mb} MB after pruning")
 
 
-def node_agents(app_dir: Path, plat: str):
-    """Codex (codex-acp) and OpenCode from the lock files in packaging/node-agents, for this platform only, into
-    <app>/vendor/<name>/node_modules. No `npx -y` at runtime. Needs npm on the build machine."""
-    bt = _bt()
-    for name in bt.NODE_AGENTS:
-        bt.install_node_agent(name, plat, app_dir / "vendor" / name)
-        print(f"build_all: vendored {name} for {plat}")
-
-
-PW_PLATFORM = {"mac-arm64": "mac11-arm64", "mac-x64": "mac11", "win": "win64"}      # Playwright's names for its downloads
+# Playwright's names for its downloads. Its current Chromium only exists for macOS 14 and later hosts (mac11, mac12 and mac13
+# are refused: "Playwright does not support chromium on mac11"), and the binary itself needs macOS 13. mac14 only picks the
+# download (Chrome for Testing, arm64 or x64), it does not make the app need macOS 14.
+PW_PLATFORM = {"mac-arm64": "mac14-arm64", "mac-x64": "mac14", "win": "win64"}
 
 
 def chromium(app_dir: Path, plat: str):
     """Playwright's Chromium into <app>/vendor/browsers, so browser use never downloads an engine nor uses the customer's
-    Chrome or Edge. Uses the target runtime's own playwright package when this host can run it (so the revision matches
-    the bundled package), else the build machine's. NOT YET RUN end to end: check the first release's browser use."""
+    Chrome or Edge. Browser use opens a visible window (sign-ins), so it is the full Chromium; `--no-shell` leaves out the
+    headless shell that Playwright installs next to it by default (about 280 MB), and bundled_tools.prune_chromium drops
+    the other languages and Widevine. Uses the target runtime's own playwright package when this host can run it (so
+    the revision matches the bundled package), else the build machine's. NOT YET RUN on a Mac or Windows build host:
+    check the first release's browser use."""
     import subprocess
     dest = app_dir / "vendor" / "browsers"
     exe = RT[plat] / ("python.exe" if plat == "win" else "bin/python3")
     host_ok = (plat == "win") == (os.name == "nt") and (plat == "win" or sys.platform == "darwin")
     py = str(exe) if host_ok and exe.exists() else sys.executable
     env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=str(dest), PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=PW_PLATFORM[plat])
-    r = subprocess.run([py, "-m", "playwright", "install", "chromium"], env=env)
+    r = subprocess.run([py, "-m", "playwright", "install", "chromium", "--no-shell"], env=env)
     if r.returncode != 0:
         sys.exit(f"build_all: could not vendor Chromium for {plat} (python used: {py})")
-    print(f"build_all: vendored Chromium for {plat}")
+    full = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) // 1_000_000
+    _bt().prune_chromium(dest)
+    mb = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) // 1_000_000
+    print(f"build_all: vendored Chromium for {plat}: {full} MB, {mb} MB after dropping other languages")
 
 
 def git_win(root: Path):
     """MinGit into <app root>/git. deps/git-win (the release workflow unpacks MinGit there) wins; otherwise the pinned,
     checksum-verified download in bundled_tools.py."""
     if (DEPS / "git-win").is_dir():
-        git_win(root)
+        shutil.copytree(DEPS / "git-win", root / "git")
     else:
         _bt().fetch_mingit(CACHE, root / "git")
 
@@ -222,7 +244,7 @@ def app_code(dst: Path):
     shutil.copy2(APP_SRC / "requirements.txt", dst / "requirements.txt")
     # The package list the bundled runtime is built from (docs/BUILDING.md); the in-app update compares it.
     shutil.copy2(PKG / "requirements-cli.txt", dst / "requirements-cli.txt")
-    shutil.copytree(VENDOR, dst / "vendor" / "hermes", ignore=IGN)
+    shutil.copytree(VENDOR, dst / "vendor" / "hermes", ignore=_bt().hermes_ignore(VENDOR))    # without tests, website, apps ...
     shutil.copy2(PKG / "hermes-NOTICE-MESHPOOL.txt", dst / "vendor" / "hermes" / "NOTICE-MESHPOOL.txt")
     if (DEPS / "ocr-models").is_dir():                   # extra-script OCR models (optional; Latin/CJK built in)
         shutil.copytree(DEPS / "ocr-models", dst / "vendor" / "ocr")
@@ -247,7 +269,6 @@ def mac_app(arch: str):
     app_code(root / "Resources/app")
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
     libreoffice(root / "Resources/app", arch)
-    node_agents(root / "Resources/app", arch)
     chromium(root / "Resources/app", arch)
     git_mac(root / "Resources", arch)
     docs(root / "Resources/harness-docs")
@@ -265,11 +286,10 @@ def win_app():
     (root / "bin").mkdir()
     shutil.copy2(PKG / "win/meshpool.cmd", root / "bin" / "meshpool.cmd")
     shutil.copytree(RT["win"], root / "runtime", ignore=IGN)
-    shutil.copytree(DEPS / "git-win", root / "git")
+    git_win(root)
     app_code(root / "app")
     pi_and_node(root / "app", root / "node", "win")
     libreoffice(root / "app", "win")
-    node_agents(root / "app", "win")
     chromium(root / "app", "win")
     docs(root / "harness-docs")
     stamp(PKG / "nsis/installer.nsi", OUT / "app-win" / "installer.nsi")

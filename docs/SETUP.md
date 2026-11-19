@@ -10,7 +10,7 @@ About five minutes. Meshpool is in beta and is not yet signed by Apple or Micros
 | Mac with Intel | About This Mac shows **Processor: … Intel** | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
 
-Macs with Apple silicon need macOS 11 Big Sur or later. Intel Macs need macOS 10.15 Catalina or later (on 10.15, Pi, Codex, OpenCode and browser use need macOS 11).
+Macs, Apple silicon and Intel, need macOS 11 Big Sur or later (browser use needs macOS 13).
 
 ## 2. Install on a Mac
 

@@ -51,9 +51,9 @@ jobs:
           rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64 11.0
           # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
           sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
-          # The Intel app opens on macOS 10.15 (Apple silicon: 11). Anything pip has to compile targets 10.15 too.
-          MACOSX_DEPLOYMENT_TARGET=10.15 arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
-          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64 10.15
+          # Both Mac apps open on macOS 11 and later (Intel dropped 10.15). Anything pip has to compile targets 11 too.
+          MACOSX_DEPLOYMENT_TARGET=11.0 arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
+          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64 11.0
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           for a in arm64 x64; do
             mkdir -p node-mac-$a
@@ -75,24 +75,19 @@ jobs:
         run: |
           set -euo pipefail
           for a in arm64 x64; do
-            # The oldest macOS each app opens on: no Apple silicon Mac runs older than 11; the Intel app opens on 10.15
-            # (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist)
-            arch=arm64; min=11.0; exempt=()
-            if [ $a = x64 ]; then
-              arch=x86_64; min=10.15
-              # Node 22 needs macOS 11, and so does Playwright's driver (it runs on that Node). On 10.15 the app turns
-              # off what needs them (Pi, Codex, OpenCode, browser use) with a message; every other file must run on 10.15.
-              exempt=(--exempt 'Contents/Resources/node/*=11.0' --exempt 'Contents/Resources/python/lib/python3.*/site-packages/playwright/driver/*=11.0' --exempt 'Contents/Resources/app/vendor/codex-acp/*=11.0' --exempt 'Contents/Resources/app/vendor/opencode/*=11.0')
-              # Codex and OpenCode are Node agents too (macos.NODE_AGENTS). LibreOffice (app/vendor/libreoffice) is NOT exempted:
-              # if check_minos reports it above 10.15, decide in docs/plan/BUNDLED_TOOLS.md (open decision 3) before releasing.
-            fi
+            # The oldest macOS both apps open on is 11 (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist).
+            # Node 22, Playwright's driver and LibreOffice run on 11. Playwright's Chromium (159) needs macOS 13, so browser
+            # use says so on older Macs (bundled.browser_needs_newer_macos) and Chromium is the one exemption.
+            arch=arm64; min=11.0
+            [ $a = x64 ] && arch=x86_64
+            exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0')
             # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
             clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
             # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
             D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
             if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
             grep -q "LSMinimumSystemVersion</key><string>$min</string>" dist-src/app-mac-$a/Meshpool.app/Contents/Info.plist || { echo "Info.plist does not say macOS $min"; exit 1; }
-            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app $min --arch $arch ${exempt[@]+"${exempt[@]}"}
+            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app $min --arch $arch "${exempt[@]}"
           done
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
@@ -108,6 +103,10 @@ jobs:
             if [ "$f" = Meshpool-Intel ]; then run=(arch -x86_64); else run=(); fi
             echo "== $f.dmg"
             ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"   # bash 3.2: empty array under set -u
+            # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
+            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+            # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
+            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_hermes_prune.py "$R/app/vendor/hermes"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -168,6 +167,10 @@ jobs:
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           M=dist-src/app-win/Meshpool
           "$M/runtime/python.exe" packaging/smoke.py --app "$M/app" --version "$VER"
+          # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
+          "$M/runtime/python.exe" packaging/verify_lo_prune.py "$M/app/vendor/libreoffice/program/soffice.exe"
+          # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
+          "$M/runtime/python.exe" packaging/verify_hermes_prune.py "$M/app/vendor/hermes"
       - name: Sign the launcher and the app files
         # Signs Meshpool.exe (the Go launcher) and everything else in the app tree that Windows checks, before the
         # installer is built. Skipped when the Azure secrets are not set, so the build works before the account exists.
@@ -286,15 +289,14 @@ jobs:
           # the in-app code update installs this archive, checked against SHA256SUMS.txt
           git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
           # update-manifest.json (docs/plan/AUTO_UPDATE.md): runtime_changed is true when a bundled program changed (pinned
-          # packages, the LibreOffice and Git pins in bundled_tools.py, the Codex and OpenCode lock files), so the app
+          # packages, the LibreOffice, Chromium and Git pins in bundled_tools.py, the LibreOffice prune list), so the app
           # then uses the full installer instead of the in-place code update. Node and Pi are versioned in this workflow:
           # if you change them, also change one of the listed files.
           gh release download "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')" \
             --pattern update-manifest.json --dir prev 2>/dev/null || true
           python3 packaging/updater/make_manifest.py --version "$VER" \
             --runtime-file packaging/requirements-pinned.txt --runtime-file packaging/requirements-runtime.txt \
-            --runtime-file packaging/bundled_tools.py --runtime-file packaging/node-agents/codex-acp/package-lock.json \
-            --runtime-file packaging/node-agents/opencode/package-lock.json \
+            --runtime-file packaging/bundled_tools.py --runtime-file packaging/lo_prune.py \
             --previous prev/update-manifest.json -o dist/update-manifest.json
           (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz update-manifest.json > SHA256SUMS.txt)
           # Updates check every download against SHA256SUMS.txt, so a release users can see must never be half

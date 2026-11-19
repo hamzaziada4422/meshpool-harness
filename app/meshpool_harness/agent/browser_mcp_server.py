@@ -100,9 +100,10 @@ class Browser:
             raise ToolFailed("Could not download the browser engine: " + (r.stderr or r.stdout)[-400:])
 
     def ensure(self):
-        from meshpool_harness import macos
-        if macos.too_old():                  # Chromium (and the Node Playwright drives it with) needs macOS 11
-            raise ToolFailed(macos.note("Browser use", macos.BROWSER_INSTEAD))
+        from meshpool_harness import bundled
+        why = bundled.browser_needs_newer_macos()       # the app opens on macOS 11, its Chromium needs 13
+        if why:
+            raise ToolFailed(why)
         if self.ctx is not None:
             try:
                 if self.page is None or self.page.is_closed():

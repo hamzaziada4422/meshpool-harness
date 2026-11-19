@@ -12,9 +12,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Python 3.12 (python-build-standalone) | PSF License and bundled licenses | https://github.com/astral-sh/python-build-standalone |
 | Git for Windows, MinGit (Windows) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | Git 2.56.1, built unmodified from the official source (macOS: `git/`; build script `packaging/mac/build_git.sh`, licence `git/COPYING-git-GPL-2.0.txt`) | GPL-2.0 | Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz |
-| LibreOffice 26.2.7, unmodified, used for Office conversion and rendering (`app/vendor/libreoffice`; notice and licence in `app/defaults/licenses/libreoffice`) | MPL-2.0 and bundled licenses | Source: https://download.documentfoundation.org/libreoffice/src/26.2.7/ |
-| Codex ACP adapter 2.6.0 and the OpenAI Codex CLI it runs (`app/vendor/codex-acp`) | Apache-2.0 | https://www.npmjs.com/package/@agentclientprotocol/codex-acp, https://github.com/openai/codex |
-| OpenCode 1.19.5 (`app/vendor/opencode`) | MIT | https://www.npmjs.com/package/opencode-ai |
+| LibreOffice 26.2.7, binaries unmodified (unused parts such as help, Base, Math, extensions and other languages are removed: `packaging/lo_prune.py`), used for Office conversion and rendering (`app/vendor/libreoffice`; notice and licence in `app/defaults/licenses/libreoffice`) | MPL-2.0 and bundled licenses | Source: https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.3/src/ |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
 
 ## Bundled content (icons and skills)

@@ -289,17 +289,18 @@ def system_check() -> list[dict]:
     rows.append({"name": "Node.js", "optional": True, "ok": bool(node),
                  "detail": (f"{node} (ships with Meshpool)" if bundled.packaged() else node) if node else "not found",
                  "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
-                         "Optional. Pi, Codex and OpenCode run on Node.js (the app includes it); from the command "
+                         "Optional. Pi runs on Node.js (the app includes it); from the command "
                          "line, install Node.js 22 or newer.")})
     try:
         import playwright  # noqa: F401
         pw = True
     except ImportError:
         pw = False
-    from meshpool_harness import macos
-    if macos.too_old():                     # the Intel app opens on 10.15; Chromium needs macOS 11
-        rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 11 or later",
-                     "fix": macos.note("Browser use", "Web search and page reading work without it.")})
+    from meshpool_harness import bundled
+    why = bundled.browser_needs_newer_macos()
+    if why:                                 # the app opens on macOS 11, its Chromium needs 13
+        rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 13 or later",
+                     "fix": why})
     else:
         rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
                      "fix": "Run: meshpool install-browser"})

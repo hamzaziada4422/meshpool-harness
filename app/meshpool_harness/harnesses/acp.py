@@ -275,7 +275,7 @@ class ACPAgent:
             return False
         m = self.manifest
         from meshpool_harness.harnesses import unsupported
-        if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode on macOS 10.15: Node needs 11
+        if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode: not part of the packaged app
             raise ACPError(unsupported(m["id"]))
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes

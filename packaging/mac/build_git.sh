@@ -18,7 +18,7 @@ PY
 )
 case "$PLAT" in
   mac-arm64) ARCH=arm64;  MIN=11.0 ;;
-  mac-x64)   ARCH=x86_64; MIN=10.15 ;;
+  mac-x64)   ARCH=x86_64; MIN=11.0 ;;
   *) echo "unknown platform $PLAT"; exit 1 ;;
 esac
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT

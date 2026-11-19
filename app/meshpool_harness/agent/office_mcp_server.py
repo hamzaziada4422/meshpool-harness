@@ -7,7 +7,7 @@ Tools
   analyze_data(request, files)        -> charts, tables and a written analysis from data files
   make_document(markdown, filename)   -> .docx from Markdown (headings, lists, tables, bold, code)
   make_pdf(markdown, filename)        -> .pdf from Markdown
-  convert_document(path, to)          -> docx/pptx/xlsx to PDF and back, through LibreOffice when installed
+  convert_document(path, to)          -> docx/pptx/xlsx to PDF, and PDF to Word (docx, odt, rtf) or a picture, through LibreOffice
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
   check_deck(path, slide_count?)      -> the forge deck rules (P0-P19), each failure as a fix instruction
@@ -418,6 +418,15 @@ def convert_document(path: str, to: str = "pdf"):
         if to == "pdf":                                                # no clarity rewrite
             return make_pdf(text, src.stem + ".pdf")
         return make_document(text, src.stem + ".docx", _clarity=False)
+    infilter: list[str] = []
+    if src.suffix.lower() == ".pdf":
+        # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
+        # it can write Word, ODT or RTF: the words and tables come across, the layout is approximate.
+        if to in ("docx", "odt", "rtf"):
+            infilter = ["--infilter=writer_pdf_import"]
+        elif to not in ("png", "jpg", "jpeg", "svg"):
+            return (f"A PDF can be converted to Word (docx, odt, rtf) or to a picture (png, jpg, svg), not to {to}. "
+                    "Use read_document to read it, then make_spreadsheet or make_deck to build that file."), True
     exe = _soffice()
     if not exe:
         from meshpool_harness import office_runtime
@@ -430,7 +439,7 @@ def convert_document(path: str, to: str = "pdf"):
     import shutil
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:          # convert aside, then save under a free name: a conversion
-        r = subprocess.run([exe, "--headless", "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
+        r = subprocess.run([exe, "--headless", *infilter, "--convert-to", to, "--outdir", tmp, str(src)],   # never replaces a file
                            capture_output=True, text=True, timeout=300, **kw)
         made = Path(tmp) / (src.stem + "." + to)
         if r.returncode != 0 or not made.exists():
@@ -517,7 +526,8 @@ TOOLS = {
     "make_pdf": (make_pdf, "Save Markdown as a PDF (headings, paragraphs, lists, tables, code, links).",
                  {"markdown": S, "filename": S, "title": S}, ["markdown"]),
     "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "
-                         "to PDF, or Markdown to PDF or Word. `to` is the target extension.",
+                         "to PDF, a PDF to Word (words and tables, approximate layout), or Markdown to PDF or Word. `to` is the target "
+                         "extension.",
                          {"path": S, "to": S}, ["path", "to"]),
     "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
                   "\"M&A\", \"datacentre\"). Searches the bundled open-licence sets (Lucide, Tabler, Phosphor, "
