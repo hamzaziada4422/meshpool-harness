@@ -220,7 +220,21 @@ def local_classify(text: str) -> tuple[str, float] | None:
 
 # ---------- stage 2: one model call -------------------------------------------------------------------------------
 def ask_model(text: str, signals: str, client, model: str) -> tuple[str, dict] | None:
-    """(category, usage) from one call, or None on any error or an answer that is not a category."""
+    """(category, usage) from one call, or None on any error, an answer that is not a category, or no answer within
+    MH_CLASSIFY_TIMEOUT seconds (default 6). The shared client retries for minutes on outages; a routing hint must
+    never hold up the request, so the call runs on a daemon thread and is abandoned at the deadline."""
+    import threading
+    box: list = []
+    th = threading.Thread(target=lambda: box.append(_ask_model_once(text, signals, client, model)), daemon=True)
+    th.start()
+    try:
+        th.join(float(os.environ.get("MH_CLASSIFY_TIMEOUT", "6")))
+    except ValueError:
+        th.join(6.0)
+    return box[0] if box else None
+
+
+def _ask_model_once(text: str, signals: str, client, model: str) -> tuple[str, dict] | None:
     try:
         resp = client.chat(model=model, messages=[{"role": "user", "content": card(text, signals)}], max_tokens=12,
                            temperature=0.0, task_id="hclassify", role="router")

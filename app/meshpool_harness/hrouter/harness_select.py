@@ -21,6 +21,9 @@ from __future__ import annotations
 import dataclasses
 import json
 import os
+import hashlib
+import uuid
+import time
 from pathlib import Path
 
 MIN_TASKS = 3
@@ -146,6 +149,7 @@ def select(prompt: str, workdir: str | None = None, model: str | None = None, *,
            tie: float | None = None, min_tasks: int | None = None) -> dict:
     """The harness for a task. {category, harness, profile, reason, classifier_tokens, stage, confidence}."""
     from . import classify as CL
+    t0 = time.time()
     cl = CL.classify(prompt, files=files, workdir=workdir, kind=kind, client=client, model=model, route=route)
     cat = cl["category"]
     card = card if card is not None else load_scorecard()
@@ -159,9 +163,50 @@ def select(prompt: str, workdir: str | None = None, model: str | None = None, *,
     if base_id(harness) == DEFAULT:
         profile = harness.split(":", 1)[1] if ":" in harness else default_profile(cat, cl.get("route"))
         harness = f"{DEFAULT}:{profile}" if profile != "full" else DEFAULT
-    return {"category": cat, "harness": harness, "profile": profile,
-            "reason": f"{cat} ({cl['stage']}, {cl['confidence']:.2f}): {why}",
-            "classifier_tokens": dict(cl.get("usage") or {}), "stage": cl["stage"], "confidence": cl["confidence"]}
+    out = {"category": cat, "harness": harness, "profile": profile,
+           "reason": f"{cat} ({cl['stage']}, {cl['confidence']:.2f}): {why}",
+           "classifier_tokens": dict(cl.get("usage") or {}), "stage": cl["stage"], "confidence": cl["confidence"],
+           "decision_id": uuid.uuid4().hex[:12], "route_ms": round((time.time() - t0) * 1000)}
+    log_decision(out, prompt, model)
+    return out
+
+
+# ---------- observability: every routing decision and its outcome, on this computer only ------------------------------
+def _log_path():
+    from meshpool_harness import config as C
+    return C.home() / "routing-log.jsonl"
+
+
+def _append(row: dict) -> None:
+    """One JSON line in <data folder>/routing-log.jsonl. Never the request text (only its hash and length), never a
+    key; MH_ROUTING_LOG=0 turns it off. A log failure never affects routing."""
+    if os.environ.get("MH_ROUTING_LOG", "1") == "0":
+        return
+    try:
+        p = _log_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def log_decision(d: dict, prompt: str, model: str | None) -> None:
+    _append({"type": "decision", "id": d["decision_id"], "t": time.time(), "model": model or os.environ.get("MH_MODEL", ""),
+             "prompt_sha": hashlib.sha256((prompt or "").encode()).hexdigest()[:16], "prompt_len": len(prompt or ""),
+             **{k: d[k] for k in ("category", "harness", "profile", "stage", "confidence", "route_ms",
+                                  "classifier_tokens")}})
+
+
+def log_outcome(decision_id: str, *, ok: bool | None, secs: float, usage: dict | None = None,
+                error: str | None = None) -> None:
+    """The result of the run a decision chose: finished or failed, time, tokens. With the decision, this is what a
+    scorecard can later be refitted from (opt-in)."""
+    if decision_id:
+        _append({"type": "outcome", "id": decision_id, "t": time.time(), "ok": ok, "secs": round(secs, 1),
+                 "usage": {k: (usage or {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
+                                                               "model_calls")},
+                 "error": (error or "")[:200] or None})
 
 
 def enabled() -> bool:

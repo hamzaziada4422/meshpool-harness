@@ -232,3 +232,35 @@ def test_fit_scorecard_on_synthetic_results(tmp_path):
     out = tmp_path / "card.json"
     assert HSC.main([str(d), "--out", str(out), "--md", str(tmp_path / "c.md")]) == 0
     assert json.loads(out.read_text())["_version"] == 1
+
+
+def test_routing_decision_and_outcome_are_logged(tmp_path, monkeypatch):
+    """Observability: each routed request leaves a decision line and an outcome line (no request text, no key)."""
+    import json
+    from meshpool_harness.hrouter import harness_select as HS
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    monkeypatch.delenv("MH_ROUTING_LOG", raising=False)
+    monkeypatch.setenv("MH_CLASSIFY_THRESHOLD", "0")          # rules only: this test is about the log, not the classifier
+    d = HS.select("Fix the crash: KeyError 'total' when an order has no lines", None, "m1", card={"*": {}}, avail={"meshpool"})
+    assert d["decision_id"] and d["route_ms"] >= 0
+    HS.log_outcome(d["decision_id"], ok=True, secs=3.2, usage={"prompt_tokens": 10, "completion_tokens": 2})
+    rows = [json.loads(x) for x in (tmp_path / "routing-log.jsonl").read_text().splitlines()]
+    assert [r["type"] for r in rows] == ["decision", "outcome"] and rows[0]["id"] == rows[1]["id"]
+    assert "KeyError" not in json.dumps(rows) and rows[0]["prompt_len"] > 10
+    monkeypatch.setenv("MH_ROUTING_LOG", "0")
+    HS.log_outcome("x", ok=False, secs=1)
+    assert len((tmp_path / "routing-log.jsonl").read_text().splitlines()) == 2
+
+
+def test_slow_endpoint_never_holds_up_routing(monkeypatch):
+    """The routing call is a hint: past its deadline the request goes on with the zero-token answer."""
+    import time
+    from meshpool_harness.hrouter import classify as CL
+
+    class Slow:
+        def chat(self, **kw):
+            time.sleep(5)
+            return {"choices": [{"message": {"content": "code.debug"}}]}
+    monkeypatch.setenv("MH_CLASSIFY_TIMEOUT", "0.3")
+    t0 = time.time()
+    assert CL.ask_model("fix it", "", Slow(), "m") is None and time.time() - t0 < 2

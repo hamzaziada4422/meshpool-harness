@@ -45,6 +45,7 @@ class Route:
     harness: str = ""                 # the agent harness the scorecard picks (harness_select.py); "" = not asked
     harness_reason: str = ""          # why; set only when MH_HARNESS_ROUTER=1
     category: str = ""                # the classifier's category for that pick
+    decision_id: str = ""             # the routing log's id for this pick (harness_select.log_outcome)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -191,6 +192,7 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
             from . import harness_select as HS
             h = HS.select(text, workdir, model, files=files, kind=kind, client=client, route=r)
             r.harness, r.harness_reason, r.category = h["harness"], h["reason"], h["category"]
+            r.decision_id = h.get("decision_id", "")
             r.used_model_call = r.used_model_call or bool(h["classifier_tokens"])
             if h["profile"] and h["profile"] != r.profile and not PROF.forced():   # the engine runs under the profile the scorecard chose
                 r.profile, r.settings = h["profile"], PROF.settings(h["profile"]) or r.settings

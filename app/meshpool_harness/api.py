@@ -74,6 +74,7 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
 
 
 def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: str | None, sessions: str) -> dict:
+    t_start = time.time()
     from meshpool_harness.agent.core import Agent
     events: list = []
     a = Agent(workdir, mode="auto", max_steps=max_steps, profile=profile, emit=events.append, sessions_dir=sessions)
@@ -103,4 +104,9 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
            "plan": a.plan_state()}
     if errors and not capped:
         out["error"] = errors[-1][:500]
+    if route is not None and getattr(route, "decision_id", ""):      # observability: the routed run's outcome
+        from meshpool_harness.hrouter import harness_select as HS
+        out["routing"] = {"decision_id": route.decision_id, "harness": route.harness, "category": route.category,
+                          "reason": route.harness_reason}
+        HS.log_outcome(route.decision_id, ok=out["ok"], secs=time.time() - t_start, usage=usage, error=out.get("error"))
     return out
