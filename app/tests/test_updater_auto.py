@@ -361,3 +361,17 @@ def test_staged_mac_app_is_checked(monkeypatch, tmp_path):
     monkeypatch.setattr(AU, "_run", _fake_run(spctl_cur=0, spctl_new=3))   # this copy passes Gatekeeper, the new one not
     with pytest.raises(AU.UpdateError, match="Gatekeeper"):
         AU.verify_staged_mac(new, cur, v)
+
+
+def test_mac_asset_follows_the_cpu_not_the_running_build(monkeypatch):
+    """Intel Mac: Meshpool-Intel.dmg. Apple silicon, native or the Intel app under Rosetta (a release without an
+    Apple silicon build ships the Intel app as Meshpool.dmg): Meshpool.dmg, so it returns to the native app."""
+    from meshpool_harness import updater as U
+    v = {"assets": [{"name": "Meshpool.dmg", "url": "u1"}, {"name": "Meshpool-Intel.dmg", "url": "u2"},
+                    {"name": "Meshpool-Setup.exe", "url": "u3"}]}
+    monkeypatch.setattr(U.sys, "platform", "darwin")
+    for machine, translated, want in (("x86_64", False, "Meshpool-Intel.dmg"), ("x86_64", True, "Meshpool.dmg"),
+                                      ("arm64", False, "Meshpool.dmg")):
+        monkeypatch.setattr(U.platform, "machine", lambda m=machine: m)
+        monkeypatch.setattr(U, "_rosetta", lambda t=translated: t)
+        assert U._asset(v)["name"] == want, (machine, translated)

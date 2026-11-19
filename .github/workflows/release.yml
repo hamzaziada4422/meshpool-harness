@@ -43,11 +43,23 @@ jobs:
       - run: uname -m; sw_vers; sysctl -n hw.ncpu; df -h / | tail -1
 
   mac:
+    # One job per architecture, each on a runner of its own CPU, so every app is built and smoke-tested natively.
+    # Intel runs on GitHub's Intel pool. Apple silicon runs on the arm64 pool, which since November 2026 often gives no
+    # runner at all ("not acquired by Runner of type hosted", cancelled after 15 minutes, see docs/plan/CI_LOCAL.md):
+    # that leg may fail without stopping the release, and the publish step then ships the Intel app for Apple silicon
+    # too (it runs under Rosetta; the updater moves those Macs to the native app once a release has it).
     if: github.event_name == 'release' || inputs.platforms == 'mac' || inputs.platforms == 'both'
-    runs-on: macos-15   # Apple silicon; macos-latest (26) kept failing to get a runner, macos-14 is retired
-    # two LibreOffice builds, Chromium for both architectures, Git compiled twice and the prune checks: a timeout at the
-    # end would waste the whole (10x) run, and billing follows the real time anyway
-    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: x64, plat: mac-x64, runner: macos-15-intel, dmg: Meshpool-Intel, pbs: x86_64-apple-darwin, rt: rt-macx64, wheels: x86_64, clang: x86_64}
+          - {arch: arm64, plat: mac-arm64, runner: macos-15, dmg: Meshpool, pbs: aarch64-apple-darwin, rt: rt-mac, wheels: arm64, clang: arm64}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.arch == 'arm64' }}
+    timeout-minutes: 120
+    env:
+      MAC_ARCHS: ${{ matrix.arch }}       # repack.sh and sign.sh work on this architecture's app only
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -56,51 +68,45 @@ jobs:
       - name: Third-party runtimes
         run: |
           set -euo pipefail
+          echo "runner: $(uname -m), macOS $(sw_vers -productVersion)"
+          [ "$(uname -m)" = "${{ matrix.clang }}" ] || { echo "this runner is $(uname -m), not ${{ matrix.clang }}"; exit 1; }
           mkdir -p deps && cd deps
-          softwareupdate --install-rosetta --agree-to-license >/dev/null 2>&1 || true
           PBS=$(gh release view --repo astral-sh/python-build-standalone --json tagName -q .tagName)
-          for pair in "aarch64-apple-darwin rt-mac" "x86_64-apple-darwin rt-macx64"; do
-            set -- $pair
-            asset=$(gh release view "$PBS" --repo astral-sh/python-build-standalone --json assets -q '.assets[].name' \
-              | grep -E "^cpython-3\.12\.[0-9]+\+[0-9]+-$1-install_only\.tar\.gz$" | head -1)
-            gh release download "$PBS" --repo astral-sh/python-build-standalone -p "$asset"
-            mkdir -p "$2" && tar -xzf "$asset" -C "$2" && rm "$asset"
-          done
+          asset=$(gh release view "$PBS" --repo astral-sh/python-build-standalone --json assets -q '.assets[].name' \
+            | grep -E "^cpython-3\.12\.[0-9]+\+[0-9]+-${{ matrix.pbs }}-install_only\.tar\.gz$" | head -1)
+          gh release download "$PBS" --repo astral-sh/python-build-standalone -p "$asset"
+          mkdir -p "${{ matrix.rt }}" && tar -xzf "$asset" -C "${{ matrix.rt }}" && rm "$asset"
+          PY="${{ matrix.rt }}/python/bin/python3"
           git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes
           (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
-          rt-mac/python/bin/python3 ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
-          rt-mac/python/bin/python3 -m pip install -q -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
-          rt-mac/python/bin/python3 ../packaging/mac/old_macos_wheels.py arm64 11.0
+          "$PY" ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
           # cryptography stopped shipping Intel Mac builds after 48.0.1; use that on Intel rather than compile from source
-          sed 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt > hermes-req-x64.txt
-          # Both Mac apps open on macOS 11 and later (Intel dropped 10.15). Anything pip has to compile targets 11 too.
-          MACOSX_DEPLOYMENT_TARGET=11.0 arch -x86_64 rt-macx64/python/bin/python3 -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt -r ../packaging/requirements-cli.txt -r hermes-req-x64.txt $RUNTIME_EXTRAS
-          arch -x86_64 rt-macx64/python/bin/python3 ../packaging/mac/old_macos_wheels.py x86_64 11.0
+          if [ "${{ matrix.arch }}" = x64 ]; then sed -i '' 's/^cryptography==.*/cryptography==48.0.1/' hermes-req.txt; fi
+          # The Mac apps open on macOS 11 and later. Anything pip has to compile targets 11 too.
+          MACOSX_DEPLOYMENT_TARGET=11.0 "$PY" -m pip install -q --prefer-binary -c ../packaging/mac/constraints.txt \
+            -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          "$PY" ../packaging/mac/old_macos_wheels.py "${{ matrix.wheels }}" 11.0
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
-          for a in arm64 x64; do
-            mkdir -p node-mac-$a
-            curl -fsSL "https://nodejs.org/dist/latest-v22.x/$NODE-darwin-$a.tar.gz" | tar -xz -C node-mac-$a --strip-components=1
-          done
+          mkdir -p "node-mac-${{ matrix.arch }}"
+          curl -fsSL "https://nodejs.org/dist/latest-v22.x/$NODE-darwin-${{ matrix.arch }}.tar.gz" | tar -xz -C "node-mac-${{ matrix.arch }}" --strip-components=1
           mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
-      - name: Build the app trees
-        run: python3 packaging/build_all.py --only=mac-arm64,mac-x64
-      - name: Check the app trees before signing and the disk images (fails in minutes, not after an hour)
+      - name: Build the app tree
+        run: python3 packaging/build_all.py --only=${{ matrix.plat }}
+      - name: Check the app tree before signing and the disk image (fails in minutes, not after an hour)
         run: |
           set -euo pipefail
           rm -rf deps/download-cache; df -h . | tail -1          # the downloads are unpacked by now; disk is tight
+          APP=dist-src/app-mac-${{ matrix.arch }}/Meshpool.app
           # a link that points nowhere or outside the app makes `codesign --verify --strict` reject the whole app
-          bad=$(find dist-src/app-mac-*/Meshpool.app -type l \( ! -exec test -e {} \; -o -lname '/*' \) -print)
+          bad=$(find "$APP" -type l \( ! -exec test -e {} \; -o -lname '/*' \) -print)
           [ -z "$bad" ] || { echo "links that codesign rejects:"; echo "$bad"; exit 1; }
-          # the pruned LibreOffice draws a deck, recalculates a workbook and converts a document, in each tree's own Python
-          for a in arm64 x64; do
-            R=dist-src/app-mac-$a/Meshpool.app/Contents/Resources
-            if [ $a = x64 ]; then run=(arch -x86_64); else run=(); fi
-            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
-          done
-      - name: Launchers, sign, disk images
+          # the pruned LibreOffice draws a deck, recalculates a workbook and converts a document, in the app's own Python
+          R=$APP/Contents/Resources
+          "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+      - name: Launcher, sign, disk image
         env:
           # Signing and notarization. Empty until the owner's Apple Developer account is set up; sign.sh then does
-          # nothing and the apps stay ad hoc-signed, so the build works either way.
+          # nothing and the app stays ad hoc-signed, so the build works either way.
           MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
           MAC_SIGN_IDENTITY: ${{ secrets.MAC_SIGN_IDENTITY }}
@@ -109,51 +115,46 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          for a in arm64 x64; do
-            # The oldest macOS both apps open on is 11 (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist).
-            # Node 22, Playwright's driver and LibreOffice run on 11. Playwright's Chromium (159) needs macOS 13, so browser
-            # use says so on older Macs (bundled.browser_needs_newer_macos) and Chromium is the one exemption.
-            arch=arm64; min=11.0
-            [ $a = x64 ] && arch=x86_64
-            exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0')
-            # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
-            clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
-            # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
-            D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
-            if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
-            grep -q "LSMinimumSystemVersion</key><string>$min</string>" dist-src/app-mac-$a/Meshpool.app/Contents/Info.plist || { echo "Info.plist does not say macOS $min"; exit 1; }
-            python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app $min --arch $arch "${exempt[@]}"
-          done
+          a=${{ matrix.arch }}; arch=${{ matrix.clang }}; min=11.0
+          # The oldest macOS the app opens on is 11 (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist).
+          # Node 22, Playwright's driver and LibreOffice run on 11. Playwright's Chromium (159) needs macOS 13, so browser
+          # use says so on older Macs (bundled.browser_needs_newer_macos) and Chromium is the one exemption.
+          exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0')
+          # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
+          clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
+          # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
+          D=dist-src/app-mac-$a/Meshpool.app/Contents/Resources/python/lib/python3.12/site-packages/playwright/driver
+          if [ -f "$D/node" ]; then rm "$D/node" && ln -s ../../../../../../node/bin/node "$D/node"; fi
+          grep -q "LSMinimumSystemVersion</key><string>$min</string>" dist-src/app-mac-$a/Meshpool.app/Contents/Info.plist || { echo "Info.plist does not say macOS $min"; exit 1; }
+          python3 packaging/mac/check_minos.py dist-src/app-mac-$a/Meshpool.app $min --arch $arch "${exempt[@]}"
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
-      - name: Smoke test both disk images (what a user downloads) before anything is published
-        # normally about 5 minutes for both; a hang must not burn the job's whole (10x) budget
+      - name: Smoke test the disk image (what a user downloads) before anything is published
+        # normally a few minutes; a hang must not burn the job
         timeout-minutes: 30
         run: |
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
-          for f in Meshpool Meshpool-Intel; do
-            T=$(mktemp -d)
-            MNT=$(hdiutil attach -nobrowse -readonly "dist-src/out/$f.dmg" | awk '/Volumes/{print substr($0, index($0,"/Volumes"))}')
-            ditto "$MNT/Meshpool.app" "$T/Meshpool.app"
-            for try in 1 2 3 4; do
-              if hdiutil detach -quiet "$MNT"; then break; fi
-              if [ "$try" = 4 ]; then hdiutil detach -force "$MNT"; else sleep $((try * 5)); fi
-            done
-            R="$T/Meshpool.app/Contents/Resources"
-            if [ "$f" = Meshpool-Intel ]; then run=(arch -x86_64); else run=(); fi
-            echo "== $f.dmg"
-            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"   # bash 3.2: empty array under set -u
-            # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
-            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
-            # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
-            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_hermes_prune.py "$R/app/vendor/hermes"
-            rm -rf "$T"
+          f=${{ matrix.dmg }}
+          T=$(mktemp -d)
+          MNT=$(hdiutil attach -nobrowse -readonly "dist-src/out/$f.dmg" | awk '/Volumes/{print substr($0, index($0,"/Volumes"))}')
+          ditto "$MNT/Meshpool.app" "$T/Meshpool.app"
+          for try in 1 2 3 4; do
+            if hdiutil detach -quiet "$MNT"; then break; fi
+            if [ "$try" = 4 ]; then hdiutil detach -force "$MNT"; else sleep $((try * 5)); fi
           done
+          R="$T/Meshpool.app/Contents/Resources"
+          echo "== $f.dmg on $(uname -m)"
+          "$R/python/bin/python3" packaging/smoke.py --app "$R/app" --version "$VER"
+          # the pruned LibreOffice (packaging/lo_prune.py) must still draw a deck, recalculate a workbook and convert a document
+          "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+          # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
+          "$R/python/bin/python3" packaging/verify_hermes_prune.py "$R/app/vendor/hermes"
+          rm -rf "$T"
       - uses: actions/upload-artifact@v4
         with:
-          name: mac
-          path: dist-src/out/*.dmg
+          name: mac-${{ matrix.arch }}
+          path: dist-src/out/${{ matrix.dmg }}.dmg
 
   windows:
     if: github.event_name == 'release' || inputs.platforms == 'windows' || inputs.platforms == 'both'
@@ -316,8 +317,9 @@ jobs:
 
   publish:
     needs: [mac, windows]
-    # Only a full build publishes: a one-platform trial run builds and checks, and stops there.
-    if: github.event_name == 'release' || inputs.platforms == 'both'
+    # Only a full build publishes: a one-platform trial run builds and checks, and stops there. always(): the Apple
+    # silicon leg of `mac` may end without a runner (see the mac job); what has to exist is checked below, by file.
+    if: always() && (github.event_name == 'release' || inputs.platforms == 'both') && needs.windows.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -325,6 +327,21 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Check the builds
+        run: |
+          set -euo pipefail
+          ls -la dist
+          # Windows and the Intel Mac app are required: each exists only when its job built and smoke-tested it.
+          for f in Meshpool-Setup.exe Meshpool-Intel.dmg; do
+            [ -s "dist/$f" ] || { echo "::error::$f was not built, so nothing is published"; exit 1; }
+          done
+          # Apple silicon: the native app when its runner came and it passed; else the Intel app, which runs there
+          # under Rosetta (the updater moves those Macs to the native app once a release carries it).
+          if [ ! -s dist/Meshpool.dmg ]; then
+            echo "::warning::No Apple silicon build in this run (${{ needs.mac.result }}): Meshpool.dmg is the Intel app, which Apple silicon Macs run under Rosetta."
+            cp dist/Meshpool-Intel.dmg dist/Meshpool.dmg
+            printf '\n**Apple silicon Macs:** this release has no native Apple silicon build (GitHub had no Apple silicon runner for it), so Meshpool.dmg is the Intel app, which runs under Rosetta. The next release with a native build replaces it automatically.\n' >> packaging/release-notes.md
+          fi
       - name: Attach to the release
         run: |
           set -euo pipefail

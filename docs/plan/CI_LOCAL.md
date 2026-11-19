@@ -9,7 +9,7 @@ edited by other agents while this ran (see "Caveats").
 | Workflow | Trigger | Runners | Steps | Expected duration |
 |---|---|---|---|---|
 | `tests` (`tests.yml`) | pull_request (ignoring docs/**, *.md, testkit/loop/**, harness-loop.yml), push to `main`, manual. Concurrency group per ref, cancel-in-progress. | 1 job, `ubuntu-latest`, timeout 30 | checkout, Python 3.12 (+pip cache), apt LibreOffice (calc, impress, writer) + fonts + poppler, pip `packaging/requirements-cli.txt` + playwright + pytest, `playwright install --with-deps chromium`, Selawik font alias, `cd app; python -m pytest -q -p no:cacheprovider tests`. Sets `MH_ALLOW_SYSTEM_SOFFICE=1` (added in the working tree). | about 8.5 min of tests here on 4 cores plus 3-5 min of setup. Estimate 13-17 min on a runner. |
-| `Release` (`release.yml`) | release published, manual. One build at a time, no cancel. | `mac` on `macos-15` (timeout 150; smoke step 30), `windows` on `windows-latest` (timeout 120; smoke step 15), `publish` on `ubuntu-latest` | mac: download python-build-standalone (arm64 + x64), clone Hermes at a pinned commit and patch it, pip install both runtimes, Node, Pi, `build_all.py --only=mac-arm64,mac-x64` (bundles LibreOffice), clang launchers, `check_minos`, sign (skipped without secrets), `repack.sh` dmgs, mount and smoke-test both dmgs. windows: same runtimes for Windows, Go launcher and winres, `build_all.py --only=win`, smoke, Azure signing (skipped without secrets), NSIS installer. publish: `git archive`, SHA256SUMS, draft release, upload, verify, publish. | mac 55-85 min (estimate; never run end to end before 0.0.7), windows 15-20 min, publish 1-2 min. The two big jobs run in parallel. |
+| `Release` (`release.yml`) | release published, manual. One build at a time, no cancel. | `mac`: a matrix, Intel on `macos-15-intel` and Apple silicon on `macos-15` (timeout 120; smoke step 30; the Apple silicon leg may fail without stopping the release), `windows` on `windows-latest` (timeout 120; smoke step 15), `publish` on `ubuntu-latest` | mac: download python-build-standalone (arm64 + x64), clone Hermes at a pinned commit and patch it, pip install both runtimes, Node, Pi, `build_all.py --only=mac-arm64,mac-x64` (bundles LibreOffice), clang launchers, `check_minos`, sign (skipped without secrets), `repack.sh` dmgs, mount and smoke-test both dmgs. windows: same runtimes for Windows, Go launcher and winres, `build_all.py --only=win`, smoke, Azure signing (skipped without secrets), NSIS installer. publish: `git archive`, SHA256SUMS, draft release, upload, verify, publish. | mac 55-85 min (estimate; never run end to end before 0.0.7), windows 15-20 min, publish 1-2 min. The two big jobs run in parallel. |
 | `harness-loop` (`harness-loop.yml`) | manual, or push to `harness-router` only if the commit message contains `[loop]`/`[probe]`/`[swe]`. No schedule. | `loop` and `swe` jobs on `ubuntu-latest`, timeouts 150 and 300 | pip install, then benchmark runs that call a paid model through `MESHPOOL_API_KEY` | up to 150 / 300 min and real model spend. Not part of CI; leave it disabled. |
 
 Billing multipliers on private repos: Linux 1x, Windows 2x, macOS 10x. Each job is rounded up to whole minutes.
@@ -113,3 +113,19 @@ retried twice can use all of it.
   run 2 did not test an identical tree. Re-run `docs/plan/ci_local.sh` on the final commit before enabling anything.
 - Run time here is not a runner measurement. Package versions are the newest allowed by `requirements-cli.txt`
   (it has no pins), so GitHub may resolve different versions.
+
+
+## macOS runners (November 2026)
+
+GitHub's Apple silicon pool (`macos-15`, `macos-26`, `macos-latest`) gave this repository no runner at all: every such
+job waited 15 minutes and was cancelled with "The job was not acquired by Runner of type hosted even after multiple
+attempts" and "Due to capacity constraints, jobs targeting macOS arm64 runners may experience longer queue times"
+(the same in community discussion #211885 since Nov 2, public and private repos). Not billing (public repos run
+standard runners free) and not the 5-job macOS concurrency limit (that makes jobs wait, not get cancelled). The
+release workflow's `probe` choice asks every macOS pool for a runner at once: on Nov 19 the Intel pool
+(`macos-15-intel`, `macos-26-intel`) answered in seconds and the arm64 pool never did.
+
+So each Mac app builds on a runner of its own CPU and is smoke-tested natively. The Intel app is required; the Apple
+silicon leg may end without a runner, and then the release ships the Intel app as Meshpool.dmg too (Rosetta), says so
+in the release notes, and the updater (`updater._rosetta`) moves those Macs to the native app with the next release
+that has one. Do not re-run a job that was not acquired in a loop: run the probe and read its result.

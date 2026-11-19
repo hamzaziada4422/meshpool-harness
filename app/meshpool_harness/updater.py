@@ -132,10 +132,22 @@ def _pick(releases: list, cur: str) -> dict | None:
     return max(ok, key=lambda r: _key(r["tag_name"]), default=None)
 
 
+def _rosetta() -> bool:
+    """True when this process is an Intel build running on Apple silicon (Rosetta). platform.machine() then says
+    x86_64, but the Mac would rather have the native app."""
+    try:
+        r = subprocess.run(["sysctl", "-n", "sysctl.proc_translated"], capture_output=True, text=True, timeout=5)
+        return r.stdout.strip() == "1"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def _asset(v: dict) -> dict | None:
     names = [a for a in v.get("assets") or [] if a.get("url")]
     if sys.platform == "darwin":
-        intel = platform.machine() == "x86_64"
+        # An Apple silicon Mac running the Intel app (a release without a native build ships the Intel app as
+        # Meshpool.dmg) goes back to the native app with the next release that has one.
+        intel = platform.machine() == "x86_64" and not _rosetta()
         dmgs = [a for a in names if a["name"].lower().endswith(".dmg")]
         pick = [a for a in dmgs if ("intel" in a["name"].lower()) == intel]
         return (pick or dmgs or [None])[0]

@@ -12,12 +12,17 @@ set -u
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 W="${1:-$HOME/Meshpool-Build/v4/work}"; OUT="$W/out"
 rm -rf "${OUT:?}"; mkdir -p "$OUT"
-PY="$W/app-mac-arm64/Meshpool.app/Contents/Resources/python/bin/python3"
+# MAC_ARCHS: the apps to build ("arm64 x64" by default; the release builds each on a runner of its own CPU)
+ARCHS="${MAC_ARCHS:-arm64 x64}"
+# compileall with an app's own Python that this Mac runs natively (the bytecode is the same for both CPUs)
+HOSTA=x64; [ "$(uname -m)" = arm64 ] && HOSTA=arm64
+PYA=$HOSTA; [ -d "$W/app-mac-$PYA/Meshpool.app" ] || PYA="${ARCHS%% *}"
+PY="$W/app-mac-$PYA/Meshpool.app/Contents/Resources/python/bin/python3"
 # The version comes from one place, app/meshpool_harness/__init__.py; Info.plist holds placeholders for it.
 VER="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$REPO/app/meshpool_harness/__init__.py")"
 NUM="$(printf '%s' "$VER" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+')"
 [ -n "$NUM" ] || { echo "Could not read the version from app/meshpool_harness/__init__.py"; exit 1; }
-for a in arm64 x64; do
+for a in $ARCHS; do
   APP="$W/app-mac-$a/Meshpool.app"; R="$APP/Contents/Resources"
   for d in meshpool_harness engines profiles defaults; do
     rm -rf "${R:?}/app/$d"; rsync -a --exclude __pycache__ --exclude '*.pyc' "$REPO/app/$d/" "$R/app/$d/"
@@ -38,7 +43,7 @@ done
 # Sign the app trees before the dmgs are built, so the copy inside each image is already signed. sign.sh does
 # nothing (and exits 0) when the Apple Developer secrets are not set.
 bash "$REPO/packaging/mac/sign.sh" sign "$W"
-for a in arm64 x64; do
+for a in $ARCHS; do
   APP="$W/app-mac-$a/Meshpool.app"
   # Without the Developer ID secrets sign.sh did nothing, so the app is still ad hoc signed here, as before.
   if [ -z "${MAC_SIGN_IDENTITY:-}" ] || [ -z "${MAC_CERT_P12_BASE64:-}" ]; then
@@ -67,7 +72,8 @@ for a in arm64 x64; do
   [ -n "$ok" ] || { echo "could not build $NAME.dmg"; exit 1; }
   rm -f "$W/$NAME-udzo.dmg"; rm -rf "$ST"; echo "built $NAME.dmg"; df -h "$W" | tail -1      # disk is tight on the runner
 done
-for f in Meshpool.dmg Meshpool-Intel.dmg; do        # never hand the publish step half a release
+for a in $ARCHS; do        # never hand the publish step half a release
+  f=Meshpool.dmg; [ "$a" = x64 ] && f=Meshpool-Intel.dmg
   [ -s "$OUT/$f" ] || { echo "missing $f"; exit 1; }
 done
 # Notarize, staple and check both disk images. sign.sh does nothing (and exits 0) when the Apple Developer secrets

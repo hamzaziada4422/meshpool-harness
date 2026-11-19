@@ -86,7 +86,7 @@ sign_one() {   # path
 }
 
 sign_apps() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     APP="$W/app-mac-$a/Meshpool.app"
     [ -d "$APP" ] || { echo "sign.sh: $APP is missing"; exit 1; }
     echo "sign.sh: signing $a"
@@ -114,7 +114,7 @@ sign_apps() {
 # The dmg is what the user downloads, so the dmg is what gets notarized and stapled; the app inside it is stapled too,
 # so it still passes after it is dragged out of the image.
 notarize_dmgs() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
     DMG="$OUT/$NAME.dmg"
     [ -f "$DMG" ] || { echo "sign.sh: $DMG is missing (repack.sh builds it)"; exit 1; }
@@ -142,7 +142,7 @@ notarize_dmgs() {
 # ---------- prove it --------------------------------------------------------------------------------------------
 # Gatekeeper's own verdict, on the dmg and on the app inside it. A build that fails here is not published.
 check_dmgs() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
     DMG="$OUT/$NAME.dmg"
     echo "sign.sh: checking $NAME.dmg with spctl"
