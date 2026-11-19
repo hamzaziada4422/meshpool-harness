@@ -280,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|company\.js|projects\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|company\.js|projects\.js|settings2\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -399,6 +399,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.models(refresh=q.get("refresh") == "1"))
             if u.path == "/api/projects":
                 return self._send(200, {"projects": W.projects(), "default": str(_default_project())})
+            if u.path in ("/api/profile", "/api/capabilities", "/api/spend", "/api/data"):
+                from meshpool_harness.ui import settings_v2 as SV
+                if u.path == "/api/profile":
+                    return self._send(200, SV.profile())
+                if u.path == "/api/capabilities":
+                    return self._send(200, {"features": SV.capabilities()})
+                if u.path == "/api/spend":
+                    return self._send(200, {"key": SV.key_spend(q.get("fresh") == "1"), "days": SV.usage_by_day(),
+                                            "billing_url": SV.BILLING_URL})
+                return self._send(200, SV.data_info())
             m = re.fullmatch(r"/api/pj(?:/(p_[0-9a-f]{10}))?", u.path)
             if m:                                                  # projects: name, instructions, knowledge, memory
                 from meshpool_harness import project_store as PS
@@ -664,6 +674,23 @@ class Handler(BaseHTTPRequestHandler):
                 C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
                 C.load_into_env(override=True)
                 return self._send(200, W.models())
+            if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify"):
+                from meshpool_harness.ui import settings_v2 as SV
+                b = self._json()
+                if u.path == "/api/profile":
+                    return self._send(200, SV.save_profile(**{k: b.get(k) for k in SV.PROFILE_KEYS}))
+                if u.path == "/api/capabilities":
+                    return self._send(200, {"features": SV.set_capability(b.get("id", ""), bool(b.get("on")))})
+                if u.path == "/api/notify":
+                    A._notify(str(b.get("title", "Meshpool")), str(b.get("body", "")))
+                    return self._send(200, {"ok": True})
+                if b.get("action") == "export":
+                    import base64
+                    return self._send(200, {"name": "meshpool-export-" + time.strftime("%Y-%m-%d") + ".zip",
+                                            "data": base64.b64encode(SV.export_zip()).decode()})
+                if b.get("action") == "clear_chats":
+                    return self._send(200, {"deleted": SV.clear_chats()})
+                raise ValueError("Unknown action.")
             if u.path == "/api/pj":
                 from meshpool_harness import project_store as PS
                 b = self._json()

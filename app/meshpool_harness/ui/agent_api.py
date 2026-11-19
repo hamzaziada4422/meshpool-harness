@@ -982,11 +982,11 @@ def create(body: dict) -> dict:
             write_meta(s.id, route=hr.spec, route_label=hr.label, route_profile=hr.profile or None)
             if hr.spec not in ("general", "docs"):
                 s.emit({"type": "status", "route": hr.to_dict(),
-                        "text": f"Harness: {hr.label} ({hr.reason})."})
+                        "text": f"Working as: {hr.label}."})
         except Exception:  # noqa: BLE001
             pass
     if routed:
-        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']}. {routed['reason']}"})
+        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']} for this task."})
         write_meta(s.id, routed=routed["harness"])
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
     if pid:

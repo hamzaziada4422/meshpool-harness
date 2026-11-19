@@ -382,6 +382,13 @@ def context_block(task: str = "", root: str = "", project_id: str = "") -> str:
     now = datetime.now().astimezone()
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
              f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY, PLAIN]
+    try:                                       # who the user is and the language to answer in (Settings, General)
+        from meshpool_harness.ui import settings_v2 as SV
+        note = SV.profile_note()
+        if note:
+            parts.append(note)
+    except Exception:  # noqa: BLE001
+        pass
     ins = instructions() if st["instructions_on"] else ""
     mem = memory() if st["memory_on"] else ""
     if ins:

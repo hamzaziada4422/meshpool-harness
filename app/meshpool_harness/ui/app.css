@@ -150,7 +150,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 
 /* ---------- conversation ---------- */
 .conv{flex:1;overflow:auto;scroll-behavior:auto;position:relative}
-.col{max-width:760px;margin:0 auto;padding:24px 24px 40px}
+.col{max-width:var(--colw,760px);margin:0 auto;padding:24px 24px 40px}
 .msg-user{display:flex;justify-content:flex-end;margin:24px 0 12px}
 .msg-user .b{background:var(--fill);border-radius:var(--r-l);padding:8px 14px;max-width:85%;white-space:pre-wrap;word-break:break-word}
 .msg-user .att{display:block;font-size:var(--fs-xs);color:var(--ink-3);margin-top:4px}
@@ -276,7 +276,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 
 /* ---------- composer ---------- */
 .composer-wrap{flex:none;padding:0 24px 12px}
-.composer{max-width:760px;margin:0 auto;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);position:relative;transition:border-color .12s ease}
+.composer{max-width:var(--colw,760px);margin:0 auto;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);box-shadow:var(--shadow);position:relative;transition:border-color .12s ease}
 .composer:focus-within{border-color:var(--line-3)}
 .composer.drag{border-color:var(--pool);background:var(--pool-soft)}
 .app.planning .composer{border-color:var(--pool)}
@@ -307,7 +307,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .intr:hover{border-color:var(--del);color:var(--del)}.intr:disabled{opacity:.5;cursor:default}
 #intrBtn:disabled{display:none}
 .composer .intr,.composer .send,.pill{white-space:nowrap}
-.hintline{max-width:760px;margin:6px auto 0;text-align:center;font-size:var(--fs-xs);color:var(--ink-3);min-height:18px;line-height:18px;height:18px;overflow:hidden}
+.hintline{max-width:var(--colw,760px);margin:6px auto 0;text-align:center;font-size:var(--fs-xs);color:var(--ink-3);min-height:18px;line-height:18px;height:18px;overflow:hidden}
 
 /* ---------- popovers and menus ---------- */
 .pop{position:fixed;z-index:50;background:var(--raise);border:1px solid var(--line);border-radius:var(--r-m);box-shadow:var(--shadow);min-width:min(240px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));max-height:min(460px,70vh);display:flex;flex-direction:column;overflow:hidden}
@@ -392,7 +392,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .chg[open] summary::before{transform:rotate(45deg)}
 .goalturn{display:flex;align-items:center;gap:6px;color:var(--ink-3);font-size:var(--fs-s);margin:8px 0}
 #pframe{background:var(--surface)}
-.sugg{max-width:760px;margin:0 auto 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.sugg{max-width:var(--colw,760px);margin:0 auto 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .schip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink-2);border-radius:999px;padding:5px 12px;font-size:var(--fs-s);min-height:30px;transition:border-color .12s ease,color .12s ease,transform .12s ease}
 .schip:hover{border-color:var(--pool);color:var(--ink);transform:translateY(-1px)}.schip svg{flex:none}
 .sugg .sx{margin-left:auto;opacity:.6}.sugg .sx:hover{opacity:1}
@@ -946,3 +946,15 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .mem li::before{content:"";position:absolute;left:0;top:10px;width:4px;height:4px;border-radius:50%;background:var(--ink-3)}
 .col.drag{outline:2px dashed var(--pool);outline-offset:-8px;background:var(--pool-soft)}
 @media (max-width:900px){.pjgrid{grid-template-columns:minmax(0,1fr)}.pjside{order:-1}}
+
+:root[data-density="compact"] .th{min-height:28px;padding-top:3px;padding-bottom:3px}
+:root[data-density="compact"] .msg-ai{line-height:1.55}
+:root[data-density="compact"] .msg-user{margin:16px 0 8px}
+.mmain{display:flex;flex-direction:column;min-width:0;min-height:0}
+.mmain .mbody{flex:1;min-height:0;overflow:auto}
+.subtabs{display:flex;gap:2px;padding:12px 24px 0;border-bottom:1px solid var(--line);flex:none;overflow-x:auto}
+.subtabs[hidden]{display:none}
+.subtabs button{border:0;background:none;padding:6px 12px 10px;color:var(--ink-3);font-size:var(--fs-s);font-weight:500;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color var(--t-fast) ease,border-color var(--t-fast) ease}
+.subtabs button:hover{color:var(--ink)}
+.subtabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--pool)}
+.th .end .tm{pointer-events:none}

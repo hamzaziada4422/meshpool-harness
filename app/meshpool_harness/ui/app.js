@@ -197,6 +197,9 @@ function isDark() { const t = store("theme") || "system"; return t === "dark" ||
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyAppearance()); } catch (e) { /* old webviews */ }
 function applyAppearance() {
+  const w = store("width") || "normal", d = store("density") || "comfortable";
+  document.documentElement.style.setProperty("--colw", {narrow: "640px", normal: "760px", wide: "960px"}[w] || "760px");
+  if (d === "compact") document.documentElement.dataset.density = "compact"; else document.documentElement.removeAttribute("data-density");
   document.querySelectorAll(".mlogo").forEach(i => i.src = logoSrc());
   const t = store("theme") || "system", z = store("size") || "normal";
   if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
@@ -345,7 +348,12 @@ async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
   S.threads = (await api("/api/agent")).sessions;
   S.unseen = S.unseen || new Set(store("unseen") || []);
-  for (const t of S.threads) if (["working", "waiting"].includes(was.get(t.id)) && !["working", "waiting"].includes(t.state) && S.cur?.id !== t.id) S.unseen.add(t.id);
+  for (const t of S.threads) {
+    const w = was.get(t.id);
+    if (["working", "waiting"].includes(w) && !["working", "waiting"].includes(t.state) && S.cur?.id !== t.id) S.unseen.add(t.id);
+    if (w === "working" && t.state === "waiting") window.notifyEvent?.("wait", t.title);
+    else if (["working", "waiting"].includes(w) && !["working", "waiting"].includes(t.state)) window.notifyEvent?.("done", t.title);
+  }
   store("unseen", [...S.unseen]);
   renderSide();
   const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
@@ -2145,19 +2153,7 @@ function openGithubPicker(opts = {}) {
 }
 
 /* ================================== settings ================================== */
-const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["import", "Import chats and context"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
-SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
-function openSettings(sec = "general") {
-  closePop();
-  $(".scrim")?.remove();
-  const sc = document.createElement("div"); sc.className = "scrim";
-  sc.innerHTML = `<div class="modal" role="dialog" aria-label="Settings"><nav class="mnav"><h2>Settings</h2>${SECTIONS.map(([k, lb]) => `<button data-s="${k}" aria-selected="${k === sec}">${lb}</button>`).join("")}<span class="sp"></span>${MP.desktop && !S.settings?.native ? `<button id="quitApp">Quit Meshpool</button>` : ""}</nav><div class="mbody" id="mbody"></div></div>`;
-  document.body.appendChild(sc);
-  sc.addEventListener("mousedown", e => { if (e.target === sc) sc.remove(); });
-  $$(".mnav [data-s]", sc).forEach(b => b.onclick = () => { $$(".mnav [data-s]", sc).forEach(x => x.setAttribute("aria-selected", x === b)); renderSection(b.dataset.s); });
-  $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`));
-  renderSection(sec);
-}
+/* The settings window (openSettings, the seven pages and their tabs) is in settings2.js. */
 async function renderSection(sec) {
   const b = $("#mbody"); b.classList.add("loading");
   new MutationObserver((_, o) => { b.classList.remove("loading"); b.scrollTop = 0; o.disconnect(); }).observe(b, {childList: true});
@@ -2167,11 +2163,11 @@ async function renderSection(sec) {
   const F = S.settings.fields; const get = k => F.find(x => x.key === k) || {};
   if (sec === "general") {
     const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
-    b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
-      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box.</small></label>
+    b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends your messages to the model service below, using your key. The key is stored only on this computer.</p>
+      <label class="field"><span>Models come from</span><select id="sProv">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">Where the models run. Meshpool picks the agent for each chat.</small></label>
       <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
-      <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
-      <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model, from any provider below, in the model picker in the message box.</small></label>
+      <label class="field"><span>Service address</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>Change this only if you use your own model service. It ends in /v1. Default: ${esc(base.default)}</small></label>
+      <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model. Pick one with the model button next to the message box.</small></label>
       <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
       <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
       <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].filter(() => !chatgptSignInGone()).map(([id, name, desc]) =>
@@ -2225,14 +2221,19 @@ async function renderSection(sec) {
     const keys = [["Esc", "Stop the running task (or close what is open)"], [`${MOD}N`, "New chat"], [`${MOD}K`, "Search chats"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}E`, "Show or fold steps"],
       [`${MOD}⇧D`, "Diff panel"], [`${MOD}J`, "Terminal"], [`${MOD},`, "Settings"], ["Enter", "Send"], ["Shift+Enter", "New line"],
       ["/", "Commands"], ["$", "Skills"], ["Esc", "Close a menu or dialog"], [`${MOD}S`, "Save the open file"]];
-    b.innerHTML = `${close}<h3>Appearance and shortcuts</h3><p class="lead">How Meshpool looks on this computer.</p>
+    b.innerHTML = `${close}<h3>Appearance</h3><p class="lead">How Meshpool looks on this computer.</p>
       <label class="field"><span>Theme</span><select id="apTheme"><option value="system">Match the system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
       <label class="field"><span>Text size</span><select id="apSize"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></label>
-      <label class="field"><span>Steps</span><select id="apSteps"><option value="1">Show every step as the agent works</option><option value="0">Fold steps into a summary</option></select></label>
+      <label class="field"><span>Chat width</span><select id="apWidth"><option value="narrow">Narrow</option><option value="normal">Normal</option><option value="wide">Wide</option></select></label>
+      <label class="field"><span>Density</span><select id="apDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><small>Compact fits more chats in the sidebar and tightens the spacing.</small></label>
+      <label class="field"><span>Steps</span><select id="apSteps"><option value="1">Show every step as Meshpool works</option><option value="0">Fold steps into a summary</option></select></label>
       <h3 style="font-size:16px;margin:18px 0 4px">Keyboard shortcuts</h3><div class="keys">${keys.map(([k, d]) => `<kbd>${esc(k)}</kbd><span>${esc(d)}</span>`).join("")}</div>`;
     $("#apTheme").value = store("theme") || "system"; $("#apSize").value = store("size") || "normal"; $("#apSteps").value = S.steps ? "1" : "0";
     $("#apTheme").onchange = () => { store("theme", $("#apTheme").value); applyAppearance(); };
     $("#apSize").onchange = () => { store("size", $("#apSize").value); applyAppearance(); };
+    $("#apWidth").value = store("width") || "normal"; $("#apDensity").value = store("density") || "comfortable";
+    $("#apWidth").onchange = () => { store("width", $("#apWidth").value); applyAppearance(); };
+    $("#apDensity").onchange = () => { store("density", $("#apDensity").value); applyAppearance(); };
     $("#apSteps").onchange = () => { if (($("#apSteps").value === "1") !== !!S.steps) toggleSteps(); };
   } else if (sec === "personal") {
     const a = await api("/api/assistant");
