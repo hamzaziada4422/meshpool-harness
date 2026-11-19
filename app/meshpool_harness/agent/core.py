@@ -877,6 +877,7 @@ class Agent:
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
         route = getattr(self, "route", None)
+        g["req"] = self.messages[-1].get("content") if self.messages else ""
         if (route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
                 and not self.plan and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # reproduce before the first call: one model round saved
@@ -968,6 +969,20 @@ class Agent:
                             f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
                             "failure is expected or unrelated, say exactly why in one line.")})
                         continue
+                    if (route is not None and route.family == "code" and not self.plan
+                            and self.ws.edits > g["edits0"]):
+                        if not g.get("review_done"):
+                            g["review_done"] = True    # once per request: a second reader checks it against the ask
+                            found = self._review_change(g, turn)
+                            if found:
+                                self.messages.append({"role": "user", "content": found})
+                                continue
+                        if not g.get("mutation_done"):
+                            g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
+                            fb = self._mutation_feedback()
+                            if fb:
+                                self.messages.append({"role": "user", "content": fb})
+                                continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
                     if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
@@ -1462,6 +1477,82 @@ class Agent:
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
+
+    def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:
+        """One separate chat completion (fresh messages, no tools) on the same model and endpoint. Goes through
+        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure."""
+        from meshpool_harness import providers as PV
+        prov, model = PV.split(self.current_model())
+        base, key = PV.endpoint(prov)
+        if not key or PV.key_problem(key) or prov == "chatgpt" or os.environ.get("MH_WIRE", "chat") != "chat":
+            raise RuntimeError("no plain chat endpoint for the reviewer")
+        body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        _apply_refused(body)
+        resp = None
+        for _ in range(3):
+            try:
+                resp, _s = self._post(base, key, body, False)
+                break
+            except RuntimeError as e:
+                if not _adapt_params(body, str(e)):
+                    raise
+        if resp is None:
+            raise RuntimeError("no reply")
+        u = resp.get("usage") or {}
+        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
+        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
+             "calls": 1}
+        for k, v in d.items():
+            turn[k] += v
+            self.usage[k] += v
+        self.emit({"type": "usage", **d})
+        return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+    def _review_change(self, g: dict, turn: dict) -> str:
+        """WP3: the independent review. '' (do nothing) unless the reviewer raised concrete points."""
+        route = getattr(self, "route", None)
+        try:
+            from meshpool_harness.core import review as RV
+            if not RV.enabled(route.spec):
+                return ""
+            req = g.get("req")
+            if isinstance(req, list):
+                req = " ".join(p.get("text", "") for p in req if isinstance(p, dict))
+            change = RV.gather_change(self.root, self.ws.turn_files)
+            if not change.strip():
+                return ""
+            cmds = [c for c in self.ws.commands if c.get("after_edit", -1) >= g["edits0"] and c.get("kind") != "read"]
+            reply = self._aux_complete(RV.SYSTEM, RV.build_user(RV.clean_request(req or ""), change,
+                                                                cmds[-1] if cmds else None), turn)
+            self.emit({"type": "status", "text": "Reviewed the change against the request."})
+            f = RV.findings(reply)
+            return RV.INJECT + f if f else ""
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception:  # noqa: BLE001 - a reviewer error must never break the turn
+            return ""
+
+    def _mutation_feedback(self) -> str:
+        """WP7: tests that still pass when the code under test is deliberately broken. '' when nothing to say."""
+        try:
+            if os.environ.get("MH_MUTATION", "1") == "0":
+                return ""
+            from meshpool_harness.core import mutate as MU
+            alive = MU.survivors(self.root, set(self.ws.turn_files))
+            if not alive:
+                return ""
+            self.emit({"type": "status", "text": "Checked the tests against deliberately broken code."})
+            return ("[Meshpool] Your tests pass, but they also pass when the code under test is deliberately broken "
+                    "in these ways, so they would not catch these bugs:\n" + MU.format_survivors(alive, 8)
+                    + "\nAdd assertions that fail for each of these changes (exact values at the boundaries, each "
+                    "branch, error paths), run them against the real code, and make sure they still pass there. A change "
+                    "that cannot alter behaviour (e.g. `<` vs `<=` where the values can never be equal) needs no "
+                    "test: skip it in one line.")
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception:  # noqa: BLE001
+            return ""
 
     def _size_with(self, messages: list) -> int:
         """How big the request would be with these messages (the body _post sends)."""
