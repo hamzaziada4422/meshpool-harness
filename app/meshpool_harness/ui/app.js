@@ -289,7 +289,7 @@ function shell() {
   $("#app").classList.toggle("steps", !!S.steps);
   let wasNarrow = narrow();
   addEventListener("resize", () => { if (narrow() !== wasNarrow) { wasNarrow = narrow(); $("#app").classList.remove("sideopen"); renderTop(); } });
-  document.addEventListener("mousedown", e => { if ($("#app").classList.contains("sideopen") && !e.target.closest(".side") && !e.target.closest("#showSide")) $("#app").classList.remove("sideopen"); });
+  document.addEventListener("mousedown", e => { if ($("#app").classList.contains("sideopen") && !e.target.closest(".side, #showSide, #ctx, #pop, .scrim")) $("#app").classList.remove("sideopen"); });
 }
 const narrow = () => innerWidth <= 760;
 function setAppMode() { /* no Work or Code switch any more; old scripts may still call this */ }
@@ -600,7 +600,7 @@ function startRename(id) {
   const finish = async save => {
     if (done) return; done = true;
     const v = inp.value.trim(); S.renaming = null;
-    const el = $("#sideList"); if (el) el._html = "";
+    const el = $("#sideList"); if (el) el._html = el._shape = "";
     if (save && v && v !== t.title) {
       try { await post(`/api/threads/${id}`, {action: "rename", title: v}); t.title = v; if (S.cur?.id === id && S.cur.view) { S.cur.view.title = v; renderTop(); } } catch (err) { toast(err.message); }
     }
@@ -930,7 +930,7 @@ const SLASH = [
   ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
-  ["/usage", "Tokens used, by model and by chat", () => openSettings("usage")],
+  ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
@@ -1354,8 +1354,8 @@ function setupScroll() {
   const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
   conv.parentElement.appendChild(jd);
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
-  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160; }, {passive: true});
-  if (window.ResizeObserver) new ResizeObserver(() => { if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
+  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
+  if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
   requestAnimationFrame(frame);
 }
 
@@ -1536,7 +1536,7 @@ function applyEv(ev) {
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
-      if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^Harness: /, "").replace(/ \(.*$/, ""), why: String(ev.text || "").replace(/^Harness: [^(]*\(?|\)?\.?$/g, "")}; sessionSoon(); break; }
+      if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
       add(esc(ev.text), "note"); break; }
@@ -1707,6 +1707,7 @@ function renderPanel() {
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
+  if (!S.cur && S.panel !== "session") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
     preview: panelPreview})[S.panel](body);
 }
@@ -2026,7 +2027,8 @@ function spHTML(d, pr) {
   const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
   const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [panelSet().includes("files") ? "files" : "outputs", ICON.files, panelSet().includes("files") ? "Files" : "Artifacts"]]
     .filter(([k]) => panelSet().includes(k));
-  const envHTML = `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>
+  const own = !!S.cur?.view?.scratch;
+  const envHTML = own ? `<div class="sprow">${ICON.folder}<span><b>This chat’s own folder</b><small>Private to this chat. Files it makes show under Artifacts.</small></span></div>` : `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>
     ${rp ? `<div class="sprow">${ICON.pr}<span><b>${rp.url ? `<a href="${esc(rp.url)}" target="_blank" rel="noopener">${esc(rp.slug)}</a>` : esc(env.name)}</b><small>${rp.slug ? "GitHub repository" : "Git repository without a GitHub remote"}</small></span></div>` : `<div class="sprow">${ICON.dir}<span><b>${esc(env.name)}</b><small>Not a Git repository</small></span></div>`}
     ${br ? `<div class="sprow">${ICON.branch}<span><b>${esc(br.name)}</b><small>${br.upstream ? `${br.ahead} to push, ${br.behind} to pull` : "Not pushed yet"}</small></span></div>
       <div class="row spbr"><select id="spBr" aria-label="Switch branch">${br.branches.map(b => `<option ${b === br.name ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
@@ -2036,7 +2038,7 @@ function spHTML(d, pr) {
     <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
   const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
   const outs = d.outputs;
-  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this session creates or changes show here.</div>`;
+  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files Meshpool makes show up here.</div>`;
   const num = (v, c, sg) => `<span class="${v ? c : "zero"}">${sg}${v}</span>`;
   let chg = `<div class="sprow">${ICON.diff}<span><b>${tr.files ? `${tr.files} file${tr.files === 1 ? "" : "s"} changed` : "Working tree is clean"}</b>${tr.files ? `<small class="nw">${num(tr.added, "plus", "+")} ${num(tr.removed, "minus", "−")} not committed</small>` : ""}</span></div>`;
   if (!pr) chg += `<div class="pnote spmini">Checking GitHub...</div>`;
@@ -2056,13 +2058,13 @@ function spHTML(d, pr) {
   const cur = S.cur, pd = planData(), rc = [...(cur?.log || [])].reverse().find(e => e.type === "receipt"), mn = cur?.mcpNote || "";
   const mcpBad = /Failed|did not start/.test(mn);
   const planHTML = pd ? spSec("plan", "Plan", `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`, `<ol class="stepl plan" id="spPlanList">${planRows(pd).map(r => `<li class="${r.st}" data-st="${r.st}" data-k="${r.key}">${planIcon(r.st, r.st === "current")}<span>${esc(r.text)}</span></li>`).join("")}</ol>`) : "";
-  const routeHTML = cur?.route ? spSec("route", "Handled by", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label)}</b><small>${esc(cur.route.why)}</small></span><button class="linkbtn" id="spRoute">Change</button></div>`) : "";
+  const routeHTML = cur?.route ? spSec("route", "Working as", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label)}</b>${cur.route.why ? `<small>${esc(cur.route.why)}</small>` : ""}</span><button class="linkbtn" id="spRoute">Change</button></div>`) : "";
   const reviewHTML = rc ? spSec("review", "Review", "", `<div class="rcbody md">${md(rc.text || "")}</div>`) : "";
   const mcpHTML = mn ? `<div class="pnote spmini ${mcpBad ? "bad" : ""}">${esc(mn.replace(/^MCP: ?/, ""))}</div>` : "";
   return `<div class="spw"><div class="spbtns">${buttons.map(([k, ic, lb]) => `<button class="btn" data-go="${k}">${ic}${lb}</button>`).join("")}</div>
     ${planHTML}${spSec("env", "Environment", "", envHTML)}${routeHTML}${spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
     ${spSec("conn", `Connectors${mcpBad ? ` <span class="cidot bad" title="A connector did not start"></span>` : ""}`, cn.used.length ? `${cn.used.length} used` : "", (cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`) + mcpHTML)}${reviewHTML}
-    ${spSec("out", "Outputs", outs.length || "", outHTML)}${spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
+    ${spSec("out", "Artifacts", outs.length || "", outHTML)}${own ? "" : spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
     ${spSec("bg", "Background tasks", bg.running.length || "", bgHTML)}
     <div class="viewer" id="viewer" hidden></div></div>`;
 }

@@ -96,6 +96,7 @@
               : `<p class="muted">Optional. Link a folder or a GitHub repository so chats here can work on your files and code.</p><div class="row"><button class="btn" id="pjLinkFolder">${ICON.dir} Link a folder</button><button class="btn" id="pjLinkGh">${ICON.pr} Link a repository</button></div>`}</section>
         </aside>
       </div></div>`;
+    $("#conv").scrollTop = 0; $(".jumpdown")?.setAttribute("hidden", "");
     bindProject(pid, d);
   };
 

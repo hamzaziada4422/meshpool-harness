@@ -139,7 +139,7 @@ function openSettings(sec = "profile") {
         const card = `<div class="card" style="max-width:560px;margin:0 0 16px"><div class="chd"><span class="ci">${ICON.bolt}</span><h3>Spent on your Meshpool key</h3></div>
           ${k.available ? `<p style="font-size:var(--fs-xl);font-weight:600;margin:0 0 4px">${money(k.spent)}${k.budget ? ` <span class="muted" style="font-size:var(--fs-s);font-weight:400">of ${money(k.budget)}</span>` : ""}</p>${pct !== null ? `<div class="spbar ${pct >= 90 ? "bad" : pct >= 70 ? "warn" : ""}" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100" aria-label="Budget used"><i style="width:${pct}%"></i></div>` : `<p class="muted">No spending limit is set on this key.</p>`}`
             : `<p class="muted">Your model service doesn’t report spending, or no Meshpool key is saved. Your account page has the full picture.</p>`}
-          ${days.length ? `<div class="spsub" style="margin-top:12px">By day, on this computer</div><ul class="spl">${days.slice(0, 7).map(d => `<li><span class="cn">${esc(d.day)}</span><span class="cs">${fmt(d.in + d.out)} tokens · ${d.calls} calls</span></li>`).join("")}</ul>` : ""}</div>`;
+          ${days.length ? `<div class="spsub" style="margin-top:12px">By day, on this computer</div><ul class="spl">${days.slice(0, 7).map(d => `<li><span class="cn">${esc(d.day)}</span><span class="cs">${fmt(d.in + d.out)} tokens · ${d.calls} call${d.calls === 1 ? "" : "s"}</span></li>`).join("")}</ul>` : ""}</div>`;
         const h3 = $("h3", b); if (h3) h3.insertAdjacentHTML("afterend", ""); b.querySelector(".lead")?.insertAdjacentHTML("afterend", card);
       } catch (e) { /* the page below still works */ }
     } else {

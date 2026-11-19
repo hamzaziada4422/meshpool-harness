@@ -15,10 +15,9 @@ const {chromium} = require("playwright");
   }
   await p.waitForFunction(() => S.cur && S.cur.view && S.cur.view.state === "idle" && (S.cur.log || []).some(e => e.type === "turn_end"), null, {timeout: 120000}); await p.waitForTimeout(1500); await p.screenshot({path: out + "/m2-cowork-done.png"});
   // code mode
-  await p.click(".modesw [data-mode=code]"); await p.waitForTimeout(500); await p.screenshot({path: out + "/m3-code-home.png"});
-  await (await p.$(".proj[data-p='/tmp/proj1'] .proj-h")).hover(); await p.click(".proj[data-p='/tmp/proj1'] [data-newin]");
-  await p.click("[data-panel=git]"); await p.waitForTimeout(4000); await p.screenshot({path: out + "/m4-code-git.png"});
-  await p.click("#openSettings"); await p.click(".mnav [data-s=harnesses]"); await p.waitForTimeout(600); await p.screenshot({path: out + "/m5-harness-defaults.png"});
-  await p.click(".mnav [data-s=connectors]"); await p.waitForSelector("#cnl"); await p.screenshot({path: out + "/m6-connectors.png"});
+  await p.evaluate(() => newThread("/tmp/proj1")); await p.waitForTimeout(500); await p.screenshot({path: out + "/m3-code-home.png"});
+  await p.evaluate(() => togglePanel("git", true)); await p.waitForTimeout(4000); await p.screenshot({path: out + "/m4-code-git.png"});
+  await p.click("#openSettings"); await p.evaluate(() => renderSection("harnesses")); await p.waitForTimeout(600); await p.screenshot({path: out + "/m5-harness-defaults.png"});
+  await p.evaluate(() => renderSection("connectors")); await p.waitForSelector("#cnl"); await p.screenshot({path: out + "/m6-connectors.png"});
   console.log(errs.length ? errs.join("\n") : "no page errors"); await b.close();
 })().catch(e => { console.error("FAIL", e.message); process.exit(1); });

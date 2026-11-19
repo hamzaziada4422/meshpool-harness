@@ -855,7 +855,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .th{min-height:32px;outline-offset:-2px}
 .th .pi{display:inline-grid;color:var(--ink-3);flex:none}
 .th.pr .tt{font-weight:500}
-.th .end{flex:none;position:relative;width:28px;height:24px}
+.th .end{flex:none;position:relative;width:40px;height:24px}
 .th .end .tm,.th .end .more{position:absolute;right:0;top:50%;transform:translateY(-50%);transition:opacity var(--t-fast) ease}
 .th .end .more{opacity:0;pointer-events:none;display:inline-grid}
 .th:hover .end .tm,.th:focus-within .end .tm,.th.on .end .tm{opacity:0}
@@ -958,3 +958,4 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .subtabs button:hover{color:var(--ink)}
 .subtabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--pool)}
 .th .end .tm{pointer-events:none}
+.th .end .tm{white-space:nowrap;text-align:right}
