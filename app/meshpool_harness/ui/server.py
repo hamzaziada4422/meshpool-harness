@@ -373,6 +373,13 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/git/pr":
                 q = parse_qs(u.query)
                 return self._send(200, W.pr_detail(q.get("root", [""])[0], int(q.get("n", ["0"])[0] or 0)))
+            if u.path == "/api/github/repos":
+                return self._send(200, W.github_repos(parse_qs(u.query).get("q", [""])[0]))
+            if u.path == "/api/github/branches":
+                return self._send(200, W.github_branches(parse_qs(u.query).get("repo", [""])[0]))
+            m = re.fullmatch(r"/api/session/([\w-]+)/(panel|pr)", u.path)
+            if m:                                           # the session side panel: local facts, then GitHub's
+                return self._send(200, (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1)))
             if u.path == "/api/usage":
                 return self._send(200, W.usage())
             if u.path == "/api/search":
@@ -419,8 +426,31 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
+                from meshpool_harness import autoupdate as AU
                 from meshpool_harness import updater as UP
-                return self._send(200, UP.check(force=bool(self._json().get("force"))))
+                r = UP.check(force=bool(self._json().get("force")))
+                if r.get("ok") and r.get("newer") and AU.settings()["auto_download"]:
+                    AU.kick()                      # a check by hand also starts the background download
+                return self._send(200, r)
+            if u.path == "/api/update/status":
+                from meshpool_harness import autoupdate as AU
+                return self._send(200, AU.status())
+            if u.path == "/api/update/settings":
+                from meshpool_harness import autoupdate as AU
+                return self._send(200, AU.save_settings(self._json() or {}))
+            if u.path == "/api/update/download":
+                from meshpool_harness import autoupdate as AU
+                AU.kick(manual=True)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/update/apply":     # "Restart to update": the helper installs it after this app quits
+                from meshpool_harness import autoupdate as AU
+                if _running():
+                    return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
+                r = AU.begin_apply()
+                self._send(200, r)
+                if r.get("ok") and r.get("mode") != "code":
+                    threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                return
             if u.path == "/api/update/install":
                 from meshpool_harness import updater as UP
                 if _running():
@@ -720,6 +750,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": f"Could not open the folder on this computer ({e.strerror or e}). "
                                                      f"It is at: {target}"})
                 return self._send(200, {"ok": True})
+            if u.path == "/api/github/workspace":          # clone (or reuse) a repository for a new session
+                return self._send(200, W.github_workspace(self._json()))
+            m = re.fullmatch(r"/api/session/([\w-]+)/bg/stop", u.path)
+            if m:
+                b = self._json()
+                return self._send(200, W.session_bg_stop(m.group(1), b.get("kind", ""), b.get("id", "")))
             if u.path == "/api/term":
                 b = self._json()
                 return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
@@ -850,6 +886,13 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    if desktop:                                     # background update checks and downloads; install on quit
+        try:
+            from meshpool_harness import autoupdate as AU
+            ON_QUIT.append(AU.on_quit)
+            AU.start_background(busy=_running)
+        except Exception:  # noqa: BLE001
+            pass
     if on_ready:
         on_ready(port)
     print("")

@@ -768,3 +768,56 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 /* the review receipt after a turn that changed files */
 .note.receipt{border-left:3px solid var(--line,#e5e7eb);padding:4px 10px;color:var(--ink-2)}
 .note.receipt p{margin:2px 0}
+
+/* ---------- session side panel and the GitHub picker ---------- */
+.spw{padding:8px 12px 16px;display:flex;flex-direction:column;gap:2px;overflow:auto;min-height:0}
+.spbtns{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0 10px}
+.spbtns .btn{display:inline-flex;align-items:center;gap:6px;padding:4px 10px}
+.spbtns .btn svg{width:14px;height:14px}
+.spsec{border-top:1px solid var(--line-2)}
+.spsec>summary{list-style:none;display:flex;align-items:center;gap:8px;padding:10px 2px;cursor:pointer;font-size:var(--fs-s);color:var(--ink)}
+.spsec>summary::-webkit-details-marker{display:none}
+.spsec>summary b{font-weight:600}
+.spsec .chev{display:inline-flex;transition:transform .12s;transform:rotate(-90deg);color:var(--ink-3)}
+.spsec[open]>summary .chev{transform:none}
+.spc{margin-left:auto;font-size:var(--fs-xs);color:var(--ink-3);background:var(--hover);border-radius:999px;padding:1px 8px;white-space:nowrap}
+.outs .spc{margin-left:8px;flex:none}
+.ghn .spc{margin-left:6px}
+.spbody{padding:0 2px 12px;display:flex;flex-direction:column;gap:8px}
+.sprow{display:flex;gap:10px;align-items:flex-start;font-size:var(--fs-s);min-width:0}
+.sprow>svg{flex:none;margin-top:2px;color:var(--ink-3)}
+.sprow>span{display:flex;flex-direction:column;min-width:0}
+.sprow b{font-weight:500;overflow-wrap:anywhere}
+.sprow a{color:var(--ink);text-decoration:none}.sprow a:hover{text-decoration:underline}
+.sprow small,.spmini,.spsub{color:var(--ink-3);font-size:var(--fs-xs)}
+.sprow small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spmini{padding:0}.spsub{margin-top:6px}
+.spbr{display:flex;gap:6px}
+.spbr select,.spbr input{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-s);padding:5px 8px;background:var(--surface);color:var(--ink);font-size:var(--fs-s)}
+.spbar{height:8px;border-radius:999px;background:var(--line-2);overflow:hidden}
+.spbar i{display:block;height:100%;background:var(--pool-btn);border-radius:999px;transition:width .3s}
+.spbar.warn i{background:var(--warn)}.spbar.bad i{background:var(--del)}
+.spnum{display:flex;gap:8px;align-items:baseline;margin-top:6px;font-size:var(--fs-xs);color:var(--ink-3)}
+.spnum b{font-size:var(--fs-m,15px);color:var(--ink);font-weight:600}
+.spl{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.spl li{display:flex;align-items:center;gap:8px;font-size:var(--fs-s);min-width:0}
+.spl .cn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.spl .cs{color:var(--ink-3);font-size:var(--fs-xs);white-space:nowrap}
+.spl a{color:var(--ink);text-decoration:none;flex:1;min-width:0;display:flex}.spl a:hover{text-decoration:underline}
+.spw .cidot{width:8px;height:8px;border-radius:50%;background:var(--line-3);flex:none;display:inline-block}
+.spw .prcard .row{display:flex;gap:6px;flex-basis:100%;margin-top:4px;flex-wrap:wrap}
+.spw .prcard .bad{color:var(--del)}
+.spw .row{display:flex;gap:6px;flex-wrap:wrap}
+.ghp{width:min(560px,94vw)}
+.ghp .fblist{max-height:260px;margin-bottom:10px}
+.ghp .fblist button{align-items:flex-start}
+.ghp .fblist button.act{background:var(--hover)}
+.ghn{display:flex;flex-wrap:wrap;align-items:center;gap:2px 0;min-width:0;text-align:left}
+.ghn small{flex-basis:100%;color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ghp input{margin-bottom:10px}
+.ghbr{display:flex;flex-direction:column;gap:8px;margin-bottom:12px;font-size:var(--fs-s)}
+.ghbr label{display:flex;gap:8px;align-items:center}
+.ghbr select{flex:1;border:1px solid var(--line-3);border-radius:var(--r-s);padding:5px 8px;background:var(--surface);color:var(--ink)}
+.ghbr .chk input{width:auto;margin:0}.ghbr input[hidden]{display:none}.ghbr>input{margin:0}
+@media (max-width:640px){.spw{padding:8px 10px 16px}.ghp .fblist{max-height:200px}}
+.spw .cidot.ok{background:var(--add)}.spw .cidot.bad{background:var(--del)}.spw .cidot.run{background:var(--warn)}

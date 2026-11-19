@@ -90,6 +90,7 @@ const ICON = {
   plus: I('<path d="M12 5v14M5 12h14"/>'), search: I('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   folder: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   chev: I('<path d="m6 9 6 6 6-6"/>', 14), chevR: I('<path d="m9 6 6 6-6 6"/>', 14),
+  cloud: I('<path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>', 14),
   gear: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   send: I('<path d="M12 19V5M5 12l7-7 7 7"/>'), stop: I('<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>'),
   clip: I('<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.3l7.9-8"/>'),
@@ -159,7 +160,7 @@ function ask({title, text = "", value, ok = "OK", danger = false}) {
   });
 }
 /* Beta: anything that breaks can be reported in one click, with what a fix needs and nothing from the chat itself. */
-const ISSUES = "https://github.com/hamzaaziada/meshpool-harness/issues/new";
+const ISSUES = "https://github.com/hamzaziada4422/meshpool-harness/issues/new";
 async function reportProblem(what = "") {
   if (!S.version) { try { S.version = (await api("/api/about")).version; } catch (e) { S.version = "unknown"; } }
   const v = S.cur?.view || {};
@@ -236,7 +237,7 @@ function shell() {
   $("#newThread").onclick = () => newThread();   // not the click event as the folder
   $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
   $("#openSettings").onclick = () => openSettings();
-  $("#updBar").onclick = () => openSettings("about");
+  $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
   $("#betaBtn").onclick = () => reportProblem();
   const clearQ = () => { $("#q").value = ""; $("#qx").hidden = true; renderSide(); };
@@ -344,7 +345,7 @@ function renderSide() {
   for (const t of threads) { if (t.pinned) continue; if (!byProj.has(t.workdir)) byProj.set(t.workdir, []); byProj.get(t.workdir).push(t); }
   let html = "";
   if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(t => thHTML(t, true)).join("")}</ul>`;
-  html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
+  html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addGh" title="New session from GitHub" aria-label="New session from GitHub">${ICON.pr}</button><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
   if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
   // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
   const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
@@ -353,7 +354,7 @@ function renderSide() {
   for (const [path, list] of order) {
     const closed = S.closedProjects.has(path);
     html += `<div class="proj ${closed ? "closed" : ""}" data-p="${esc(path)}">
-      <div class="proj-h" title="${esc(path)}"><span class="chev">${ICON.chev}</span>${ICON.dir}<span class="nm">${esc(projName(path))}</span>
+      <div class="proj-h" title="${esc(isMgd(path) ? projName(path) : path)}"><span class="chev">${ICON.chev}</span>${ICON.dir}<span class="nm">${esc(projName(path))}</span>
         <span class="acts"><button class="iconbtn" data-newin="${esc(path)}" title="New chat in this folder" aria-label="New chat in ${esc(projName(path))}">${ICON.plus}</button><button class="iconbtn" data-pmenu="${esc(path)}" aria-label="Folder options">${ICON.more}</button></span></div>
       ${list.length ? `<ul class="threads">${list.map(t => thHTML(t)).join("")}</ul>` : ""}</div>`;
   }
@@ -379,6 +380,7 @@ function renderSide() {
   el._html = html; el._shape = shape; el.dataset.mode = "list";
   el.innerHTML = html;
   $("#addProj")?.addEventListener("click", pickProject);
+  $("#addGh")?.addEventListener("click", openGithubPicker);
   $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
   $$(".proj-h", el).forEach(h => h.addEventListener("click", e => {
     if (e.target.closest("button")) return;
@@ -544,7 +546,7 @@ async function pickProject() {
 function renderTop() {
   const v = S.cur?.view; const hidden = $("#app").classList.contains("noside") || $("#app").classList.contains("autoside") || narrow();
   const root = curRoot();
-  const ALL = {progress: [ICON.list, "Progress", ""], outputs: [ICON.files, "Files", ""], diff: [ICON.diff, "Diff", `${MOD}⇧D`],
+  const ALL = {session: [ICON.side, "Session", ""], progress: [ICON.list, "Progress", ""], outputs: [ICON.files, "Files", ""], diff: [ICON.diff, "Diff", `${MOD}⇧D`],
     files: [ICON.files, "Files", ""], term: [ICON.term, "Terminal", `${MOD}J`], git: [ICON.pr, "Git and CI", ""], preview: [ICON.globe, "Preview", ""]};
   const tabs = PANELS[curMode()].map(k => [k, ...ALL[k]]);
   const u = v?.usage; const cx = v?.context;
@@ -553,7 +555,7 @@ function renderTop() {
   $("#topbar").innerHTML = `
     ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
     <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
-    ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
+    ${root ? `<button class="chip" id="projChip" title="${esc(isMgd(root) ? projName(root) : root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
     <span class="sp"></span>
     ${usage ? `<span class="chip use" title="Tokens in this chat">${esc(usage)}</span>` : ""}
@@ -564,7 +566,7 @@ function renderTop() {
   $("#stepsBtn")?.addEventListener("click", toggleSteps);
   $$("[data-panel]").forEach(b => b.onclick = () => togglePanel(b.dataset.panel));
   $("#tmore")?.addEventListener("click", e => threadMenu(e, v.id));
-  $("#projChip")?.addEventListener("click", e => { if (!v) projectPop(e.currentTarget); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
+  $("#projChip")?.addEventListener("click", e => { if (!v) projectPop(e.currentTarget); else if (isMgd(root)) togglePanel("session", true); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
   const ttl = $("#ttl");
   if (v) ttl.ondblclick = () => {
     ttl.contentEditable = "true"; ttl.focus(); document.getSelection().selectAllChildren(ttl);
@@ -597,7 +599,7 @@ async function ciChip(root, fresh) {
   el.insertAdjacentHTML("beforeend", `<button class="chip ci ${ci.summary}" id="ciChip" title="${esc(ci.pr ? "#" + ci.pr.number + " " + ci.pr.title : ci.branch)}"><span class="cidot"></span>${CI_TEXT[ci.summary]}</button>`);
   $("#ciChip").onclick = () => togglePanel("git", true);
 }
-const PANELS = {cowork: ["progress", "outputs"], code: ["diff", "files", "term", "git", "preview"]};
+const PANELS = {cowork: ["session", "progress", "outputs"], code: ["session", "diff", "files", "term", "git", "preview"]};
 function curMode() { return S.cur?.view?.kind || S.appMode; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || S.defaultProject || ""; }
 
@@ -640,7 +642,7 @@ function renderBar() {
     <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
     <button class="pill" id="attBtn" title="Attach images or files" aria-label="Attach images or files">${ICON.clip}</button>
     <span class="sp"></span>
-    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spin"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
+    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
   $("#hPill").onclick = e => harnessPop(e.currentTarget);
   $("#mPill").onclick = e => modelPop(e.currentTarget);
@@ -966,10 +968,11 @@ function accessPop(anchor) {
 function projectPop(anchor) {
   const cur = curRoot();
   const list = S.projects.length ? S.projects : [];
-  const p = openPop(anchor, `<div class="pl">${list.map(x => `<button class="opt" data-p="${esc(x.path)}"><span class="ol">${esc(x.name)}<span class="od">${esc(x.path)}</span></span>${x.path === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}
+  const p = openPop(anchor, `<div class="pl">${list.map(x => `<button class="opt" data-p="${esc(x.path)}"><span class="ol">${esc(x.name)}<span class="od">${esc(x.managed ? "GitHub" : x.path)}</span></span>${x.path === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}
     <button class="opt" data-p="${esc(S.defaultProject)}"><span class="ol">Meshpool Projects<span class="od">${esc(S.defaultProject)}</span></span></button></div>
-    <div class="pf"><button class="opt" id="pickNew">${ICON.folder}<span class="ol">Choose a folder on this computer</span></button><button class="opt" id="pickHome">${ICON.dir}<span class="ol">Use my whole home folder<span class="od">Every folder and file you can open yourself</span></span></button></div>`, {width: 380});
+    <div class="pf"><button class="opt" id="pickGh">${ICON.pr}<span class="ol">New session from GitHub<span class="od">Pick a repository and branch; Meshpool keeps its own copy</span></span></button><button class="opt" id="pickNew">${ICON.folder}<span class="ol">Choose a folder on this computer</span></button><button class="opt" id="pickHome">${ICON.dir}<span class="ol">Use my whole home folder<span class="od">Every folder and file you can open yourself</span></span></button></div>`, {width: 380});
   $$(".opt[data-p]", p).forEach(b => b.onclick = () => { closePop(); S.draft.project = b.dataset.p; store("project", S.draft.project); renderBar(); renderTop(); if (S.panel) renderPanel(); });
+  $("#pickGh").onclick = () => { closePop(); openGithubPicker(); };
   $("#pickNew").onclick = () => { closePop(); pickProject(); };
   $("#pickHome").onclick = () => { closePop(); useHome(); };
 }
@@ -1336,7 +1339,7 @@ async function undoTurn(n) {
 }
 
 /* ================================== right panel ================================== */
-const PTABS_ALL = {progress: "Progress", outputs: "Files", diff: "Diff", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Files", diff: "Diff", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
 function togglePanel(name, force) {
   if (!PANELS[curMode()].includes(name)) name = PANELS[curMode()][0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1357,6 +1360,7 @@ function fitPanel() {
 }
 function renderPanel() {
   const p = $("#panel");
+  clearTimeout(S.spT);
   if (S.panel && !PANELS[curMode()].includes(S.panel)) { S.panel = PANELS[curMode()][0]; store("panel", S.panel); }
   fitPanel(); if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
@@ -1364,7 +1368,7 @@ function renderPanel() {
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
-  ({progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
+  ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
     preview: panelPreview})[S.panel](body);
 }
 
@@ -1613,6 +1617,133 @@ function panelPreview(body) {
   else { $("#pframe").hidden = true; const msg = $("#pempty"); msg.hidden = false; msg.textContent = "Type the address of your running app (for example localhost:3000) and press Open."; }
 }
 
+/* ================================== session panel + GitHub sessions ================================== */
+const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
+const spDur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
+const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
+const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
+function spSec(k, title, count, inner) {
+  return `<details class="spsec" data-k="${k}" ${spOpen(k) ? "open" : ""}><summary><span class="chev">${ICON.chev}</span><b>${title}</b>${count ? `<span class="spc">${count}</span>` : ""}</summary><div class="spbody">${inner}</div></details>`;
+}
+function spHTML(d, pr) {
+  const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
+  const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [PANELS[curMode()].includes("files") ? "files" : "outputs", ICON.files, "Files"]]
+    .filter(([k]) => PANELS[curMode()].includes(k));
+  const envHTML = `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>
+    ${rp ? `<div class="sprow">${ICON.pr}<span><b>${rp.url ? `<a href="${esc(rp.url)}" target="_blank" rel="noopener">${esc(rp.slug)}</a>` : esc(env.name)}</b><small>${rp.slug ? "GitHub repository" : "Git repository without a GitHub remote"}</small></span></div>` : `<div class="sprow">${ICON.dir}<span><b>${esc(env.name)}</b><small>Not a Git repository</small></span></div>`}
+    ${br ? `<div class="sprow">${ICON.branch}<span><b>${esc(br.name)}</b><small>${br.upstream ? `${br.ahead} to push, ${br.behind} to pull` : "Not pushed yet"}</small></span></div>
+      <div class="row spbr"><select id="spBr" aria-label="Switch branch">${br.branches.map(b => `<option ${b === br.name ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
+      <div class="row spbr"><input id="spNew" placeholder="New branch name" aria-label="New branch name"><button class="btn" id="spCreate">Create</button></div>` : ""}`;
+  const cls = cx.percent >= 90 ? "bad" : cx.percent >= 70 ? "warn" : "";
+  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="width:${cx.percent}%"></i></div>
+    <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
+  const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
+  const outs = d.outputs;
+  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this session creates or changes show here.</div>`;
+  const num = (v, c, sg) => `<span class="${v ? c : "zero"}">${sg}${v}</span>`;
+  let chg = `<div class="sprow">${ICON.diff}<span><b>${tr.files ? `${tr.files} file${tr.files === 1 ? "" : "s"} changed` : "Working tree is clean"}</b>${tr.files ? `<small class="nw">${num(tr.added, "plus", "+")} ${num(tr.removed, "minus", "−")} not committed</small>` : ""}</span></div>`;
+  if (!pr) chg += `<div class="pnote spmini">Checking GitHub...</div>`;
+  else if (!pr.available) chg += `<div class="pnote spmini">${esc(pr.error || "No GitHub remote.")}${/Connect GitHub/.test(pr.error || "") ? ` <button class="linkbtn" id="spConn">Connect GitHub</button>` : ""}</div>`;
+  else {
+    const p = pr.pr;
+    chg += p ? `<div class="prcard"><a href="${esc(p.url)}" target="_blank" rel="noopener"><b>#${p.number} ${esc(p.title)}</b></a><span class="badge ${p.draft ? "modified" : "added"}">${p.draft ? "Draft" : "Open"}</span>
+        <span class="nw">${num(p.additions, "plus", "+")} ${num(p.deletions, "minus", "−")}</span>
+        ${p.checks !== "none" ? `<span class="chip ci ${p.checks}"><span class="cidot"></span>${esc(CI_TEXT[p.checks] || p.checks)}</span>` : `<span class="stat">No checks</span>`}
+        <small>${esc(p.head)} into ${esc(p.base)}</small>
+        ${p.failing.length ? `<small class="bad">Failing: ${esc(p.failing.join(", "))}</small>` : ""}
+        <div class="row">${p.draft ? `<button class="btn primary" id="spReady" ${p.can_ready ? "" : "disabled title='Connect GitHub first'"}>Mark ready</button>` : ""}<button class="btn" id="spPrView">Open the full view</button></div></div>`
+      : `<div class="pnote spmini">No pull request for ${esc(pr.branch)} yet.</div><div class="row"><button class="btn" id="spDraft">Open a draft PR</button><button class="btn" id="spGit">Commit and push</button></div>`;
+    if (pr.others.length) chg += `<div class="spsub">Other open pull requests</div><ul class="spl">${pr.others.map(o => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener"><span class="cn">#${o.number} ${esc(o.title)}</span></a>${o.draft ? `<span class="spc">draft</span>` : ""}</li>`).join("")}</ul>`;
+  }
+  const bgHTML = (bg.running.length ? `<ul class="spl">${bg.running.map(t => `<li><span class="cidot run"></span><span class="cn" title="${esc(t.title)}">${esc(t.title)}</span><span class="cs">${esc({subagent: "Sub-agent", terminal: "Command", scheduled: "Scheduled"}[t.kind])} · ${spDur(t.elapsed)}</span><button class="linkbtn" data-stop="${esc(t.kind)}:${esc(t.id)}">Stop</button></li>`).join("")}</ul>` : `<div class="pnote spmini">Nothing running in the background.</div>`) + (bg.finished ? `<div class="stat">${bg.finished} finished</div>` : "");
+  return `<div class="spw"><div class="spbtns">${buttons.map(([k, ic, lb]) => `<button class="btn" data-go="${k}">${ic}${lb}</button>`).join("")}</div>
+    ${spSec("env", "Environment", "", envHTML)}${spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
+    ${spSec("conn", "Connectors", cn.used.length ? `${cn.used.length} used` : "", cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`)}
+    ${spSec("out", "Outputs", outs.length || "", outHTML)}${spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
+    ${spSec("bg", "Background tasks", bg.running.length || "", bgHTML)}
+    <div class="viewer" id="viewer" hidden></div></div>`;
+}
+async function panelSession(body) {
+  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a session and its environment, context, connectors, files and pull request show here.</div>`; return; }
+  const sid = S.cur.id, root = curRoot();
+  S.spPr = S.spPr?.sid === sid ? S.spPr : {sid, t: 0, data: null};
+  body.innerHTML = `<div class="pnote">Loading...</div>`;
+  const tick = async first => {
+    if (S.panel !== "session" || S.cur?.id !== sid) return;
+    try {
+      if (!S.spPr.data || Date.now() - S.spPr.t > 30000) { api(`/api/session/${sid}/pr`).then(r => { S.spPr = {sid, t: Date.now(), data: r}; if (S.panel === "session") spDraw(sid, root, last); }).catch(() => {}); S.spPr.t = Date.now(); }
+      const d = await api(`/api/session/${sid}/panel`); last = d; spDraw(sid, root, d);
+    } catch (e) { if (first) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), 4000);
+  };
+  let last = null; clearTimeout(S.spT); tick(true);
+}
+function spDraw(sid, root, d) {
+  const body = $("#pbody"); if (!body || !d || S.panel !== "session" || S.cur?.id !== sid) return;
+  if (body.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) return;   // never rebuild under the user's typing
+  const keep = $("#viewer", body); const vh = keep && !keep.hidden ? keep.innerHTML : "";
+  const sc = body.scrollTop;
+  body.innerHTML = spHTML(d, S.spPr?.data);
+  body.scrollTop = sc;
+  if (vh) { const v = $("#viewer", body); v.hidden = false; v.innerHTML = vh; }
+  $$("details.spsec", body).forEach(el => el.ontoggle = () => { const o = store("sp_open") || {}; o[el.dataset.k] = el.open; store("sp_open", o); });
+  $$("[data-go]", body).forEach(b => b.onclick = () => togglePanel(b.dataset.go, true));
+  $$("[data-open]", body).forEach(b => b.onclick = () => openFile(root, b.dataset.open));
+  $("#spBr", body)?.addEventListener("change", e => gitAct({action: "checkout", branch: e.target.value}));
+  $("#spCreate", body)?.addEventListener("click", () => gitAct({action: "checkout", branch: $("#spNew").value, create: true}));
+  $("#spConn", body)?.addEventListener("click", () => openSettings("connectors"));
+  $("#spGit", body)?.addEventListener("click", () => togglePanel("git", true));
+  $("#spPrView", body)?.addEventListener("click", () => openPRView(root, S.spPr.data.pr.number));
+  $("#spReady", body)?.addEventListener("click", async () => { try { await post("/api/git/pr", {root, action: "ready", pr: S.spPr.data.pr.number}); toast("Marked ready for review"); S.spPr.data = null; S.spPr.t = 0; } catch (e) { toast(e.message, 5000); } });
+  $("#spDraft", body)?.addEventListener("click", async () => { const t = await ask({title: "Open a draft pull request", text: "Pushes this branch and opens a draft on GitHub.", value: S.spPr.data.branch, ok: "Open draft"}); if (t) { try { const r = await post("/api/git", {root, action: "pr", title: t, draft: true}); toast("Draft pull request opened"); S.spPr.data = null; S.spPr.t = 0; if (r.pr) window.open?.(r.pr, "_blank", "noopener"); } catch (e) { toast(e.message, 5000); } } });
+  $$("[data-stop]", body).forEach(b => b.onclick = async () => { const [kind, ...id] = b.dataset.stop.split(":"); try { await post(`/api/session/${sid}/bg/stop`, {kind, id: id.join(":")}); toast("Stopped"); } catch (e) { toast(e.message); } });
+}
+function openGithubPicker() {
+  const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
+  sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="New session from GitHub"><h3>New session from GitHub</h3>
+    <p>Pick a repository. Meshpool keeps its own copy and works there, so you do not need it on this computer first.</p>
+    <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
+    <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
+    <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>Start session</button></div></div>`;
+  document.body.appendChild(sc);
+  let repo = null, qT = null;
+  const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
+  const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(); } };
+  document.addEventListener("keydown", key, true);
+  sc.addEventListener("mousedown", e => { if (e.target === sc) done(); });
+  $("[data-a='0']", sc).onclick = done;
+  const list = $("#ghList", sc), msg = $("#ghMsg", sc);
+  const load = async () => {
+    try {
+      const r = await api("/api/github/repos?q=" + encodeURIComponent($("#ghQ", sc).value.trim()));
+      list.innerHTML = r.repos.length ? r.repos.map((x, i) => `<li><button data-i="${i}" class="${repo?.full_name === x.full_name ? "act" : ""}">${ICON.pr}<span class="ghn"><b>${esc(x.full_name)}</b>${x.private ? `<span class="spc">private</span>` : ""}${x.cloned ? `<span class="spc">ready</span>` : ""}<small>${esc(x.description)}</small></span></button></li>`).join("") : `<li class="pnote">No repositories match.</li>`;
+      $$("[data-i]", list).forEach(b => b.onclick = () => pick(r.repos[+b.dataset.i]));
+    } catch (e) {
+      list.innerHTML = `<li class="pnote">${esc(e.message)} ${/Connect GitHub/.test(e.message) ? `<button class="linkbtn" id="ghConn">Connect GitHub</button>` : ""}</li>`;
+      $("#ghConn", sc)?.addEventListener("click", () => { done(); openSettings("connectors"); });
+    }
+  };
+  const pick = async x => {
+    repo = x; $$("#ghList button", sc).forEach(b => b.classList.toggle("act", b.textContent.includes(x.full_name))); $("#ghGo", sc).disabled = true; msg.textContent = "Loading branches...";
+    try {
+      const b = await api("/api/github/branches?repo=" + encodeURIComponent(x.full_name));
+      $("#ghSel", sc).innerHTML = b.branches.map(n => `<option ${n === b.default ? "selected" : ""}>${esc(n)}</option>`).join(""); $("#ghBr", sc).hidden = false; $("#ghGo", sc).disabled = false; msg.textContent = x.full_name;
+    } catch (e) { msg.textContent = e.message; }
+  };
+  $("#ghQ", sc).oninput = () => { clearTimeout(qT); qT = setTimeout(load, 250); };
+  $("#ghNewOn", sc).onchange = e => { $("#ghNewName", sc).hidden = !e.target.checked; if (e.target.checked) $("#ghNewName", sc).focus(); };
+  $("#ghGo", sc).onclick = async () => {
+    const mk = $("#ghNewOn", sc).checked, nm = $("#ghNewName", sc).value.trim(); if (mk && !nm) { msg.textContent = "Name the new branch."; return; }
+    $("#ghGo", sc).disabled = true; msg.textContent = "Getting the repository ready. A large one can take a minute...";
+    try {
+      const r = await post("/api/github/workspace", {repo: repo.full_name, branch: mk ? nm : $("#ghSel", sc).value, create: mk, base: $("#ghSel", sc).value});
+      done(); await loadProjects(); renderSide(); newThread(r.path); toast(`${r.name} on ${r.branch} is ready`);
+    } catch (e) { msg.textContent = e.message; $("#ghGo", sc).disabled = false; }
+  };
+  load(); $("#ghQ", sc).focus();
+}
+
 /* ================================== settings ================================== */
 const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["import", "Import chats and context"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
 SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
@@ -1755,7 +1886,7 @@ async function renderSection(sec) {
   } else if (sec === "about") {
     const a = await api("/api/about");
     b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
-      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
+      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaziada4422/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <details style="margin-top:16px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
     $("#aboutReport").onclick = () => reportProblem();
@@ -1966,7 +2097,7 @@ async function renderSection(sec) {
         ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:10px">Allow all</button>` : ""}
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
-        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
+        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>`;
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
@@ -2316,27 +2447,63 @@ function setupStep(o, prev) {
 /* ================================== updates ================================== */
 async function checkUpdate(force) {
   try { S.upd = await post("/api/update/check", {force: !!force}); } catch (e) { S.upd = {ok: false, error: e.message}; }
-  const bar = $("#updBar");
-  if (bar) { bar.hidden = !(S.upd.ok && S.upd.newer); bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(S.upd.latest || "")} is available<span class="go">Update</span>`; }
+  await updStatus();
   return S.upd;
+}
+/* The background updater's state: downloading, ready ("Restart to update"), or an error. Polled quickly while it works. */
+async function updStatus() {
+  try { S.ust = await post("/api/update/status", {}); } catch (e) { S.ust = null; }
+  renderUpdBar(); if ($("#updMore")) updatePanel(S.upd);
+  const r = S.ust?.last_result;
+  if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
+  clearTimeout(S.ustT);
+  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking"].includes(S.ust?.state) ? 3000 : 60000);
+  return S.ust;
+}
+function updPct(s) { return s && s.total ? Math.min(99, Math.floor(100 * s.done / s.total)) : 0; }
+function renderUpdBar() {
+  const bar = $("#updBar"); if (!bar) return;
+  const s = S.ust, u = S.upd;
+  if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
+  else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
+  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
+  else bar.hidden = true;
+}
+async function applyUpdate() {
+  let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
+  if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
+  if (r.mode === "code") { restartApp(); return; }
+  toast("Updating Meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
+  const s = S.ust || {}, st = s.settings || {};
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>`;
+  const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
+  if (s.state === "ready") { res.className = "res ok"; res.textContent = `Meshpool ${s.latest} is ready to install.`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button><a class="btn" href="${esc(s.url || "")}" target="_blank" rel="noopener">What's new</a></div>${opts}`;
+    $("#updGo").onclick = applyUpdate; bindOpts(); return; }
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${s.latest}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${s.latest}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "error" && s.error && u?.newer !== false) { res.className = "res bad"; res.textContent = s.error;
+    more.innerHTML = `<div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}</div>${opts}`;
+    $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
   if (!u) { res.textContent = ""; more.innerHTML = ""; return; }
   if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = ""; return; }
-  if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = ""; return; }
+  if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
-  const how = u.kind === "mac-app" ? "Downloads the new Mac app and opens it." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">Update now</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>`;
+  const how = ["mac-app", "win-app"].includes(u.kind) ? "Downloads in the background; installs when you restart." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">${["mac-app", "win-app"].includes(u.kind) ? "Download update" : "Update now"}</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(u.kind) ? opts : ""}`;
+  bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
     const out = RES("updOut"); btn.disabled = true; btn.textContent = "Updating...";
-    out.className = "res"; out.textContent = "Downloading the release. Keep Meshpool open.";
+    out.className = "res"; out.textContent = "Starting the update.";
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
     btn.disabled = false; btn.textContent = "Update now";
     if (!r.ok) { out.className = "res bad"; out.textContent = r.error; return; }
     out.className = "res ok"; out.textContent = r.message;
-    if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
+    if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
+    else if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
     else if (r.action !== "installer") btn.remove();
   };
 }
@@ -2374,7 +2541,7 @@ async function restartApp() {
     else if (last && S.threads.some(t => t.id === last && !t.archived)) openThread(last);
   }   // set up but onboarding left halfway
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
-  setTimeout(() => checkUpdate(false), 3000);
+  setTimeout(() => checkUpdate(false), 3000); setTimeout(updStatus, 1000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
   document.addEventListener("contextmenu", e => { const ph = e.target.closest?.("#sideList .proj-h"); if (ph) { e.preventDefault(); projMenu({currentTarget: ph, target: ph}, ph.parentElement.dataset.p); return; } });
   document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });

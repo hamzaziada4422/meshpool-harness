@@ -38,7 +38,7 @@ def projects() -> list[dict]:
             continue
         seen.add(p)
         out.append({"path": p, "name": r.get("name") or Path(p).name or p, "added": r.get("added", 0),
-                    "exists": Path(p).is_dir()})
+                    "exists": Path(p).is_dir(), "managed": is_managed(p)})
     return out
 
 
@@ -317,6 +317,19 @@ def git_exe() -> str | None:
     return g
 
 
+_NET_CMDS = {"push", "pull", "fetch", "clone", "ls-remote"}
+# The token reaches git through the environment of that one process, never on the command line or in .git/config:
+# an empty helper resets any stored ones, then this helper answers git's question from $MESHPOOL_GH_TOKEN.
+_CRED_FLAGS = ["-c", "credential.helper=",
+               "-c", 'credential.helper=!f() { echo username=x-access-token; echo "password=$MESHPOOL_GH_TOKEN"; }; f']
+
+
+def _gh_git_env(env: dict) -> dict:
+    from meshpool_harness import mcp_apps as CN
+    tok = CN.github_token()
+    return dict(env, MESHPOOL_GH_TOKEN=tok) if tok else env
+
+
 def _git(root: Path, *args, check=True, timeout=60) -> str:
     g = git_exe()
     if not g:
@@ -325,8 +338,11 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     # project, diffs for the changes list): fsmonitor, an external diff tool and a pager are all programs.
     safe = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c", "core.quotePath=false",
             "--no-pager"]
-    r = subprocess.run([g, *safe, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace",
-                       timeout=timeout, creationflags=NO_WINDOW, env=dict(os.environ, GIT_TERMINAL_PROMPT="0"))
+    env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
+    if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
+        env, extra = _gh_git_env(env), _CRED_FLAGS
+    r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
     if check and r.returncode != 0:
         raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
     return r.stdout
@@ -427,7 +443,7 @@ def _open_pr(r: Path, body: dict) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:
             base = json.loads(resp.read())["default_branch"]
         data = json.dumps({"title": title, "head": st["branch"], "base": body.get("base") or base,
-                           "body": desc}).encode()
+                           "body": desc, "draft": bool(body.get("draft"))}).encode()
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}/pulls", data=data, method="POST", headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "Meshpool",
             "Content-Type": "application/json"})
@@ -438,7 +454,8 @@ def _open_pr(r: Path, body: dict) -> dict:
             raise ValueError(f"GitHub said: {e.read().decode('utf-8', 'replace')[:400]}")
         return st | {"pr": pr.get("html_url")}
     if gh:
-        out = subprocess.run([gh, "pr", "create", "--title", title, "--body", desc or title], cwd=str(r),
+        out = subprocess.run([gh, "pr", "create", "--title", title, "--body", desc or title,
+                              *(["--draft"] if body.get("draft") else [])], cwd=str(r),
                              capture_output=True, text=True, timeout=120, creationflags=NO_WINDOW)
         if out.returncode != 0:
             raise ValueError(out.stderr.strip()[-600:])
@@ -984,3 +1001,396 @@ def git_ci_action(root: str, body: dict) -> dict:
     else:
         raise ValueError("Unknown action.")
     return git_ci(root)
+
+
+# ======================================== GitHub sessions: a repository cloned into a managed workspace ===========
+_SLUG_RX = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$")
+
+
+def workspaces_dir() -> Path:
+    """Where Meshpool keeps the clones it makes for GitHub sessions. The user never has to know: the app shows
+    owner/name, not this folder."""
+    return C.home() / "workspaces"
+
+
+def is_managed(path) -> bool:
+    try:
+        p = Path(path).expanduser().resolve()
+        return workspaces_dir().resolve() in p.parents
+    except (OSError, ValueError):
+        return False
+
+
+def clone_argv(slug: str, dest: Path) -> list[str]:
+    """The git command that clones one repository. No token in it: _gh_git_env hands that to the process."""
+    if not _SLUG_RX.match(slug or ""):
+        raise ValueError("Give the repository as owner/name.")
+    return [git_exe() or "git", *_CRED_FLAGS, "clone", "--origin", "origin", "--", f"https://github.com/{slug}.git",
+            str(dest)]
+
+
+_REPOS: dict = {"t": 0, "tok": "", "rows": []}
+
+
+def github_repos(q: str = "") -> dict:
+    """Repositories the saved GitHub token can reach (newest push first), filtered by what the user typed. A typed
+    owner/name that is not in the list is looked up directly, so public repositories can be opened too."""
+    from meshpool_harness import mcp_apps as CN
+    token = CN.github_token()
+    if not token:
+        raise ValueError("Connect GitHub (Settings, Connectors) to pick one of your repositories.")
+    if _REPOS["tok"] != token[-8:] or time.time() - _REPOS["t"] > 60:
+        got = _gh_all("/user/repos?sort=pushed&affiliation=owner,collaborator,organization_member", token, 300)
+        _REPOS.update(t=time.time(), tok=token[-8:], rows=[
+            {"full_name": r["full_name"], "private": bool(r.get("private")), "description": (r.get("description") or "")[:140],
+             "pushed": r.get("pushed_at"), "default_branch": r.get("default_branch") or "main"} for r in got])
+    q = (q or "").strip().lower()
+    rows = [r for r in _REPOS["rows"] if q in r["full_name"].lower() or q in r["description"].lower()] if q \
+        else list(_REPOS["rows"])
+    if not rows and _SLUG_RX.match(q):
+        try:
+            r = _gh_api(f"/repos/{q}", token)
+            rows = [{"full_name": r["full_name"], "private": bool(r.get("private")),
+                     "description": (r.get("description") or "")[:140], "pushed": r.get("pushed_at"),
+                     "default_branch": r.get("default_branch") or "main"}]
+        except ValueError:
+            pass
+    for r in rows:
+        r["cloned"] = _workspace_path(r["full_name"]).is_dir()
+    return {"repos": rows[:100]}
+
+
+def github_branches(slug: str) -> dict:
+    from meshpool_harness import mcp_apps as CN
+    if not _SLUG_RX.match(slug or ""):
+        raise ValueError("Give the repository as owner/name.")
+    token = CN.github_token()
+    info = _gh_api(f"/repos/{slug}", token)
+    names = [b["name"] for b in _gh_all(f"/repos/{slug}/branches", token, 300)]
+    return {"repo": slug, "default": info.get("default_branch") or "main", "branches": names}
+
+
+def _workspace_path(slug: str) -> Path:
+    return workspaces_dir() / slug.replace("/", "__")
+
+
+def github_workspace(body: dict) -> dict:
+    """Make a repository ready to work in: clone it into the managed workspace (or reuse the clone that is there,
+    fetching first), then switch to the branch asked for, creating it from `base` (default: the repository's
+    default branch) when create is set. Returns the folder for the new session and the project's name."""
+    slug = (body.get("repo") or "").strip()
+    branch = (body.get("branch") or "").strip()
+    if not _SLUG_RX.match(slug):
+        raise ValueError("Give the repository as owner/name.")
+    if not git_exe():
+        raise ValueError("Git is not installed.")
+    from meshpool_harness import mcp_apps as CN
+    if not CN.github_token():
+        raise ValueError("Connect GitHub (Settings, Connectors) first.")
+    if branch and (branch.startswith("-") or subprocess.run([git_exe(), "check-ref-format", "--branch", branch],
+                                                            capture_output=True, creationflags=NO_WINDOW).returncode):
+        raise ValueError(f'"{branch}" is not a valid branch name.')
+    dest = _workspace_path(slug)
+    workspaces_dir().mkdir(parents=True, exist_ok=True)
+    reused = (dest / ".git").exists()
+    if reused:
+        if _github_slug(_git(dest, "remote", "get-url", "origin", check=False).strip()).lower() != slug.lower():
+            raise ValueError("The saved copy of this repository points somewhere else. Remove it and try again.")
+        _git(dest, "fetch", "--prune", "origin", timeout=300)
+    else:
+        argv = clone_argv(slug, dest)
+        r = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=900,
+                           creationflags=NO_WINDOW, env=_gh_git_env(dict(os.environ, GIT_TERMINAL_PROMPT="0")))
+        if r.returncode:
+            shutil.rmtree(dest, ignore_errors=True)
+            tail = (r.stderr or r.stdout).strip()[-400:]
+            raise ValueError("Could not copy the repository: " + re.sub(r"https://[^@\s]*@", "https://", tail))
+    p = add_project(str(dest), slug)
+    if branch:
+        have_local = _git(dest, "rev-parse", "-q", "--verify", f"refs/heads/{branch}", check=False).strip()
+        have_remote = _git(dest, "rev-parse", "-q", "--verify", f"refs/remotes/origin/{branch}", check=False).strip()
+        if have_local or have_remote:
+            _git(dest, "switch", branch)
+        elif body.get("create"):
+            base = (body.get("base") or "").strip()
+            start = f"origin/{base}" if base else _git(dest, "symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD",
+                                                       check=False).strip()
+            _git(dest, "switch", "-c", branch, *([start] if start else []))
+        else:
+            raise ValueError(f'There is no branch "{branch}" in {slug}. Choose "new branch" to create it.')
+    return {"path": p["path"], "name": slug, "reused": reused, "branch": _git(dest, "branch", "--show-current").strip()}
+
+
+# ======================================== the session side panel ==================================================
+_WINDOWS = [(r"gemini", 1_000_000), (r"gpt-4\.1", 1_000_000), (r"claude", 200_000), (r"gpt-5|o[134]\b", 400_000)]
+
+
+def model_window(model: str) -> tuple[int, str]:
+    """The context window in tokens for a model, and where that number came from: the endpoint's model list when
+    it gave one, else a rule of thumb by name, else 128K (the size the agent's compaction is tuned for)."""
+    bare = (model or "").split(":", 1)[-1]
+    for row in _MODELS.get("rows") or []:
+        if row.get("id") in (model, bare) and row.get("context"):
+            try:
+                return int(row["context"]), "endpoint"
+            except (TypeError, ValueError):
+                pass
+    for rx, n in _WINDOWS:
+        if re.search(rx, bare, re.I):
+            return n, "estimate"
+    return 128_000, "estimate"
+
+
+def context_info(s) -> dict:
+    """How full the model's context window is. Harnesses that report it (ACP, Pi) give used and size. The built-in
+    agent does not, so: the prompt size of its latest model call (a usage event), else its message text / 4."""
+    a = getattr(s, "agent", None)
+    model = ""
+    try:
+        model = (a.current_model() if hasattr(a, "current_model") else getattr(a, "model", "")) or ""
+    except Exception:  # noqa: BLE001
+        pass
+    ctx = getattr(a, "context", None)
+    if isinstance(ctx, dict) and ctx.get("size"):
+        used, size, src = int(ctx.get("used") or 0), int(ctx["size"]), "agent"
+    else:
+        size, src = model_window(model)
+        used = 0
+        with s.lock:
+            evs = list(s.events)
+        last = next((e for e in reversed(evs) if e.get("type") == "usage" and e.get("in") and not e.get("aux")), None)
+        if last:
+            used, src = int(last["in"]), src + "+usage"
+        else:
+            try:
+                from meshpool_harness.agent.core import _context_size
+                used, src = _context_size(getattr(a, "messages", []) or []) // 4, src + "+chars"
+            except Exception:  # noqa: BLE001
+                pass
+    pct = min(100, round(100 * used / size)) if size else 0
+    return {"used": used, "size": size, "percent": pct, "model": model, "source": src}
+
+
+def _rel(root: Path, p: str) -> str:
+    p = str(p or "").strip().strip('"')
+    try:
+        q = Path(p)
+        if q.is_absolute():
+            return q.resolve().relative_to(root.resolve()).as_posix()
+    except (ValueError, OSError):
+        return ""
+    return Path(p).as_posix().lstrip("./") if ".." not in Path(p).parts else ""
+
+
+_OUT_RX = re.compile(r"(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n\"'`<>():]+?\."
+                     r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])")
+
+
+def session_outputs(s, root: Path) -> list[dict]:
+    """Files this session created or changed: edits and writes from its tool calls, files its tools said they saved,
+    and what its checkpoints recorded per reply. Only files that still exist inside the folder."""
+    found: dict[str, dict] = {}
+    with s.lock:
+        evs = list(s.events)
+    for e in evs:
+        if e.get("type") == "tool_start" and e.get("name") in ("write_file", "edit"):
+            rel = _rel(root, e.get("summary") or "")
+            if rel:
+                found.setdefault(rel, {"path": rel, "how": "written" if e["name"] == "write_file" else "edited"})
+        elif e.get("type") == "tool_end" and e.get("ok") and e.get("output"):
+            for m in _OUT_RX.finditer(str(e["output"])):
+                rel = _rel(root, m.group(1))
+                if rel:
+                    found.setdefault(rel, {"path": rel, "how": "saved"})
+    try:
+        for t in (s.cp.turns() if s.cp else []):
+            for c in t.get("changed") or []:
+                if c.get("status") != "deleted":
+                    found.setdefault(str(c["path"]), {"path": str(c["path"]), "how": c.get("status") or "changed"})
+    except Exception:  # noqa: BLE001
+        pass
+    out = []
+    for rel, row in found.items():
+        if any(part in HIDE or part.startswith(".") for part in Path(rel).parts):
+            continue                                   # caches and tool folders are not the user's files
+        try:
+            f = _inside(root, rel)
+            if f.is_file():
+                out.append(row | {"size": f.stat().st_size})
+        except (ValueError, OSError):
+            continue
+    return out[:200]
+
+
+def session_connectors(s) -> dict:
+    """The MCP servers enabled for this session, and which ones its tool calls actually used (names mcp__server__tool)."""
+    used: dict[str, dict] = {}
+    with s.lock:
+        evs = list(s.events)
+    for e in evs:
+        if e.get("type") == "tool_start" and str(e.get("name") or "").startswith("mcp__"):
+            parts = str(e["name"]).split("__", 2)
+            if len(parts) == 3:
+                u = used.setdefault(parts[1], {"calls": 0, "tools": []})
+                u["calls"] += 1
+                if parts[2] not in u["tools"]:
+                    u["tools"].append(parts[2])
+    st = []
+    try:
+        st = s.mcp.status() if getattr(s, "mcp", None) else []
+    except Exception:  # noqa: BLE001
+        pass
+    rows = [{"name": r["name"], "status": r["status"], "tools": len(r.get("tools") or []),
+             "error": r.get("error") or "", "used": used.get(r["name"], {}).get("calls", 0)}
+            for r in st if r["status"] != "disabled"]
+    known = {r["name"] for r in rows}
+    rows += [{"name": n, "status": "not listed", "tools": 0, "error": "", "used": u["calls"]}
+             for n, u in used.items() if n not in known]
+    rows.sort(key=lambda r: (-r["used"], r["name"]))
+    return {"servers": rows, "used": sorted(used)}
+
+
+def session_background(s, root: str) -> dict:
+    """What is running for this session: sub-agents (from its delegation events), the scheduled task that started
+    it, and terminal commands run in its folder, with how long each has run. `finished` counts the ones that ended."""
+    now = time.time()
+    busy = getattr(s, "state", "") in ("working", "waiting")
+    with s.lock:
+        evs = list(s.events)
+    subs: dict[str, dict] = {}
+    for e in evs:
+        if e.get("type") != "subagent" or not e.get("sid"):
+            continue
+        r = subs.setdefault(e["sid"], {"kind": "subagent", "id": e["sid"], "title": e.get("title") or "Sub-agent",
+                                       "t0": e.get("t") or now, "t1": None})
+        if e.get("kind") == "done":
+            r["t1"] = e.get("t") or now
+    running, finished = [], 0
+    for r in subs.values():
+        if r["t1"] is None and busy:
+            running.append(r | {"elapsed": round(now - r["t0"], 1)})
+        else:
+            finished += 1
+    for t in list(TERMS.values()):
+        if t.get("cwd") != root:
+            continue
+        if t["rc"] is None:
+            running.append({"kind": "terminal", "id": t["id"], "title": t["command"][:120],
+                            "elapsed": round(now - t["start"], 1)})
+        else:
+            finished += 1
+    if getattr(s, "scheduled", None):
+        sch = s.scheduled
+        row = {"kind": "scheduled", "id": s.id, "title": sch.get("name") or "Scheduled task",
+               "elapsed": round(now - (getattr(s, "t_turn", None) or now), 1)}
+        if busy:
+            running.append(row)
+        else:
+            finished += 1
+    return {"running": running, "finished": finished}
+
+
+def session_bg_stop(sid: str, kind: str, ident: str) -> dict:
+    from meshpool_harness.ui import agent_api as A
+    s = A.LIVE.get(sid)
+    if not s:
+        raise KeyError(sid)
+    if kind == "terminal":
+        if TERMS.get(ident, {}).get("cwd") != s.workdir:
+            raise ValueError("That command is not part of this session.")
+        term_stop(ident)
+    elif kind == "subagent":
+        for d in list(getattr(s.agent, "_delegations", {}).values()):
+            with d.lock:
+                rec = d.children.get(ident)
+            if rec:
+                rec["stop"] = True
+                ag = rec.get("agent")
+                if ag is not None:
+                    ag.stop()
+                break
+        else:
+            raise ValueError("That sub-agent has already finished.")
+    elif kind == "scheduled":
+        s.stop()
+    else:
+        raise ValueError("Unknown task.")
+    return session_background(s, s.workdir)
+
+
+def _session_of(sid: str):
+    from meshpool_harness.ui import agent_api as A
+    s = A.LIVE.get(sid)
+    if not s:
+        raise KeyError(sid)
+    return s
+
+
+def session_panel(sid: str) -> dict:
+    """Everything the session side panel shows that is local and quick: where it runs, the repository and branch,
+    context fill, connectors (enabled and used), files made, background tasks and the working-tree summary. The
+    pull request and other open PRs come from session_pr (network), so this answers at once."""
+    s = _session_of(sid)
+    root = s.workdir
+    out = {"id": sid, "context": context_info(s), "connectors": session_connectors(s),
+           "background": session_background(s, root), "state": s.state}
+    managed = is_managed(root)
+    env = {"where": "workspace" if managed else "computer",
+           "label": "Managed workspace on this computer" if managed else "This computer",
+           "managed": managed, "folder": "" if managed else root, "name": Path(root).name}
+    out["environment"] = env
+    out["repo"], out["branch"], out["tree"] = None, None, {"files": 0, "added": 0, "removed": 0}
+    try:
+        r = Path(root)
+        g = git_status(root)
+    except (ValueError, OSError):
+        g = {"repo": False}
+    if g.get("repo"):
+        slug = g.get("github") or ""
+        out["repo"] = {"slug": slug, "url": f"https://github.com/{slug}" if slug else "", "remote": bool(g.get("remote"))}
+        if managed and slug:
+            env["name"] = slug
+        out["branch"] = {"name": g["branch"], "branches": g["branches"], "ahead": g["ahead"], "behind": g["behind"],
+                         "upstream": g["upstream"]}
+        add = rem = 0
+        for line in _git(r, "diff", "--numstat", "HEAD", check=False).splitlines():
+            a_, d_ = (line.split("\t") + ["0", "0"])[:2]
+            add += int(a_) if a_.isdigit() else 0
+            rem += int(d_) if d_.isdigit() else 0
+        out["tree"] = {"files": g["dirty"], "added": add, "removed": rem}
+    out["outputs"] = session_outputs(s, Path(root))
+    return out
+
+
+def session_pr(sid: str) -> dict:
+    """The pull request for the session's current branch (title, number, size, draft state, checks) and the
+    repository's other open pull requests. GitHub only; every failure is reported in `error`, never raised."""
+    s = _session_of(sid)
+    root = s.workdir
+    out = {"available": False, "pr": None, "others": [], "error": ""}
+    try:
+        slug, token = _repo(root)
+        branch = git_status(root).get("branch", "")
+    except ValueError as e:
+        out["error"] = str(e)
+        return out
+    out.update(available=True, slug=slug, connected=bool(token), branch=branch)
+    try:
+        owner = slug.split("/")[0]
+        prs = _gh_api(f"/repos/{slug}/pulls?head={owner}:{urllib.parse.quote(branch)}&state=open&per_page=1", token)
+        if prs:
+            p = _gh_api(f"/repos/{slug}/pulls/{prs[0]['number']}", token)
+            row = _pr_row(p)
+            checks = _checks_for(slug, row["sha"], token)
+            out["pr"] = {k: row[k] for k in ("number", "title", "url", "state", "draft", "base", "head")} | {
+                "additions": p.get("additions", 0), "deletions": p.get("deletions", 0),
+                "changed_files": p.get("changed_files", 0), "checks": _verdict(checks),
+                "failing": [c["name"] for c in checks if c["conclusion"] in ("failure", "timed_out", "cancelled")][:5],
+                "can_ready": bool(token) and bool(row["draft"])}
+        others = _gh_api(f"/repos/{slug}/pulls?state=open&sort=updated&direction=desc&per_page=8", token)
+        out["others"] = [{"number": o["number"], "title": o["title"], "url": o["html_url"],
+                          "draft": bool(o.get("draft")), "head": o["head"]["ref"]}
+                         for o in others if not out["pr"] or o["number"] != out["pr"]["number"]][:6]
+    except ValueError as e:
+        out["error"] = str(e)
+    return out

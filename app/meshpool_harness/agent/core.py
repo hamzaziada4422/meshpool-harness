@@ -1506,7 +1506,7 @@ class Agent:
         for k, v in d.items():
             turn[k] += v
             self.usage[k] += v
-        self.emit({"type": "usage", **d})
+        self.emit({"type": "usage", "aux": True, **d})   # a side call (review): not the chat's context size
         return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
     def _trace_note(self, tool: str, arg: str) -> None:
