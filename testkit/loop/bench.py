@@ -59,6 +59,12 @@ def load_suites(names: list[str]) -> list[dict]:
 
 
 def setup_workdir(task: dict) -> str:
+    if task.get("repo"):                               # a real repository at a commit (swe_local.py)
+        import swe_local
+        d = tempfile.mkdtemp(prefix=f"mhloop-{task['id']}-")
+        os.rmdir(d)
+        swe_local.worktree(task, d)
+        return d
     d = tempfile.mkdtemp(prefix=f"mhloop-{task['id']}-")
     for rel, body in (task.get("files") or {}).items():
         p = Path(d) / rel
@@ -82,6 +88,12 @@ def setup_workdir(task: dict) -> str:
 def grade(task: dict, answer: str, workdir: str) -> tuple[bool, str]:
     """Code-graded: the answer's facts and length, or the task's own check command in its folder."""
     g = task["grade"]
+    if g.get("swe"):                                   # official SWE-bench tests, applied only now
+        import swe_local
+        try:
+            return swe_local.grade(task, workdir)
+        except subprocess.TimeoutExpired:
+            return False, "tests timed out"
     words = len(re.findall(r"\S+", answer or ""))
     if "max_words" in g and words > g["max_words"]:
         return False, f"too long ({words} words > {g['max_words']})"
@@ -131,6 +143,9 @@ def child(task_json: str, arm: str, out_path: str) -> None:
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
     Path(out_path).write_text(json.dumps(row))
+    if task.get("repo"):
+        import swe_local
+        swe_local.drop_worktree(task, wd)
     shutil.rmtree(wd, ignore_errors=True)
 
 
@@ -305,6 +320,8 @@ def run(args) -> int:
                 env["MH_MODEL"] = model
             if args.meter_port:
                 env["MESHPOOL_BASE_URL"] = f"http://127.0.0.1:{args.meter_port}/m/{task['id']}/{label}/{rep}/v1"
+            if task.get("path_prepend"):                 # the task's own Python first on PATH, for every harness
+                env["PATH"] = task["path_prepend"] + os.pathsep + env.get("PATH", "")
             home = tempfile.mkdtemp(prefix="mhhome-")    # one data folder per run: agents never share state
             env["MESHPOOL_HOME"] = home
             if arm == "routed-fast" and args.fast_model:
