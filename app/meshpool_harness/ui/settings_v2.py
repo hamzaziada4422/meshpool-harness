@@ -92,9 +92,41 @@ def capabilities() -> list[dict]:
             on = (C.read().get(c["env"]) or os.environ.get(c["env"], "1")) != "0"
         else:
             on = profile()["plan_first"]
-        out.append({"id": c["id"], "name": c["name"], "desc": c["desc"], "on": on, "advanced": bool(c.get("advanced")),
-                    "available": on is not None})
+        row = {"id": c["id"], "name": c["name"], "desc": c["desc"], "on": on, "advanced": bool(c.get("advanced")),
+               "available": on is not None}
+        if c["id"] == "browser":
+            row["browser_use"] = browser_use()              # which browser: Meshpool's, the installed one, or attached
+        if c["id"] == "computer":
+            row["computer_status"] = computer_status()      # what is missing (macOS permissions, Windows lock, Linux)
+        out.append(row)
     return out
+
+
+def browser_use() -> dict:
+    """{mode, modes[{id, name, desc, available, detail}], cdp_url, installed[...]}: the "Which browser" setting."""
+    from meshpool_harness import browser_use as BU
+    return BU.describe()
+
+
+def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = None) -> dict:
+    """Save which browser browser use drives (meshpool, installed, attach), the debugging address for attach and, for
+    installed, which of chrome, edge, brave (empty: the first found). New chats use it."""
+    from meshpool_harness import browser_use as BU
+    vals = {"MH_BROWSER_USE": str(mode or "meshpool").strip().lower()}
+    if cdp_url is not None:
+        vals["MH_BROWSER_CDP_URL"] = str(cdp_url).strip()
+    if app is not None:
+        vals["MH_BROWSER_APP"] = str(app).strip().lower()
+    BU.validate(vals)
+    C.write(vals)
+    for k, v in vals.items():
+        os.environ[k] = v
+    return browser_use()
+
+
+def computer_status() -> dict:
+    from meshpool_harness.agent import computer_mcp_server as CU
+    return CU.computer_status()
 
 
 def set_capability(cid: str, on: bool) -> list[dict]:

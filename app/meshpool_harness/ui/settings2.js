@@ -232,12 +232,15 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
     } else if (sec === "caps") {
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
       const mode = get0("MH_AGENT_PERMISSIONS") || "ask";
+      const bu = (feat.features.find(f => f.id === "browser") || {}).browser_use;
       const row = f => toggleRow(f.id, f.name, f.desc, f.on, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : "", !f.available);
       b.innerHTML = `${close}<h3>Capabilities</h3><p class="lead">What Meshpool can do for you. Changes apply to new chats; chats already open keep what they started with.</p>
         <ul class="rows2" id="capL">${feat.features.filter(f => !f.advanced).map(row).join("")}</ul>
         <h3 style="font-size:16px;margin:20px 0 4px">Always available</h3><p class="lead">Making Word documents, slides, spreadsheets and PDFs, reading your files, and running scripts are part of Meshpool. Meshpool asks first, unless you change that here.</p>
         <label class="field"><span>Editing files and running commands</span><select id="capMode">${Object.entries(MODES).map(([k, [lb, d]]) => `<option value="${k}" ${k === mode ? "selected" : ""}>${lb}: ${d.toLowerCase()}</option>`).join("")}</select><small>The starting point for new chats. You can change it for one chat from the settings button next to the message box.</small></label>
         <label class="field"><span>Harness for new chats</span><select id="capHarness"><option value="meshpool-auto">Auto (recommended)</option>${harnessChoices().map(h => `<option value="${esc(h.id)}" ${h.id === store("harness_default") ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select><small>Auto picks the agent that suits each request. Choose one here to use it for every new chat; you can still change it for one chat from the model menu.</small></label>
+        ${bu ? `<label class="field"><span>Browser for browser use</span><select id="capBrowser">${bu.modes.map(m => `<option value="${m.id}" ${m.id === bu.mode ? "selected" : ""} ${m.available ? "" : "disabled"}>${esc(m.name)}${m.available ? "" : " (not found)"}</option>`).join("")}</select><small id="capBrowserD"></small></label>
+        <label class="field" id="capCdpW"><span>Debugging address</span><input id="capCdp" value="${esc(bu.cdp_url)}" placeholder="${esc(bu.default_cdp_url)}"><small>The address your browser listens on, from --remote-debugging-port.</small></label>` : ""}
         <h3 style="font-size:16px;margin:20px 0 4px">Advanced</h3>
         <ul class="rows2">${feat.features.filter(f => f.advanced).map(row).join("")}</ul>
         <p class="lead" style="margin-top:12px">Which agent does the work, and how each one is set up: <button class="linkbtn" data-go="harnesses">Agents</button></p><div class="res" id="capRes"></div>`;
@@ -247,6 +250,11 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       });
       $("#capHarness").onchange = () => { const v = $("#capHarness").value; store("harness_default", v === "meshpool-auto" ? null : v); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } res("capRes", "ok", "Saved. New chats use it."); };
       $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = $("#capMode").value; store("mode", S.draft.mode); renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
+      if (bu) {
+        const showBu = () => { const m = bu.modes.find(x => x.id === $("#capBrowser").value) || {}; $("#capBrowserD").textContent = `${m.desc || ""} (${m.detail || ""})`; $("#capCdpW").hidden = m.id !== "attach"; };
+        $("#capBrowser").onchange = $("#capCdp").onchange = async () => { showBu(); try { await post("/api/browser-use", {mode: $("#capBrowser").value, cdp_url: $("#capCdp").value}); res("capRes", "ok", "Saved. New chats use it."); } catch (e) { res("capRes", "bad", e.message); } };
+        showBu();
+      }
       $$("[data-go]", b).forEach(x => x.onclick = () => renderSection(x.dataset.go));
     } else if (sec === "billing") {
       const sp = await api("/api/spend").catch(() => ({billing_url: "https://meshpool.ai"}));
