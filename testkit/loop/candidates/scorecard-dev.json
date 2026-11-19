@@ -1,0 +1,1052 @@
+{
+ "_about": "fitted by testkit/loop/harness_scorecard.py",
+ "_version": 1,
+ "*": {
+  "ambiguous-build": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.002301,
+    "median_s": 11.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003796,
+    "median_s": 62.7
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.004453,
+    "median_s": 40.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003856,
+    "median_s": 39.8
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003336,
+    "median_s": 31.5
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.001896,
+    "median_s": 75.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.003196,
+    "median_s": 17.6
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.002994,
+    "median_s": 9.9
+   }
+  ],
+  "code.build": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005078,
+    "median_s": 55.7
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003431,
+    "median_s": 36.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.006541,
+    "median_s": 82.3
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.010301,
+    "median_s": 96.2
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.010164,
+    "median_s": 77.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003445,
+    "median_s": 28.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.006774,
+    "median_s": 51.4
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007795,
+    "median_s": 29.3
+   }
+  ],
+  "code.build.algorithm": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005894,
+    "median_s": 52.8
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.007208,
+    "median_s": 50.8
+   },
+   {
+    "harness": "hermes",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.014664,
+    "median_s": 150.4
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.01293,
+    "median_s": 164.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.010533,
+    "median_s": 166.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.017077,
+    "median_s": 259.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.010197,
+    "median_s": 55.6
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.019653,
+    "median_s": 135.7
+   }
+  ],
+  "code.build.feature": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002859,
+    "median_s": 16.7
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002631,
+    "median_s": 25.0
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.010178,
+    "median_s": 67.9
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.005607,
+    "median_s": 82.7
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.005045,
+    "median_s": 43.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002626,
+    "median_s": 44.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 0,
+    "tasks": 1,
+    "cost_per_task": 0.010167,
+    "median_s": 25.8
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.00435,
+    "median_s": 18.1
+   }
+  ],
+  "code.debug": [
+   {
+    "harness": "codex",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004691,
+    "median_s": 31.8
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005331,
+    "median_s": 19.7
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.008144,
+    "median_s": 59.9
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00395,
+    "median_s": 21.5
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003683,
+    "median_s": 41.4
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.002534,
+    "median_s": 15.5
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004262,
+    "median_s": 27.4
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.011262,
+    "median_s": 31.6
+   }
+  ],
+  "code.debug.perf": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.008226,
+    "median_s": 74.5
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003956,
+    "median_s": 65.1
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.025603,
+    "median_s": 600.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006661,
+    "median_s": 437.4
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.00617,
+    "median_s": 339.6
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00542,
+    "median_s": 400.9
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005267,
+    "median_s": 31.6
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.004316,
+    "median_s": 51.8
+   }
+  ],
+  "code.refactor": [
+   {
+    "harness": "codex",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004475,
+    "median_s": 44.0
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003951,
+    "median_s": 34.1
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00743,
+    "median_s": 69.1
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006978,
+    "median_s": 44.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007169,
+    "median_s": 52.7
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004192,
+    "median_s": 51.4
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.005622,
+    "median_s": 43.5
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005888,
+    "median_s": 49.1
+   }
+  ],
+  "code.test": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.005861,
+    "median_s": 58.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007466,
+    "median_s": 110.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.00694,
+    "median_s": 84.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.038789,
+    "median_s": 206.1
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.035931,
+    "median_s": 212.2
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.039879,
+    "median_s": 340.1
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.012643,
+    "median_s": 63.3
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.010216,
+    "median_s": 41.8
+   }
+  ],
+  "data": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.004315,
+    "median_s": 24.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004681,
+    "median_s": 24.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.006975,
+    "median_s": 65.2
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.003646,
+    "median_s": 28.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007431,
+    "median_s": 76.8
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.002564,
+    "median_s": 25.5
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.009004,
+    "median_s": 37.3
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006985,
+    "median_s": 23.3
+   }
+  ]
+ },
+ "deepseek-v4.1-flash": {
+  "ambiguous-build": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.002301,
+    "median_s": 11.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003796,
+    "median_s": 62.7
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.004453,
+    "median_s": 40.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003856,
+    "median_s": 39.8
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.003336,
+    "median_s": 31.5
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 2,
+    "cost_per_task": 0.001896,
+    "median_s": 75.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.003196,
+    "median_s": 17.6
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 2,
+    "cost_per_task": 0.002994,
+    "median_s": 9.9
+   }
+  ],
+  "code.build": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005078,
+    "median_s": 55.7
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003431,
+    "median_s": 36.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.006541,
+    "median_s": 82.3
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.010301,
+    "median_s": 96.2
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.010164,
+    "median_s": 77.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003445,
+    "median_s": 28.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.006774,
+    "median_s": 51.4
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007795,
+    "median_s": 29.3
+   }
+  ],
+  "code.build.algorithm": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005894,
+    "median_s": 52.8
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.007208,
+    "median_s": 50.8
+   },
+   {
+    "harness": "hermes",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.014664,
+    "median_s": 150.4
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.01293,
+    "median_s": 164.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.010533,
+    "median_s": 166.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.017077,
+    "median_s": 259.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.010197,
+    "median_s": 55.6
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.019653,
+    "median_s": 135.7
+   }
+  ],
+  "code.build.feature": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002859,
+    "median_s": 16.7
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002631,
+    "median_s": 25.0
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.010178,
+    "median_s": 67.9
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.005607,
+    "median_s": 82.7
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.005045,
+    "median_s": 43.3
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.002626,
+    "median_s": 44.7
+   },
+   {
+    "harness": "opencode",
+    "solved": 0,
+    "tasks": 1,
+    "cost_per_task": 0.010167,
+    "median_s": 25.8
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 1,
+    "cost_per_task": 0.00435,
+    "median_s": 18.1
+   }
+  ],
+  "code.debug": [
+   {
+    "harness": "codex",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004691,
+    "median_s": 31.8
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005331,
+    "median_s": 19.7
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.008144,
+    "median_s": 59.9
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00395,
+    "median_s": 21.5
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003683,
+    "median_s": 41.4
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.002534,
+    "median_s": 15.5
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004262,
+    "median_s": 27.4
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.011262,
+    "median_s": 31.6
+   }
+  ],
+  "code.debug.perf": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.008226,
+    "median_s": 74.5
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003956,
+    "median_s": 65.1
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.025603,
+    "median_s": 600.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006661,
+    "median_s": 437.4
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.00617,
+    "median_s": 339.6
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00542,
+    "median_s": 400.9
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005267,
+    "median_s": 31.6
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.004316,
+    "median_s": 51.8
+   }
+  ],
+  "code.refactor": [
+   {
+    "harness": "codex",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004475,
+    "median_s": 44.0
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.003951,
+    "median_s": 34.1
+   },
+   {
+    "harness": "hermes",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.00743,
+    "median_s": 69.1
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006978,
+    "median_s": 44.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007169,
+    "median_s": 52.7
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004192,
+    "median_s": 51.4
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.005622,
+    "median_s": 43.5
+   },
+   {
+    "harness": "pi",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.005888,
+    "median_s": 49.1
+   }
+  ],
+  "code.test": [
+   {
+    "harness": "codex",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.005861,
+    "median_s": 58.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007466,
+    "median_s": 110.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.00694,
+    "median_s": 84.0
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.038789,
+    "median_s": 206.1
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.035931,
+    "median_s": 212.2
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.039879,
+    "median_s": 340.1
+   },
+   {
+    "harness": "opencode",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.012643,
+    "median_s": 63.3
+   },
+   {
+    "harness": "pi",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.010216,
+    "median_s": 41.8
+   }
+  ],
+  "data": [
+   {
+    "harness": "codex",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.004315,
+    "median_s": 24.6
+   },
+   {
+    "harness": "codex-routed",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.004681,
+    "median_s": 24.2
+   },
+   {
+    "harness": "hermes",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.006975,
+    "median_s": 65.2
+   },
+   {
+    "harness": "meshpool:full-noplan",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.003646,
+    "median_s": 28.3
+   },
+   {
+    "harness": "meshpool:full-noplan-stop",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.007431,
+    "median_s": 76.8
+   },
+   {
+    "harness": "meshpool:lean-stop",
+    "solved": 1,
+    "tasks": 3,
+    "cost_per_task": 0.002564,
+    "median_s": 25.5
+   },
+   {
+    "harness": "opencode",
+    "solved": 3,
+    "tasks": 3,
+    "cost_per_task": 0.009004,
+    "median_s": 37.3
+   },
+   {
+    "harness": "pi",
+    "solved": 2,
+    "tasks": 3,
+    "cost_per_task": 0.006985,
+    "median_s": 23.3
+   }
+  ]
+ }
+}
