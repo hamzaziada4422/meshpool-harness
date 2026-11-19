@@ -183,21 +183,23 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .work>summary .chev{transition:transform .12s}
 .work[open]>summary .chev{transform:rotate(90deg)}
 .work .rows{border-left:1px solid var(--line);margin:2px 0 4px 10px;padding:2px 0}
-.tool{font-size:var(--fs-s)}
+.tool{font-size:var(--fs-s);color:var(--ink-3)}   /* tool activity reads as quiet metadata, not content */
 .tool>summary{list-style:none;cursor:pointer;display:flex;gap:8px;align-items:center;padding:4px 12px;border-radius:0 var(--r-s) var(--r-s) 0}
 .tool>summary::-webkit-details-marker{display:none}
 .tool>summary:hover{background:var(--hover)}
 .tool .ic{width:14px;height:14px;color:var(--ink-3);flex:none}
-.tool .tn{color:var(--ink-2);font-weight:500;white-space:nowrap}
+.tool .tn{color:var(--ink-3);font-weight:400;white-space:nowrap}
 .tool .ts{font-family:var(--mono);font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0}
 .tool .st{font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap}
 .tool .st:empty{display:none}
-.tool .st.bad{color:var(--del)} .tool .st.run{color:var(--pool-text)}
+.tool .st.bad{color:var(--del)} .tool .st.run{color:var(--ink-3)}
 .tool pre{margin:2px 12px 8px 34px;background:var(--fill);border-radius:var(--r-s);padding:8px 10px;max-height:300px;overflow:auto;font:var(--fs-xs)/1.5 var(--mono);white-space:pre}
 .d-add{color:var(--add)} .d-del{color:var(--del)} .d-hunk{color:var(--ink-3)}
 
 /* approvals and questions */
-.appr{border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));background:var(--warn-bg);border-radius:var(--r-m);padding:12px 14px;margin:12px 0}
+.appr{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-m);padding:12px 14px;margin:12px 0;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+.appr .btn.danger{border-color:var(--line);color:var(--ink-2);background:none}   /* Deny is a quiet choice, not an alarm */
+.appr .btn.danger:hover{color:var(--del);background:var(--hover)}
 .appr b{display:block;margin-bottom:8px;font-weight:600}
 .appr pre{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;max-height:280px;overflow:auto;font:var(--fs-xs)/1.5 var(--mono);margin:0 0 12px;white-space:pre}
 .appr .acts{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
