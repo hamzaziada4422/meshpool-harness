@@ -194,6 +194,7 @@
   // eslint-disable-next-line no-global-assign
   renderSection = async function (sec) {
     if (sec !== "company") return base(sec);
+    if (typeof markSettings === "function") markSettings(sec);
     const b = $("#mbody");
     const close = `<button class="iconbtn mclose" aria-label="Close settings">${ICON.x}</button>`;
     try { CO.data = await api("/api/company"); }
