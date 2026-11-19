@@ -173,7 +173,13 @@ def chromium(app_dir: Path, plat: str):
     host_ok = (plat == "win") == (os.name == "nt") and (plat == "win" or sys.platform == "darwin")
     py = str(exe) if host_ok and exe.exists() else sys.executable
     env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=str(dest), PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=PW_PLATFORM[plat])
-    r = subprocess.run([py, "-m", "playwright", "install", "chromium", "--no-shell"], env=env)
+    import time
+    for attempt in range(4):                                  # a download that times out once must not stop a release
+        r = subprocess.run([py, "-m", "playwright", "install", "chromium", "--no-shell"], env=env)
+        if r.returncode == 0:
+            break
+        print(f"build_all: Chromium download failed (attempt {attempt + 1} of 4), retrying", flush=True)
+        time.sleep(15 * (attempt + 1))
     if r.returncode != 0:
         sys.exit(f"build_all: could not vendor Chromium for {plat} (python used: {py})")
     full = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file()) // 1_000_000
