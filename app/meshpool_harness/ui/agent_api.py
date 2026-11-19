@@ -971,8 +971,14 @@ def create(body: dict) -> dict:
             model = None                            # a model this agent cannot run: it uses its own default
     except (KeyError, ValueError):
         pass
+    plan_first = False
+    try:                                            # Settings, "Plan first": every new chat starts with a plan
+        from meshpool_harness.ui import settings_v2 as SV2
+        plan_first = SV2.profile()["plan_first"]
+    except Exception:  # noqa: BLE001
+        pass
     s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                kind=kind, model=model, plan=bool(body.get("plan")))
+                kind=kind, model=model, plan=bool(body.get("plan")) or plan_first)
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
