@@ -1406,8 +1406,8 @@ function progressUpdate() {
   if (!pr.items.length) { ol?.remove(); setHTML(box, `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`); }
   else {
     if (!ol) { box.innerHTML = ""; box._h = null; ol = document.createElement("ol"); ol.className = "stepl"; box.appendChild(ol); }
-    reconcile(ol, pr.items, it => it.key, it => { const li = document.createElement("li"); li.className = it.status; li.innerHTML = `${icon(it.status)}<span></span>`; $("span:last-child", li).textContent = it.text; li.dataset.st = it.status; return li; },
-      (li, it) => { if (li.dataset.st !== it.status) { li.dataset.st = it.status; li.className = it.status; $(".pi", li).outerHTML = icon(it.status); } setTxt(li.lastElementChild, it.text); });
+    reconcile(ol, pr.items, it => it.key, it => { const li = document.createElement("li"); li.className = it.status; li.innerHTML = `${icon(it.status)}<span class="stx"></span>`; $(".stx", li).textContent = it.text; li.dataset.st = it.status; return li; },
+      (li, it) => { if (li.dataset.st !== it.status) { li.dataset.st = it.status; li.className = it.status; $(".pi", li).outerHTML = icon(it.status); } setTxt($(".stx", li), it.text); });   // .stx: a running icon has its own inner span
   }
   const fbox = $("#pgFiles", body); let ul = $("ul", fbox);
   if (!outs.length) { ul?.remove(); setHTML(fbox, `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`); }
