@@ -170,8 +170,10 @@ def models(refresh: bool = False) -> dict:
     else:
         rows, err = [], ""
         try:
-            req = urllib.request.Request(base + "/models", headers={"Authorization": f"Bearer {key}",
-                                                                    "User-Agent": "Meshpool"})
+            from meshpool_harness import providers as _PV
+            auth = ({"x-api-key": key, "anthropic-version": "2023-06-01"} if _PV.key_wire() == "anthropic"
+                    else {"Authorization": f"Bearer {key}"})
+            req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
