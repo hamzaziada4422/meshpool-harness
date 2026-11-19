@@ -34,12 +34,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-APP = HERE.parents[1] / "app"
+APP = Path(os.environ["MH_BENCH_APP"]) if os.environ.get("MH_BENCH_APP") else HERE.parents[1] / "app"
 LOCK = threading.Lock()
 ARMS = {
     "base": {"MH_HROUTER": "0", "MH_SKILLS": "full"},
     "routed": {"MH_HROUTER": "1", "MH_SKILLS": ""},
     "routed-fast": {"MH_HROUTER": "1", "MH_SKILLS": ""},
+    "v1": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-v1" / "app")},
     "routed-full": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_LEAN_TOOLS": "0"},   # every tool: the lean A/B
 }
 
@@ -88,6 +89,9 @@ def setup_workdir(task: dict) -> str:
 def grade(task: dict, answer: str, workdir: str) -> tuple[bool, str]:
     """Code-graded: the answer's facts and length, or the task's own check command in its folder."""
     g = task["grade"]
+    if g.get("dabench"):                               # InfiAgent-DABench's own closed-form rule
+        import dabench
+        return dabench.grade(task, answer)
     if g.get("swe"):                                   # official SWE-bench tests, applied only now
         import swe_local
         try:
