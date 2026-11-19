@@ -59,7 +59,18 @@ OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp",
             "tagline": "The open-source coding agent, with its own tools and plans",
             "description": ("OpenCode, the popular open-source coding agent, on your Meshpool key, another API key or "
                             "your ChatGPT sign-in. Uses your connected apps and skills.")}
-RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", "opencode", *LEGACY}
+# Claude Code, over ACP through the Claude agent adapter. It runs under the user's own Claude Code sign-in on this
+# computer (`claude`); Meshpool never reads that sign-in, only starts the agent, and the agent talks to Anthropic as
+# the user's own Claude Code. Listed only when the `claude` command is installed.
+CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.109.0"
+CLAUDE_AGENT = {"id": "claude-agent", "name": "Claude Code", "mode": "code", "type": "acp", "models": "harness",
+                "login": "claude", "command": "npx", "args": ["-y", CLAUDE_ACP], "share_mcp": True,
+                "install": NODE_NOTE,
+                "tagline": "Anthropic's coding agent, on your own Claude Code sign-in",
+                "description": ("Anthropic's Claude Code agent, started the way you run it in a terminal: it uses "
+                                "the Claude Code sign-in already on this computer, never an API key from Meshpool.")}
+RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", "opencode", "claude-agent",
+            *LEGACY}
 ID_RE = r"[A-Za-z0-9_.-]{1,60}"
 HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
@@ -307,6 +318,8 @@ def load_all() -> list[dict]:
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
     out.append(_npx_agent(CODEX, signed_in=signed_in(CODEX["login"])))
     out.append(_npx_agent(OPENCODE))
+    if shutil.which("claude"):                       # Claude Code is installed (and signed in by the user themselves)
+        out.append(_npx_agent(CLAUDE_AGENT))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
