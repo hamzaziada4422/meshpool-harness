@@ -30,8 +30,15 @@ for k in ("HTTP_PROXY","HTTPS_PROXY","http_proxy","https_proxy","ALL_PROXY"): en
 import yaml
 open(home+"/config.yaml","w").write(yaml.safe_dump({"model":{"provider":"custom","base_url":f"http://127.0.0.1:{port}/v1","default":"x","api_key":"k"},"tools":{"tool_search":{"enabled":"off"}},"security":{"allow_lazy_installs":False}}))
 p=subprocess.Popen([sys.executable,"-m","acp_adapter"],cwd=tempfile.mkdtemp(),env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
-out=[]
-def send(o): p.stdin.write(json.dumps(o)+"\n"); p.stdin.flush()
+out=[]; err=[]
+threading.Thread(target=lambda:[err.append(l) for l in p.stderr],daemon=True).start()   # drained, so a chatty stderr cannot block it
+def died(where):
+    try:p.wait(5)
+    except Exception:pass
+    print(f"FAIL: the ACP adapter exited (code {p.poll()}) {where}. Its stderr:\n"+"".join(err)[-4000:]); sys.exit(1)
+def send(o):
+    try:p.stdin.write(json.dumps(o)+"\n"); p.stdin.flush()
+    except OSError: died(f"before {o['method']}")
 def recv(i,t=120):
     end=time.time()+t
     while time.time()<end:
@@ -42,6 +49,7 @@ def recv(i,t=120):
         out.append(m)
         if m.get("id")==i and "method" not in m: return m
 send({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"clientCapabilities":{}}}); r1=recv(1)
+if r1 is None: died("without answering initialize")
 send({"jsonrpc":"2.0","id":2,"method":"session/new","params":{"cwd":os.getcwd(),"mcpServers":[]}}); r2=recv(2,90)
 sid=(r2 or {}).get("result",{}).get("sessionId")
 send({"jsonrpc":"2.0","id":3,"method":"session/prompt","params":{"sessionId":sid,"prompt":[{"type":"text","text":"say hi"}]}}); r3=recv(3,120)
@@ -51,5 +59,5 @@ print("prompt result:",json.dumps(r3)[:160],"| text:",text[:60],"| model calls:"
 p.stdin.close()
 try:p.wait(10)
 except Exception:p.kill()
-if not ok: print("STDERR:",p.stderr.read()[-1500:])
+if not ok: print("STDERR:","".join(err)[-4000:])
 print("OK" if ok else "FAIL"); sys.exit(0 if ok else 1)

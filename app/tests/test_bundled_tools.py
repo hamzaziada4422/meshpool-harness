@@ -343,3 +343,23 @@ def test_convert_document_opens_a_pdf_as_text_for_word_and_refuses_what_cannot_w
     (tmp_path / "b.docx").write_bytes(b"x")
     msg, err = O.convert_document(str(tmp_path / "b.docx"), "pdf")
     assert not err and not any(a.startswith("--infilter") for a in calls[-1])
+
+
+def test_windows_build_gives_mingit_a_bash_exe(tmp_path, monkeypatch):
+    """MinGit ships only usr/bin/sh.exe (the MSYS2 bash binary). Without a bash.exe the agents' shell fell back to
+    PowerShell on Windows; the build copies sh.exe to bash.exe, and the app takes sh.exe if a bash.exe is missing."""
+    ba = _load_build_all()
+    deps = tmp_path / "deps"
+    (deps / "git-win" / "usr" / "bin").mkdir(parents=True)
+    (deps / "git-win" / "usr" / "bin" / "sh.exe").write_bytes(b"MZbash")
+    monkeypatch.setattr(ba, "DEPS", deps)
+    root = tmp_path / "Meshpool"
+    root.mkdir()
+    ba.git_win(root)
+    assert (root / "git" / "usr" / "bin" / "bash.exe").read_bytes() == b"MZbash"
+
+    from meshpool_harness import bundled
+    monkeypatch.setattr(bundled, "root", lambda: root)
+    assert bundled.bundled_bash().endswith("bash.exe")
+    (root / "git" / "usr" / "bin" / "bash.exe").unlink()
+    assert bundled.bundled_bash().endswith("sh.exe")

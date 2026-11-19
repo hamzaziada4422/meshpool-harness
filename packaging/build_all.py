@@ -189,6 +189,14 @@ def git_win(root: Path):
         shutil.copytree(DEPS / "git-win", root / "git")
     else:
         _bt().fetch_mingit(CACHE, root / "git")
+    # MinGit has no bash.exe, only usr/bin/sh.exe, which is the same MSYS2 bash binary (named sh it runs in POSIX
+    # mode). A copy named bash.exe is full bash: the agents' shell (config.find_bash) needs it, else Windows falls
+    # back to PowerShell and every bash command the model writes fails.
+    ub = root / "git" / "usr" / "bin"
+    if not (ub / "bash.exe").exists():
+        if not (ub / "sh.exe").is_file():
+            sys.exit("build_all: MinGit has neither usr/bin/bash.exe nor usr/bin/sh.exe; the agents would have no bash")
+        shutil.copy2(ub / "sh.exe", ub / "bash.exe")
 
 
 def git_mac(root: Path, arch: str):

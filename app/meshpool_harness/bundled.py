@@ -64,9 +64,10 @@ def bundled_git() -> str | None:
 
 
 def bundled_bash() -> str | None:
-    """Windows: the bash inside MinGit (git/usr/bin/bash.exe, or git/bin/bash.exe)."""
+    """Windows: the bash inside MinGit (git/usr/bin/bash.exe, which the build copies from MinGit's sh.exe; git/bin/
+    bash.exe in a full Git; else sh.exe itself, the same bash running in POSIX mode)."""
     g = root() / "git"
-    for p in (g / "usr" / "bin" / "bash.exe", g / "bin" / "bash.exe"):
+    for p in (g / "usr" / "bin" / "bash.exe", g / "bin" / "bash.exe", g / "usr" / "bin" / "sh.exe"):
         if p.is_file():
             return str(p)
     return None
