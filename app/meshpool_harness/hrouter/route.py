@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from pathlib import Path
 from dataclasses import asdict, dataclass, field
 
 from meshpool_harness import pace as PACE
@@ -71,6 +72,8 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
         fam, why, conf, lane = "chat", "a request for a short snippet", 0.85, "chat"
     elif kind == "code":
         other = {k: v for k, v in fams.items() if k not in ("code", "research")}
+        if repo or langs or any(S.EXT_LANG.get(Path(f).suffix) for f in files):
+            other.pop("docs", None)        # "the sales report is wrong" in a code project is code, not a document
         top = max(other, key=other.get) if other else ""
         if top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
             fam, why, conf = top, f"{top} words in a Code chat", 0.7

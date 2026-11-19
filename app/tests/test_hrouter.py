@@ -452,3 +452,12 @@ def test_a_failing_check_after_a_change_is_not_a_finished_fix(tmp_path, monkeypa
                             {"role": "assistant", "content": "Fixed; check passes."}])
     r = run_task("test_a.py fails, fix it", workdir=str(tmp_path), engine="agent")
     assert r["answer"] == "Fixed; check passes." and "`true` passed" in r["receipt"], r
+
+
+def test_a_report_bug_in_a_code_project_is_code_not_documents(tmp_path):
+    (tmp_path / "report.py").write_text("x = 1\n")
+    (tmp_path / "store.py").write_text("y = 2\n")
+    r = route("The daily sales report puts late-evening sales on the wrong day. Fix it.", kind="code",
+              workdir=str(tmp_path))
+    assert r.family == "code" and r.spec.startswith("code."), r
+    assert route("Make a 10 slide deck on Nvidia", kind="code").spec == "docs"     # no project: still a deck
