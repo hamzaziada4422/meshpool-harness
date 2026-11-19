@@ -1,0 +1,19 @@
+{
+ "default": "full",
+ "assign": {},
+ "profiles": {
+  "full-noplan": {
+   "extends": "full",
+   "plan": "off"
+  },
+  "full-noplan-stop": {
+   "extends": "full",
+   "plan": "off",
+   "methods": "stop"
+  },
+  "lean-stop": {
+   "extends": "lean",
+   "methods": "v2-stop"
+  }
+ }
+}
