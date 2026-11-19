@@ -130,6 +130,21 @@ def list_projects() -> list[dict]:
     return sorted(out, key=lambda r: -float(r.get("updated") or 0))
 
 
+def linked_paths() -> list[str]:
+    """The folders projects are linked to, from project.json alone (list_projects also reads every project's
+    knowledge index, which a file-browsing request must not do each time)."""
+    out = []
+    try:
+        dirs = [p for p in root().iterdir() if p.is_dir() and ID_RX.fullmatch(p.name)]
+    except OSError:
+        return out
+    for d in dirs:
+        link = _meta(d).get("link")
+        if isinstance(link, dict) and link.get("path"):
+            out.append(str(link["path"]))
+    return out
+
+
 def create(name: str, description: str = "", instructions: str = "", link=None, legacy_path: str = "") -> dict:
     name = " ".join((name or "").split())[:NAME_MAX]
     if not name:
@@ -439,7 +454,7 @@ def context_parts(pid: str, task: str = "", instructions_on: bool = True, memory
 # ---------- chats' own folders -----------------------------------------------------------------------------------------
 def new_scratch(pid: str = "") -> str:
     """A private working folder for a chat with no linked folder. In a project, the project's knowledge files are
-    linked into it (knowledge/) so the agent can open them in full."""
+    copied into it (knowledge/) so the agent can open them in full."""
     d = chats_root() / uuid.uuid4().hex[:12]
     d.mkdir(parents=True, exist_ok=True)
     if pid:
@@ -451,10 +466,10 @@ def new_scratch(pid: str = "") -> str:
             if names:
                 (d / "knowledge").mkdir(exist_ok=True)
                 for n in names:
-                    try:
-                        os.link(k / n, d / "knowledge" / n)
-                    except OSError:
+                    try:           # a copy, not a link: an edit by the agent must never reach the project's own file
                         shutil.copy2(k / n, d / "knowledge" / n)
+                    except OSError:
+                        pass
         except (KeyError, ValueError):
             pass
     return str(d.resolve())

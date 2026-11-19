@@ -184,6 +184,9 @@ def test_clone_command_never_carries_the_token(env):
     argv = W.clone_argv("o/r", Path("/dest"))
     assert not any(TOKEN in a for a in argv) and "https://github.com/o/r.git" in argv
     assert "credential.helper=" in argv and any("MESHPOOL_GH_TOKEN" in a for a in argv)
+    # the token helper answers for github.com only, never for another host the remote might be changed to
+    helper = [a for a in argv if "MESHPOOL_GH_TOKEN" in a]
+    assert helper and all(a.startswith("credential.https://github.com.helper=") for a in helper)
     assert W._gh_git_env({})["MESHPOOL_GH_TOKEN"] == TOKEN
     for bad in ("o", "o/r;rm", "../x/y z", "-x/y"):
         with pytest.raises(ValueError):
@@ -227,6 +230,26 @@ def test_git_network_commands_sign_in_only_in_managed_workspaces(env, monkeypatc
     assert "credential.helper=" in calls[0][0] and calls[0][1]["MESHPOOL_GH_TOKEN"] == TOKEN
     assert "credential.helper=" not in calls[1][0] and "MESHPOOL_GH_TOKEN" not in calls[1][1]
     assert not any(TOKEN in a for a in calls[0][0])
+
+
+def test_a_planted_git_hook_never_sees_the_token(env):
+    """The agent can write .git/hooks with bash; push/pull/fetch in a managed workspace run with the token in their
+    environment, so hooks are switched off for them."""
+    ws = W.workspaces_dir() / "o__r"
+    ws.mkdir(parents=True)
+    git(ws, "init", "-q", "-b", "main")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-qm", "init")
+    bare = env / "remote.git"
+    git(env, "init", "-q", "--bare", str(bare))
+    git(ws, "remote", "add", "origin", str(bare))
+    leak = env / "leaked.txt"
+    hook = ws / ".git" / "hooks" / "pre-push"
+    hook.write_text('#!/bin/sh\necho "$MESHPOOL_GH_TOKEN" > "' + str(leak).replace("\\", "/") + '"\n')
+    hook.chmod(0o755)
+    W._git(ws, "push", "origin", "main")
+    assert not leak.exists(), "a hook ran with the token in its environment"
+    assert (bare / "refs" / "heads" / "main").exists()                    # the push itself still worked
+    assert "core.hooksPath" in " ".join(W.clone_argv("o/r", Path("/dest")))
 
 
 def test_branch_create_and_missing(env, monkeypatch):

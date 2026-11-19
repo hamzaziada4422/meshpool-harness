@@ -373,3 +373,38 @@ def test_claude_code_not_offered_in_the_installed_app(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(tmp_path) + ":" + __import__("os").environ.get("PATH", ""))
     monkeypatch.setattr(bundled, "packaged", lambda: True)
     assert PS.claude_code()["found"] is False
+
+
+def test_the_chat_agent_speaks_the_messages_wire_to_an_anthropic_style_endpoint(tmp_path, monkeypatch):
+    """Saving wire=anthropic must change what the agent loop sends, not only the connection test."""
+    from meshpool_harness.agent.core import Agent
+    got = {}
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            got["path"], got["hdr"] = self.path, {k.lower(): v for k, v in self.headers.items()}
+            got["body"] = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            out = json.dumps({"id": "m1", "model": "claude-x", "stop_reason": "end_turn",
+                              "content": [{"type": "text", "text": "hello"}],
+                              "usage": {"input_tokens": 5, "output_tokens": 2}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    monkeypatch.setenv("MESHPOOL_BASE_URL", base)
+    monkeypatch.setenv("MH_API_WIRE", "anthropic")
+    a = Agent(str(tmp_path), mode="auto")
+    resp, streamed = a._post(base, "sk-good-key-1234", {"model": "claude-x", "stream": True, "messages": [
+        {"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]}, True)
+    srv.shutdown()
+    assert got["path"] == "/v1/messages" and got["hdr"]["x-api-key"] == "sk-good-key-1234"
+    assert "authorization" not in got["hdr"] and "stream" not in got["body"]
+    assert got["body"]["system"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
+    assert resp["choices"][0]["message"]["content"] == "hello" and streamed is False

@@ -313,8 +313,10 @@ jobs:
           # uploaded or have its files swapped one by one (a new installer next to the old checksums fails every
           # update until the last file lands). A new version is built as a draft, which the updater ignores, and made
           # public only when every file is up. A version that is already public keeps its files: a rebuild only
-          # refreshes the release page; changed code needs a new version number.
-          if gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null | grep -qx false; then
+          # refreshes the release page; changed code needs a new version number. (A release published by hand on
+          # GitHub, which is what starts this workflow, has no files yet: it still gets them.)
+          if gh release view "$TAG" --json isDraft -q .isDraft 2>/dev/null | grep -qx false \
+             && gh release view "$TAG" --json assets -q '.assets[].name' | grep -qx SHA256SUMS.txt; then
             echo "$TAG is already public: updating the release page only, its files stay as published."
             gh release edit "$TAG" --notes-file packaging/release-notes.md
             exit 0

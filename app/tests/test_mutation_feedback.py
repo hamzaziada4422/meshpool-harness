@@ -93,3 +93,18 @@ def test_hook_off_switch(tmp_path, _agent_env, monkeypatch):
     monkeypatch.setenv("MH_MUTATION", "0")
     a, out = _agent_run(tmp_path)
     assert out == "done"
+
+
+def test_hook_never_runs_project_code_unasked(tmp_path, _agent_env, monkeypatch):
+    """In Supervised mode the user approves every command: the feedback (which runs the tests) must not run."""
+    monkeypatch.delenv("MH_MUTATION", raising=False)
+    (tmp_path / "lib.py").write_text(LIB)
+    (tmp_path / "test_lib.py").write_text(WEAK)
+    a = Agent(str(tmp_path), mode="ask")
+    a.route = Route(spec="code.test", family="code")
+    a.ws.turn_files.add(str(tmp_path / "test_lib.py"))
+    assert a._mutation_feedback() == ""
+    b = Agent(str(tmp_path), mode="auto")
+    b.route = Route(spec="code.test", family="code")
+    b.ws.turn_files.add(str(tmp_path / "test_lib.py"))
+    assert "deliberately broken" in b._mutation_feedback()

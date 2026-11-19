@@ -536,7 +536,7 @@ async function sendNow(interrupt) {
   try {
     if (!S.cur) {
       const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
-      S.draft.plan = false; S.draft.pid = "";
+      S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile

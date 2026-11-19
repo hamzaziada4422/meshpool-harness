@@ -771,16 +771,23 @@ class Terminal:
     def _approve_raw(self, kind: str, title: str, detail: str):
         st = self.st
         rows = detail.splitlines()
-        shown = []
-        for ln in rows[:14]:
+
+        def style(ln):
             if kind == "edit" and ln.startswith("+") and not ln.startswith("+++"):
-                shown.append(st.green(ln))
-            elif kind == "edit" and ln.startswith("-") and not ln.startswith("---"):
-                shown.append(st.red(ln))
-            else:
-                shown.append(st.bold(ln) if kind == "bash" else st.dim(ln))
+                return st.green(ln)
+            if kind == "edit" and ln.startswith("-") and not ln.startswith("---"):
+                return st.red(ln)
+            return st.bold(ln) if kind == "bash" else st.dim(ln)
         if len(rows) > 14:
-            shown.append(st.dim(f"… {len(rows) - 14} more lines"))
+            # a yes must never cover lines the user did not see: the whole text goes to the scrollback, above the menu
+            self.p("")
+            for ln in rows[:200]:
+                self.p("  " + style(ln))
+            if len(rows) > 200:
+                self.p("  " + st.dim(f"… {len(rows) - 200} more lines (not shown; answer No and ask for smaller steps)"))
+            shown = [st.dim(f"The full text ({len(rows)} lines) is above.")]
+        else:
+            shown = [style(ln) for ln in rows]
         what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         i = self.choose(title, shown, ["Yes", f"Yes, and don't ask again for {what} in this session", "No"],
                         hotkeys={"y": 0, "a": 1, "n": 2},

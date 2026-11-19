@@ -290,8 +290,13 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
-    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    from meshpool_harness import providers as _PV
+    if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
+        from meshpool_harness.core import anthropic_wire as AW
+        url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
+    else:
+        url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
         with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
@@ -1244,7 +1249,9 @@ class Agent:
             if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
                 return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
             exact = name + ":" + args[:2000]
-            shape = name + ":" + re.sub(r"\d+", "#", args[:2000])
+            # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
+            # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
+            shape = name + ":" + re.sub(r"\d+", "#", args[:2000]) if name in ("bash", "bash_many", "shell") else exact
             book = g.setdefault("loop", {})
             edits = self.ws.edits
             for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
@@ -1274,8 +1281,8 @@ class Agent:
             except ValueError:
                 return False
             cmds = a.get("commands") if name == "bash_many" else [a.get("command")]
-            if name == "shell" and isinstance(a.get("command"), list):
-                cmds = [" ".join(str(x) for x in a["command"])]
+            if name == "shell" and a.get("command") is not None:
+                cmds = [T.shell_script(a["command"])]          # the script inside ["bash", "-lc", script]
             cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
             return bool(cmds) and all(T.read_only(x) for x in cmds)
         return False
@@ -1780,6 +1787,8 @@ class Agent:
         try:
             if not self.hsettings()["mutation"]:
                 return ""
+            if self.mode != "auto" or getattr(self.ws, "container", None):
+                return ""       # it runs the project's tests on this computer: only where commands run unasked, never beside a sandbox
             from meshpool_harness.core import mutate as MU
             alive = MU.survivors(self.root, set(self.ws.turn_files))
             self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")
@@ -1854,12 +1863,22 @@ class Agent:
 
     def _post(self, base: str, key: str, body: dict, stream: bool) -> tuple[dict, bool]:
         b = dict(body)
-        if stream:
-            b["stream"] = True
-            b["stream_options"] = {"include_usage": True}
-        req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
-                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
+        from meshpool_harness import providers as _PV
+        # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
+        # (core/anthropic_wire.py), not streamed; every other endpoint speaks chat completions
+        anthropic = _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base()
+        if anthropic:
+            from meshpool_harness.core import anthropic_wire as AW
+            stream = False
+            b = AW.to_request(b)
+            url, hdrs = f"{base}/messages", AW.headers(key)
+        else:
+            if stream:
+                b["stream"] = True
+                b["stream_options"] = {"include_usage": True}
+            url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
+                                     headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
         # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
         # long task the same way ("The read operation timed out").
@@ -1885,7 +1904,8 @@ class Agent:
                 if not stream:
                     raw_body = r.read()
                     try:
-                        return json.loads(raw_body.decode("utf-8", "replace")), False
+                        data = json.loads(raw_body.decode("utf-8", "replace"))
+                        return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
                     except ValueError:                   # a gateway that streams anyway, or sends an error page
                         if raw_body.lstrip().startswith(b"data:"):
                             return sse_to_chat(raw_body.splitlines(keepends=True)), False

@@ -78,3 +78,19 @@ def test_repeats_that_do_work_are_never_refused(tmp_path):
     steps = [_bash(30 + i, "python3 m.py") for i in range(4)] + [{"content": "done"}]
     a, tools = _run(tmp_path, steps)
     assert not any("Not run" in t["content"] for t in tools)
+
+
+def test_reading_other_line_ranges_is_not_a_loop(tmp_path):
+    """Paging through a big file changes only numbers (start/end); it is progress, not a repeat."""
+    reads = [{"content": "", "tool_calls": [_call(40 + i, "read_file", {"path": "m.py", "start": i * 300 + 1,
+                                                                        "end": (i + 1) * 300})]} for i in range(7)]
+    a, tools = _run(tmp_path, reads + [{"content": "done"}])
+    assert not any("Not run" in t["content"] for t in tools)
+
+
+def test_codex_shell_command_list_is_inspected_by_its_script(tmp_path):
+    """The Codex-style shell tool sends ["bash", "-lc", script]; the guard looks at the script."""
+    a = Agent(str(tmp_path), mode="auto")
+    assert a._inspection("shell", json.dumps({"command": ["bash", "-lc", "od -c m.py | sed -n '1,2p'"]}))
+    assert a._inspection("shell", json.dumps({"command": "cat m.py"}))
+    assert not a._inspection("shell", json.dumps({"command": ["bash", "-lc", "python3 m.py"]}))
