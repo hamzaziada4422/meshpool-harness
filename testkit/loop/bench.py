@@ -248,7 +248,7 @@ def cap_left(model: str) -> float | None:
     except (OSError, ValueError):
         led = {"start_spend": now, "cap_usd": CAP_USD, "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
         json.dump(led, open(LEDGER, "w"), indent=1)
-    return float(led.get("cap_usd", CAP_USD)) - (now - float(led["start_spend"]))
+    return float(led.get("cap_usd", CAP_USD)) - (now - float(led["start_spend"])) - float(led.get("other_spend", 0))
 
 
 def cost(row: dict, prices: dict) -> float:
@@ -312,9 +312,12 @@ def run(args) -> int:
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
                 tmp = f.name
             try:
-                subprocess.run([sys.executable, __file__, "--child", json.dumps(task), arm, tmp], env=env,
-                               timeout=args.timeout, capture_output=True, text=True)
+                cp = subprocess.run([sys.executable, __file__, "--child", json.dumps(task), arm, tmp], env=env,
+                                    timeout=args.timeout, capture_output=True, text=True)
                 row = json.loads(Path(tmp).read_text() or "{}")
+                if "pass" not in row:                  # the run crashed before grading: keep why
+                    row.update(task=task["id"], suite=task["suite"], arm=arm, **{"pass": False}, why="crash",
+                               error=("crash: " + (cp.stderr or cp.stdout or "")[-600:]).strip())
             except (subprocess.TimeoutExpired, ValueError):
                 row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": False, "why": "timeout",
                        "secs": args.timeout}
@@ -433,6 +436,12 @@ def compare(by: dict, keys: list, a: str, b: str) -> dict:
 
 def report(out: Path, arms: list[str] | None = None, slack: int = 1) -> int:
     rows = [json.loads(l) for l in (out / "results.jsonl").read_text().splitlines()]
+    for r in rows:                                     # rows from a crashed run (older bench): count as errors
+        if "pass" not in r:
+            r.update({"pass": False, "why": "crash", "error": r.get("error") or "crash (no output kept)"})
+        r.setdefault("task", "?")
+        r.setdefault("suite", "?")
+    rows = [r for r in rows if r["task"] != "?"]
     sp = out / "spend.json"
     actual = json.loads(sp.read_text()) if sp.exists() else {}
     for m, real in actual.items():                     # scale each model's token estimates to the billed total
