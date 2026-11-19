@@ -248,6 +248,51 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
     return args
 
 
+
+_PY_VERSIONS: dict = {}
+
+
+def _newer_pythons(path: Path) -> list:
+    """Interpreters newer than this one that could run `path`: its project's virtual environment (the nearest
+    .venv / venv above it), then the newest python3.x on PATH. Each is asked its version once."""
+    import sys
+    cands = []
+    for d in [path.parent, *path.parent.parents][:8]:
+        for rel in (".venv/bin/python", "venv/bin/python", ".venv/Scripts/python.exe", "venv/Scripts/python.exe"):
+            if (d / rel).exists():
+                cands.append(str(d / rel))
+    try:
+        from meshpool_harness.hrouter.packs import newest_python
+        np_ = newest_python()
+        if np_:
+            cands.append(np_)
+    except Exception:  # noqa: BLE001
+        pass
+    out = []
+    for exe in dict.fromkeys(cands):
+        if exe not in _PY_VERSIONS:
+            try:
+                r = subprocess.run([exe, "-c", "import sys;print(sys.version_info[0], sys.version_info[1])"],
+                                   capture_output=True, text=True, timeout=10)
+                _PY_VERSIONS[exe] = tuple(int(x) for x in r.stdout.split()[:2]) if r.returncode == 0 else ()
+            except (OSError, subprocess.SubprocessError, ValueError):
+                _PY_VERSIONS[exe] = ()
+        if _PY_VERSIONS[exe] and _PY_VERSIONS[exe] > sys.version_info[:2]:
+            out.append(exe)
+    return out
+
+
+def _parses_with_newer_python(path: Path, text: str) -> bool:
+    for exe in _newer_pythons(path):
+        try:
+            r = subprocess.run([exe, "-c", "import sys; compile(sys.stdin.read(), sys.argv[1], 'exec', dont_inherit=True)",
+                                str(path)], input=text, capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return True
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return False
+
 class Workspace:
     """Executes tools inside workdir, tracks reads/writes/commands for guards."""
 
@@ -424,6 +469,11 @@ class Workspace:
                 compile(text, str(path), "exec", dont_inherit=True)
                 return None
             except SyntaxError as e:     # Python's own message: "'(' was never closed", "invalid syntax. Perhaps you forgot a comma?"
+                # MeshPool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
+                # The code is judged by the newest Python that would run it: the project's venv, else the newest
+                # python3.x on this computer. Without a newer one the code cannot run here either, so the error stands.
+                if _parses_with_newer_python(path, text):
+                    return None
                 return where(e.lineno or 0, e.offset or 1, e.msg)
             except (ValueError, TypeError):
                 return None
