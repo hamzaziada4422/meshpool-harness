@@ -66,6 +66,35 @@ def read_only(cmd: str) -> bool:
     return True
 
 
+_PATCH_CMDS = ("apply_patch", "applypatch")
+_HEREDOC = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s*"
+                      r"<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)[ \t]*\n(?P<body>.*)\n[ \t]*(?P=tag)[ \t]*\n?\s*\Z", re.S)
+
+
+def shell_script(argv) -> str:
+    """The script a shell tool call runs: argv as the command list Codex sends, or a string."""
+    import shlex
+    if isinstance(argv, str):
+        return argv
+    argv = [str(a) for a in argv or []]
+    if len(argv) >= 3 and os.path.basename(argv[0]) in ("bash", "sh", "zsh") and argv[1] in ("-c", "-lc"):
+        return argv[2]
+    return argv[0] if len(argv) == 1 else shlex.join(argv)
+
+
+def patch_from_shell(argv):
+    """(patch text, working folder or None) when a shell call is Codex's apply_patch through the shell, as the Codex
+    prompt shows it: ["apply_patch", "<patch>"], or a bash script `[cd dir &&] apply_patch <<'EOF' ... EOF`. Else None."""
+    if isinstance(argv, (list, tuple)) and len(argv) == 2 and str(argv[0]) in _PATCH_CMDS:
+        return str(argv[1]), None
+    script = shell_script(argv)
+    m = _HEREDOC.match(script)
+    if not m:
+        return None
+    cd = (m.group("cd") or "").strip("'\"") or None
+    return m.group("body"), cd
+
+
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
         "type": "object", "properties": props, "required": req, "additionalProperties": False}}}
@@ -131,6 +160,37 @@ SCHEMAS = {
 }
 CORE = ["read_file", "grep", "glob", "edit", "write_file", "bash", "run_tests", "finish"]
 
+# The Codex tool set (engine style "codex", see agent/core.py): shell, apply_patch, update_plan. The shell and plan
+# definitions follow Codex's (command as an argv list, workdir, timeout_ms; plan items with a step and a status); the
+# apply_patch format text is Codex's own (app/defaults/engines/codex/prompt.md), as a JSON function because the chat
+# API has no freeform grammar tools.
+CODEX_TOOLS = ["shell", "apply_patch", "update_plan"]
+_PATCH_HELP = (
+    "Edit files with a patch. `input` is the whole patch: '*** Begin Patch', one or more file operations, "
+    "'*** End Patch'. Operations: '*** Add File: <path>' (every following line starts with +), "
+    "'*** Delete File: <path>', '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'), then "
+    "hunks that start with '@@' (optionally '@@ <a line such as a function header that comes before the change>') "
+    "and have lines starting with ' ' (unchanged context), '-' (removed) or '+' (added). Give about 3 lines of "
+    "context before and after each change; '*** End of File' marks a change at the end of a file. Paths are relative "
+    "to the project folder. The patch is applied to all files or to none.")
+SCHEMAS["shell"] = _fn(
+    "shell", "Runs a shell command and returns its output. The command is an argv list, for example "
+             '["bash", "-lc", "pytest -q"]; a plain string is run with bash. Set `workdir` instead of using cd '
+             'when you can. `apply_patch` can also be called through this tool as ["apply_patch", "<patch>"].',
+    {"command": {"type": "array", "items": S, "description": "The command to execute"},
+     "workdir": {"type": "string", "description": "The working directory to execute the command in"},
+     "timeout_ms": {"type": "number", "description": "The timeout for the command in milliseconds"}}, ["command"])
+SCHEMAS["apply_patch"] = _fn("apply_patch", _PATCH_HELP, {"input": {"type": "string", "description":
+                             "The entire contents of the apply_patch command"}}, ["input"])
+SCHEMAS["update_plan"] = _fn(
+    "update_plan", "Updates the task plan.\nProvide an optional explanation and a list of plan items, each with a "
+                   "step and status.\nAt most one step can be in_progress at a time.",
+    {"explanation": S,
+     "plan": {"type": "array", "description": "The list of steps", "items": {"type": "object", "properties": {
+         "step": S, "status": {"type": "string", "description": "One of: pending, in_progress, completed",
+                               "enum": ["pending", "in_progress", "completed"]}},
+         "required": ["step", "status"], "additionalProperties": False}}}, ["plan"])
+
 
 def _delegate_schema():
     from meshpool_harness.agent.delegate import schema
@@ -170,6 +230,8 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
     if (name == "write_file" and isinstance(args.get("content"), (dict, list))
             and str(args.get("path", "")).lower().endswith(".json")):
         args["content"] = json.dumps(args["content"], indent=2, ensure_ascii=False) + "\n"   # models often send JSON as an object
+    if name == "shell" and isinstance(args.get("command"), str):        # a plain string: run it with bash
+        args["command"] = ["bash", "-lc", args["command"]]
     sch = SCHEMAS[name]["function"]["parameters"]
     for k in sch["required"]:
         if k not in args:
@@ -179,6 +241,7 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
             raise ToolError(f"{name}: unknown argument '{k}'; allowed: {', '.join(sch['properties'])}")
         t = sch["properties"][k]["type"]
         ok = {"string": isinstance(v, str), "integer": isinstance(v, int) and not isinstance(v, bool),
+              "number": isinstance(v, (int, float)) and not isinstance(v, bool),
               "boolean": isinstance(v, bool), "array": isinstance(v, list)}[t]
         if not ok:
             raise ToolError(f"{name}: argument '{k}' must be {t}, got {type(v).__name__}")
@@ -652,11 +715,11 @@ class Workspace:
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
 
-    def _proc(self, args, env, timeout_s, shell=False, encoding=None):
+    def _proc(self, args, env, timeout_s, shell=False, encoding=None, cwd=None):
         """Run a command the user can stop at any moment: the whole process tree is killed on Stop or timeout."""
         import signal
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
-        p = subprocess.Popen(args, shell=shell, cwd=self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
         box: dict = {}
 
@@ -691,7 +754,7 @@ class Workspace:
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True):
+    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -704,22 +767,23 @@ class Workspace:
                 proj = str(Path(__file__).resolve().parents[2])      # engine helper libraries importable anywhere
                 env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             if self.container and not command.lstrip().startswith("docker "):
-                r = subprocess.run(["docker", "exec", "-w", self.cdir, self.container, "bash", "-lc", command],
+                cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
+                r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
                                    capture_output=True, text=True, timeout=timeout_s, errors="replace")
             else:
                 env.setdefault("PYTHONUTF8", "1")
                 bash = _bash()
                 if bash and os.name == "nt":                     # Git Bash: keep the working folder
                     env["CHERE_INVOKING"] = "1"
-                    r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8")
+                    r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc([bash, "-c", command], env, timeout_s)
+                    r = self._proc([bash, "-c", command], env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
-                                   env, timeout_s, encoding="utf-8")
+                                   env, timeout_s, encoding="utf-8", cwd=cwd)
                 else:
-                    r = self._proc(command, env, timeout_s, shell=True)
+                    r = self._proc(command, env, timeout_s, shell=True, cwd=cwd)
             code, out = r.returncode, (r.stdout + ("\n" + r.stderr if r.stderr else ""))
         except subprocess.TimeoutExpired as e:
             code = 124
@@ -790,6 +854,156 @@ class Workspace:
 
     def run_tests(self, command, timeout_s=None):
         return self._run(command, timeout_s, "check")[0]
+
+    # -- the Codex tools (engine style "codex")
+    def shell(self, command, workdir=None, timeout_ms=None):
+        """Codex's shell tool: command (argv list or string), workdir, timeout_ms. Runs through the same path as bash
+        (timeout, stop, output cap, error context). An apply_patch given through the shell is applied as a patch."""
+        hit = patch_from_shell(command)
+        if hit:
+            patch, cd = hit
+            return self.apply_patch(patch, base=cd or workdir)
+        script = shell_script(command)
+        if not script.strip():
+            raise ToolError("shell: `command` is empty")
+        try:
+            from .applypatch import parse
+            parse(script)
+        except Exception:  # noqa: BLE001 - not a patch: an ordinary command
+            pass
+        else:
+            raise ToolError("patch detected without explicit call to apply_patch. Rerun as apply_patch with the "
+                            "patch as `input` (or [\"apply_patch\", \"<patch>\"] here).")
+        cwd = None
+        if workdir:
+            d = self._path(str(workdir))
+            if not d.is_dir() and not (self.container and not self.mounted):
+                raise ToolError(f"workdir not found: {workdir}")
+            cwd = d
+        secs = None
+        if timeout_ms is not None:
+            secs = max(1, -(-int(timeout_ms) // 1000))
+        return self._run(script, secs, "bash", cwd=cwd)[0]
+
+    def apply_patch(self, input, base=None):
+        """Codex's apply_patch: every hunk is checked and every new file built in memory first; only then are the files
+        written, so a patch that cannot be applied changes nothing. Code files that would stop parsing are refused."""
+        from .applypatch import PatchError, apply_update, parse
+        try:
+            hunks = parse(input)
+        except PatchError as e:
+            raise ToolError(str(e)) from None
+        remote = bool(self.container and not self.mounted)
+        base = str(base) if base else ""
+        shown: dict = {}                              # key -> path as the patch names it
+
+        def loc(path: str):
+            full = os.path.join(base, path) if base and not os.path.isabs(path) else path
+            if remote:
+                return self._cpath(full), None
+            p = self._path(full, write=True)
+            return str(p), p
+
+        files: dict = {}                              # key -> [path object, text before or None, text after or None]
+        order: list = []
+
+        def get(path: str):
+            key, p = loc(path)
+            if key not in files:
+                if remote:
+                    r = self._cexec(["cat", key])
+                    before = r.stdout if r.returncode == 0 else None
+                elif p.is_file():
+                    before = p.read_bytes().decode("utf-8", "surrogateescape")
+                else:
+                    before = None
+                files[key] = [p, before, before]
+                order.append(key)
+            shown.setdefault(key, path)
+            return key, files[key]
+
+        added, modified, deleted = [], [], []
+        for h in hunks:
+            if h.kind == "add":
+                key, f = get(h.path)
+                f[2] = h.contents
+                added.append(h.path)
+            elif h.kind == "delete":
+                key, f = get(h.path)
+                if f[2] is None:
+                    raise ToolError(f"Failed to delete file {h.path}: no such file")
+                f[2] = None
+                deleted.append(h.path)
+            else:
+                key, f = get(h.path)
+                if f[2] is None:
+                    raise ToolError(f"Failed to read file to update {h.path}: no such file")
+                try:
+                    new = apply_update(f[2], h.path, h.chunks)
+                except PatchError as e:
+                    raise ToolError(str(e)) from None
+                if h.move and h.move != h.path:
+                    k2, f2 = get(h.move)
+                    f2[2], f[2] = new, None
+                    modified.append(h.move)
+                else:
+                    f[2] = new
+                    modified.append(h.path)
+        for key in order:                             # a code file may not stop parsing because of the patch
+            p, before, after = files[key]
+            if after is None or p is None or after == before:
+                continue
+            bad = self._syntax_error(p, after)
+            if bad and (before is None or not self._syntax_error(p, before)):
+                raise ToolError(f"apply_patch rejected: it would make {shown[key]} stop parsing. Nothing was "
+                                f"written. Fix the patch at the marked place and retry.\n{bad}")
+        done: list = []                               # write, restoring everything if one write fails
+        try:
+            for key in order:
+                p, before, after = files[key]
+                if after == before:
+                    continue
+                done.append(key)
+                if remote:
+                    if after is None:
+                        self._cexec(["rm", "-f", key])
+                    else:
+                        self._cwrite(key, after)
+                elif after is None:
+                    p.unlink()
+                else:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_bytes(after.encode("utf-8", "surrogateescape"))
+        except Exception as e:  # noqa: BLE001
+            for key in done:
+                p, before, after = files[key]
+                try:
+                    if remote:
+                        self._cexec(["rm", "-f", key]) if before is None else self._cwrite(key, before)
+                    elif before is None:
+                        p.unlink(missing_ok=True)
+                    else:
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_bytes(before.encode("utf-8", "surrogateescape"))
+                except Exception:  # noqa: BLE001
+                    pass
+            raise ToolError(f"apply_patch failed while writing ({e}); the files written so far were restored") from None
+        for key in done:
+            p, before, after = files[key]
+            if before is None and after is not None:
+                self.created.add(key)
+            elif before is not None and key not in self.original:
+                self.original[key] = self._hash(before)
+            if after is None:
+                self.seen.pop(key, None)
+            else:
+                self.seen[key] = self._hash(after)
+                self.written.add(key)
+            self.turn_files.add(key)
+            self.edits += 1
+        lines = ["Success. Updated the following files:"]
+        lines += [f"A {x}" for x in added] + [f"M {x}" for x in modified] + [f"D {x}" for x in deleted]
+        return "\n".join(lines)
 
     def all_output(self) -> str:
         p = self.run_dir / "commands.log"

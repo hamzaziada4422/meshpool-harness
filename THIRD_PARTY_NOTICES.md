@@ -14,6 +14,7 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Git 2.56.1, built unmodified from the official source (macOS: `git/`; build script `packaging/mac/build_git.sh`, licence `git/COPYING-git-GPL-2.0.txt`) | GPL-2.0 | Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz |
 | LibreOffice 26.2.7, binaries unmodified (unused parts such as help, Base, Math, extensions and other languages are removed: `packaging/lo_prune.py`), used for Office conversion and rendering (`app/vendor/libreoffice`; notice and licence in `app/defaults/licenses/libreoffice`) | MPL-2.0 and bundled licenses | Source: https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.3/src/ |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
+| OpenAI Codex CLI (commit 097558c1bdfc6318cb0ce80a64816ca4d61c7814): base instructions, apply_patch format description and grammar, update_plan tool definition, and the apply_patch parser and matching rules re-implemented in Python for MeshPool's "codex" engine style (`app/defaults/engines/codex`, notice and licence in that folder), Copyright 2025 OpenAI; modified by MeshPool (see the NOTICE comment in `prompt.md`) | Apache-2.0 | https://github.com/openai/codex |
 
 ## Bundled content (icons and skills)
 

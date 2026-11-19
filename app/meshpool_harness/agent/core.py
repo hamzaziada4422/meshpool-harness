@@ -40,7 +40,7 @@ SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill"}
+             "ask_user", "diagnostics", "find_skill", "update_plan"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -63,6 +63,16 @@ if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug bef
     BUILTIN[BUILTIN.index("bash") + 1:BUILTIN.index("bash") + 1] = ["probe", "trace"]
 WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
+
+
+def _codex_prompt() -> str:
+    """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
+    for readers of the file and is not sent to the model)."""
+    try:
+        text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
+    except OSError:
+        return "You are a coding agent. Use the shell and apply_patch tools to complete the user's task."
+    return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
 
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
 from meshpool_harness.agent import planning as _PLAN  # noqa: E402
@@ -389,7 +399,20 @@ def _summary(name: str, args: dict) -> str:
         return s if len(s) < 300 else s[:300] + "..."
 
 
+def _patch_files(patch: str) -> list:
+    return re.findall(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", str(patch or ""))
+
+
 def _summary_of(name: str, args: dict) -> str:
+    if name == "shell":
+        cmd = T.shell_script(args.get("command"))
+        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + cmd
+    if name == "apply_patch":
+        files = _patch_files(args.get("input"))
+        return ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "") if files else "patch"
+    if name == "update_plan":
+        items = args.get("plan") or []
+        return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
     if name == "bash":
         return args.get("command", "")
     if name == "bash_many":
@@ -652,9 +675,37 @@ class Agent:
         self.title = ""
 
     # ---------- prompt -----------------------------------------------------------------------------------------
+    def _style(self) -> bool:
+        """True when this chat runs in Codex style (harness profile engine_style "codex"): Codex's base instructions,
+        shell / apply_patch / update_plan and Codex's loop, under MeshPool's routing. Code chats only."""
+        try:
+            return self.profile == "code" and self.hsettings()["engine_style"] == "codex"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _codex(self) -> bool:
+        return self._style() and not self.plan           # plan mode keeps its read-only tools
+
+    def _codex_env(self) -> str:
+        """Codex's <environment_context>: where it is, and how much it may do without asking."""
+        from meshpool_harness.config import find_bash
+        shell = "bash" if find_bash() else ("powershell" if os.name == "nt" else "sh")
+        policy = "never" if self.mode == "auto" else "on-request"
+        return (f"<environment_context>\n  <cwd>{self.root}</cwd>\n  <approval_policy>{policy}</approval_policy>\n"
+                f"  <shell>{shell}</shell>\n</environment_context>")
+
     def system_prompt(self) -> str:
         from meshpool_harness.config import find_bash
         bash = find_bash()
+        if self._style():
+            text = _codex_prompt()
+            for name in PROJECT_FILES:
+                pf = self.root / name
+                if pf.is_file():
+                    body = pf.read_text(encoding="utf-8", errors="replace")[:20000]
+                    text += f"\n\n# {name} instructions for {self.root}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
+                    break
+            return text
         if os.name == "nt":
             shell = (("bash (Git Bash). For Windows tools, run them through powershell -NoProfile -Command \"...\" "
                       "or cmd /c \"...\"") if bash else
@@ -725,6 +776,11 @@ class Agent:
     def tool_schemas(self) -> list:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
+        if self._codex():                          # Codex's tools, and the user's own MCP tools
+            return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas()
+                                                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_")
+                                                and not x["function"]["name"].endswith("run_subtasks")]
+                                               if self.mcp else [])
         names = self._tool_names()
         if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
             names = names + ["delegate_task"]
@@ -737,6 +793,8 @@ class Agent:
                                    if self.mcp else [])
 
     def _tool_names(self) -> list:
+        if self._codex():
+            return list(T.CODEX_TOOLS)
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
@@ -893,8 +951,23 @@ class Agent:
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
         g.update({"since_todo": 0, "plan_asked": False})
-        self._plan_start(route, g)
-        if (route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
+        cx = self._codex()
+        if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
+            self._plan_needed = False
+        else:
+            self._plan_start(route, g)
+        if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
+            extra = self._codex_env()
+            if route is not None:
+                from meshpool_harness.hrouter.route import addon
+                ad = addon(route).strip()
+                extra += ("\n\n" + ad) if ad else ""
+            last = self.messages[-1].get("content")
+            if isinstance(last, str):
+                self.messages[-1]["content"] = last + "\n\n\u200b" + extra
+            elif isinstance(last, list):
+                self.messages[-1]["content"] = last + [{"type": "text", "text": extra}]
+        if (not cx and route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
                 and not self.plan and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # reproduce before the first call: one model round saved
                 rep = _PACKS.reproduce(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
@@ -903,7 +976,7 @@ class Agent:
             if rep:
                 self.messages[-1]["content"] += "\n\n" + rep
                 self.emit({"type": "status", "text": "Reproduced the problem before starting."})
-        if (route is not None and route.spec in ("code.build", "code.refactor", "code.explain", "code.test")
+        if (not cx and route is not None and route.spec in ("code.build", "code.refactor", "code.explain", "code.test")
                 and len(self.messages) <= 2 and not self.plan and isinstance(self.messages[-1].get("content"), str)
                 and os.environ.get("MH_REPO_MAP", "1") != "0"):
             try:                                     # the project's symbols up front: no exploring rounds
@@ -912,7 +985,7 @@ class Agent:
                 rm = ""
             if rm:
                 self.messages[-1]["content"] += "\n\n" + rm
-        if (route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
+        if (not cx and route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
                 and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # the data's shape before the first call: no exploring round
                 prev = _PACKS.data_preview(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
@@ -921,7 +994,7 @@ class Agent:
             if prev:
                 self.messages[-1]["content"] += "\n\n" + prev
                 self.emit({"type": "status", "text": "Read the data files' structure before starting."})
-        if V3 and len(self.messages) <= 2 and not self.plan:
+        if V3 and not cx and len(self.messages) <= 2 and not self.plan:
             snap = _env_snapshot(self.root)
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
@@ -966,7 +1039,7 @@ class Agent:
                         continue
                     if self.has_steers():           # the user added something while this reply was written
                         continue
-                    if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan
+                    if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan and not cx
                             and self.ws.edits > g["edits0"] and not g.get("scope_shown")):
                         g["scope_shown"] = True     # once per request: the same check as the benchmark loop's finish
                         from meshpool_harness.core.finishing import scope_report
@@ -976,7 +1049,8 @@ class Agent:
                             continue
                     route = getattr(self, "route", None)
                     after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits]
-                    if (route is not None and route.family == "code" and not self.plan and self.ws.edits > g["edits0"]
+                    if (route is not None and route.family == "code" and not self.plan and not cx
+                            and self.ws.edits > g["edits0"]
                             and after and after[-1]["code"] not in (0, None) and not g.get("verify_nudged")):
                         g["verify_nudged"] = True      # once per request: a failing check is not a finished fix
                         last = after[-1]
@@ -985,7 +1059,7 @@ class Agent:
                             f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
                             "failure is expected or unrelated, say exactly why in one line.")})
                         continue
-                    if (route is not None and route.family == "code" and not self.plan
+                    if (route is not None and route.family == "code" and not self.plan and not cx
                             and self.ws.edits > g["edits0"]):
                         if not g.get("review_done"):
                             g["review_done"] = True    # once per request: a second reader checks it against the ask
@@ -1001,7 +1075,7 @@ class Agent:
                                 continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
                     if (V3 or self._plan_needed) and left and self._todo_touched and not g["todo_nudged"] \
-                            and not self.plan:
+                            and not self.plan and not cx:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
                         where = (_PLAN.reminder(self._todos) + "\n") if self._plan_needed else ""
                         self.messages.append({"role": "user", "content": (
@@ -1030,7 +1104,7 @@ class Agent:
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)
-                if V3:
+                if V3 and not cx:
                     note = self._v3_notes(step, calls, g)
                     if note:
                         self.messages.append({"role": "user", "content": "[Meshpool] " + note})
@@ -1173,11 +1247,12 @@ class Agent:
             edits = self.ws.edits
             for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
                 runs = [e for e in book.get(key, []) if e == edits]
-                if len(runs) + 1 >= limit and name not in ("todo_write", "ask_user", "finish"):
+                if len(runs) + 1 >= limit and name not in ("todo_write", "update_plan", "ask_user", "finish"):
                     g["refused"] = g.get("refused", 0) + 1
+                    shown = ("what the command printed" if name in T.CODEX_TOOLS else "what read_file shows")
                     return ("[Meshpool] Not run: you already made this call (or the same call with only numbers "
                             f"changed) {len(runs)} times and no file has changed since, so the result would be the "
-                            "same. The file contents are exactly what read_file shows (plain text, no hidden "
+                            f"same. The file contents are exactly {shown} (plain text, no hidden "
                             "characters unless a tool says so). Act on what you have: make the change, run your "
                             "check, or answer.")
             for key in {exact, shape}:                 # one count per run, also when the two keys are equal
@@ -1900,15 +1975,20 @@ class Agent:
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
+        if name == "shell":
+            hit = T.patch_from_shell(args.get("command"))
+            if hit:                            # apply_patch through the shell is an edit like any other
+                name, args = "apply_patch", {"input": hit[0]}
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
-        if self.mode == "edits" and name in ("edit", "write_file"):
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
-        group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
+        group = ("edit" if name in ("edit", "write_file", "apply_patch")
+                 else "bash" if name in ("bash_many", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
         if group in self.always:
@@ -1919,6 +1999,14 @@ class Agent:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
+        elif name == "shell":
+            kind, title, detail = "bash", "Run this command?", (
+                (f"cd {args['workdir']} && " if args.get("workdir") else "") + T.shell_script(args.get("command")))
+        elif name == "apply_patch":
+            files = _patch_files(args.get("input"))
+            kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
+                                                                                        else "") or "files") + "?", \
+                self._diff(name, args)
         elif name == "bash_many":
             cmds = [str(c) for c in args.get("commands") or []]
             kind, title, detail = "bash", f"Run these {len(cmds)} commands?", "\n".join(cmds)
@@ -1964,6 +2052,9 @@ class Agent:
     def _diff_text(self, name: str, args: dict) -> str:
         """The diff the user approves (and the tool card shows). Several changes in one edit call (`edits` for one
         file, `changes` for several) show every file's diff, so an approval never shows less than will change."""
+        if name == "apply_patch":                      # the patch is the diff: what the user approves is what is applied
+            lines = str(args.get("input") or "").splitlines()
+            return "\n".join(lines[:200]) + ("\n..." if len(lines) > 200 else "")
         if name == "edit" and (isinstance(args.get("edits"), list) or isinstance(args.get("changes"), list)):
             groups: dict = {}
             if isinstance(args.get("changes"), list):
@@ -2039,8 +2130,10 @@ class Agent:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
-                   "timeout_s": args.get("timeout_s") if isinstance(args, dict) and name in ("bash", "bash_many") else None,
-                   "diff": self._diff(name, args) if name in ("edit", "write_file") and not bad else ""})
+                   "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
+                                 args["timeout_ms"] / 1000 if name == "shell" and isinstance(
+                                     args.get("timeout_ms"), (int, float)) else None) if isinstance(args, dict) else None,
+                   "diff": self._diff(name, args) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         try:
             if bad:
@@ -2090,6 +2183,22 @@ class Agent:
             elif name == "diagnostics":
                 out = self._wait(_PACKS.diagnostics, self.ws, args.get("paths"), args.get("language"),
                                  bool(args.get("deep")))
+            elif name == "update_plan":                # Codex's plan tool; the plan event is the same one todo_write sends
+                steps = args.get("plan")
+                if not isinstance(steps, list):
+                    raise ToolError("update_plan: `plan` must be a list of {step, status}")
+                items = []
+                for i in steps:
+                    if not isinstance(i, dict) or not isinstance(i.get("step"), str):
+                        raise ToolError("update_plan: every plan item needs a `step` (text) and a `status`")
+                    if i.get("status") not in ("pending", "in_progress", "completed"):
+                        raise ToolError(f"update_plan: status '{i.get('status')}' is not one of pending, in_progress, "
+                                        "completed")
+                    items.append({"content": i["step"], "status": i["status"]})
+                self._todos, self._todo_touched = items, True
+                self.emit(dict(_PLAN.state(items) or {"items": [], "current": 0, "total": 0, "done": 0},
+                               type="plan", entries=items))
+                out = "Plan updated"
             elif name == "todo_write":
                 items = [{"content": str(i.get("content", "")), "status": i.get("status", "pending")}
                          for i in args.get("items") or [] if isinstance(i, dict)]
@@ -2103,9 +2212,9 @@ class Agent:
                 route = getattr(self, "route", None)
                 if name in ("edit", "write_file") and route is not None and route.family == "code":
                     out += _PACKS.quick_check(self.ws, args.get("path", ""))   # a broken edit shows now, at no call
-                if name == "bash":
+                if name in ("bash", "shell"):
                     m = re.match(r"\[exit (\d+)\]", out)
-                    ok = bool(m) and m.group(1) == "0"
+                    ok = (not m and name == "shell") or (bool(m) and m.group(1) == "0")   # shell: a patch has no exit line
                 elif name == "bash_many":
                     ok = "[exit " in out and not re.search(r"\[exit [1-9]", out)
                 elif name in ("probe", "trace"):

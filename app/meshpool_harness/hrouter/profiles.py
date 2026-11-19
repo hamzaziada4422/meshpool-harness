@@ -5,7 +5,11 @@ the compaction limit, the spec-text set ("methods"), lean tools, per-step method
 
     {"plan": "auto"|"on"|"off", "review": bool, "mutation": bool, "compact_chars": int,
      "methods": null | "<name>", "lean_tools": bool, "step_methods": bool,
-     "engine": "meshpool"|"pi"|"hermes", "extends": "<profile>"}
+     "engine": "meshpool"|"pi"|"hermes", "engine_style": "meshpool"|"codex", "extends": "<profile>"}
+
+engine_style "codex" (code routes of the MeshPool engine only): Codex's base instructions, tools (shell, apply_patch,
+update_plan) and loop, with MeshPool's routing method on the first message (app/defaults/engines/codex,
+docs/plan/CODEX_ENGINE.md).
 
 Assignment (app/defaults/profiles.json, then <data folder>/profiles.json, then MH_PROFILES_FILE; later wins):
 
@@ -25,15 +29,19 @@ import re
 from pathlib import Path
 
 ENGINES = ("meshpool", "pi", "hermes")
+STYLES = ("meshpool", "codex")      # how the MeshPool agent itself runs: its own prompt and tools, or Codex's design
 
 FULL = {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000, "methods": None,
-        "lean_tools": True, "step_methods": False, "engine": "meshpool"}
+        "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool"}
 
 BUILTIN = {
     "full": {},
     "lean": {"plan": "off", "review": False, "mutation": False, "methods": "v2"},
     "lean+plan": {"extends": "lean", "plan": "auto"},
     "lean+review": {"extends": "lean", "review": True},
+    # Codex's design under MeshPool's routing: no plan/review/mutation rounds, the method text of "lean-stop"
+    "codex": {"plan": "off", "review": False, "mutation": False, "step_methods": False, "methods": "v2-stop",
+              "engine_style": "codex"},
 }
 
 
@@ -60,6 +68,8 @@ def _clean(d: dict) -> dict:
         out["methods"] = str(m) if m else None
     if "engine" in d:
         out["engine"] = d["engine"] if d["engine"] in ENGINES else "meshpool"
+    if "engine_style" in d:
+        out["engine_style"] = d["engine_style"] if d["engine_style"] in STYLES else "meshpool"
     if d.get("extends"):
         out["extends"] = str(d["extends"])
     return out
@@ -159,6 +169,8 @@ def effective(route) -> dict:
     for var, key in (("MH_REVIEW", "review"), ("MH_MUTATION", "mutation"), ("MH_LEAN_TOOLS", "lean_tools")):
         if (v := _env(var)) is not None:
             s[key] = v != "0"
+    if (v := _env("MH_ENGINE_STYLE")) is not None and v in STYLES:
+        s["engine_style"] = v
     if (v := _env("MH_COMPACT_CHARS")) is not None:
         try:
             s["compact_chars"] = int(v)

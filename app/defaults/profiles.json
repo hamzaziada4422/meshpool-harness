@@ -20,6 +20,14 @@
   "lean-stop": {
    "extends": "lean",
    "methods": "v2-stop"
+  },
+  "codex": {
+   "plan": "off",
+   "review": false,
+   "mutation": false,
+   "step_methods": false,
+   "methods": "v2-stop",
+   "engine_style": "codex"
   }
  },
  "_source": "testkit/loop/select_profiles.py on runs-v2/round2 (24 dev tasks x 3 profiles, 19 Nov 2026); see docs/results/v3/PROFILE_SELECTION.md"
