@@ -62,6 +62,9 @@ SUB = [  # (sub, pattern, weight). Checked in order; the heaviest total wins.
               r"result|answer|month|date|total|number)s?|worked (before|last (week|month|time)|yesterday)|used to work|"
               r"too slow|far too slow|slow(er)? (on|with|than)|times? out|timed out|performance|speed (it )?up|"
               r"memory leak)\b", 1.0),
+    ("debug", r"github issue|<issue>|\bexpected (output|result|behaviou?r|value)\b|\bshould (return|be|give|raise|"
+              r"produce|output|work)\b|\binstead of\b|\bbut (it )?(returns|gives|got|raises|prints|produces)\b|"
+              r"\bis (incorrect|wrong|broken)\b|\bincorrect(ly)?\b|\bunexpected(ly)?\b|\bnot (correct|right)\b", 1.5),
     ("test", r"\b(write|add|generate|increase) (unit |integration |e2e )?tests?\b|\btest coverage\b|"
              r"\bcoverage\b", 1.5),
     ("refactor", r"\b(refactor\w*|clean ?up|restructure|rename (all|every)|extract (a |the )?(function|method|class|"

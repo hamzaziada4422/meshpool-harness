@@ -142,6 +142,9 @@ def child(task_json: str, arm: str, out_path: str) -> None:
            "error": res.get("error"), "answer_words": len((res.get("answer") or "").split()), **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
+    if task.get("repo"):                               # keep the patch, to learn from failures
+        row["patch"] = subprocess.run(["git", "diff", "HEAD", "--", ".", ":!.swe_test.patch", ":!.gold.patch"],
+                                      cwd=wd, capture_output=True, text=True).stdout[-20000:]
     Path(out_path).write_text(json.dumps(row))
     if task.get("repo"):
         import swe_local
