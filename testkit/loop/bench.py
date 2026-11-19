@@ -150,6 +150,8 @@ def child(task_json: str, arm: str, out_path: str) -> None:
         res = run_pi_agent(task, wd, routed=arm.startswith("pi-routed"))
     elif arm.split("@")[0] in ACP_ARMS:
         res = run_acp_agent(arm.split("@")[0], task, wd)
+    elif arm.split("@")[0].endswith("-routed") and arm.split("@")[0][:-7] in ACP_ARMS:
+        res = run_acp_agent(arm.split("@")[0][:-7], task, wd, routed=True)
     else:
         res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
     ok, why = grade(task, res.get("answer", ""), wd)
@@ -203,7 +205,7 @@ def run_pi_agent(task: dict, wd: str, routed: bool) -> dict:
 ACP_ARMS = ("codex", "opencode", "hermes")
 
 
-def run_acp_agent(hid: str, task: dict, wd: str) -> dict:
+def run_acp_agent(hid: str, task: dict, wd: str, routed: bool = False) -> dict:
     """Codex, OpenCode or Hermes through Meshpool's own ACP integration (what users run), set up by the app for the
     same endpoint and model. Tokens come from the metering proxy, not from the agent."""
     from meshpool_harness import harnesses as HR
@@ -218,7 +220,14 @@ def run_acp_agent(hid: str, task: dict, wd: str) -> dict:
         except Exception:  # noqa: BLE001
             a.model = model
     try:
-        answer = a.send(task["prompt"])
+        body = task["prompt"]
+        if routed:                                   # MeshPool Auto's sub-harness method rides on the first message
+            from meshpool_harness import hrouter as HRR
+            from meshpool_harness.hrouter.route import addon
+            r = HRR.route(task["prompt"], kind="code" if task.get("mode", "code") == "code" else "cowork", workdir=wd)
+            if addon(r):
+                body += "\n\n" + addon(r).strip()
+        answer = a.send(body)
     finally:
         try:
             a.close()
