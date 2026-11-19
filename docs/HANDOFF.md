@@ -11,7 +11,8 @@ repo.
   green run and release (see "Release").
 - **Frozen V1 MeshPool** (the "before"): commit `b52c31c`, checked out as a git worktree at `~/.cache/meshpool-v1`.
   Benchmark arm `v1` runs it.
-- **Benchmark code:** `testkit/loop/`
+- **Latest results: `docs/results/v2/V2_REPORT.md`, `docs/BENCHMARKS_V2.md` (verdict: promising but unproven).
+- **Benchmark code:**** `testkit/loop/`
   - `bench.py`: runner, arms, metering, statistics, cap guard.
   - `meter.py`: a metering proxy every harness's model calls go through.
   - `swe_local.py`: SWE-bench Verified SymPy tasks without Docker.
@@ -28,8 +29,7 @@ repo.
 
 - **DeepSeek V4.1 Flash only** (`MH_MODEL=deepseek-v4.1-flash`). No GPT, Claude or Kimi.
 - **$25 cap**, enforced by `bench.py` from the key's billed spend (ledger: `~/.meshpool-bench-ledger.json`). Check it
-  with `python testkit/loop/bench.py --cap-status`. **$17.86 was left** when the last V2 runs started; they cost about
-  $1–2 more.
+  with `python testkit/loop/bench.py --cap-status`. **$10.02 spent, $14.98 left** after the V2 runs (19 Nov 2026).
 - No GitHub Actions or cloud CI for benchmarks. Do not increase repetitions (1 for V2 and DABench, 2 for SWE SymPy).
   Do not weaken tasks or graders. Do not tune on `v2_eval` tasks (use `v2_dev`). Report regressions and ties honestly.
 - **Machine safety:**
