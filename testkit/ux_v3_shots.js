@@ -72,7 +72,7 @@ async function seed(b) {
 
     await shot("home");
     if (narrow) { await openSide(); await shot("sidebar"); await closeSide(); } else { await p.click("#hideSide"); await shot("sidebar-collapsed"); await p.click("#showSide"); await p.waitForTimeout(300); }
-    await openSide(); await p.click('.nv[data-nv="search"]'); await p.waitForSelector("#srchList .srow"); await shot("search-empty");
+    await openSide(); await p.click('.nv[data-nv="search"]'); await p.waitForSelector("#srchList .sres"); await shot("search-empty");
     await p.fill("#srchIn", "board"); await p.waitForTimeout(120); await shot("search-loading"); await p.waitForTimeout(500); await shot("search-results"); await esc(); await closeSide();
     await p.click("#attBtn"); await shot("plus-menu"); await esc();
     await p.click("#mPill"); await shot("model-menu"); await esc();
@@ -90,11 +90,11 @@ async function seed(b) {
     await p.fill("#input", "stream long please"); await p.keyboard.press("Enter");
     await p.waitForSelector(".msg-user"); await p.waitForTimeout(1500);
     await p.click("#panelBtn"); await shot("chat-running-progress");
-    await p.hover(".msg-user"); await shot("message-hover");
+    if (narrow) await p.evaluate(() => { if (S.panel) togglePanel(S.panel); }); await p.hover(".msg-user"); await shot("message-hover");
     await p.click("#ttl"); await shot("title-menu"); await esc();
     await p.click("#devBtn"); await shot("device-popover"); await esc();
     await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 120000, polling: 1000}).catch(() => {});
-    await p.click("#panelBtn"); await p.waitForTimeout(300); await shot("chat-finished");
+    if (!narrow) await p.click("#panelBtn"); await p.waitForTimeout(300); await shot("chat-finished");
     // code mode
     await openSide(); await p.click("#modeCode"); await p.waitForTimeout(500); await closeSide();
     await p.evaluate(() => { newThread(); }); await shot("code-home");

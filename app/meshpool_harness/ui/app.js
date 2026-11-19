@@ -1824,7 +1824,7 @@ async function renderSection(sec) {
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
-      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Claude, Claude Code or Codex? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
+      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
     $("#paImport").onclick = () => renderSection("import");
     $("#paSave").onclick = async () => {
       try {
@@ -1994,7 +1994,7 @@ async function renderSection(sec) {
         <label class="field"><span>When to use it (one line)</span><input id="skDesc" placeholder="Write release notes from the commits since the last tag."></label>
         <label class="field"><span>Instructions</span><textarea id="skBody" class="code" placeholder="Step-by-step instructions the agent follows."></textarea></label>
         <button class="btn primary" id="skCreate">Create skill</button></div></details>
-      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from Claude, Codex and other apps</button><button class="btn" id="skOpen">Open the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
+      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Open the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
     $("#skImp").onclick = () => importPanel($("#skImpBox"), r => { if (r) renderSection("skills"); });
     const drawSk = () => {
       $("#skl").innerHTML = S.skills.map(s => `<li><label class="switch"><input type="checkbox" data-id="${esc(s.id)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>$${esc(s.name)}</b><small>${esc(s.description)}</small></span><button class="btn" data-edit="${esc(s.id)}">Edit</button><button class="iconbtn" data-rm="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">${ICON.x}</button></li>`).join("") || `<li class="pnote">No skills yet.</li>`;
@@ -2064,7 +2064,7 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Tools (MCP servers)</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New chats pick up changes.</p>
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from other apps</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
       <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">The common mcpServers format most MCP apps use. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
@@ -2209,20 +2209,20 @@ async function contextPanel(box) {
   box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
     <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Your files stay on this computer; to write those, the titles and first messages of up to 80 chats are sent once to your model.</p>
     <ol class="ctx-steps">
-      <li><b>Your ChatGPT or Claude chats</b>
+      <li><b>Your ChatGPT chats and other assistants</b>
         <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
-        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link, usually within minutes.</small>
+        <small class="muted">ChatGPT: Settings, Data controls, Export data. Other assistants: look for Export data in their settings. Both email you a link, usually within minutes.</small>
         <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
-        <small class="muted">Every conversation comes over with its original date. Claude projects become skills, and lasting facts about you become memory.</small></li>
+        <small class="muted">Every conversation comes over with its original date. Projects from other apps become skills, and lasting facts about you become memory.</small></li>
       ${srcs.length ? `<li><b>Sessions on this computer</b>
         <p>Each session opens in its project folder, so you can carry on with any agent.</p>
         ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
       <li><b>What your assistant knows about you</b>
-        <p>Copy the prompt into ChatGPT, Claude or Gemini, then paste its whole answer here. It becomes your instructions and memory.</p>
+        <p>Copy the prompt into ChatGPT or another assistant, then paste its whole answer here. It becomes your instructions and memory.</p>
         <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
         <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
         <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
-      <li><b>A custom GPT or Claude project you rely on</b>
+      <li><b>A custom GPT or assistant project you rely on</b>
         <p>Paste its instructions to keep them as a skill every agent can use.</p>
         <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
         <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
@@ -2237,12 +2237,12 @@ async function contextPanel(box) {
   };
   const upload = async f => {
     if (!f) return;
-    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or Claude, without unzipping it.", true);
+    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or another assistant, without unzipping it.", true);
     res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2277,7 +2277,7 @@ async function drawPlugins(b, close) {
   const plugin = p => `<li><label class="switch"><input type="checkbox" data-pi="${esc(p.name)}" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(p.name)}"><span></span></label><span class="tg"><b>${esc(p.name)}</b>${p.version ? ` <span class="badge modified">${esc(p.version)}</span>` : ""}<small>${esc(p.description)}</small>${p.skills.length ? `<small>Skills: ${p.skills.map(s => "$" + esc(s)).join(", ")}</small>` : ""}${(p.server_status || []).map(server).join("")}<small>From ${esc(p.source)}</small></span><button class="iconbtn" data-pr="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.x}</button></li>`;
   const render = v => {
     d = v;
-    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the same format as Claude Code plugins. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
+    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the plugin format coding agents share. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
       <h3 style="font-size:16px;margin:14px 0 6px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
       <h3 style="font-size:16px;margin:14px 0 6px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
       <div class="keyrow"><input id="plSrc" placeholder="Folder, .zip, git URL or marketplace.json" spellcheck="false"><button class="btn primary" id="plAdd">Install</button></div>
@@ -2334,7 +2334,7 @@ async function drawMcpLibrary(b) {
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
-  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Claude, Codex, Cursor and other apps...</div>`;
+  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Codex, Cursor and other apps...</div>`;
   let f;
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
@@ -2411,7 +2411,7 @@ function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
+    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in ChatGPT, Codex, Cursor or other apps. You can also do this later in Settings.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;

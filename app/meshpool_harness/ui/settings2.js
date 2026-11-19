@@ -31,7 +31,6 @@ function markSettings(sec) {
   st.hidden = subs.length < 2;
   if (st.dataset.g !== g[0]) { st.dataset.g = g[0]; st.innerHTML = subs.map(k => `<button role="tab" data-sub="${k}">${esc(setName(k))}</button>`).join(""); $$("[data-sub]", st).forEach(b => b.onclick = () => renderSection(b.dataset.sub)); }
   $$("[data-sub]", st).forEach(b => b.setAttribute("aria-selected", b.dataset.sub === sec));
-  const t = $("#mtitle"); if (t) t.textContent = g[1];
   try { history.replaceState(null, "", "#settings/" + g[0]); } catch (e) { /* file or sandboxed frames */ }
 }
 function closeSettings() { $(".scrim:not(.dlg-scrim):not(.srch-scrim)")?.remove(); try { if (/^#settings/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search); } catch (e) { /* ignore */ } }
