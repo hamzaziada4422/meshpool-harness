@@ -177,7 +177,7 @@ const S = {
   cur: null,                         // the open thread: {id, total, view, epoch, ...}
   appMode: store("appmode") || "cowork",
   draft: {project: folderOrNone(store("project")), harness: "", model: store("model") || "", mode: store("mode") || "ask", plan: false},
-  panel: store("panel") || null, steps: store("steps") ?? true, attachments: [], showArchived: false, closedProjects: new Set(store("closed") || []),
+  panel: store("panel") || ((store("appmode") || "cowork") === "cowork" && !store("cw_panel_closed") && innerWidth >= 1400 ? "progress" : null), steps: store("steps") ?? false, attachments: [], showArchived: false, closedProjects: new Set(store("closed") || []),
 };
 const MODES = {ask: ["Supervised", "Asks before edits and commands"], edits: ["Auto-accept edits", "Edits go through; commands still ask"], auto: ["Full access", "Edits and commands run without asking"]};
 
@@ -199,7 +199,7 @@ function shell() {
     <aside class="side" aria-label="Chats">
       <div class="side-top">
         <div class="brandrow">
-          <img class="mlogo" src="${logoSrc()}" alt="Meshpool">
+          <img class="mlogo" src="${logoSrc()}" alt="Meshpool" width="102" height="20">
           <button class="beta" id="betaBtn" title="Meshpool is in beta: some things may not work yet. Click to report a problem.">Beta</button>
           <span class="sp"></span>
           <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
@@ -229,10 +229,10 @@ function shell() {
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
-        <div class="hintline" id="hintline"></div>
+        <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" hidden><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#newThread").onclick = () => newThread();   // not the click event as the folder
   $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
@@ -543,25 +543,26 @@ async function pickProject() {
 }
 
 /* ================================== topbar ================================== */
+// Set an element's HTML only when it differs from what is there: a header or bar that did not change is not rebuilt,
+// so nothing flashes, loses hover or focus, or does layout work during a run.
+function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; el.innerHTML = html; return true; }
 function renderTop() {
   const v = S.cur?.view; const hidden = $("#app").classList.contains("noside") || $("#app").classList.contains("autoside") || narrow();
   const root = curRoot();
   const ALL = {session: [ICON.side, "Session", ""], progress: [ICON.list, "Progress", ""], outputs: [ICON.files, "Files", ""], diff: [ICON.diff, "Diff", `${MOD}⇧D`],
     files: [ICON.files, "Files", ""], term: [ICON.term, "Terminal", `${MOD}J`], git: [ICON.pr, "Git and CI", ""], preview: [ICON.globe, "Preview", ""]};
   const tabs = PANELS[curMode()].map(k => [k, ...ALL[k]]);
-  const u = v?.usage; const cx = v?.context;
-  const usage = u && u.in ? `${fmt(u.in)} in · ${u.in ? Math.round(100 * u.cached / u.in) : 0}% cached` : cx && cx.size ? `Context ${Math.round(100 * cx.used / cx.size)}%` : "";
   $("#topbar").classList.toggle("newt", !v);
-  $("#topbar").innerHTML = `
+  const topHTML = `
     ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
-    <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
+    <span class="title" id="ttl" data-id="${esc(v?.id || "")}" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
     ${root ? `<button class="chip" id="projChip" title="${esc(isMgd(root) ? projName(root) : root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
     <span class="sp"></span>
-    ${usage ? `<span class="chip use" title="Tokens in this chat">${esc(usage)}</span>` : ""}
 
     ${tabs.map(([k, ic, lb, kb]) => `<button class="tbtn" data-panel="${k}" aria-pressed="${S.panel === k && !$("#panel")?.hidden}" title="${lb}${kb ? " (" + kb + ")" : ""}">${ic}<span>${lb}</span></button>`).join("")}
     ${v ? `<button class="tbtn" id="tmore" aria-label="Chat options">${ICON.more}</button>` : ""}`;
+  if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
   $("#stepsBtn")?.addEventListener("click", toggleSteps);
   $$("[data-panel]").forEach(b => b.onclick = () => togglePanel(b.dataset.panel));
@@ -635,7 +636,7 @@ function renderBar() {
   $("#app").classList.toggle("planning", !!c.plan);
   const fits = c.model && (!h.providers || h.providers.includes(provOf(c.model)));
   const modelLabel = fits ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : (h.runs_on ? "Default · " + h.runs_on : "Agent's own model");
-  $("#cbar").innerHTML = `
+  const barHTML = `
     <button class="pill" id="hPill" title="Agent: who does the work in this chat">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
     <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
     <button class="pill" id="aPill" title="${esc(MODES[c.mode]?.[1] || "")}">${ICON.shield}<span class="lbl">${esc(MODES[c.mode]?.[0] || "Supervised")}</span>${ICON.chev}</button>
@@ -644,21 +645,22 @@ function renderBar() {
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
-  $("#hPill").onclick = e => harnessPop(e.currentTarget);
-  $("#mPill").onclick = e => modelPop(e.currentTarget);
-  $("#aPill").onclick = e => accessPop(e.currentTarget);
-  $("#pPill").onclick = () => setPlan(!cfg().plan);
-  $("#attBtn").onclick = () => $("#fileIn").click();
-  $("#sendBtn")?.addEventListener("click", () => sendNow(false));
-  $("#stopBtn")?.addEventListener("click", stopNow);
-  $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
+  if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
+    $("#hPill").onclick = e => harnessPop(e.currentTarget);
+    $("#mPill").onclick = e => modelPop(e.currentTarget);
+    $("#aPill").onclick = e => accessPop(e.currentTarget);
+    $("#pPill").onclick = () => setPlan(!cfg().plan);
+    $("#attBtn").onclick = () => $("#fileIn").click();
+    $("#sendBtn")?.addEventListener("click", () => sendNow(false));
+    $("#stopBtn")?.addEventListener("click", stopNow);
+    $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
+  }
   const root = curRoot();
   const goal = S.cur?.view?.goal;
   const touch = matchMedia("(pointer: coarse)").matches;
-  $("#hintline").innerHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
+  const hintHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
     + (c.busy && !touch ? `Enter adds to the task · Esc stops` : "");
-  $("#goalClr")?.addEventListener("click", () => setGoal(""));
-  $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
+  if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget)); }
   const inp = $("#input");
   inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
 }
@@ -711,14 +713,13 @@ async function sendNow(interrupt) {
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
-  if (S.cur && !$("#working")) { const wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt">Sending</span><span class="el"></span>`; $("#col").appendChild(wk); scrollConv(true); }
+  S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
       const root = S.draft.project || S.defaultProject;
       const v = await post("/api/agent", {workdir: root, harness: S.draft.harness || modeHarness(), kind: S.appMode, model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
       S.draft.plan = false;
       openThread(v.id, true);
-      if (S.appMode === "cowork" && !S.panel && !store("cw_panel_closed") && innerWidth >= 1400) togglePanel("progress", true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
     const files = atts.filter(a => !a.image);
@@ -990,10 +991,10 @@ function restoreDraft() {
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
 function newThread(project) {     // project: the folder for the new chat; without one, the open chat's folder
-  if (S.cur) clearTimeout(S.cur.pollT);
+  leaveChat(S.cur);
   const p = folderOrNone(project) || S.cur?.view?.workdir;
   if (p) { S.draft.project = p; store("project", p); }
-  S.cur = null; S.attachments = []; renderAttach();
+  S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
   S.draft.harness = modeHarness();
   if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
@@ -1023,65 +1024,221 @@ function renderHero() {
   $("#heroProj").onclick = e => projectPop(e.currentTarget);
   $$(".starters button").forEach(b => b.onclick = () => { const inp = $("#input"); inp.value = b.dataset.s; inp.focus(); inp.dispatchEvent(new Event("input")); });
 }
+/* ---------- opening a chat, live delivery, scrolling ----------
+   A chat is built off-screen (cur.stage) and swapped in whole, so switching never shows a blank or half-built list.
+   Live events arrive over a Server-Sent Events stream (polling stays as the fallback and as a slow safety net) and are
+   queued; one requestAnimationFrame loop applies them, a few characters per frame, so text flows instead of arriving
+   in lumps. The reply is rendered as Markdown while it streams, into the same node it ends in. */
+const CACHE = new Map();                         // chat id -> {log, total, next, epoch, view}: reopening replays it, then fetches only what is new
+const colEl = () => S.cur?.stage || $("#col");
+function stashChat(cur) {
+  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 4000) return;
+  try { flushQ(cur); } catch (e) { return; }
+  const view = Object.assign({}, cur.view); delete view.events; delete view.prefill;
+  CACHE.delete(cur.id); CACHE.set(cur.id, {log: cur.log.slice(), total: cur.total, next: cur.next || 0, epoch: cur.epoch, view, turn: cur.turn});
+  while (CACHE.size > 6) CACHE.delete(CACHE.keys().next().value);
+}
+function leaveChat(cur) {
+  if (!cur) return;
+  clearTimeout(cur.pollT); stopStream(cur); clearTimeout(cur.sseT);
+  stashChat(cur); EASE.clear();
+}
+function beginStage(cur) {                       // the next events build a detached list; commitStage swaps it in
+  cur.stage = document.createElement("div"); cur.group = null; cur.live = null; cur.liveText = ""; cur.thought = null; cur.plan = null; cur.planEv = null; cur.mcpNote = null; cur.route = null; cur.subs = null; cur.tools = {}; cur.q = []; cur.ready = false;
+  $("#col")?.classList.add("loading");
+}
+function commitStage(cur) {
+  const st = cur.stage; if (!st) return;
+  cur.stage = null; EASE.clear();
+  const col = $("#col"); col.replaceChildren(...st.childNodes); col.classList.remove("loading");
+  for (const n of col.children) n.classList.remove("enter");
+  S.pinned = true; scrollConv(true);
+  if (cur.live) easeStart(cur.live);
+}
 function openThread(id, fresh) {
   if (S.unseen?.delete(id)) store("unseen", [...S.unseen]);
   store("last_" + S.appMode, id);
   $("#app").classList.remove("sideopen");
-  if (S.cur) clearTimeout(S.cur.pollT);
+  leaveChat(S.cur);
   const known = S.threads.find(t => t.id === id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
+  const hit = !fresh && CACHE.get(id);
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
-  $("#col").innerHTML = "";
-  closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
+  const cur = S.cur;
+  S.pinned = true; setWorking(null);
+  closePop();
+  beginStage(cur);
+  if (hit) {                                     // replay what we already had, off-screen, then ask only for the rest
+    cur.view = Object.assign(cur.view || {}, hit.view, {events: []}); cur.total = hit.total; cur.next = hit.next; cur.epoch = hit.epoch; cur.turn = 0;
+    for (const ev of hit.log) { cur.log.push(ev); applyEv(ev); }
+    cur.turn = hit.turn || cur.turn; flushLive(cur); commitStage(cur); cur.cached = true;
+  }
+  renderSide(); if (cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
+}
+function resetChat(cur) {                        // the history changed under us (undo, rewind): rebuild from the start
+  stopStream(cur); cur.total = 0; cur.next = 0; cur.log = []; cur.epoch = -2; cur.turn = 0; beginStage(cur);
 }
 async function poll() {
   const cur = S.cur; if (!cur) return;
+  clearTimeout(cur.pollT);
   let v;
   try { v = await api(`/api/agent/${cur.id}?since=${cur.total}`); }
   catch (e) {
     if (S.cur !== cur) return;
-    if (/not found/i.test(e.message)) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); return; }
+    if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
-    let n = $("#pollErr"); if (!n && cur.fails > 1) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
+    let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
     if (n) n.textContent = `${e.message} Retrying…`;
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
     return;
   }
   if (S.cur !== cur) return;
   if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
-  if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { cur.total = 0; cur.epoch = v.epoch; $("#col").innerHTML = ""; cur.live = null; cur.group = null; cur.tools = {}; cur.log = []; cur.next = 0; return poll(); }
+  const again = ingest(cur, v);
+  if (again) return poll();
+  const busy = ["starting", "working", "waiting"].includes(v.state);
+  if (busy) startStream(cur);
+  cur.pollT = setTimeout(poll, cur.es && cur.es.readyState === 1 ? 4000 : busy ? 400 : document.hidden ? 15000 : 3000);
+}
+// Take one view of the chat (from a poll or the stream): queue its new events and update the chrome around them.
+function ingest(cur, v) {
+  if (S.cur !== cur) return;
+  if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { resetChat(cur); cur.epoch = v.epoch; return true; }
   const first = !cur.view || cur.view.prefill || cur.view.state === "starting" && !cur.total;
-  cur.epoch = v.epoch; cur.total = v.total;
+  cur.epoch = v.epoch; cur.total = Math.max(cur.total || 0, v.total || 0);
   const prevState = cur.view?.state, prevGoal = cur.view?.goal;
+  const evs = v.events || []; v = Object.assign({}, v); delete v.events;
   cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
   const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; if (v.readonly) inpEl.placeholder = "This chat's folder is gone, so it can't continue. Start a new chat."; }
-  cur.log = cur.log || [];
-  const cv = $("#conv"); const stick = !!cv && cv.scrollHeight - cv.scrollTop - cv.clientHeight < 200;
-  for (const ev of v.events) {
-    if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // two polls in flight
+  let got = 0;
+  for (const ev of evs) {
+    if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // the stream and a poll can overlap
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
-    cur.log.push(ev); applyEv(ev);
+    cur.q.push(ev); got++;
   }
+  if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
+  if (cur.stage) commitStage(cur);
   if (v.kind && v.kind !== S.appMode) { S.appMode = v.kind; store("appmode", v.kind); $("#app").dataset.mode = v.kind; $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === v.kind)); renderSide(); renderTop(); }
-  if (S.panel === "progress" && (v.events.length || prevState !== v.state)) renderPanel();
+  if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
-  let wk = $("#working");
-  if (v.state === "working" && !cur.live && !$(".appr:not(.done)")) {
-    if (!wk) { wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); }
-    $(".wt", wk).textContent = String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, "");
-    $(".el", wk).textContent = Math.round((Date.now() - (cur.since || Date.now())) / 1000) + "s";
-    $("#col").appendChild(wk);
-  } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
+  cur.busy = busy; cur.working = v.state === "working";
+  if (v.state === "working") { if (!cur.since) cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); } else cur.since = null;
   if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   if (first && S.panel) renderPanel();
-  scrollConv(first || stick);
-  if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
-  cur.pollT = setTimeout(poll, busy ? 400 : document.hidden ? 15000 : 3000);
+  if (first) scrollConv(true);
+  if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
+  return false;
 }
-function scrollConv(force) { const c = $("#conv"); if (force || c.scrollHeight - c.scrollTop - c.clientHeight < 200) c.scrollTop = c.scrollHeight; }
+// ---- Server-Sent Events: the open chat's events pushed as they happen
+function startStream(cur) {
+  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  cur.es = es;
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onerror = () => {                           // fall back to polling; try the stream again a few times
+    stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
+    if (cur.esFails >= 4) { cur.sseOff = true; return; }
+    cur.sseT = setTimeout(() => { if (S.cur === cur && cur.busy) startStream(cur); }, 600 * cur.esFails);
+    if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
+  };
+}
+function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+// ---- the paced drain: events leave the queue in order; text goes a few characters per frame
+function drainQ(cur, all) {
+  const q = cur.q; if (!q || !q.length) return;
+  let backlog = 0; if (!all) for (const e of q) if (e.type === "text_delta") backlog += e.text.length;
+  let budget = all ? Infinity : Math.max(8, Math.ceil(backlog / 8)), evs = 0;
+  while (q.length && (all || evs < 3)) {
+    const ev = q[0];
+    if (ev.type === "text_delta") {
+      if (budget <= 0) break;
+      if (ev.text.length > budget) { const head = ev.text.slice(0, budget); ev.text = ev.text.slice(budget); const part = {type: "text_delta", text: head}; cur.log.push(part); applyEv(part); break; }
+      q.shift(); budget -= ev.text.length;
+    } else { q.shift(); evs++; }
+    cur.log.push(ev); applyEv(ev);
+  }
+}
+function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
+function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+function frame() {
+  requestAnimationFrame(frame);
+  const cur = S.cur;
+  if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
+  easeAll(); workTick(cur);
+}
+// The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
+// scrolls with it smoothly instead of stepping a whole line at a time.
+const EASE = new Set();
+function easeStart(node) { if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+function easeEnd(node) { if (node) node.dataset.done = "1"; }
+function easeAll() {
+  for (const n of EASE) {
+    if (!n.isConnected) { EASE.delete(n); n.style.height = ""; n.classList.remove("rv"); continue; }
+    const inner = n.firstElementChild, target = inner ? inner.offsetHeight : 0, h = parseFloat(n.style.height) || 0, done = n.dataset.done === "1";
+    if (target > h + 0.5) n.style.height = Math.min(target, h + Math.max(1, (target - h) * (target - h > 70 ? 0.25 : 0.11))).toFixed(1) + "px";
+    else if (done) { n.style.height = ""; n.classList.remove("rv"); EASE.delete(n); }
+  }
+}
+// ---- the "working" status: one slot under the composer, always the same size, updated in place
+function setWorking(text, secs) {
+  const slot = $("#statusSlot"); if (!slot) return;
+  let wk = $("#working", slot);
+  if (text == null) { wk?.remove(); return; }
+  if (!wk) { wk = document.createElement("span"); wk.id = "working"; wk.className = "working"; wk.setAttribute("role", "status"); wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; slot.appendChild(wk); }
+  const wt = $(".wt", wk), el = $(".el", wk);
+  if (wt.textContent !== text) wt.textContent = text;
+  const e = secs == null ? "" : secs + "s"; if (el.textContent !== e) el.textContent = e;
+}
+function workTick(cur) {
+  if (!cur) return;
+  const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
+  const pd = cur.working ? planData() : null;
+  if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
+  else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
+}
+// ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
+function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.pinned = true; if (S.pinned) { c.scrollTop = c.scrollHeight; $(".jumpdown")?.setAttribute("hidden", ""); } }
+function setupScroll() {
+  const conv = $("#conv"), col = $("#col");
+  const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
+  conv.parentElement.appendChild(jd);
+  jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
+  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160; }, {passive: true});
+  if (window.ResizeObserver) new ResizeObserver(() => { if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
+  requestAnimationFrame(frame);
+}
 
 /* ---------- markdown ---------- */
+// One renderer for the live reply and for history. The text is cut into blocks at blank lines (a code fence is one block);
+// each block becomes its own elements. When the text grows only the last, still-open block is re-rendered, so finished
+// blocks are never touched and the finished reply is exactly what was on screen while it streamed.
+function mdBlocks(text) {
+  const out = []; let cur = [], fence = false;
+  for (const ln of String(text || "").split("\n")) {
+    if ((ln.split("```").length - 1) % 2) fence = !fence;
+    if (!fence && !ln.trim()) { if (cur.length) { out.push(cur.join("\n")); cur = []; } continue; }
+    cur.push(ln);
+  }
+  if (cur.length) out.push(cur.join("\n"));
+  return out;
+}
+function mdRoot(node) { let r = node.firstElementChild; if (!r || !r.classList.contains("mdh")) { r = document.createElement("div"); r.className = "mdh"; node.textContent = ""; node.appendChild(r); node._blocks = []; } return r; }
+function mdRender(node, text) {
+  const root = mdRoot(node), prev = node._blocks || (node._blocks = []), srcs = mdBlocks(text);
+  for (let i = 0; i < srcs.length; i++) {
+    if (prev[i] && prev[i].src === srcs[i]) continue;
+    const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
+    const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
+    const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
+    for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
+    for (const n of old) n.remove();
+    prev[i] = {src: srcs[i], nodes};
+  }
+  while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
+  return node;
+}
 function inline(s) {
   return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
@@ -1093,14 +1250,14 @@ function md(src) {
     if (i % 2) return `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
-    const flushL = () => { if (list) { out += `<${list.t}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
+    const flushL = () => { if (list) { out += `<${list.t}${list.t === "ol" && list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
     const flushT = () => { if (table.length) { const rows = table.filter(r => !/^\s*\|?\s*:?-{2,}/.test(r)).map(r => r.replace(/^\s*\||\|\s*$/g, "").split("|").map(c => c.trim())); out += `<table>${rows.map((r, ri) => `<tr>${r.map(c => ri ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`).join("")}</tr>`).join("")}</table>`; table = []; } };
     for (const ln of lines) {
       let m;
       if (/^\s*\|.*\|\s*$/.test(ln)) { flushP(); flushL(); table.push(ln); continue; } else flushT();
       if ((m = /^(#{1,6})\s+(.*)$/.exec(ln))) { flushP(); flushL(); out += `<h3>${inline(m[2])}</h3>`; }
       else if ((m = /^\s*[-*]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ul") { flushL(); list = {t: "ul", items: []}; } list.items.push(m[1]); }
-      else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = {t: "ol", items: []}; } list.items.push(m[1]); }
+      else if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = {t: "ol", items: [], start: +m[1]}; } list.items.push(m[2]); }
       else if ((m = /^&gt;\s?(.*)$/.exec(ln))) { flushP(); flushL(); out += `<blockquote>${inline(m[1])}</blockquote>`; }
       else if (!ln.trim()) { flushP(); flushL(); }
       else { flushL(); para.push(ln); }
@@ -1125,10 +1282,10 @@ function stepSummary(name, ev) {
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
 function workGroup() {
   const cur = S.cur;
-  if (cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild) return cur.group;
-  const d = document.createElement("details"); d.className = "work"; d.open = true; d.dataset.n = "0";
+  if (cur.group && cur.group.isConnected && cur.group === colEl().lastElementChild) return cur.group;
+  const d = document.createElement("details"); d.className = "work"; d.open = !!S.steps; d.dataset.n = "0";
   d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="wl">Working</span></summary><div class="rows"></div>`;
-  $("#col").appendChild(d); cur.group = d; return d;
+  colEl().appendChild(d); cur.group = d; return d;
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
@@ -1140,7 +1297,7 @@ const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 function applyEv(ev) {
-  const cur = S.cur, col = $("#col");
+  const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
@@ -1156,13 +1313,13 @@ function applyEv(ev) {
       add(`<div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }
     case "text_delta":
-      if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.live.style.whiteSpace = "pre-wrap"; cur.liveText = ""; }
-      cur.liveText += ev.text; cur.live.textContent = cur.liveText; cur.activity = "Writing"; break;
-    case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; } break;
+      if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
+      cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
+    case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "assistant":
       { const txt = stripGoal(ev.text);
-      if (cur.live) { if (txt) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = linkFiles(md(txt)); } else cur.live.remove(); cur.live = null; }
-      else if (txt) { closeGroup(); add(linkFiles(md(txt)), "msg-ai"); } }
+      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
+      else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {
@@ -1187,7 +1344,7 @@ function applyEv(ev) {
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
-      const gKeep = cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild ? cur.group : null;
+      const gKeep = cur.group && cur.group.isConnected && cur.group === col.lastElementChild ? cur.group : null;
       for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "waiting for your OK"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
@@ -1207,14 +1364,11 @@ function applyEv(ev) {
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
-        const g = d.previousElementSibling; if (g?.classList.contains("work") && d === $("#col").lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
+        const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
-    case "plan": {
-      const html = `<b>Plan</b><ol>${(ev.entries || []).map(e => `<li class="${esc(e.status)}">${esc(e.content)}</li>`).join("")}</ol>`;
-      if (cur.plan && cur.plan.isConnected) cur.plan.innerHTML = html; else { closeGroup(); cur.plan = add(html, "planbox"); }
-      break; }
+    case "plan": { cur.planEv = ev; planSoon(); break; }       // shown in the Session panel and as one line above the composer
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
       let box = cur.subs[ev.delegation];
@@ -1229,14 +1383,14 @@ function applyEv(ev) {
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
-    case "receipt": { closeGroup(); add(md(ev.text || ""), "note receipt"); break; }   // what changed, how it was checked
+    case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
+      add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
-      if (ev.route) {                       // the harness router's pick, as a chip the user can change
-        const r = ev.route, why = String(ev.text || "").replace(/^Harness: [^(]*\(?|\)?\.?$/g, "");
-        const n = add(`<button class="routechip" title="Change how Meshpool handles this chat">${esc(String(ev.text || "").replace(/^Harness: /, "").replace(/ \(.*$/, ""))}</button><span class="routewhy">${esc(why)}</span>`, "note route");
-        $(".routechip", n).onclick = () => routeMenu(n);
-        break; }
-      if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break; }
+      // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
+      if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^Harness: /, "").replace(/ \(.*$/, ""), why: String(ev.text || "").replace(/^Harness: [^(]*\(?|\)?\.?$/g, "")}; sessionSoon(); break; }
+      if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
+      if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
+      add(esc(ev.text), "note"); break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
@@ -1272,51 +1426,87 @@ function questionEv(ev, add) {
   if (ev.type === "question_done") { questionDone(ev); return true; }
   return false;
 }
+// The card sits in the transcript like any message. Rows are full width; 1-9 pick a row, arrows move, Enter on a chosen row
+// sends. Answered, it folds into one line (its height eases down, so nothing jumps).
+const qId = ev => "q-" + String(ev.id).replace(/[^\w-]/g, "");
+const QCHECK = `<svg class="qck" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`;
 function questionCard(ev, add) {
-  const qs = ev.questions || [], cid = "q-" + String(ev.id).replace(/[^\w-]/g, "");
-  const many = qs.length > 1;
-  const html = `<div class="qhead" id="${cid}-h">${many ? `${qs.length} questions before I go on` : "A question before I go on"}</div>` +
-    qs.map((q, i) => `<fieldset class="qq" data-i="${i}" data-multi="${q.multi ? 1 : 0}">
-      <legend><span class="qchip">${esc(q.header || `Question ${i + 1}`)}</span><span class="qtext">${esc(q.question)}</span>${q.multi ? `<span class="qhint">Pick any</span>` : ""}</legend>
-      <div class="qopts">${(q.options || []).map(o => `<button type="button" class="qopt" aria-pressed="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="ql">${esc(o.label)}${o.recommended ? ` <span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</button>`).join("")}</div>
-      <label class="qother"><span>Other</span><input type="text" placeholder="Type your own answer" aria-label="Your own answer to: ${esc(q.question)}"></label>
-    </fieldset>`).join("") +
-    `<div class="acts"><button type="button" class="btn primary qsend">Send ${many ? "answers" : "answer"}</button><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span></div>`;
-  const d = add(html, "qcard"); d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-labelledby", cid + "-h");
-  $$(".qq", d).forEach(fs => {
-    const multi = fs.dataset.multi === "1", btns = $$(".qopt", fs), inp = $("input", fs);
-    btns.forEach(b => b.onclick = () => {
-      const on = b.getAttribute("aria-pressed") !== "true";
-      if (!multi) { btns.forEach(x => x.setAttribute("aria-pressed", "false")); if (on) inp.value = ""; }
-      b.setAttribute("aria-pressed", on ? "true" : "false");
-    });
-    inp.oninput = () => { if (!multi && inp.value.trim()) btns.forEach(x => x.setAttribute("aria-pressed", "false")); };
-    inp.onkeydown = e => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $(".qsend", d).click(); } };
-  });
-  $(".qsend", d).onclick = async () => {
-    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[aria-pressed=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
-    $$("button, input", d).forEach(x => x.disabled = true);
-    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); }
-    catch (e) { $$("button, input", d).forEach(x => x.disabled = false); toast(e.message); }
+  const qs = ev.questions || [], cid = qId(ev), many = qs.length > 1;
+  const html = qs.map((q, i) => {
+    const multi = !!q.multi, opts = q.options || [], role = multi ? "checkbox" : "radio";
+    return `<fieldset class="qq" data-i="${i}" data-multi="${multi ? 1 : 0}">
+      <legend>${q.header ? `<span class="qchip">${esc(q.header)}</span>` : ""}<span class="qtext">${esc(q.question)}</span>${multi ? `<span class="qhint">Choose any</span>` : ""}</legend>
+      <div class="qopts" role="${multi ? "group" : "radiogroup"}" aria-label="${esc(q.question)}">${opts.map((o, k) => `<button type="button" class="qopt" role="${role}" aria-checked="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="qk">${k + 1}</span><span class="qbody"><span class="ql">${esc(o.label)}${o.recommended ? `<span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</span>${QCHECK}</button>`).join("")}
+        <label class="qopt qother" data-other="1"><span class="qk">${opts.length + 1}</span><span class="qbody"><input type="text" placeholder="Other: type your own answer" aria-label="Your own answer to: ${esc(q.question)}" autocomplete="off"></span>${QCHECK}</label>
+      </div></fieldset>`;
+  }).join("");
+  const d = add(`<div class="qin">${html}<div class="qfoot"><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span><button type="button" class="btn primary qsend">${many ? "Send answers" : "Continue"}</button></div></div>`, "qcard");
+  d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
+  const sync = () => {
+    $$(".qq", d).forEach(fs => { const inp = $("input", fs), oth = $(".qother", fs); oth.setAttribute("aria-checked", inp.value.trim() ? "true" : "false"); });
+    const ok = $$(".qq", d).every(fs => $$(".qopt[aria-checked=true]", fs).length);
+    $(".qsend", d).disabled = !ok || d.classList.contains("sent");
   };
+  const pick = (fs, row) => {
+    const multi = fs.dataset.multi === "1", inp = $("input", fs), rows = $$(".qopt[data-l]", fs);
+    if (row.dataset.other) { inp.focus(); return; }
+    const on = multi ? row.getAttribute("aria-checked") !== "true" : true;
+    if (!multi) { rows.forEach(x => x.setAttribute("aria-checked", "false")); inp.value = ""; }
+    row.setAttribute("aria-checked", on ? "true" : "false"); sync();
+  };
+  const submit = async () => {
+    if ($(".qsend", d).disabled) return;
+    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[data-l][aria-checked=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
+    d.classList.add("sent"); $$("button, input", d).forEach(x => x.disabled = true);
+    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); $("#input")?.focus({preventScroll: true}); }
+    catch (e) { d.classList.remove("sent"); $$("button, input", d).forEach(x => x.disabled = false); sync(); toast(e.message); }
+  };
+  d._submit = submit; d._pick = pick;
+  $$(".qq", d).forEach(fs => {
+    const multi = fs.dataset.multi === "1", inp = $("input", fs);
+    $$(".qopt[data-l]", fs).forEach(b => b.onclick = () => pick(fs, b));
+    $(".qother", fs).onclick = e => { if (e.target !== inp) inp.focus(); };
+    inp.oninput = () => { if (!multi && inp.value.trim()) $$(".qopt[data-l]", fs).forEach(x => x.setAttribute("aria-checked", "false")); sync(); };
+  });
+  $(".qsend", d).onclick = submit;
+  d.addEventListener("keydown", e => qKeys(e, d));
+  sync();
   if (!ev.timeout_s) $$("button, input", d).forEach(x => x.disabled = true);   // answered at once (no one to ask)
   scrollConv(true);
-  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-pressed=true]", d)?.focus({preventScroll: true});
+  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-checked=true], .qopt", d)?.focus({preventScroll: true});
 }
+// Keys for the open question: inside the card, and from an empty message box so the reader never has to reach for the mouse.
+function qKeys(e, d) {
+  if (d.classList.contains("done") || d.classList.contains("sent") || e.isComposing || e.altKey) return;
+  const inInput = e.target.tagName === "INPUT", fs = e.target.closest?.(".qq") || $(".qq", d);
+  const rows = $$(".qopt[data-l], .qother input", fs), k = e.key;
+  if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); const i = rows.indexOf(e.target.closest(".qopt")?.matches(".qother") ? $("input", e.target.closest(".qopt")) : e.target); rows[(i < 0 ? (k === "ArrowDown" ? 0 : rows.length - 1) : (i + (k === "ArrowDown" ? 1 : -1) + rows.length) % rows.length)]?.focus(); return; }
+  if (/^[1-9]$/.test(k) && !inInput && !e.metaKey && !e.ctrlKey) { const r = rows[+k - 1]; if (r) { e.preventDefault(); if (r.tagName === "INPUT") r.focus(); else { d._pick(fs, r); r.focus(); } } return; }
+  if (k === "Enter" && !e.shiftKey) {
+    const onRow = e.target.classList?.contains("qopt");
+    if (onRow && e.target.getAttribute("aria-checked") !== "true" && !(e.metaKey || e.ctrlKey)) return;     // the first Enter chooses (native click)
+    if (e.target.classList?.contains("qsend")) return;
+    e.preventDefault(); d._submit();
+  }
+}
+document.addEventListener("keydown", e => {            // from an empty message box
+  if (e.target !== $("#input") || $("#input").value || e.metaKey || e.ctrlKey) return;
+  const d = [...document.querySelectorAll(".qcard:not(.done):not(.sent)")].pop(); if (!d || d.dataset.n === undefined || $(".qsend", d)?.disabled && !/^[1-9]$|Arrow/.test(e.key)) return;
+  if (!(/^[1-9]$/.test(e.key) || e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) return;
+  if (e.key === "Enter") { if ($(".qsend", d).disabled) return; e.preventDefault(); e.stopPropagation(); d._submit(); return; }
+  qKeys(e, d);
+}, true);
 function questionDone(ev) {
-  const d = document.getElementById("q-" + String(ev.id).replace(/[^\w-]/g, "")); if (!d || d.classList.contains("done")) return;
-  d.classList.add("done");
-  const src = ev.source, head = $(".qhead", d);
-  if (head) head.textContent = src === "stopped" ? "Question (stopped)" : src === "user" || src === "replay" ? "You answered" : src === "timeout" ? "No answer in time: went with the recommendations" : "Went with the recommendations";
-  const ans = ev.answers || [];
-  const typed = src === "user" && /^You replied/.test(ev.text || "");
-  const rows = ans.length && !typed ? $$(".qq", d).map((fs, i) => {
-    const a = ans[i] || {}, q = $(".qtext", fs)?.textContent || "", h = $(".qchip", fs)?.textContent || "";
-    const val = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", ");
-    return `<div class="qa"><span class="qchip">${esc(h)}</span><span class="qtext">${esc(q)}</span><b>${esc(val || "-")}</b>${a.default && src === "user" ? `<span class="qhint">recommended</span>` : ""}</div>`;
-  }).join("") : `<div class="qa"><span class="qtext qpre">${esc(ev.text || "")}</span></div>`;
-  $$(".qq, .acts", d).forEach(x => x.parentNode.removeChild(x));
-  d.insertAdjacentHTML("beforeend", rows);
+  const d = document.getElementById(qId(ev)); if (!d || d.classList.contains("done")) return;
+  const src = ev.source, ans = ev.answers || [], typed = src === "user" && /^You replied/.test(ev.text || "");
+  const qs = $$(".qq", d).map(fs => $(".qtext", fs)?.textContent || "");
+  const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
+  const line = (q, val) => `<div class="qa">${QCHECK}<span class="qtext">${esc(q)}</span><b>${esc(val || "No answer")}</b></div>`;
+  const rows = typed ? line("You replied", String(ev.text).replace(/^You replied:?\s*/, "")) : ans.length ? qs.map((q, i) => { const a = ans[i] || {}; const v = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", "); return line(q, (how ? how + " " : "") + v); }).join("") : line(qs[0] || "Question", (how || "") + (ev.text ? " " + ev.text : ""));
+  const h0 = d.offsetHeight; d.style.height = h0 + "px"; d.style.overflow = "hidden";
+  d.classList.add("done"); d.innerHTML = `<div class="qin">${rows}</div>`;
+  const h1 = $(".qin", d).offsetHeight + parseFloat(getComputedStyle(d).paddingTop) + parseFloat(getComputedStyle(d).paddingBottom);
+  requestAnimationFrame(() => { d.style.height = h1 + "px"; setTimeout(() => { d.style.height = ""; d.style.overflow = ""; }, 220); });
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
@@ -1334,7 +1524,7 @@ function bindFoot(foot) {
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); S.cur.total = 0; S.cur.next = 0; S.cur.log = []; S.cur.epoch = -2; $("#col").innerHTML = ""; S.cur.turn = 0; S.cur.group = null; S.cur.live = null; S.cur.tools = {}; poll(); if (S.panel === "diff") renderPanel(); }
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
@@ -1379,7 +1569,7 @@ function progressSteps() {
   const lastUser = log.map(e => e.type).lastIndexOf("user");
   const turn = log.slice(Math.max(0, lastUser));
   const plan = [...turn].reverse().find(e => e.type === "plan");
-  if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map(e => ({text: e.content, status: e.status}))};
+  if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map((e, i) => ({key: "p" + i, text: e.content, status: e.status}))};
   const tools = {};
   let turnIds = [];
   for (const e of turn) {
@@ -1391,7 +1581,7 @@ function progressSteps() {
     if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
     if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
   }
-  return {kind: "steps", items: Object.values(tools)};
+  return {kind: "steps", items: Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t))};
 }
 const OUT_RX = /(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n"'`<>():]+?\.(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])/g;
 function outputFiles() {
@@ -1402,25 +1592,58 @@ function outputFiles() {
   return [...seen.values()];
 }
 function fileIcon(p) { return ICON.files; }
-function panelProgress(body) {
-  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
+// The Progress tab is built once and then patched by key, so a step finishing changes one row, not the whole panel.
+function reconcile(parent, items, keyOf, make, update) {
+  const have = new Map([...parent.children].map(el => [el.dataset.k, el]));
+  let ref = parent.firstElementChild;
+  for (const it of items) {
+    const k = keyOf(it); let el = have.get(k);
+    if (el) { have.delete(k); update(el, it); if (el === ref) ref = ref.nextElementSibling; else parent.insertBefore(el, ref); }
+    else { el = make(it); el.dataset.k = k; parent.insertBefore(el, ref); }
+  }
+  for (const el of have.values()) el.remove();
+}
+const setTxt = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
+const setCls = (el, c) => { if (el && el.className !== c) el.className = c; };
+function progressSoon() { if (S.panel !== "progress" || S.pgT) return; S.pgT = setTimeout(() => { S.pgT = null; if (S.panel === "progress") progressUpdate(); }, 250); }
+function progressUpdate() {
+  const body = $("#pbody .cw"); if (!body || !S.cur) return;
   const v = S.cur.view || {}; const pr = progressSteps(); const outs = outputFiles();
   const busy = ["working", "waiting", "starting"].includes(v.state);
   const icon = st => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : st === "failed" ? `<span class="pi bad">${ICON.x}</span>` : st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
+  const hd = $("#pgState", body);
+  const stateHTML = busy ? `<span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? `<span class="cwstop">Stopped</span>` : `<span class="cwdone">Done</span>`) : "";
+  if (hd._h !== stateHTML) { hd._h = stateHTML; hd.innerHTML = stateHTML; }
+  const box = $("#pgSteps", body); let ol = $("ol", box);
+  if (!pr.items.length) { ol?.remove(); setHTML(box, `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`); }
+  else {
+    if (!ol) { box.innerHTML = ""; box._h = null; ol = document.createElement("ol"); ol.className = "stepl"; box.appendChild(ol); }
+    reconcile(ol, pr.items, it => it.key, it => { const li = document.createElement("li"); li.className = it.status; li.innerHTML = `${icon(it.status)}<span></span>`; $("span:last-child", li).textContent = it.text; li.dataset.st = it.status; return li; },
+      (li, it) => { if (li.dataset.st !== it.status) { li.dataset.st = it.status; li.className = it.status; $(".pi", li).outerHTML = icon(it.status); } setTxt(li.lastElementChild, it.text); });
+  }
+  const fbox = $("#pgFiles", body); let ul = $("ul", fbox);
+  if (!outs.length) { ul?.remove(); setHTML(fbox, `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`); }
+  else {
+    if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
+    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => { toast(`Opening ${o.path}…`); post("/api/open-file", {root: curRoot(), path: o.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); }; return li; }, () => {});
+  }
+  setTxt($("#pgHarness", body), v.harness?.name || ""); setTxt($("#pgModel", body), modelName(v.model || ""));
+}
+function panelProgress(body) {
+  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
+  const v = S.cur.view || {};
   const users = threadLog().filter(e => e.type === "user");
   const skills = [...new Set(users.flatMap(u => (String(u.text).match(/\$[\w-]+/g) || [])))].filter(x => S.skills.some(k => "$" + k.name === x));
   body.innerHTML = `<div class="cw">
-    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? ` <span class="cwstop">Stopped</span>` : ` <span class="cwdone">Done</span>`) : ""}</h4>
-      ${pr.items.length ? `<ol class="stepl">${pr.items.map(it => `<li class="${esc(it.status)}">${icon(it.status)}<span>${esc(it.text)}</span></li>`).join("")}</ol>` : `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`}
-    </section>
-    <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
+    <section><h4>Progress <span id="pgState"></span></h4><div id="pgSteps"></div></section>
+    <section><h4>Files made</h4><div id="pgFiles"></div></section>
     <section><h4>Context</h4><ul class="ctxl">
       <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
-      <li>${ICON.cpu}<span><b>${esc(v.harness?.name || "")}</b><small>${esc(modelName(v.model || ""))}</small></span></li>
+      <li>${ICON.cpu}<span><b id="pgHarness"></b><small id="pgModel"></small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
-  $$("[data-open]", body).forEach(b => b.onclick = () => { toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); });
+  progressUpdate();
   $("#cwOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
   $("#cwConnMgr").onclick = () => openSettings("connectors");
   (S.connCache ? Promise.resolve(S.connCache) : api("/api/connectors").then(r => (S.connCache = r.connectors))).then(cs => {
@@ -1622,6 +1845,31 @@ const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
 const spDur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
 const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
 const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
+// ---- the plan: the agent's checklist. In the Session panel, patched by row; in the chat only one quiet line (the status slot).
+function planData() {
+  const cur = S.cur; if (!cur) return null;
+  const e = cur.planEv, sp = S.spPlan && S.spPlan.sid === cur.id ? S.spPlan : null, src = e || sp; if (!src) return null;
+  if (cur._pd && cur._pd.src === src) return cur._pd.v;
+  // events: items/entries {content, status}; the panel's data: steps {text, state: done|current|pending}
+  const raw = src.items || src.entries || (src.steps || []).map(x => ({text: x.text, status: x.state === "done" ? "completed" : x.state === "current" ? "in_progress" : "pending"}));
+  const items = raw.map(x => ({text: String(x.content ?? x.text ?? ""), status: x.status === "done" ? "completed" : x.status || "pending"}));
+  // the backend's `current` is 1-based (0 = every step done); here it is an index into items
+  let c = Number.isInteger(src.current) && src.current > 0 ? src.current - 1 : items.findIndex(x => x.status !== "completed");
+  if (c < 0) c = Math.max(0, items.length - 1);
+  const v = items.length ? {items, current: c, total: src.total || items.length} : null;
+  cur._pd = {src, v}; return v;
+}
+const planLine = pd => `Step ${Math.min(pd.current + 1, pd.total)} of ${pd.total} · ${clip(String(pd.items[pd.current]?.text || ""), 60)}`;
+const planIcon = (st, cur) => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : cur || st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
+function planRows(pd) { return pd.items.map((it, i) => ({key: "s" + i, text: it.text, st: it.status === "completed" ? "completed" : i === pd.current || it.status === "in_progress" ? "current" : "pending"})); }
+function planUpdate() {
+  const ol = $("#spPlanList"), pd = planData(); if (!ol || !pd) return;
+  reconcile(ol, planRows(pd), r => r.key, r => { const li = document.createElement("li"); li.className = r.st; li.dataset.st = r.st; li.innerHTML = `${planIcon(r.st, r.st === "current")}<span></span>`; li.lastElementChild.textContent = r.text; return li; },
+    (li, r) => { if (li.dataset.st !== r.st) { li.dataset.st = r.st; li.className = r.st; $(".pi", li).outerHTML = planIcon(r.st, r.st === "current"); } setTxt(li.lastElementChild, r.text); });
+  setTxt($("[data-k=plan] .spc"), `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`);
+}
+function planSoon() { if (S.plT) return; S.plT = setTimeout(() => { S.plT = null; if ($("#spPlanList") || S.panel !== "session") planUpdate(); else sessionSoon(); }, 120); }
+function sessionSoon() { if (S.panel !== "session" || S.seT) return; S.seT = setTimeout(() => { S.seT = null; if (S.panel === "session" && S.spLast && S.cur) spDraw(S.cur.id, curRoot(), S.spLast); }, 300); }
 function spSec(k, title, count, inner) {
   return `<details class="spsec" data-k="${k}" ${spOpen(k) ? "open" : ""}><summary><span class="chev">${ICON.chev}</span><b>${title}</b>${count ? `<span class="spc">${count}</span>` : ""}</summary><div class="spbody">${inner}</div></details>`;
 }
@@ -1656,9 +1904,15 @@ function spHTML(d, pr) {
     if (pr.others.length) chg += `<div class="spsub">Other open pull requests</div><ul class="spl">${pr.others.map(o => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener"><span class="cn">#${o.number} ${esc(o.title)}</span></a>${o.draft ? `<span class="spc">draft</span>` : ""}</li>`).join("")}</ul>`;
   }
   const bgHTML = (bg.running.length ? `<ul class="spl">${bg.running.map(t => `<li><span class="cidot run"></span><span class="cn" title="${esc(t.title)}">${esc(t.title)}</span><span class="cs">${esc({subagent: "Sub-agent", terminal: "Command", scheduled: "Scheduled"}[t.kind])} · ${spDur(t.elapsed)}</span><button class="linkbtn" data-stop="${esc(t.kind)}:${esc(t.id)}">Stop</button></li>`).join("")}</ul>` : `<div class="pnote spmini">Nothing running in the background.</div>`) + (bg.finished ? `<div class="stat">${bg.finished} finished</div>` : "");
+  const cur = S.cur, pd = planData(), rc = [...(cur?.log || [])].reverse().find(e => e.type === "receipt"), mn = cur?.mcpNote || "";
+  const mcpBad = /Failed|did not start/.test(mn);
+  const planHTML = pd ? spSec("plan", "Plan", `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`, `<ol class="stepl plan" id="spPlanList">${planRows(pd).map(r => `<li class="${r.st}" data-st="${r.st}" data-k="${r.key}">${planIcon(r.st, r.st === "current")}<span>${esc(r.text)}</span></li>`).join("")}</ol>`) : "";
+  const routeHTML = cur?.route ? spSec("route", "Handled by", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label)}</b><small>${esc(cur.route.why)}</small></span><button class="linkbtn" id="spRoute">Change</button></div>`) : "";
+  const reviewHTML = rc ? spSec("review", "Review", "", `<div class="rcbody md">${md(rc.text || "")}</div>`) : "";
+  const mcpHTML = mn ? `<div class="pnote spmini ${mcpBad ? "bad" : ""}">${esc(mn.replace(/^MCP: ?/, ""))}</div>` : "";
   return `<div class="spw"><div class="spbtns">${buttons.map(([k, ic, lb]) => `<button class="btn" data-go="${k}">${ic}${lb}</button>`).join("")}</div>
-    ${spSec("env", "Environment", "", envHTML)}${spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
-    ${spSec("conn", "Connectors", cn.used.length ? `${cn.used.length} used` : "", cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`)}
+    ${planHTML}${spSec("env", "Environment", "", envHTML)}${routeHTML}${spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
+    ${spSec("conn", `Connectors${mcpBad ? ` <span class="cidot bad" title="A connector did not start"></span>` : ""}`, cn.used.length ? `${cn.used.length} used` : "", (cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`) + mcpHTML)}${reviewHTML}
     ${spSec("out", "Outputs", outs.length || "", outHTML)}${spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
     ${spSec("bg", "Background tasks", bg.running.length || "", bgHTML)}
     <div class="viewer" id="viewer" hidden></div></div>`;
@@ -1681,6 +1935,7 @@ async function panelSession(body) {
 function spDraw(sid, root, d) {
   const body = $("#pbody"); if (!body || !d || S.panel !== "session" || S.cur?.id !== sid) return;
   if (body.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) return;   // never rebuild under the user's typing
+  S.spLast = d; if (d.plan) S.spPlan = Object.assign({sid}, d.plan);
   const keep = $("#viewer", body); const vh = keep && !keep.hidden ? keep.innerHTML : "";
   const sc = body.scrollTop;
   body.innerHTML = spHTML(d, S.spPr?.data);
@@ -1688,6 +1943,7 @@ function spDraw(sid, root, d) {
   if (vh) { const v = $("#viewer", body); v.hidden = false; v.innerHTML = vh; }
   $$("details.spsec", body).forEach(el => el.ontoggle = () => { const o = store("sp_open") || {}; o[el.dataset.k] = el.open; store("sp_open", o); });
   $$("[data-go]", body).forEach(b => b.onclick = () => togglePanel(b.dataset.go, true));
+  $("#spRoute", body)?.addEventListener("click", e => routeMenu(e.currentTarget.parentElement));
   $$("[data-open]", body).forEach(b => b.onclick = () => openFile(root, b.dataset.open));
   $("#spBr", body)?.addEventListener("change", e => gitAct({action: "checkout", branch: e.target.value}));
   $("#spCreate", body)?.addEventListener("click", () => gitAct({action: "checkout", branch: $("#spNew").value, create: true}));
@@ -2545,9 +2801,7 @@ async function restartApp() {
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
   document.addEventListener("contextmenu", e => { const ph = e.target.closest?.("#sideList .proj-h"); if (ph) { e.preventDefault(); projMenu({currentTarget: ph, target: ph}, ph.parentElement.dataset.p); return; } });
   document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });
-  const conv = $("#conv"); const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "↓ Latest"});
-  conv.parentElement.appendChild(jd); jd.onclick = () => { conv.scrollTop = conv.scrollHeight; };
-  conv.addEventListener("scroll", () => { jd.hidden = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 300; });
+  setupScroll();
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();
 

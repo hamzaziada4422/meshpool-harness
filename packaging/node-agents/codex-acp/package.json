@@ -1,7 +1,0 @@
-{
-  "name": "meshpool-codex-acp",
-  "version": "0.0.0",
-  "private": true,
-  "description": "Codex over ACP, vendored into the app at build time (no download at runtime). Keep the version equal to CODEX_ACP in app/meshpool_harness/harnesses/__init__.py; tests/test_bundled_tools.py checks it.",
-  "dependencies": { "@agentclientprotocol/codex-acp": "2.6.0" }
-}

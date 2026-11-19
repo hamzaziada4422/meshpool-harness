@@ -221,6 +221,56 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
+    def _event_stream(self, sid: str, since: int):
+        """Server-Sent Events for one chat: a JSON view of whatever is new, about 30 times a second at most, until the
+        chat is no longer working (then an `end` event). The page falls back to polling if this fails."""
+        A.get(sid)                                    # unknown chat: KeyError -> 404 before any stream starts
+        self.send_response(200)
+        for k, v in (("Content-Type", "text/event-stream; charset=utf-8"), ("Cache-Control", "no-store"),
+                     ("X-Accel-Buffering", "no"), ("X-Content-Type-Options", "nosniff")):
+            self.send_header(k, v)
+        self.end_headers()
+        self.close_connection = True
+        busy = ("starting", "working", "waiting")
+        cursor, last_state, beat, idle_since = since, None, time.time(), None
+
+        def put(text: str):
+            self.wfile.write(text.encode("utf-8"))
+            self.wfile.flush()
+        try:
+            put("retry: 1500\n\n")
+            while True:
+                try:
+                    s = A.get(sid)
+                    n, state = len(s.events), s.state
+                except Exception:  # noqa: BLE001 - a chat whose folder vanished: send what there is, then stop
+                    put("data: " + json.dumps(A.view(sid, cursor), default=str) + "\n\n")
+                    put("event: end\ndata: {}\n\n")
+                    return
+                if n > cursor or state != last_state:
+                    with s.lock:
+                        fresh = s.events[cursor:]
+                    if fresh and state == last_state and all(e.get("type") == "text_delta" for e in fresh):
+                        v = {"id": sid, "state": state, "epoch": s.epoch, "events": fresh, "total": cursor + len(fresh),
+                             "turn_started": getattr(s, "t_turn", None) if state in ("working", "waiting") else None}
+                    else:
+                        v = A.view(sid, cursor)
+                    cursor, last_state, beat = v["total"], state, time.time()
+                    put("data: " + json.dumps(v, default=str) + "\n\n")
+                    idle_since = None if state in busy else (idle_since or time.time())
+                elif state not in busy:
+                    put("event: end\ndata: {}\n\n")
+                    return
+                elif time.time() - beat > 10:
+                    put(": keep-alive\n\n")
+                    beat = time.time()
+                if idle_since and time.time() - idle_since > 0.4:
+                    put("event: end\ndata: {}\n\n")
+                    return
+                time.sleep(0.03)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
@@ -292,6 +342,19 @@ class Handler(BaseHTTPRequestHandler):
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
+        m = re.fullmatch(r"/api/agent/([\w-]+)/events", u.path)
+        if m:                                         # a chat's events pushed as they happen (EventSource cannot set headers)
+            q = parse_qs(u.query)
+            if q.get("t", [""])[0] != TOKEN:
+                return self._send(403, {"error": "forbidden"})
+            try:
+                return self._event_stream(m.group(1), max(0, int(q.get("since", ["0"])[0])))
+            except KeyError:
+                return self._send(404, {"error": "Not found."})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
