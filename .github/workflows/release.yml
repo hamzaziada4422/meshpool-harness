@@ -7,6 +7,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), or both. Publishing needs both."
+        type: choice
+        options: [windows, mac, both]
+        default: windows
 
 permissions:
   contents: write
@@ -24,6 +30,7 @@ env:
 
 jobs:
   mac:
+    if: github.event_name == 'release' || inputs.platforms != 'windows'
     runs-on: macos-15   # Apple silicon; macos-latest (26) kept failing to get a runner, macos-14 is retired
     timeout-minutes: 90
     steps:
@@ -114,6 +121,7 @@ jobs:
           path: dist-src/out/*.dmg
 
   windows:
+    if: github.event_name == 'release' || inputs.platforms != 'mac'
     runs-on: windows-latest
     timeout-minutes: 90
     defaults:
@@ -274,6 +282,8 @@ jobs:
 
   publish:
     needs: [mac, windows]
+    # Only a full build publishes: a one-platform trial run builds and checks, and stops there.
+    if: github.event_name == 'release' || inputs.platforms == 'both'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
