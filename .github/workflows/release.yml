@@ -32,7 +32,9 @@ jobs:
   mac:
     if: github.event_name == 'release' || inputs.platforms != 'windows'
     runs-on: macos-15   # Apple silicon; macos-latest (26) kept failing to get a runner, macos-14 is retired
-    timeout-minutes: 90
+    # two LibreOffice builds, Chromium for both architectures, Git compiled twice and the prune checks: a timeout at the
+    # end would waste the whole (10x) run, and billing follows the real time anyway
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -123,7 +125,7 @@ jobs:
   windows:
     if: github.event_name == 'release' || inputs.platforms != 'mac'
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
