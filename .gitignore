@@ -37,3 +37,4 @@ app/build/
 runs-v2/
 dist-src/
 deps/
+.claude/worktrees/
