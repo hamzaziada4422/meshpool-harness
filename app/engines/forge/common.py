@@ -79,15 +79,10 @@ def summarize(failures: list[dict], rules_run: list[str]) -> dict:
 
 # ------------------------------------------------------------------ LibreOffice
 def find_soffice() -> str | None:
-    for c in (os.environ.get("SOFFICE"), "soffice", "libreoffice",
-              "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-              r"C:\Program Files\LibreOffice\program\soffice.exe"):
-        if not c:
-            continue
-        p = shutil.which(c) or (c if Path(c).exists() else None)
-        if p:
-            return p
-    return None
+    """LibreOffice from the one resolver (meshpool_harness/office_runtime.py): MH_SOFFICE, the copy bundled in the
+    app. A system install counts only for developers (MH_ALLOW_SYSTEM_SOFFICE=1)."""
+    from meshpool_harness import office_runtime
+    return office_runtime.find_soffice()
 
 
 FONT_SUBSTITUTES = {"Segoe UI": "Selawik", "Segoe UI Semibold": "Selawik"}
@@ -127,9 +122,10 @@ def _profile_fonts(profile: Path) -> None:
 
 def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path:
     """Headless convert with a throwaway profile, so parallel runs never share a lock."""
+    from meshpool_harness import office_runtime
     exe = find_soffice()
     if not exe:
-        raise RuntimeError("LibreOffice not installed")
+        raise RuntimeError(f"LibreOffice not installed ({office_runtime.missing_reason()})")
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
         _profile_fonts(Path(profile))

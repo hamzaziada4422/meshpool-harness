@@ -41,7 +41,7 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          # Codex's read-only mode refuses to edit rather than asking; in Workspace access it edits the project and
          # asks before anything outside it. Meshpool's Undo covers every change.
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
-         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "install": NODE_NOTE,
+         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "install": NODE_NOTE, "vendored": "codex",
          "tagline": "Terminal and command-line work, on GPT models",
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "
@@ -56,6 +56,7 @@ MODES = ("code", "cowork")
 OPENCODE_PKG = "opencode-ai@1.19.5"
 OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp", "models": "meshpool",
             "command": "npx", "args": ["-y", OPENCODE_PKG, "acp"], "share_mcp": True, "install": NODE_NOTE,
+            "vendored": "opencode",
             "tagline": "The open-source coding agent, with its own tools and plans",
             "description": ("OpenCode, the popular open-source coding agent, on your Meshpool key, another API key or "
                             "your ChatGPT sign-in. Uses your connected apps and skills.")}
@@ -279,8 +280,24 @@ def unsupported(hid: str) -> str:
     return ""
 
 
-def _node_agent(h: dict, available: bool, **extra) -> dict:
+def packaged_launch(h: dict) -> dict:
+    """In the packaged app a Node agent runs from the copy vendored inside the app, with the app's own Node: no npx, no
+    registry download, no PATH lookup. A source checkout keeps `npx -y <pinned package>`."""
+    from meshpool_harness import bundled
+    if not h.get("vendored") or not bundled.packaged():
+        return h
+    cmd = bundled.node_agent_command(h["vendored"])
+    if not cmd:                                   # an install without it: say so, never reach for npx
+        return dict(h, command="", install="This agent is missing from this install of Meshpool. Reinstall Meshpool.")
+    extra = ["acp"] if h["vendored"] == "opencode" else []
+    return dict(h, command=cmd[0], args=[*cmd[1], *extra])
+
+
+def _node_agent(h: dict, available: bool | None = None, **extra) -> dict:
     """A Node agent's row: unavailable, with the reason as its install note, where this macOS cannot run it."""
+    h = packaged_launch(h)
+    if available is None:
+        available = _available(h)
     why = unsupported(h["id"])
     row = dict(h, available=available and not why, builtin=True, **extra, **credentials(h["id"]))
     if why:
@@ -297,8 +314,8 @@ def load_all() -> list[dict]:
     if bh:
         out.append(dict(bh, available=True, builtin=True, **credentials("hermes")))
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
-    out.append(_node_agent(CODEX, _available(CODEX), signed_in=signed_in(CODEX["login"])))
-    out.append(_node_agent(OPENCODE, _available(OPENCODE)))
+    out.append(_node_agent(CODEX, signed_in=signed_in(CODEX["login"])))
+    out.append(_node_agent(OPENCODE))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
@@ -339,7 +356,7 @@ def signed_in(which: str) -> bool:
 
 
 def npx() -> str:
-    return shutil.which("npx") or "npx"
+    return shutil.which("npx") or "npx"       # source checkouts only: the packaged app signs in through its vendored Codex
 
 
 def login(which: str) -> dict:
@@ -348,7 +365,14 @@ def login(which: str) -> dict:
     if which == "codex" and unsupported("codex"):      # the sign-in runs on Node, which needs macOS 11
         raise ValueError(unsupported("codex"))
     if which == "codex":
-        cmd = [npx(), "-y", "@openai/codex@latest", "login"]
+        from meshpool_harness import bundled
+        if bundled.packaged():
+            run = bundled.node_agent_command("codex-login")
+            if not run:
+                raise ValueError("Codex is missing from this install of Meshpool. Reinstall Meshpool.")
+            cmd = [run[0], *run[1], "login"]
+        else:
+            cmd = [npx(), "-y", "@openai/codex@latest", "login"]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                          **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
         return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "

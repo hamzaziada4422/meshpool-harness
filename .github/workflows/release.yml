@@ -1,6 +1,6 @@
 # Builds the Mac apps and the Windows installer on GitHub's machines and publishes them as a release.
 # Publish a release on GitHub (tag vX.Y.Z matching app/meshpool_harness/__init__.py), or run this workflow by hand;
-# the builds attach Meshpool.dmg, Meshpool-Intel.dmg, Meshpool-Setup.exe and SHA256SUMS.txt to the release.
+# the builds attach Meshpool.dmg, Meshpool-Intel.dmg, Meshpool-Setup.exe, update-manifest.json and SHA256SUMS.txt to the release.
 name: Release
 
 on:
@@ -82,7 +82,9 @@ jobs:
               arch=x86_64; min=10.15
               # Node 22 needs macOS 11, and so does Playwright's driver (it runs on that Node). On 10.15 the app turns
               # off what needs them (Pi, Codex, OpenCode, browser use) with a message; every other file must run on 10.15.
-              exempt=(--exempt 'Contents/Resources/node/*=11.0' --exempt 'Contents/Resources/python/lib/python3.*/site-packages/playwright/driver/*=11.0')
+              exempt=(--exempt 'Contents/Resources/node/*=11.0' --exempt 'Contents/Resources/python/lib/python3.*/site-packages/playwright/driver/*=11.0' --exempt 'Contents/Resources/app/vendor/codex-acp/*=11.0' --exempt 'Contents/Resources/app/vendor/opencode/*=11.0')
+              # Codex and OpenCode are Node agents too (macos.NODE_AGENTS). LibreOffice (app/vendor/libreoffice) is NOT exempted:
+              # if check_minos reports it above 10.15, decide in docs/plan/BUNDLED_TOOLS.md (open decision 3) before releasing.
             fi
             # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
             clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
@@ -283,7 +285,18 @@ jobs:
           TAG="v$VER"
           # the in-app code update installs this archive, checked against SHA256SUMS.txt
           git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
-          (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz > SHA256SUMS.txt)
+          # update-manifest.json (docs/plan/AUTO_UPDATE.md): runtime_changed is true when a bundled program changed (pinned
+          # packages, the LibreOffice and Git pins in bundled_tools.py, the Codex and OpenCode lock files), so the app
+          # then uses the full installer instead of the in-place code update. Node and Pi are versioned in this workflow:
+          # if you change them, also change one of the listed files.
+          gh release download "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')" \
+            --pattern update-manifest.json --dir prev 2>/dev/null || true
+          python3 packaging/updater/make_manifest.py --version "$VER" \
+            --runtime-file packaging/requirements-pinned.txt --runtime-file packaging/requirements-runtime.txt \
+            --runtime-file packaging/bundled_tools.py --runtime-file packaging/node-agents/codex-acp/package-lock.json \
+            --runtime-file packaging/node-agents/opencode/package-lock.json \
+            --previous prev/update-manifest.json -o dist/update-manifest.json
+          (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz update-manifest.json > SHA256SUMS.txt)
           # Updates check every download against SHA256SUMS.txt, so a release users can see must never be half
           # uploaded or have its files swapped one by one (a new installer next to the old checksums fails every
           # update until the last file lands). A new version is built as a draft, which the updater ignores, and made
@@ -298,10 +311,10 @@ jobs:
             gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
           fi
           gh release edit "$TAG" --notes-file packaging/release-notes.md
-          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/Meshpool-src.tar.gz dist/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/Meshpool-src.tar.gz dist/update-manifest.json dist/SHA256SUMS.txt --clobber
           # every file is up and matches the checksums before anyone can see the release
           gh release view "$TAG" --json assets -q '.assets[].name' | sort > uploaded.txt
-          printf '%s\n' Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz Meshpool.dmg SHA256SUMS.txt | sort | diff - uploaded.txt
+          printf '%s\n' Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz Meshpool.dmg SHA256SUMS.txt update-manifest.json | sort | diff - uploaded.txt
           mkdir -p check && gh release download "$TAG" --dir check --pattern 'SHA256SUMS.txt' --pattern 'Meshpool-src.tar.gz'
           (cd check && grep Meshpool-src.tar.gz SHA256SUMS.txt | sha256sum -c -)
           gh release edit "$TAG" --draft=false --latest

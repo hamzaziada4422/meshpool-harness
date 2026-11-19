@@ -233,35 +233,31 @@ def load_into_env(override: bool = False) -> dict:
             continue
         if override or k not in os.environ:
             os.environ[k] = v
+    from meshpool_harness import bundled
+    bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
     return vals
 
 
 # ---------- local tools -------------------------------------------------------------------------------------------
 
 def find_soffice() -> str | None:
-    """LibreOffice binary: PATH first, then the usual install folders on Windows and macOS."""
-    hit = shutil.which("soffice") or shutil.which("libreoffice")
-    if hit:
-        return hit
-    cands = []
-    if os.name == "nt":
-        for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), r"C:\Program Files"):
-            if base:
-                cands.append(Path(base) / "LibreOffice" / "program" / "soffice.exe")
-    elif sys.platform == "darwin":
-        cands.append(Path("/Applications/LibreOffice.app/Contents/MacOS/soffice"))
-    for c in cands:
-        if c.exists():
-            return str(c)
-    return None
+    """LibreOffice for Office conversions. One resolver (office_runtime.py): MH_SOFFICE, the copy bundled in the app;
+    never the customer's install in the packaged app."""
+    from meshpool_harness import office_runtime
+    return office_runtime.find_soffice()
 
 
 def find_bash() -> str | None:
     """A real bash for the agent's shell commands. On Windows: Git Bash, never WSL's System32 bash."""
     if os.environ.get("MH_BASH"):
         return os.environ["MH_BASH"]
+    from meshpool_harness import bundled
+    if os.name == "nt" and bundled.bundled_bash():
+        return bundled.bundled_bash()                  # the Git that ships with Meshpool, never the customer's
+    if bundled.packaged() and os.name == "nt":
+        return None
     if os.name != "nt":
-        return shutil.which("bash")
+        return shutil.which("bash")                    # macOS: /bin/bash is part of the OS
     cands = []
     for base in (os.environ.get("ProgramFiles"), os.environ.get("ProgramW6432"), r"C:\Program Files",
                  os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")):
@@ -283,8 +279,18 @@ def system_check() -> list[dict]:
     rows.append({"name": "Shell", "ok": bool(find_bash()), "detail": find_bash() or "not found",
                  "fix": "Agents run shell commands. The Windows app includes one; for the terminal-only harness on "
                         "Windows, install Git for Windows (git-scm.com)."})
-    rows.append({"name": "Git", "optional": True, "ok": bool(shutil.which("git")), "detail": shutil.which("git") or "not found",
-                 "fix": "Optional. Used to spot edited tests and for pull requests. On a Mac, run: xcode-select --install"})
+    from meshpool_harness import bundled
+    git = bundled.bundled_git() if bundled.packaged() else shutil.which("git")
+    rows.append({"name": "Git", "optional": True, "ok": bool(git),
+                 "detail": (f"{git} (ships with Meshpool)" if bundled.packaged() else git) if git else "not found",
+                 "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                         "Optional. Used to spot edited tests and for pull requests. On a Mac, run: xcode-select --install")})
+    node = bundled.node_exe()
+    rows.append({"name": "Node.js", "optional": True, "ok": bool(node),
+                 "detail": (f"{node} (ships with Meshpool)" if bundled.packaged() else node) if node else "not found",
+                 "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                         "Optional. Pi, Codex and OpenCode run on Node.js (the app includes it); from the command "
+                         "line, install Node.js 22 or newer.")})
     try:
         import playwright  # noqa: F401
         pw = True
@@ -297,10 +303,13 @@ def system_check() -> list[dict]:
     else:
         rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
                      "fix": "Run: meshpool install-browser"})
-    so = find_soffice()
-    rows.append({"name": "LibreOffice", "optional": True, "ok": bool(so), "detail": so or "not installed (optional)",
-                 "fix": "Optional. With it, Meshpool also checks spreadsheet formula results and renders slides to "
-                        "review them. Files are complete without it."})
+    from meshpool_harness import office_runtime
+    lo = office_runtime.describe()
+    rows.append({"name": "LibreOffice", "optional": True, "ok": bool(lo["path"]),
+                 "detail": f"{lo['path']} ({lo['note']})" if lo["path"] else lo["note"],
+                 "fix": "Optional. Meshpool uses only its own LibreOffice (the copy inside the app), never one you "
+                        "installed. With it, Meshpool checks spreadsheet formula results, "
+                        "renders slides to review them and converts Office files. Files are complete without it."})
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
     return rows

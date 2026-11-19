@@ -16,6 +16,10 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied. Hermes runs from source and refuses to build as a package, so install only its dependencies: `python packaging/hermes_requirements.py <hermes folder> > req.txt`, then `pip install -r req.txt` (its `acp` and `mcp` extras are included; without `mcp`, Hermes connects to no MCP servers) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
 | `ocr-models` | PP-OCRv5 recognition models for RapidOCR | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) model releases |
 | `git-win` | MinGit for Windows (Git and Bash) | [git-for-windows](https://github.com/git-for-windows/git/releases) |
+| `git-mac-arm64`, `git-mac-x64` | Git for the Mac apps (optional: built by `packaging/mac/build_git.sh` on a Mac when missing) | pinned source tarball, checksum in `packaging/bundled_tools.py` |
+| `download-cache` | Created by the build: the verified LibreOffice downloads | The Document Foundation, pins in `packaging/bundled_tools.py` |
+
+Also inside every installer, installed by `build_all.py` from the repo (no deps folder): LibreOffice (`app/vendor/libreoffice`), and Codex and OpenCode (`app/vendor/codex-acp`, `app/vendor/opencode`, from the lock files in `packaging/node-agents`; needs `npm` on the build machine). See `docs/plan/BUNDLED_TOOLS.md`.
 | `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
 
 ## Build

@@ -114,8 +114,12 @@ class Browser:
         if self.pw is None:
             self.pw = sync_playwright().start()
         headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"
-        channels = ["chrome", "msedge", ""] if sys.platform != "linux" else ["chrome", ""]
-        if os.environ.get("MH_BROWSER_CHANNEL") is not None:
+        from meshpool_harness import bundled
+        own = bundled.packaged()           # the app's own Chromium (app/vendor/browsers): never the customer's Chrome or Edge
+        if own:
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled.browsers_dir())
+        channels = [""] if own else ["chrome", "msedge", ""] if sys.platform != "linux" else ["chrome", ""]
+        if os.environ.get("MH_BROWSER_CHANNEL") is not None and not own:
             channels = [os.environ["MH_BROWSER_CHANNEL"]]
         last = None
         for attempt in range(2):
@@ -132,7 +136,7 @@ class Browser:
                     last = e
             if self.ctx is not None:
                 break
-            if attempt == 0:
+            if attempt == 0 and not own:                      # packaged: Chromium ships inside the app, nothing to fetch
                 self._install_chromium()                      # no Chrome or Edge here: fetch Chromium once
                 channels = [""]
         if self.ctx is None:

@@ -404,13 +404,8 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
 
 
 def _soffice() -> str | None:
-    import shutil
-    for c in ("soffice", "libreoffice", "/Applications/LibreOffice.app/Contents/MacOS/soffice",
-              r"C:\Program Files\LibreOffice\program\soffice.exe"):
-        p = shutil.which(c) or (c if Path(c).exists() else None)
-        if p:
-            return p
-    return None
+    from meshpool_harness import office_runtime      # the copy bundled in the app (never the system's)
+    return office_runtime.find_soffice()
 
 
 def convert_document(path: str, to: str = "pdf"):
@@ -425,8 +420,10 @@ def convert_document(path: str, to: str = "pdf"):
         return make_document(text, src.stem + ".docx", _clarity=False)
     exe = _soffice()
     if not exe:
-        return ("Converting Office files needs LibreOffice, which is not installed. Install it from libreoffice.org, "
-                "or build the file directly with make_pdf, make_document, make_deck or make_spreadsheet."), True
+        from meshpool_harness import office_runtime
+        return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
+                f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
+                "make_deck or make_spreadsheet."), True
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}

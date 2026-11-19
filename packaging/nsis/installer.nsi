@@ -1,5 +1,6 @@
 Unicode true
 !include "MUI2.nsh"
+!include "LogicLib.nsh"
 Name "Meshpool"
 OutFile "Meshpool Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Meshpool"
@@ -22,7 +23,7 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 !define MUI_UNICON "Meshpool\Meshpool.ico"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Install Meshpool"
-!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, the Meshpool Code, Meshpool Work, Pi and Hermes agents (Codex and OpenCode download on first use), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
+!define MUI_WELCOMEPAGE_TEXT "Meshpool is a coding and cowork agent that runs on your computer with your Meshpool API key.$\r$\n$\r$\nEverything is included: the app, the Meshpool Code, Meshpool Work, Pi and Hermes agents (Codex, OpenCode and LibreOffice are inside, nothing downloads later), browser use, computer use, Office files, connectors for GitHub, Jira, Linear, Notion and more, and the meshpool command for your terminal. Nothing else to install, and no administrator rights needed."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\Meshpool.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open Meshpool now"
 !insertmacro MUI_PAGE_WELCOME
@@ -35,6 +36,23 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 
 !include "winsetup.nsh"
 
+; folder swap helpers for the staged install (see the main section)
+!macro MP_SWAP N
+  RMDir /r "$INSTDIR\${N}.old"
+  IfFileExists "$INSTDIR\${N}\*.*" 0 +3
+    Rename "$INSTDIR\${N}" "$INSTDIR\${N}.old"
+    IfErrors +2
+  Rename "$INSTDIR.new\${N}" "$INSTDIR\${N}"
+!macroend
+!macro MP_DROP_OLD N
+  RMDir /r "$INSTDIR\${N}.old"
+!macroend
+!macro MP_ROLLBACK N
+  IfFileExists "$INSTDIR\${N}.old\*.*" 0 +3
+    RMDir /r "$INSTDIR\${N}"
+    Rename "$INSTDIR\${N}.old" "$INSTDIR\${N}"
+!macroend
+
 Section "Meshpool" SecMain
   InitPluginsDir
   File "/oname=$PLUGINSDIR\winsetup.ps1" "winsetup.ps1"
@@ -42,17 +60,49 @@ Section "Meshpool" SecMain
   nsExec::Exec 'taskkill /F /IM Meshpool.exe'
   Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
+  ; Stage the new program files beside the install folder first, then swap folder by folder (the old one is kept as
+  ; <name>.old until every swap worked, and put back if one fails). A failure halfway (power loss, a locked file, a full
+  ; disk) therefore leaves a working install instead of a half-deleted one. The user's settings live in %APPDATA%\Meshpool.
+  RMDir /r "$INSTDIR.new"
+  SetOutPath "$INSTDIR.new"
+  File /r "Meshpool\*.*"
   SetOutPath "$INSTDIR"
-  ; replace old program files, keep the user's settings (they live in %APPDATA%\Meshpool)
-  RMDir /r "$INSTDIR\app"
-  RMDir /r "$INSTDIR\runtime"
-  RMDir /r "$INSTDIR\git"
-  RMDir /r "$INSTDIR\node"
-  RMDir /r "$INSTDIR\harness-docs"
-  RMDir /r "$INSTDIR\bin"
+  ClearErrors
+  !insertmacro MP_SWAP app
+  !insertmacro MP_SWAP runtime
+  !insertmacro MP_SWAP git
+  !insertmacro MP_SWAP node
+  !insertmacro MP_SWAP harness-docs
+  !insertmacro MP_SWAP bin
+  IfErrors swap_failed
   ; older installs had the terminal command next to Meshpool.exe; it now lives in bin
   Delete "$INSTDIR\meshpool.cmd"
-  File /r "Meshpool\*.*"
+  Delete "$INSTDIR\Meshpool.exe"
+  Delete "$INSTDIR\Meshpool.ico"
+  Delete "$INSTDIR\LICENSE.txt"
+  Rename "$INSTDIR.new\Meshpool.exe" "$INSTDIR\Meshpool.exe"
+  Rename "$INSTDIR.new\Meshpool.ico" "$INSTDIR\Meshpool.ico"
+  IfFileExists "$INSTDIR.new\LICENSE.txt" 0 +2
+    Rename "$INSTDIR.new\LICENSE.txt" "$INSTDIR\LICENSE.txt"
+  RMDir /r "$INSTDIR.new"
+  !insertmacro MP_DROP_OLD app
+  !insertmacro MP_DROP_OLD runtime
+  !insertmacro MP_DROP_OLD git
+  !insertmacro MP_DROP_OLD node
+  !insertmacro MP_DROP_OLD harness-docs
+  !insertmacro MP_DROP_OLD bin
+  Goto swap_done
+  swap_failed:
+    !insertmacro MP_ROLLBACK app
+    !insertmacro MP_ROLLBACK runtime
+    !insertmacro MP_ROLLBACK git
+    !insertmacro MP_ROLLBACK node
+    !insertmacro MP_ROLLBACK harness-docs
+    !insertmacro MP_ROLLBACK bin
+    RMDir /r "$INSTDIR.new"
+    MessageBox MB_OK|MB_ICONSTOP "Meshpool could not be updated: a file in $INSTDIR is in use or the disk is full. The previous version was kept." /SD IDOK
+    Abort
+  swap_done:
   ; The uninstaller is written and signed on the build machine (packaging/nsis/uninstaller.nsi) and shipped here, so
   ; it carries a signature. Without the Azure account the build falls back to WriteUninstaller, which writes it on the
   ; user's machine and leaves it unsigned.
@@ -62,7 +112,10 @@ Section "Meshpool" SecMain
     WriteUninstaller "$INSTDIR\Uninstall Meshpool.exe"
   !endif
   CreateShortcut "$SMPROGRAMS\Meshpool.lnk" "$INSTDIR\Meshpool.exe" "" "$INSTDIR\Meshpool.ico"
-  CreateShortcut "$DESKTOP\Meshpool.lnk" "$INSTDIR\Meshpool.exe" "" "$INSTDIR\Meshpool.ico"
+  ; a silent install is an update (or a managed install): it must not bring back a Desktop shortcut the user deleted
+  ${IfNot} ${Silent}
+    CreateShortcut "$DESKTOP\Meshpool.lnk" "$INSTDIR\Meshpool.exe" "" "$INSTDIR\Meshpool.ico"
+  ${EndIf}
   WriteRegStr HKCU "Software\Meshpool" "InstallDir" "$INSTDIR"
   ; the meshpool terminal command: only its own folder goes on the user's PATH. With the install folder itself on
   ; PATH, `meshpool` would start Meshpool.exe (Windows tries .EXE before .CMD), so an older entry for it is removed.

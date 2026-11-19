@@ -42,12 +42,9 @@ class PiError(Exception):
 
 
 def node_exe() -> str | None:
-    """The Node runtime bundled with the app, else one on PATH (development)."""
-    base = C.APP.parent / "node"
-    for p in (base / "node.exe", base / "bin" / "node"):
-        if p.is_file():
-            return str(p)
-    return shutil.which("node")
+    """The Node runtime bundled with the app; one on PATH only in a source checkout (never in the packaged app)."""
+    from meshpool_harness import bundled
+    return bundled.node_exe()
 
 
 def pi_cli() -> Path | None:

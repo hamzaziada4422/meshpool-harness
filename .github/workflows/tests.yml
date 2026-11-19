@@ -18,6 +18,9 @@ jobs:
     env:
       # one place for Chromium: the install step and the app under test (which only sets a default) both use it
       PLAYWRIGHT_BROWSERS_PATH: /home/runner/pw-browsers
+      # The app itself never uses a LibreOffice found on the computer (it ships its own). The tests run from a source
+      # checkout on a runner with the apt LibreOffice below, so they opt in to that copy.
+      MH_ALLOW_SYSTEM_SOFFICE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
