@@ -285,6 +285,13 @@ def remember_project(root: str, note: str) -> str:
         raise ValueError("A project note needs the project folder and the note.")
     if BAD.search(note):
         raise ValueError("Memory does not store secrets or instructions about the system.")
+    try:                                                 # a chat in a project: the note goes to that project's memory
+        from meshpool_harness import project_store as PS
+        pid = PS.for_root(root)
+        if pid:
+            return PS.memory_add(pid, note)
+    except Exception:  # noqa: BLE001 - never lose the note: fall back to the folder's own notes
+        pass
     p = _project_file(root)
     p.parent.mkdir(parents=True, exist_ok=True)
     with _memory_lock():
@@ -347,10 +354,31 @@ class StreamScrubber:
         return out
 
 
-def context_block(task: str = "", root: str = "") -> str:
-    """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
-    relevant: the user's core facts, the facts that match the task, and the project's notes."""
+def project_block(project_id: str, task: str = "") -> str:
+    """The part of context_block that belongs to a project: its instructions (the user's directions), then its memory
+    and knowledge files inside the memory fence. Empty when there is no such project."""
+    if not project_id:
+        return ""
+    from meshpool_harness import project_store as PS
     st = settings()
+    ins, back = PS.context_parts(project_id, task, st["instructions_on"], st["memory_on"])
+    parts = [ins] if ins else []
+    if back:
+        parts.append(fence(back))
+    return "\n\n".join(parts)
+
+
+def context_block(task: str = "", root: str = "", project_id: str = "") -> str:
+    """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
+    relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
+    project's instructions, memory and knowledge files (see project_store)."""
+    st = settings()
+    if not project_id and root:
+        try:
+            from meshpool_harness import project_store as PS
+            project_id = PS.for_root(root)
+        except Exception:  # noqa: BLE001
+            project_id = ""
     now = datetime.now().astimezone()
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
              f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY, PLAIN]
@@ -358,13 +386,16 @@ def context_block(task: str = "", root: str = "") -> str:
     mem = memory() if st["memory_on"] else ""
     if ins:
         parts.append("The user's instructions for every chat (follow them):\n" + ins[:6000])
-    if mem or (st["memory_on"] and root):
+    if mem or (st["memory_on"] and root and not project_id):
         about = recall(task) if mem else ""
-        proj = project_memory(root) if st["memory_on"] else ""
+        proj = project_memory(root) if st["memory_on"] and not project_id else ""
         body = (("About the user:\n" + about) if about else "") + (
             ("\n\nAbout this project (" + Path(root).name + "):\n" + proj[-2500:]) if proj else "")
         if body.strip():
             parts.append(fence(body.strip()))
+    pb = project_block(project_id, task)
+    if pb:
+        parts.append(pb)
     parts.append("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser. "
                  "Cite sources with links. "
                  + ("If the user asks you to remember something, or states a lasting fact or preference about "

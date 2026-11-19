@@ -103,12 +103,20 @@ def known_roots() -> list[Path]:
         pass
     with A.LOCK:
         roots += [Path(s.workdir) for s in A.LIVE.values()]
+    try:                                           # folders linked to a project
+        from meshpool_harness import project_store as PS
+        roots += [Path(r["link"]["path"]) for r in PS.list_projects() if r.get("link")]
+    except Exception:  # noqa: BLE001
+        pass
     return roots
 
 
 def check_root(root: str) -> Path:
     """Only folders the user added as projects (or a live session's folder) are browsable from the page."""
     p = Path(root).expanduser().resolve()
+    from meshpool_harness import project_store as PS
+    if PS.is_scratch(str(p)):                      # a chat's own private folder
+        return p
     if not any(p == r.resolve() for r in known_roots()):
         raise ValueError("That folder is not one of your projects.")
     return p
@@ -290,14 +298,18 @@ def attach(root: str, name: str, data: bytes) -> dict:
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
-    p = r / name
+    from meshpool_harness import project_store as PS
+    sub = "attachments" if PS.is_scratch(str(r)) else ""     # a chat's own folder keeps attachments apart from its work
+    base = r / sub if sub else r
+    base.mkdir(exist_ok=True)
+    p = base / name
     stem, suf, i = p.stem, p.suffix, 2
     while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
-        p = r / f"{stem} ({i}){suf}"
+        p = base / f"{stem} ({i}){suf}"
         i += 1
     with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
         f.write(data)
-    return {"path": p.name}
+    return {"path": (sub + "/" if sub else "") + p.name}
 
 
 def git_exe() -> str | None:
