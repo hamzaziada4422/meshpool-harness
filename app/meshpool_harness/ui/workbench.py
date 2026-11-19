@@ -333,9 +333,10 @@ def git_exe() -> str | None:
 
 _NET_CMDS = {"push", "pull", "fetch", "clone", "ls-remote"}
 # The token reaches git through the environment of that one process, never on the command line or in .git/config:
-# an empty helper resets any stored ones, then this helper answers git's question from $MESHPOOL_GH_TOKEN.
+# an empty helper resets any stored ones, then this helper answers git's question from $MESHPOOL_GH_TOKEN, for
+# github.com only: a remote the agent (or a repository's config) pointed elsewhere never receives the token.
 _CRED_FLAGS = ["-c", "credential.helper=",
-               "-c", 'credential.helper=!f() { echo username=x-access-token; echo "password=$MESHPOOL_GH_TOKEN"; }; f']
+               "-c", 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo "password=$MESHPOOL_GH_TOKEN"; }; f']
 
 
 def _gh_git_env(env: dict) -> dict:

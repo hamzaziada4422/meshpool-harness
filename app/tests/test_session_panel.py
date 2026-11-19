@@ -184,6 +184,9 @@ def test_clone_command_never_carries_the_token(env):
     argv = W.clone_argv("o/r", Path("/dest"))
     assert not any(TOKEN in a for a in argv) and "https://github.com/o/r.git" in argv
     assert "credential.helper=" in argv and any("MESHPOOL_GH_TOKEN" in a for a in argv)
+    # the token helper answers for github.com only, never for another host the remote might be changed to
+    helper = [a for a in argv if "MESHPOOL_GH_TOKEN" in a]
+    assert helper and all(a.startswith("credential.https://github.com.helper=") for a in helper)
     assert W._gh_git_env({})["MESHPOOL_GH_TOKEN"] == TOKEN
     for bad in ("o", "o/r;rm", "../x/y z", "-x/y"):
         with pytest.raises(ValueError):

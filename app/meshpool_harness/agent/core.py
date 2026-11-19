@@ -1244,7 +1244,9 @@ class Agent:
             if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
                 return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
             exact = name + ":" + args[:2000]
-            shape = name + ":" + re.sub(r"\d+", "#", args[:2000])
+            # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
+            # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
+            shape = name + ":" + re.sub(r"\d+", "#", args[:2000]) if name in ("bash", "bash_many", "shell") else exact
             book = g.setdefault("loop", {})
             edits = self.ws.edits
             for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
@@ -1274,8 +1276,8 @@ class Agent:
             except ValueError:
                 return False
             cmds = a.get("commands") if name == "bash_many" else [a.get("command")]
-            if name == "shell" and isinstance(a.get("command"), list):
-                cmds = [" ".join(str(x) for x in a["command"])]
+            if name == "shell" and a.get("command") is not None:
+                cmds = [T.shell_script(a["command"])]          # the script inside ["bash", "-lc", script]
             cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
             return bool(cmds) and all(T.read_only(x) for x in cmds)
         return False
@@ -1780,6 +1782,8 @@ class Agent:
         try:
             if not self.hsettings()["mutation"]:
                 return ""
+            if self.mode != "auto" or getattr(self.ws, "container", None):
+                return ""       # it runs the project's tests on this computer: only where commands run unasked, never beside a sandbox
             from meshpool_harness.core import mutate as MU
             alive = MU.survivors(self.root, set(self.ws.turn_files))
             self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")

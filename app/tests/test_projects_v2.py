@@ -145,6 +145,9 @@ def test_a_chat_folder_for_a_project_gets_its_knowledge_files(home):
     d = Path(PS.new_scratch(pid))
     assert PS.is_scratch(str(d)) and (d / "knowledge" / "spec.md").read_text() == "hello spec"
     assert PS.for_root(str(d)) == pid
+    with open(d / "knowledge" / "spec.md", "w", encoding="utf-8") as f:       # the agent editing its copy in place
+        f.write("changed by a chat")
+    assert (PS._kdir(pid) / "spec.md").read_text() == "hello spec"             # the project's own file is untouched
     PS.remove_scratch(str(d))
     assert not d.exists()
     PS.remove_scratch(str(home))                                       # never removes anything that is not a chat folder
