@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), or both. Publishing needs both."
+        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), or both. Publishing needs both. probe: only report which macOS runners this repository is given."
         type: choice
-        options: [windows, mac, both]
+        options: [windows, mac, both, probe]
         default: windows
 
 permissions:
@@ -19,7 +19,7 @@ permissions:
 
 # One build at a time: a newer push waits for the running one, then replaces its files
 concurrency:
-  group: release
+  group: ${{ inputs.platforms == 'probe' && 'release-probe' || 'release' }}     # a probe never waits behind a build
   cancel-in-progress: false
 
 env:
@@ -29,8 +29,21 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
+  mac-probe:
+    # Which GitHub-hosted macOS runners this repository is actually given (a job no runner takes is cancelled after
+    # about 15 minutes). Prints the machine only.
+    if: github.event_name == 'workflow_dispatch' && inputs.platforms == 'probe'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-latest, macos-14, macos-13]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - run: uname -m; sw_vers; sysctl -n hw.ncpu; df -h / | tail -1
+
   mac:
-    if: github.event_name == 'release' || inputs.platforms != 'windows'
+    if: github.event_name == 'release' || inputs.platforms == 'mac' || inputs.platforms == 'both'
     runs-on: macos-15   # Apple silicon; macos-latest (26) kept failing to get a runner, macos-14 is retired
     # two LibreOffice builds, Chromium for both architectures, Git compiled twice and the prune checks: a timeout at the
     # end would waste the whole (10x) run, and billing follows the real time anyway
@@ -143,7 +156,7 @@ jobs:
           path: dist-src/out/*.dmg
 
   windows:
-    if: github.event_name == 'release' || inputs.platforms != 'mac'
+    if: github.event_name == 'release' || inputs.platforms == 'windows' || inputs.platforms == 'both'
     runs-on: windows-latest
     timeout-minutes: 120
     defaults:
