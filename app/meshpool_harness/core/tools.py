@@ -84,8 +84,17 @@ SCHEMAS = {
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
     "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file. Fails if `old` is missing, "
-                        "not unique, the same as `new`, or the file changed since you last read it.",
-                {"path": S, "old": S, "new": S}, ["path", "old", "new"]),
+                        "not unique, the same as `new`, or the file changed since you last read it. To make several "
+                        "changes, put them all in one call: `edits` for one file, `changes` for several files "
+                        "(all-or-nothing).",
+                {"path": S, "old": S, "new": S,
+                 "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S},
+                                                      "required": ["old", "new"]}},
+                 "changes": {"type": "array", "items": {"type": "object", "properties": {
+                     "path": S, "old": S, "new": S,
+                     "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S},
+                                                          "required": ["old", "new"]}}}, "required": ["path"]}}},
+                []),
     "write_file": _fn("write_file", "Create or overwrite a file. Set append=true to add to the end (for large files written in parts).",
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
     "bash": _fn("bash", "Run a shell command in the workdir. Output is capped; full output is saved to a file.",
@@ -498,42 +507,116 @@ class Workspace:
         raise ToolError(f"`old` text not found in {path}. Copy it exactly from read_file output "
                         f"(without the line-number prefix)." + cls._closest_region(lines, old))
 
-    def edit(self, path, old, new):
-        if old == new:       # 22% of edits in a 12-run SWE-bench sample: reported as success, the model looped on them
-            raise ToolError(self.NOOP_EDIT.format(path=path))
+    @staticmethod
+    def _edit_items(spec: dict, where: str) -> list[tuple[str, str]]:
+        """The (old, new) pairs of one edit spec: its own old/new first, then its `edits` list, in order."""
+        items = []
+        if spec.get("old") is not None or spec.get("new") is not None:
+            items.append((spec.get("old"), spec.get("new")))
+        extra = spec.get("edits")
+        if extra is not None:
+            if not isinstance(extra, list):
+                raise ToolError(f"`edits` for {where} must be a list of {{old, new}} objects")
+            for j, it in enumerate(extra, 1):
+                if not isinstance(it, dict):
+                    raise ToolError(f"edit {j} for {where} must be an object with `old` and `new`")
+                items.append((it.get("old"), it.get("new")))
+        if not items:
+            raise ToolError(f"nothing to edit in {where}: give `old` and `new`, or an `edits` list")
+        for j, (o, n) in enumerate(items, 1):
+            if not isinstance(o, str) or not isinstance(n, str) or o == "":
+                raise ToolError(f"edit {j} of {len(items)} for {where} needs a non-empty string `old` and a string `new`")
+        return items
+
+    def _plan_many(self, text: str, items: list[tuple[str, str]], path: str, unread: bool):
+        """All `items` applied in order to `text`: (final text, notes). Each must match once in the text as it stands
+        after the previous ones. Raises ToolError naming the failing item; nothing is written here."""
+        notes, n = [], len(items)
+        for j, (old, new) in enumerate(items, 1):
+            tag = f"edit {j} of {n} in {path}: " if n > 1 else ""
+            if old == new:
+                raise ToolError(tag + self.NOOP_EDIT.format(path=path))
+            if unread and text.count(old) != 1:
+                raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
+                                f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
+            try:
+                text, note = self._plan_edit(text, old, new, path)
+            except ToolError as e:
+                raise ToolError(tag + str(e) + (f"\nNothing was written; {path} is unchanged." if n > 1 else "")) from None
+            notes.append(note)
+        return text, notes
+
+    def _load(self, path: str):
+        """(key, text|None, path object|None) for a file about to be edited, host or container."""
         if self.container and not self.mounted:
-            text, key = self._cread(path), self._cpath(path)
-            if key not in self.seen:
-                raise ToolError(f"read {path} before editing it")
-            if self.seen[key] != self._hash(text):
-                raise ToolError(f"{path} changed since you last read it (stale edit). Read it again, then edit.")
-            text, note = self._plan_edit(text, old, new, path)
-            self._cwrite(path, text)
-            self.seen[key] = self._hash(text)
-            self.edits += 1
-            self.written.add(key)
-            self.turn_files.add(key)
-            return f"edited {path}{note}"
+            return self._cpath(path), self._cread(path), None
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
-        text = p.read_text(errors="replace")
-        key = str(p)
-        if key not in self.seen:
-            raise ToolError(f"read {path} before editing it")
-        if self.seen[key] != self._hash(text):
-            raise ToolError(f"{path} changed since you last read it (stale edit). Read it again, then edit.")
-        new_text, note = self._plan_edit(text, old, new, path)
-        bad = self._syntax_error(p, new_text) if not self._syntax_error(p, text) else None
-        if bad:
-            raise ToolError(f"edit rejected: it would make {path} stop parsing. The file is unchanged. Fix `new` "
-                            f"at the marked place and retry.\n{bad}")
-        p.write_text(new_text)
-        self.seen[key] = self._hash(new_text)
-        self.edits += 1
-        self.written.add(key)
-        self.turn_files.add(key)
-        return f"edited {path}{note}"
+        return str(p), p.read_text(errors="replace"), p
+
+    def edit(self, path=None, old=None, new=None, edits=None, changes=None):
+        if changes is not None:
+            if not isinstance(changes, list) or not changes or not all(isinstance(c, dict) for c in changes):
+                raise ToolError("`changes` must be a non-empty list of {path, old, new} or {path, edits} objects")
+            specs = list(changes)
+            if path is not None:
+                specs.insert(0, {"path": path, "old": old, "new": new, "edits": edits})
+        elif path is None:
+            raise ToolError("edit needs `path` with `old` and `new` (or `edits`), or `changes` for several files")
+        else:
+            specs = [{"path": path, "old": old, "new": new, "edits": edits}]
+        grouped: dict[str, list] = {}
+        for sp in specs:
+            pth = sp.get("path")
+            if not isinstance(pth, str) or not pth:
+                raise ToolError("every change needs a `path`")
+            grouped.setdefault(pth, []).extend(self._edit_items(sp, pth))
+        # validate everything first
+        plans = []     # (path, key, p, before, after, notes, n_items)
+        for pth, items in grouped.items():
+            key, text, p = self._load(pth)
+            unread = key not in self.seen
+            if not unread and self.seen[key] != self._hash(text):
+                raise ToolError(f"{pth} changed since you last read it (stale edit). Read it again, then edit.")
+            after, notes = self._plan_many(text, items, pth, unread)
+            if p is not None:
+                bad = self._syntax_error(p, after) if not self._syntax_error(p, text) else None
+                if bad:
+                    raise ToolError(f"edit rejected: it would make {pth} stop parsing. Nothing was written; "
+                                    f"{pth} is unchanged. Fix `new` at the marked place and retry.\n{bad}")
+            plans.append((pth, key, p, text, after, notes, len(items)))
+        # write, restoring what was written if one write fails
+        done = []
+        try:
+            for pth, key, p, before, after, _n, _c in plans:
+                done.append((pth, p, before))
+                if p is None:
+                    self._cwrite(pth, after)
+                else:
+                    p.write_text(after)
+        except Exception as e:  # noqa: BLE001
+            for pth, p, before in done:
+                try:
+                    self._cwrite(pth, before) if p is None else p.write_text(before)
+                except Exception:  # noqa: BLE001
+                    pass
+            raise ToolError(f"edit failed while writing ({e}); files already written were restored") from None
+        for pth, key, p, before, after, _n, _c in plans:
+            self.seen[key] = self._hash(after)
+            self.edits += 1
+            self.written.add(key)
+            self.turn_files.add(key)
+        if len(plans) == 1:
+            pth, _k, _p, _b, _a, notes, count = plans[0]
+            if count == 1 and edits is None:
+                return f"edited {pth}{notes[0]}"
+            fuzzy = sum(1 for x in notes if x)
+            return f"edited {pth}: {count} edits applied" + (f" ({fuzzy} matched after normalising whitespace)" if fuzzy else "")
+        total = sum(pl[6] for pl in plans)
+        lines = [f"edited {len(plans)} files: {total} edits applied"]
+        lines += [f"- {pl[0]}: {pl[6]} edit{'s' if pl[6] != 1 else ''}" for pl in plans]
+        return "\n".join(lines)
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:

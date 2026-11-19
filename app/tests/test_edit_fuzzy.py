@@ -98,5 +98,6 @@ def test_noop_and_read_before_edit_unchanged(tmp_path):
     (tmp_path / "a.txt").write_text("a\n")
     with pytest.raises(ToolError, match="identical"):
         ws.edit("a.txt", "a", "a")
+    (tmp_path / "a.txt").write_text("a\na\n")        # unread: allowed only when `old` matches exactly once
     with pytest.raises(ToolError, match="read a.txt before editing"):
         ws.edit("a.txt", "a", "b")
