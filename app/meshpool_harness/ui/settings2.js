@@ -237,6 +237,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         <ul class="rows2" id="capL">${feat.features.filter(f => !f.advanced).map(row).join("")}</ul>
         <h3 style="font-size:16px;margin:20px 0 4px">Always available</h3><p class="lead">Making Word documents, slides, spreadsheets and PDFs, reading your files, and running scripts are part of Meshpool. Meshpool asks first, unless you change that here.</p>
         <label class="field"><span>Editing files and running commands</span><select id="capMode">${Object.entries(MODES).map(([k, [lb, d]]) => `<option value="${k}" ${k === mode ? "selected" : ""}>${lb}: ${d.toLowerCase()}</option>`).join("")}</select><small>The starting point for new chats. You can change it for one chat from the settings button next to the message box.</small></label>
+        <label class="field"><span>Harness for new chats</span><select id="capHarness"><option value="meshpool-auto">Auto (recommended)</option>${harnessChoices().map(h => `<option value="${esc(h.id)}" ${h.id === store("harness_default") ? "selected" : ""}>${esc(h.name)}</option>`).join("")}</select><small>Auto picks the agent that suits each request. Choose one here to use it for every new chat; you can still change it for one chat from the model menu.</small></label>
         <h3 style="font-size:16px;margin:20px 0 4px">Advanced</h3>
         <ul class="rows2">${feat.features.filter(f => f.advanced).map(row).join("")}</ul>
         <p class="lead" style="margin-top:12px">Which agent does the work, and how each one is set up: <button class="linkbtn" data-go="harnesses">Agents</button></p><div class="res" id="capRes"></div>`;
@@ -244,6 +245,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         try { const r = await post("/api/capabilities", {id: x.dataset.t, on: x.checked}); if (x.dataset.t === "plan_first") S.draft.plan = x.checked; res("capRes", "ok", "Saved. New chats use it."); void r; renderBar(); }
         catch (e) { x.checked = !x.checked; res("capRes", "bad", e.message); }
       });
+      $("#capHarness").onchange = () => { const v = $("#capHarness").value; store("harness_default", v === "meshpool-auto" ? null : v); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } res("capRes", "ok", "Saved. New chats use it."); };
       $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = $("#capMode").value; store("mode", S.draft.mode); renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
       $$("[data-go]", b).forEach(x => x.onclick = () => renderSection(x.dataset.go));
     } else if (sec === "billing") {

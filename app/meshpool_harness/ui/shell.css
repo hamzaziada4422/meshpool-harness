@@ -399,3 +399,4 @@
 @media (max-width:760px){.app.sideopen .side{width:min(300px,88vw)}.side-in{width:100%}}
 .srch-tabs{overflow-x:auto;scrollbar-width:none}.srch-tabs button{flex:none}
 .gbar{min-width:0}.gtabs{min-width:0;overflow-x:auto;scrollbar-width:none}.gtabs button{flex:none;white-space:nowrap}
+.col .note.using{font-size:var(--fs-xs);color:var(--ink-3);margin:2px 0 6px}

@@ -988,8 +988,15 @@ def create(body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     if routed:
-        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']} for this task."})
+        # The chat shows a short neutral label; why Auto picked it travels with the event for the Session panel.
+        s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
+                "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}})
         write_meta(s.id, routed=routed["harness"])
+    else:
+        try:
+            s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(HR.get(harness or HR.default_for(kind))['name'])}"})
+        except (KeyError, ValueError):
+            pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
     if pid:
         PS.touch(pid)
@@ -1003,6 +1010,11 @@ def create(body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     return s.view(0)
+
+
+def _short_harness(name: str) -> str:
+    """'Meshpool Work' and 'Meshpool Code' read as MeshPool; Codex, Pi, OpenCode and Hermes keep their names."""
+    return "MeshPool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []

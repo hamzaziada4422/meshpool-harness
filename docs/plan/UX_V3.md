@@ -106,6 +106,15 @@ One pattern: display title, tabs, toolbar icons, optional banner, card grid.
 - Plugins: search, All, Connectors, Skills, Add menu, Your plugins (connected connectors, skills, installed plugins) with
   row menus, and connectors available to connect. Data: `/api/connectors`, `/api/skills`, `/api/plugins`.
 
+### Harness (agent) choice
+The chat shows one neutral line, "Using MeshPool" (or Codex, Pi, OpenCode, Hermes), whether Auto or the user chose it; the
+reason Auto picked it (category and reason from `harness_router.route`) is only in the Session panel's Agent section.
+The model menu has a Harness row: "Auto (recommended)" first, then the harnesses this build offers (`/api/harnesses`,
+available and without errors). A chat keeps the harness it started with, so picking another one from an open chat
+starts a new chat with it. The default for new chats is "Harness for new chats" in Settings > Capabilities (kept on this
+computer); a specific choice skips Auto's pick, and the harness method text from the route still applies. The status
+event is `{type: "status", using: true, text: "Using X", auto: {harness, category, reason}}` (`agent_api._short_harness`).
+
 ### Account menu
 Muted header (key status), Settings, Usage, Language (Settings > Account), Get help, Learn more, View all plans and Get
 API keys (open meshpool.ai), Get apps and tools (command line tool installer, downloads, updates), Quit Meshpool
@@ -197,7 +206,7 @@ can be typed. Switching endpoints starts from a fresh test, so an old model list
 
 ## Tests
 - `tests/test_hub_v3.py` (9), `tests/test_ui_brand.py` (3), the provider tests of the backend track.
-- `testkit/ux_v3_flows.js` (105 checks): the v2 checks ported (projects, rows, rename, pin, move, delete, keyboard, panel
+- `testkit/ux_v3_flows.js` (111 checks): the v2 checks ported (projects, rows, rename, pin, move, delete, keyboard, panel
   and sidebar memory, every settings page reachable) plus shell, search, menus and shortcuts, Code mode, galleries,
   account menu, Settings modal and hash, Appearance, Models and providers, unread dots, reduced motion, narrow width.
 - `testkit/ux_jitter_audit.js --strict`: 19 of 19. `testkit/ux_v3_shots.js` writes the screenshots.

@@ -45,6 +45,8 @@ const check = (name, ok, detail = "") => { results.push(ok); console.log((ok ? "
   check("chat started with its own private folder", v1.scratch === true && /chats/.test(v1.workdir), v1.workdir);
   check("no folder chip in the top bar", (await p.$("#projChip")) === null);
   check("Auto picked the agent (no picker needed)", !!v1.harness?.id, v1.harness?.id);
+  const usingTxt = await texts("#col .note.using");
+  check("the chat shows one neutral line about what is used, with no reason", usingTxt.length === 1 && /^Using (MeshPool|Codex|Pi|OpenCode|Hermes)$/.test(usingTxt[0]) && !/picked|because/i.test(await p.textContent("#col")), usingTxt.join("|"));
 
   // ---------------- projects: from the Projects page
   await nav("projects"); await p.waitForSelector("#gNew");
@@ -179,7 +181,7 @@ const check = (name, ok, detail = "") => { results.push(ok); console.log((ok ? "
   await p.evaluate(() => newThread()); await p.waitForTimeout(300);
   await p.click("#attBtn");
   const plus = await menuItems();
-  check("plus menu: upload, plan first, memory, skills, plugins, agent", ["Upload or add files", "Plan first", "Memory", "Skills", "Plugins", "Agent"].every(x => plus.some(y => y.startsWith(x))), plus.join(", "));
+  check("plus menu: upload, plan first, memory, skills, plugins", ["Upload or add files", "Plan first", "Memory", "Skills", "Plugins"].every(x => plus.some(y => y.startsWith(x))), plus.join(", "));
   await p.click('#ctx .mi:has-text("Plan first")');
   check("Plan first shows as a chip on the composer", !!(await p.$("#planChip")));
   await p.click("#planChip");
@@ -191,6 +193,11 @@ const check = (name, ok, detail = "") => { results.push(ok); console.log((ok ? "
   await p.click("#aPill"); await p.click('#ctx .mi:has-text("Auto") >> nth=0'); check("Auto maps to editing freely", await p.evaluate(() => S.draft.mode) === "edits"); await p.keyboard.press("Escape");
   await p.click("#mPill");
   const mm = await menuItems();
+  check("model menu has a Harness choice", mm.some(x => /^Harness/.test(x)));
+  await p.click('#ctx .mi:has-text("Harness")');
+  const hs = await menuItems();
+  check("Harness submenu: Auto (recommended) first, then the available harnesses", /^Auto \(recommended\)/.test(hs[1] || hs[0]) && hs.length >= 3, hs.join(" | "));
+  await p.keyboard.press("Escape"); await p.click("#mPill");
   check("model menu: models, Effort, More models", mm.some(x => /Effort/.test(x)) && mm.some(x => /More models/.test(x)) && mm.length >= 4, mm.join(" | "));
   await p.keyboard.press("2");
   await p.waitForTimeout(200);
@@ -283,6 +290,9 @@ const check = (name, ok, detail = "") => { results.push(ok); console.log((ok ? "
   }
   check("every settings page is reachable (23 sections)", !missing.length, missing.join(","));
   await p.evaluate(() => renderSection("caps")); await p.waitForTimeout(500);
+  check("Capabilities has a default harness: Auto (recommended) first", /^Auto \(recommended\)/.test(await p.$eval("#capHarness option", e => e.textContent)));
+  const hOpt = await p.$$eval("#capHarness option", e => e.map(x => x.value)).then(v => v[1]);
+  if (hOpt) { await p.selectOption("#capHarness", hOpt); check("the default harness is remembered and used by new chats", await p.evaluate(() => { newThread(); return S.draft.harness; }) === hOpt); await p.evaluate(() => renderSection("caps")); await p.waitForSelector("#capHarness"); await p.selectOption("#capHarness", "meshpool-auto"); check("choosing Auto again restores the default", await p.evaluate(() => { newThread(); return S.draft.harness; }) === "meshpool-auto"); }
   const toggles = await p.$$eval("#mbody [data-t]", e => e.map(x => x.getAttribute("aria-label")));
   check("capabilities are plain toggles", toggles.includes("Memory") && toggles.includes("Web search"), toggles.join(", "));
   // models and providers: Base URL + key -> Test -> models -> pick -> Save

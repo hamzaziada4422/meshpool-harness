@@ -116,8 +116,8 @@ async function watch(p) {
   await p.fill("#input", "$"); await p.waitForTimeout(300); check("skills palette opens", (await p.$$(".pop .opt")).length > 0); await p.keyboard.press("Escape"); await p.fill("#input", "");
   // Auto routes a real task
   await p.fill("#input", "Build a revenue forecast in Excel"); await p.keyboard.press("Enter");
-  await p.waitForFunction(() => (S.cur?.log || []).some(e => /Meshpool Auto picked/.test(e.text || "")), null, {timeout: 30000}).catch(() => {});
-  check("Auto picks a harness and says why", await p.evaluate(() => (S.cur?.log || []).some(e => /Meshpool Auto picked/.test(e.text || ""))));
+  await p.waitForFunction(() => (S.cur?.log || []).some(e => /^Using /.test(e.text || "")), null, {timeout: 30000}).catch(() => {});
+  check("Auto picks a harness and says why", await p.evaluate(() => (S.cur?.log || []).some(e => /^Using /.test(e.text || ""))));
   await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 120000}).catch(() => {});
   for (const pn of ["progress", "outputs"]) { await p.evaluate(n => togglePanel(n, true), pn); await p.waitForTimeout(500); }
   await p.evaluate(() => newThread("/tmp/proj1")); await p.waitForTimeout(500);

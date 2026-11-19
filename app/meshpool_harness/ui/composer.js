@@ -42,11 +42,6 @@ async function loadConnectors() { try { S.connCache = (await api("/api/connector
 const capOn = id => (S.caps || []).find(f => f.id === id)?.on;
 function plusMenu(anchor) {
   const c = cfg(), h = harness(c.harness);
-  const agents = S.harnesses.filter(x => !x.error && x.available !== false).map(x => ({label: x.name, desc: x.ready === false ? "Needs setup" : (x.tagline || x.description || ""), checked: x.id === c.harness ? true : undefined, fn: () => {
-    if (x.ready === false) return openSettings(x.login ? "harnesses" : "general");
-    if (S.cur) { if (x.id === S.cur.view.harness.id) return; toast("An agent can’t change mid-chat, so this started a new chat with " + x.name + "."); newThread(); }
-    S.draft.harness = x.id; renderBar(); renderHero();
-  }}));
   const skills = (S.skills || []).filter(s => s.enabled).slice(0, 14).map(s => ({label: "$" + s.name, desc: clip(s.description || "", 60), fn: () => { const inp = $("#input"); inp.value = `$${s.name} ` + inp.value; inp.focus(); inp.dispatchEvent(new Event("input")); }}));
   const conns = (S.connCache || []).filter(x => x.connected && x.enabled).map(x => ({label: x.name, checked: true, fn: () => goPage("plugins")}));
   ctxMenu({type: "click", currentTarget: anchor}, [
@@ -56,9 +51,25 @@ function plusMenu(anchor) {
     {sep: true},
     {label: "Skills", icon: ICON.skill, sub: skills.length ? skills : [{label: "No skills yet", fn: () => openSettings("skills")}]},
     {label: "Plugins", icon: ICON.plug, sub: [...conns, ...(conns.length ? [{sep: true}] : []), {label: "Manage plugins", icon: ICON.gear, fn: () => goPage("plugins")}]},
-    {label: "Agent", icon: ICON.cpu, desc: S.cur ? h.name : "Automatic", sub: agents},
     ...(!S.cur && S.view !== "project" ? [{sep: true}, {label: S.draft.project ? "Change folder" : "Work in a folder", icon: ICON.folder, desc: S.draft.project ? projName(S.draft.project) : "", fn: chooseDraftFolder}, ...(S.draft.project ? [{label: "Don’t use a folder", icon: ICON.x, fn: () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); }}] : [])] : []),
   ], {cls: "plusmenu", up: true});
+}
+
+/* ---------- harness: Auto (recommended) or one of the available agents ---------- */
+// The default for new chats is kept on this computer; a chat keeps the harness it started with.
+const modeHarness = () => store("harness_default") || "meshpool-auto";
+const harnessChoices = () => S.harnesses.filter(h => !h.error && h.available !== false && h.id !== "meshpool-auto");
+function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "MeshPool" : harness(c).name); }
+function pickHarness(id) {
+  if (S.cur) { if (id === S.cur.view.harness?.id || (id === "meshpool-auto" && S.cur.auto)) return; toast("An agent can’t change mid-chat, so this started a new chat with " + (id === "meshpool-auto" ? "Auto" : harness(id).name) + "."); newThread(); }
+  S.draft.harness = id; renderBar(); renderHero();
+}
+function harnessMenuItems() {
+  const c = cfg().harness, auto = !S.cur ? c === "meshpool-auto" : !!S.cur.auto;
+  return [{label: "Auto (recommended)", desc: "Meshpool picks the agent that suits each request", checked: auto ? true : undefined, fn: () => pickHarness("meshpool-auto")},
+    ...harnessChoices().map(h => ({label: h.name, desc: h.ready === false ? "Needs setup" : (h.tagline || h.description || ""), checked: !auto && h.id === c ? true : undefined, fn: () => {
+      if (h.ready === false) return openSettings(h.login ? "harnesses" : "general");
+      pickHarness(h.id); }}))];
 }
 
 /* ---------- permission mode and model ---------- */
@@ -82,6 +93,7 @@ function modelMenu(anchor) {
     {head: S.cur ? "Model · this chat" : "Model · new chats"},
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
+    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "MeshPool") : harnessShort(), sub: harnessMenuItems()},
     {label: "Effort", note: "Auto", sub: [{head: "Effort"}, {label: "Auto", desc: "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps.", checked: true, fn: () => {}}]},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
   ], {cls: "modelmenu", up: true});
