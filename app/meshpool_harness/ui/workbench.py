@@ -1326,6 +1326,19 @@ def _session_of(sid: str):
     return s
 
 
+def session_plan(s) -> dict:
+    """The agent's plan for the panel: steps with done / current / pending. From the live agent's todo list, else the
+    last plan event of the session (a chat reopened after a restart)."""
+    from meshpool_harness.agent import planning as P
+    todos = list(getattr(getattr(s, "agent", None), "_todos", None) or [])
+    if not todos:
+        for ev in reversed(getattr(s, "events", None) or []):
+            if ev.get("type") == "plan":
+                todos = list(ev.get("entries") or ev.get("items") or [])
+                break
+    return P.panel(todos)
+
+
 def session_panel(sid: str) -> dict:
     """Everything the session side panel shows that is local and quick: where it runs, the repository and branch,
     context fill, connectors (enabled and used), files made, background tasks and the working-tree summary. The
@@ -1359,6 +1372,7 @@ def session_panel(sid: str) -> dict:
             rem += int(d_) if d_.isdigit() else 0
         out["tree"] = {"files": g["dirty"], "added": add, "removed": rem}
     out["outputs"] = session_outputs(s, Path(root))
+    out["plan"] = session_plan(s)
     return out
 
 

@@ -65,6 +65,7 @@ WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
+from meshpool_harness.agent import planning as _PLAN  # noqa: E402
 from meshpool_harness.hrouter import packs as _PACKS  # noqa: E402  language packs: the diagnostics tool
 T.SCHEMAS.setdefault("diagnostics", _PACKS.SCHEMA)
 T.SCHEMAS.setdefault("find_skill", T._fn(
@@ -638,6 +639,8 @@ class Agent:
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
         self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
+        self._plan_needed = False              # this turn needs a written plan (decided at its start, free)
         self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
         self._trace_lock = threading.Lock()
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
@@ -706,7 +709,10 @@ class Agent:
         if route is None or self.plan or os.environ.get("MH_LEAN_TOOLS", "1") == "0":
             return set()
         from meshpool_harness.hrouter.route import dropped
-        return dropped(route)
+        d = dropped(route)
+        if getattr(self, "_plan_needed", False):
+            d = d - {"todo_write"}                   # a long task keeps its plan tool even on a lean route
+        return d
 
     def tool_schemas(self) -> list:
         if self.plan:
@@ -878,6 +884,8 @@ class Agent:
              "todo_nudged": False}
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
+        g.update({"since_todo": 0, "plan_asked": False})
+        self._plan_start(route, g)
         if (route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
                 and not self.plan and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # reproduce before the first call: one model round saved
@@ -984,10 +992,13 @@ class Agent:
                                 self.messages.append({"role": "user", "content": fb})
                                 continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
-                    if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
+                    if (V3 or self._plan_needed) and left and self._todo_touched and not g["todo_nudged"] \
+                            and not self.plan:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
+                        where = (_PLAN.reminder(self._todos) + "\n") if self._plan_needed else ""
                         self.messages.append({"role": "user", "content": (
-                            "[Meshpool] These items on your todo list are not completed:\n- " + "\n- ".join(left[:12])
+                            "[Meshpool] " + where + "These items on your todo list are not completed:\n- "
+                            + "\n- ".join(left[:12])
                             + "\nComplete them now, or mark them completed if they are done. If one is not needed or "
                             "you need the user's answer, say so briefly and end your turn.")})
                         continue
@@ -1013,6 +1024,10 @@ class Agent:
                     self._attach_images(shots)
                 if V3:
                     note = self._v3_notes(step, calls, g)
+                    if note:
+                        self.messages.append({"role": "user", "content": "[Meshpool] " + note})
+                if self._plan_needed:
+                    note = self._plan_note(calls, g)
                     if note:
                         self.messages.append({"role": "user", "content": "[Meshpool] " + note})
             else:
@@ -1066,6 +1081,44 @@ class Agent:
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
             self.save()
         return final
+
+    def _plan_start(self, route, g: dict):
+        """Decide, for free, whether this request needs a written plan; if so the first call is told to write it
+        (a line on the request, not the system prompt: the prompt cache stays warm)."""
+        last = self.messages[-1].get("content") if self.messages else ""
+        text = last if isinstance(last, str) else " ".join(
+            p.get("text", "") for p in last or [] if isinstance(p, dict) and p.get("type") == "text")
+        if text.startswith("[Added by the user"):                 # a steer picked up in a new turn: same plan state
+            return
+        self._plan_needed = _PLAN.needed(route, text, self.plan)
+        if not self._plan_needed:
+            return
+        line = "\n\n[Meshpool] " + _PLAN.instruction()
+        if isinstance(last, str):
+            self.messages[-1]["content"] = last + line
+        elif isinstance(last, list):
+            self.messages[-1]["content"] = last + [{"type": "text", "text": line.strip()}]
+
+    def _plan_note(self, calls: list, g: dict) -> str:
+        """After a step's tool calls: a tiny reminder of the current step every few calls without a plan update, or
+        one nudge to write the plan if the first calls went by without one."""
+        if any(c.get("function", {}).get("name") == "todo_write" for c in calls):
+            g["since_todo"] = 0
+            return ""
+        g["since_todo"] += len(calls)
+        if not self._todo_touched:
+            if g["since_todo"] >= 3 and not g["plan_asked"]:
+                g["plan_asked"] = True
+                return "No plan yet. Write it now with todo_write (3 to 8 checkable steps, the first in_progress)."
+            return ""
+        if g["since_todo"] >= _PLAN.every():
+            g["since_todo"] = 0
+            return _PLAN.reminder(self._todos, "Update the plan with todo_write as steps finish.")
+        return ""
+
+    def plan_state(self) -> dict | None:
+        """The plan as a dict {items, current, total, done}, or None when the agent has not written one."""
+        return _PLAN.state(self._todos)
 
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
         """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the
@@ -1939,8 +1992,9 @@ class Agent:
             elif name == "todo_write":
                 items = [{"content": str(i.get("content", "")), "status": i.get("status", "pending")}
                          for i in args.get("items") or [] if isinstance(i, dict)]
-                self.emit({"type": "plan", "entries": items})
                 self._todos, self._todo_touched = items, True
+                self.emit(dict(_PLAN.state(items) or {"items": [], "current": 0, "total": 0, "done": 0},
+                               type="plan", entries=items))     # entries: what older front ends read
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             else:
