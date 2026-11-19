@@ -54,6 +54,15 @@ def key() -> str:
     return _cfg("MESHPOOL_API_KEY") or _openai_pair()[0]
 
 
+def key_wire() -> str:
+    """The wire the key endpoint speaks: "openai" (chat completions) or "anthropic" (Messages). MH_API_WIRE when set
+    (provider_setup saves it); otherwise guessed from the host, so settings saved by older versions keep working."""
+    w = _cfg("MH_API_WIRE").lower()
+    if w in ("openai", "anthropic"):
+        return w
+    return "anthropic" if host(key_base()).endswith("anthropic.com") else "openai"
+
+
 def key_problem(k: str | None) -> str:
     """Why a key cannot work, in words the user can act on; "" when it looks usable. A key copied from a dashboard
     that masks it ("sk-43Ux7•••••") carries characters no HTTP header can hold, and each agent then failed with its

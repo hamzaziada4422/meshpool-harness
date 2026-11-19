@@ -1,11 +1,11 @@
 #!/bin/sh
 # Meshpool for the terminal, on macOS and Linux. One command installs it and starts setup:
 #
-#   curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | sh
 #
 # On macOS, `--app` installs the Meshpool app itself instead, the same one the download button gives you:
 #
-#   curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | bash -s -- --app
+#   curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | bash -s -- --app
 #
 # It installs into ~/.meshpool-cli and puts the `meshpool` command on your PATH. It uses your Python 3.10 or later
 # if you have one; otherwise it downloads a private copy of Python into ~/.meshpool-cli (nothing system-wide changes).
@@ -13,7 +13,7 @@
 # MESHPOOL_SRC (install from a local checkout instead of downloading).
 set -eu
 
-REPO="hamzaaziada/meshpool-harness"
+REPO="hamzaziada4422/meshpool-harness"
 PBS="https://github.com/astral-sh/python-build-standalone/releases/download/20241016"
 PBS_PY="cpython-3.12.7+20241016"
 

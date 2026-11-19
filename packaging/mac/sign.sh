@@ -86,7 +86,7 @@ sign_one() {   # path
 }
 
 sign_apps() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     APP="$W/app-mac-$a/Meshpool.app"
     [ -d "$APP" ] || { echo "sign.sh: $APP is missing"; exit 1; }
     echo "sign.sh: signing $a"
@@ -97,6 +97,13 @@ sign_apps() {
       if is_macho "$f"; then sign_one "$f"; n=$((n + 1)); fi
     done < <(find "$APP" -type f -print0)
     echo "sign.sh: signed $n file(s) inside the bundle"
+    # Nested bundles (LibreOffice.app, Chromium's helper apps and frameworks) need their own signature over their
+    # contents, deepest first: pruning LibreOffice removed its _CodeSignature, and --deep --strict checks every one.
+    m=0
+    while IFS= read -r b; do sign_one "$b"; m=$((m + 1)); done < <(
+      find "$APP/Contents" -mindepth 1 -type d \( -name '*.app' -o -name '*.framework' -o -name '*.appex' \) |
+        awk -F/ '{ print NF "\t" $0 }' | sort -rn | cut -f2-)
+    echo "sign.sh: signed $m nested bundle(s)"
     sign_one "$APP/Contents/MacOS/Meshpool"
     sign_one "$APP"
     codesign --verify --deep --strict --verbose=2 "$APP"
@@ -107,7 +114,7 @@ sign_apps() {
 # The dmg is what the user downloads, so the dmg is what gets notarized and stapled; the app inside it is stapled too,
 # so it still passes after it is dragged out of the image.
 notarize_dmgs() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
     DMG="$OUT/$NAME.dmg"
     [ -f "$DMG" ] || { echo "sign.sh: $DMG is missing (repack.sh builds it)"; exit 1; }
@@ -135,7 +142,7 @@ notarize_dmgs() {
 # ---------- prove it --------------------------------------------------------------------------------------------
 # Gatekeeper's own verdict, on the dmg and on the app inside it. A build that fails here is not published.
 check_dmgs() {
-  for a in arm64 x64; do
+  for a in ${MAC_ARCHS:-arm64 x64}; do
     NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
     DMG="$OUT/$NAME.dmg"
     echo "sign.sh: checking $NAME.dmg with spctl"

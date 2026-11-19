@@ -85,10 +85,10 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
       const opt = await p.$(".pop .opt[data-id]"); if (opt) await opt.click(); else await p.keyboard.press("Escape");
       await p.waitForTimeout(500);
     }
-    await p.click("#pPill"); await p.waitForTimeout(300); await p.click("#pPill"); await p.waitForTimeout(300);
+    await p.click("#oPill"); await p.click("#oPlan"); await p.waitForTimeout(300); await p.click("#oPill"); await p.click("#oPlan"); await p.waitForTimeout(300);
     check(T("model and plan changes mid-run do not break the task"), (await st(id)) === "working");
     // 8. Harness picker mid-run starts a new thread and leaves the running one alone
-    await p.click("#hPill"); await p.waitForTimeout(300);
+    await p.click("#oPill"); await p.click("#oAgent"); await p.waitForTimeout(300);
     const want = hid === "meshpool-code" ? "pi" : "meshpool-code";
     const other = await p.$(`.pop .opt[data-id="${listed.includes(want) ? want : "meshpool-auto"}"]`) || await p.$(`.pop .opt[data-id]:not([data-id="${hid}"])`);
     if (other) await other.click(); else await p.keyboard.press("Escape");
@@ -98,10 +98,10 @@ const sleeps = () => { try { return Number(execSync("pgrep -c -f '^sleep 25$' ||
     await p.evaluate(([i]) => openThread(i), [id]); await p.waitForTimeout(800);
     // 9. Panels and terminal mid-run
     for (const pn of kind === "code" ? ["diff", "files", "term", "git", "preview"] : ["progress", "outputs"]) {
-      const bt = await p.$(`[data-panel=${pn}]`); if (bt) { await bt.click(); await p.waitForTimeout(700); }
+      await p.evaluate(n => togglePanel(n, true), pn); await p.waitForTimeout(700);
     }
     if (kind === "code") {
-      await p.click("[data-panel=term]"); await p.waitForTimeout(500);
+      await p.evaluate(() => togglePanel("term", true)); await p.waitForTimeout(500);
       const ti = await p.$("#termIn, #tin, .term input"); if (ti) { await ti.fill("echo midrun-ok"); await ti.press("Enter"); await p.waitForTimeout(1500); }
       check(T("terminal works mid-run"), !ti || (await p.textContent("body")).includes("midrun-ok"));
     }

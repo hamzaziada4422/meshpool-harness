@@ -66,6 +66,17 @@ def main():
     import meshpool_harness as MH
     if MH.__version__ != a.version:
         raise SystemExit(f"smoke: FAILED, the app says version {MH.__version__}, the release is {a.version}")
+    if os.name == "nt":                         # the agents' shell is the bundled Git Bash, never a PowerShell fallback
+        from meshpool_harness import bundled
+        from meshpool_harness.config import find_bash
+        sh = find_bash()
+        if not sh or not bundled.bundled_bash() or Path(sh).name.lower() != "bash.exe":
+            raise SystemExit(f"smoke: FAILED, no bundled bash for the agents' shell (found {sh!r})")
+        out = subprocess.run([sh, "-lc", "echo $BASH_VERSION; ls / >/dev/null && grep -q . <<< x && echo ok"],
+                             capture_output=True, text=True, timeout=60)
+        if "ok" not in out.stdout:
+            raise SystemExit(f"smoke: FAILED, the bundled bash does not run: {out.stdout!r} {out.stderr[-300:]!r}")
+        step(f"bash {out.stdout.split()[0] if out.stdout.split() else '?'} at {sh}")
 
     step("Word and PDF files")
     tmp = Path(tempfile.mkdtemp(prefix="meshpool-smoke-"))

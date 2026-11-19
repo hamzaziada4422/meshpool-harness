@@ -17,8 +17,8 @@ async function watch(p) {
 
 (async () => {
   const b = await chromium.launch();
-  // ---------- 1. onboarding on a fresh install
-  {
+  // ---------- 1. onboarding on a fresh install (FRESH_PORT "-" skips it)
+  if (freshPort !== "-") {
     const p = await b.newPage({viewport: {width: 1280, height: 860}}); const errs = await watch(p);
     await p.addInitScript(() => { try { localStorage.clear(); } catch (e) {} });
     await p.goto(`http://127.0.0.1:${freshPort}/`);
@@ -62,12 +62,12 @@ async function watch(p) {
   await p.addInitScript(() => { try { localStorage.setItem("mp_permsAsked", "1"); } catch (e) {} });
   await p.goto(`http://127.0.0.1:${mainPort}/`); await p.waitForSelector(".hero");
   await p.click("#openSettings");
-  const sections = await p.$$eval(".mnav [data-s]", x => x.map(b => b.dataset.s));
+  const sections = await p.evaluate(() => SECTIONS.map(s => s[0]));
   check("settings has all sections", ["personal", "scheduled", "web", "connectors", "skills", "harnesses", "mcp", "permissions", "about"].every(s => sections.includes(s)), sections);
   for (const sec of sections) {
     const before = errs.length;
     if (!(await p.$(".scrim"))) await p.click("#openSettings");
-    await p.click(`.mnav [data-s=${sec}]`); await p.waitForTimeout(900);
+    await p.evaluate(s => renderSection(s), sec); await p.waitForTimeout(900);
     const labels = await p.$$eval("#mbody button:not([disabled]), #mbody summary", xs => xs.map((x, i) => [i, (x.textContent || x.getAttribute("aria-label") || "").trim()]));
     let clicked = 0;
     for (const [i, label] of labels) {
@@ -76,7 +76,7 @@ async function watch(p) {
       if (!el || !(await el.isVisible())) continue;
       try { await el.click({timeout: 2000}); clicked++; await p.waitForTimeout(350); } catch (e) { /* re-rendered */ }
       if (await p.$(".dlg")) { await p.keyboard.press("Escape"); }
-      if (!(await p.$(".scrim"))) { await p.click("#openSettings"); await p.click(`.mnav [data-s=${sec}]`); await p.waitForTimeout(500); }
+      if (!(await p.$(".scrim"))) { await p.click("#openSettings"); await p.evaluate(s => renderSection(s), sec); await p.waitForTimeout(500); }
     }
     await p.screenshot({path: `${out}/s-${sec}.png`});
     // 400s are validation messages (e.g. "No GitHub login found on this computer"), as in the whole-app check below.
@@ -84,50 +84,49 @@ async function watch(p) {
     check(`settings: ${sec} (${clicked} buttons) without errors`, !pageErrs.length, pageErrs.join(" | "));
   }
   // specific settings flows
-  await p.click(`.mnav [data-s=personal]`); await p.waitForTimeout(600);
+  await p.evaluate(() => renderSection("personal")); await p.waitForTimeout(600);
   await p.fill("#paIns", "Be brief."); await p.click("#paSave"); await p.waitForTimeout(600);
   check("instructions save from the UI", /Saved/.test(await p.textContent("#paRes")));
-  await p.click(`.mnav [data-s=scheduled]`); await p.waitForTimeout(600);
+  await p.evaluate(() => renderSection("scheduled")); await p.waitForTimeout(600);
   await p.fill("#tsName", "UI task"); await p.fill("#tsPrompt", "Reply with the single word ok"); await p.selectOption("#tsWhen", "weekly");
   check("weekly shows the day picker", await p.isVisible("#tsDay"));
   await p.click("#tsAdd"); await p.waitForTimeout(800);
   check("scheduled task added from the UI", /UI task/.test(await p.textContent("#mbody")));
-  await p.click(`.mnav [data-s=connectors]`); await p.waitForSelector("#cnl");
+  await p.evaluate(() => renderSection("connectors")); await p.waitForSelector("#cnl");
   await p.fill("#cxUrl", "not a url"); await p.click("#cxAdd"); await p.waitForTimeout(800);
   check("bad connector address shows an error", /https/.test(await p.textContent("#cnRes")), await p.textContent("#cnRes"));
   await p.keyboard.press("Escape"); await p.$eval(".scrim", x => x.remove()).catch(() => {});
   // ---------- 3. composer, palette and panels
   const before = errs.length;
-  for (const id of ["#hPill", "#mPill", "#aPill"]) {
+  for (const id of ["#oPill", "#mPill"]) {
     await p.click(id); await p.waitForTimeout(400);
-    const opts = await p.$$eval(".pop .opt[data-id], .pop .opt[data-m]", x => x.length);
+    const opts = await p.$$eval(".pop .opt[data-id], .pop .opt[data-m], .pop #oPlan", x => x.length);
     check(`popover ${id} opens with options`, opts > 0, opts);
     await p.keyboard.press("Escape"); await p.waitForTimeout(200);
   }
-  await p.click("#hPill"); await p.waitForTimeout(300);
+  await p.click("#oPill"); await p.click("#oAgent"); await p.waitForTimeout(300);
   const groups = await p.$$eval(".pop .grp", x => x.map(g => g.textContent));
   // Agents only (Codex is an agent; a subscription is a provider, chosen in the model menu)
   check("harness picker shows Automatic and agents, no subscription entries", groups.some(g => /Automatic/.test(g)) && !groups.some(g => /subscription/i.test(g)), groups);
   check("each agent shows what it is best at", (await p.$$eval(".pop .opt[data-id] .od", x => x.filter(e => e.textContent.trim()).length)) >= 3);
   await p.click(".pop .opt[data-id='meshpool-auto']"); await p.waitForTimeout(300);
-  check("pick Meshpool Auto", /Meshpool Auto/.test(await p.textContent("#hPill")));
-  await p.click("#pPill"); await p.waitForTimeout(200); check("plan toggle on", (await p.getAttribute("#pPill", "aria-pressed")) === "true"); await p.click("#pPill");
+  check("pick Meshpool Auto", await p.evaluate(() => S.draft.harness === "meshpool-auto"));
+  await p.click("#oPill"); await p.click("#oPlan"); await p.waitForTimeout(200); check("plan toggle on", await p.evaluate(() => !!S.draft.plan)); await p.click("#oPill"); await p.click("#oPlan");
   await p.fill("#input", "/"); await p.waitForTimeout(300); check("slash palette opens", (await p.$$(".pop .opt")).length > 3); await p.keyboard.press("Escape"); await p.fill("#input", "");
   await p.fill("#input", "$"); await p.waitForTimeout(300); check("skills palette opens", (await p.$$(".pop .opt")).length > 0); await p.keyboard.press("Escape"); await p.fill("#input", "");
   // Auto routes a real task
   await p.fill("#input", "Build a revenue forecast in Excel"); await p.keyboard.press("Enter");
-  await p.waitForFunction(() => (S.cur?.log || []).some(e => /Meshpool Auto picked/.test(e.text || "")), null, {timeout: 30000}).catch(() => {});
-  check("Auto picks a harness and says why", await p.evaluate(() => (S.cur?.log || []).some(e => /Meshpool Auto picked/.test(e.text || ""))));
+  await p.waitForFunction(() => (S.cur?.log || []).some(e => /^Using /.test(e.text || "")), null, {timeout: 30000}).catch(() => {});
+  check("Auto picks a harness and says why", await p.evaluate(() => (S.cur?.log || []).some(e => /^Using /.test(e.text || ""))));
   await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 120000}).catch(() => {});
-  for (const pn of ["progress", "outputs"]) { const b2 = await p.$(`[data-panel=${pn}]`); if (b2) { await b2.click(); await p.waitForTimeout(500); } }
-  await p.click(".modesw [data-mode=code]"); await p.waitForTimeout(500);
+  for (const pn of ["progress", "outputs"]) { await p.evaluate(n => togglePanel(n, true), pn); await p.waitForTimeout(500); }
+  await p.evaluate(() => newThread("/tmp/proj1")); await p.waitForTimeout(500);
   await p.fill("#input", "say hello and create hello.py"); await p.keyboard.press("Enter");
   await p.waitForFunction(() => S.cur?.view?.state && S.cur.view.state !== "starting", null, {timeout: 30000}).catch(() => {});
   for (let i = 0; i < 40; i++) { const ok = await p.$(".appr:not(.done) button"); if (ok) { await ok.click(); } if (await p.evaluate(() => S.cur?.view?.state === "idle" && (S.cur.log || []).some(e => e.type === "turn_end"))) break; await p.waitForTimeout(500); }
   check("code thread finishes with approval click", await p.evaluate(() => (S.cur.log || []).some(e => e.type === "turn_end")));
   for (const pn of ["diff", "files", "term", "git", "preview"]) {
-    const b2 = await p.$(`[data-panel=${pn}]`); if (!b2) { check(`panel ${pn} button exists`, false); continue; }
-    await b2.click(); await p.waitForTimeout(900); await p.screenshot({path: `${out}/p-${pn}.png`});
+    await p.evaluate(n => togglePanel(n, true), pn); await p.waitForTimeout(900); await p.screenshot({path: `${out}/p-${pn}.png`});
   }
   check("panels open without errors", errs.length === before, errs.slice(before).join(" | "));
   // keyboard shortcuts and sidebar

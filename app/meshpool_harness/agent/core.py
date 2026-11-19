@@ -40,7 +40,7 @@ SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill"}
+             "ask_user", "diagnostics", "find_skill", "update_plan"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -64,7 +64,18 @@ if os.environ.get("MH_OBSERVE") == "1":           # probe/trace: see the bug bef
 WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
+
+def _codex_prompt() -> str:
+    """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
+    for readers of the file and is not sent to the model)."""
+    try:
+        text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
+    except OSError:
+        return "You are a coding agent. Use the shell and apply_patch tools to complete the user's task."
+    return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
+
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
+from meshpool_harness.agent import planning as _PLAN  # noqa: E402
 from meshpool_harness.hrouter import packs as _PACKS  # noqa: E402  language packs: the diagnostics tool
 T.SCHEMAS.setdefault("diagnostics", _PACKS.SCHEMA)
 T.SCHEMAS.setdefault("find_skill", T._fn(
@@ -279,8 +290,13 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
-    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode("utf-8"), method="POST",
-                                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    from meshpool_harness import providers as _PV
+    if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
+        from meshpool_harness.core import anthropic_wire as AW
+        url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
+    else:
+        url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
         with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
@@ -388,11 +404,27 @@ def _summary(name: str, args: dict) -> str:
         return s if len(s) < 300 else s[:300] + "..."
 
 
+def _patch_files(patch: str) -> list:
+    return re.findall(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", str(patch or ""))
+
+
 def _summary_of(name: str, args: dict) -> str:
+    if name == "shell":
+        cmd = T.shell_script(args.get("command"))
+        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + cmd
+    if name == "apply_patch":
+        files = _patch_files(args.get("input"))
+        return ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "") if files else "patch"
+    if name == "update_plan":
+        items = args.get("plan") or []
+        return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
     if name == "bash":
         return args.get("command", "")
     if name == "bash_many":
         return " ; ".join(str(c) for c in args.get("commands") or [])[:400]
+    if name == "edit" and isinstance(args.get("changes"), list):     # one call, several files
+        paths = list(dict.fromkeys(str(c.get("path", "")) for c in args["changes"] if isinstance(c, dict)))
+        return ", ".join(paths[:6]) + (f" (+{len(paths) - 6} more)" if len(paths) > 6 else "")
     if name in ("read_file", "write_file", "edit"):
         s = args.get("path", "")
         if name == "read_file" and (args.get("start") or args.get("end")):
@@ -638,6 +670,8 @@ class Agent:
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
         self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
+        self._plan_needed = False              # this turn needs a written plan (decided at its start, free)
         self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
         self._trace_lock = threading.Lock()
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
@@ -646,9 +680,37 @@ class Agent:
         self.title = ""
 
     # ---------- prompt -----------------------------------------------------------------------------------------
+    def _style(self) -> bool:
+        """True when this chat runs in Codex style (harness profile engine_style "codex"): Codex's base instructions,
+        shell / apply_patch / update_plan and Codex's loop, under MeshPool's routing. Code chats only."""
+        try:
+            return self.profile == "code" and self.hsettings()["engine_style"] == "codex"
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _codex(self) -> bool:
+        return self._style() and not self.plan           # plan mode keeps its read-only tools
+
+    def _codex_env(self) -> str:
+        """Codex's <environment_context>: where it is, and how much it may do without asking."""
+        from meshpool_harness.config import find_bash
+        shell = "bash" if find_bash() else ("powershell" if os.name == "nt" else "sh")
+        policy = "never" if self.mode == "auto" else "on-request"
+        return (f"<environment_context>\n  <cwd>{self.root}</cwd>\n  <approval_policy>{policy}</approval_policy>\n"
+                f"  <shell>{shell}</shell>\n</environment_context>")
+
     def system_prompt(self) -> str:
         from meshpool_harness.config import find_bash
         bash = find_bash()
+        if self._style():
+            text = _codex_prompt()
+            for name in PROJECT_FILES:
+                pf = self.root / name
+                if pf.is_file():
+                    body = pf.read_text(encoding="utf-8", errors="replace")[:20000]
+                    text += f"\n\n# {name} instructions for {self.root}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
+                    break
+            return text
         if os.name == "nt":
             shell = (("bash (Git Bash). For Windows tools, run them through powershell -NoProfile -Command \"...\" "
                       "or cmd /c \"...\"") if bash else
@@ -700,17 +762,30 @@ class Agent:
         if len(self.messages) <= 1:
             self.messages = [{"role": "system", "content": self.system_prompt()}]
 
+    def hsettings(self) -> dict:
+        """The routed harness profile's settings, with explicit env flags on top (hrouter/profiles.py)."""
+        from meshpool_harness.hrouter.profiles import effective
+        return effective(getattr(self, "route", None))
+
     def _dropped(self) -> set:
         """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0."""
         route = getattr(self, "route", None)
-        if route is None or self.plan or os.environ.get("MH_LEAN_TOOLS", "1") == "0":
+        if route is None or self.plan or not self.hsettings()["lean_tools"]:
             return set()
         from meshpool_harness.hrouter.route import dropped
-        return dropped(route)
+        d = dropped(route)
+        if getattr(self, "_plan_needed", False):
+            d = d - {"todo_write"}                   # a long task keeps its plan tool even on a lean route
+        return d
 
     def tool_schemas(self) -> list:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
+        if self._codex():                          # Codex's tools, and the user's own MCP tools
+            return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas()
+                                                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_")
+                                                and not x["function"]["name"].endswith("run_subtasks")]
+                                               if self.mcp else [])
         names = self._tool_names()
         if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
             names = names + ["delegate_task"]
@@ -723,6 +798,8 @@ class Agent:
                                    if self.mcp else [])
 
     def _tool_names(self) -> list:
+        if self._codex():
+            return list(T.CODEX_TOOLS)
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
@@ -877,7 +954,25 @@ class Agent:
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
         route = getattr(self, "route", None)
-        if (route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
+        g["req"] = self.messages[-1].get("content") if self.messages else ""
+        g.update({"since_todo": 0, "plan_asked": False})
+        cx = self._codex()
+        if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
+            self._plan_needed = False
+        else:
+            self._plan_start(route, g)
+        if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
+            extra = self._codex_env()
+            if route is not None:
+                from meshpool_harness.hrouter.route import addon
+                ad = addon(route).strip()
+                extra += ("\n\n" + ad) if ad else ""
+            last = self.messages[-1].get("content")
+            if isinstance(last, str):
+                self.messages[-1]["content"] = last + "\n\n\u200b" + extra
+            elif isinstance(last, list):
+                self.messages[-1]["content"] = last + [{"type": "text", "text": extra}]
+        if (not cx and route is not None and route.spec in ("code.debug", "code.test") and len(self.messages) <= 2
                 and not self.plan and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # reproduce before the first call: one model round saved
                 rep = _PACKS.reproduce(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
@@ -886,7 +981,7 @@ class Agent:
             if rep:
                 self.messages[-1]["content"] += "\n\n" + rep
                 self.emit({"type": "status", "text": "Reproduced the problem before starting."})
-        if (route is not None and route.spec in ("code.build", "code.refactor", "code.explain", "code.test")
+        if (not cx and route is not None and route.spec in ("code.build", "code.refactor", "code.explain", "code.test")
                 and len(self.messages) <= 2 and not self.plan and isinstance(self.messages[-1].get("content"), str)
                 and os.environ.get("MH_REPO_MAP", "1") != "0"):
             try:                                     # the project's symbols up front: no exploring rounds
@@ -895,7 +990,7 @@ class Agent:
                 rm = ""
             if rm:
                 self.messages[-1]["content"] += "\n\n" + rm
-        if (route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
+        if (not cx and route is not None and route.spec == "data" and len(self.messages) <= 2 and not self.plan
                 and isinstance(self.messages[-1].get("content"), str)):
             try:                                     # the data's shape before the first call: no exploring round
                 prev = _PACKS.data_preview(self.ws, self.messages[-1]["content"].split("\n\n\u200b")[0])
@@ -904,7 +999,7 @@ class Agent:
             if prev:
                 self.messages[-1]["content"] += "\n\n" + prev
                 self.emit({"type": "status", "text": "Read the data files' structure before starting."})
-        if V3 and len(self.messages) <= 2 and not self.plan:
+        if V3 and not cx and len(self.messages) <= 2 and not self.plan:
             snap = _env_snapshot(self.root)
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
@@ -949,7 +1044,7 @@ class Agent:
                         continue
                     if self.has_steers():           # the user added something while this reply was written
                         continue
-                    if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan
+                    if (os.environ.get("MH_SCOPE_CHECK") == "1" and self.profile == "code" and not self.plan and not cx
                             and self.ws.edits > g["edits0"] and not g.get("scope_shown")):
                         g["scope_shown"] = True     # once per request: the same check as the benchmark loop's finish
                         from meshpool_harness.core.finishing import scope_report
@@ -959,7 +1054,8 @@ class Agent:
                             continue
                     route = getattr(self, "route", None)
                     after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits]
-                    if (route is not None and route.family == "code" and not self.plan and self.ws.edits > g["edits0"]
+                    if (route is not None and route.family == "code" and not self.plan and not cx
+                            and self.ws.edits > g["edits0"]
                             and after and after[-1]["code"] not in (0, None) and not g.get("verify_nudged")):
                         g["verify_nudged"] = True      # once per request: a failing check is not a finished fix
                         last = after[-1]
@@ -968,11 +1064,28 @@ class Agent:
                             f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
                             "failure is expected or unrelated, say exactly why in one line.")})
                         continue
+                    if (route is not None and route.family == "code" and not self.plan and not cx
+                            and self.ws.edits > g["edits0"]):
+                        if not g.get("review_done"):
+                            g["review_done"] = True    # once per request: a second reader checks it against the ask
+                            found = self._review_change(g, turn)
+                            if found:
+                                self.messages.append({"role": "user", "content": found})
+                                continue
+                        if not g.get("mutation_done"):
+                            g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
+                            fb = self._mutation_feedback()
+                            if fb:
+                                self.messages.append({"role": "user", "content": fb})
+                                continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
-                    if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
+                    if (V3 or self._plan_needed) and left and self._todo_touched and not g["todo_nudged"] \
+                            and not self.plan and not cx:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
+                        where = (_PLAN.reminder(self._todos) + "\n") if self._plan_needed else ""
                         self.messages.append({"role": "user", "content": (
-                            "[Meshpool] These items on your todo list are not completed:\n- " + "\n- ".join(left[:12])
+                            "[Meshpool] " + where + "These items on your todo list are not completed:\n- "
+                            + "\n- ".join(left[:12])
                             + "\nComplete them now, or mark them completed if they are done. If one is not needed or "
                             "you need the user's answer, say so briefly and end your turn.")})
                         continue
@@ -986,9 +1099,9 @@ class Agent:
                     if len(batch) > 1:               # independent lookups: run together, answer in the asked order
                         from concurrent.futures import ThreadPoolExecutor
                         with ThreadPoolExecutor(max_workers=min(6, len(batch))) as ex:
-                            outs = list(ex.map(lambda c: self._run_tool(c, cut=c["id"] in cut), batch))
+                            outs = list(ex.map(lambda c: self._guarded_tool(c, g, cut=c["id"] in cut), batch))
                     else:
-                        outs = [self._run_tool(batch[0], cut=batch[0]["id"] in cut)]
+                        outs = [self._guarded_tool(batch[0], g, cut=batch[0]["id"] in cut)]
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
@@ -996,8 +1109,12 @@ class Agent:
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)
-                if V3:
+                if V3 and not cx:
                     note = self._v3_notes(step, calls, g)
+                    if note:
+                        self.messages.append({"role": "user", "content": "[Meshpool] " + note})
+                if self._plan_needed:
+                    note = self._plan_note(calls, g)
                     if note:
                         self.messages.append({"role": "user", "content": "[Meshpool] " + note})
             else:
@@ -1052,6 +1169,124 @@ class Agent:
             self.save()
         return final
 
+    def _plan_start(self, route, g: dict):
+        """Decide, for free, whether this request needs a written plan; if so the first call is told to write it
+        (a line on the request, not the system prompt: the prompt cache stays warm)."""
+        last = self.messages[-1].get("content") if self.messages else ""
+        text = last if isinstance(last, str) else " ".join(
+            p.get("text", "") for p in last or [] if isinstance(p, dict) and p.get("type") == "text")
+        if text.startswith("[Added by the user"):                 # a steer picked up in a new turn: same plan state
+            return
+        self._plan_needed = _PLAN.needed(route, text, self.plan)
+        if not self._plan_needed:
+            return
+        line = "\n\n[Meshpool] " + _PLAN.instruction()
+        if isinstance(last, str):
+            self.messages[-1]["content"] = last + line
+        elif isinstance(last, list):
+            self.messages[-1]["content"] = last + [{"type": "text", "text": line.strip()}]
+
+    def _plan_note(self, calls: list, g: dict) -> str:
+        """After a step's tool calls: a tiny reminder of the current step every few calls without a plan update, or
+        one nudge to write the plan if the first calls went by without one."""
+        if any(c.get("function", {}).get("name") == "todo_write" for c in calls):
+            g["since_todo"] = 0
+            return self._step_method(g)
+        g["since_todo"] += len(calls)
+        if not self._todo_touched:
+            if g["since_todo"] >= 3 and not g["plan_asked"]:
+                g["plan_asked"] = True
+                return "No plan yet. Write it now with todo_write (3 to 8 checkable steps, the first in_progress)."
+            return ""
+        if g["since_todo"] >= _PLAN.every():
+            g["since_todo"] = 0
+            return _PLAN.reminder(self._todos, "Update the plan with todo_write as steps finish.")
+        return ""
+
+    def _step_method(self, g: dict) -> str:
+        """Per-step method (profile "step_methods"): when the plan's current step changes, route its text with hrouter
+        (no tokens); if that step is another sub-harness than the turn's and has a method, one short line with the
+        first sentence of it, at most once per sub-harness per turn."""
+        route = getattr(self, "route", None)
+        try:
+            if route is None or not self.hsettings()["step_methods"]:
+                return ""
+            cur = _PLAN.current(self._todos)
+            if cur < 0 or cur == g.get("step_cur"):
+                return ""
+            g["step_cur"] = cur
+            from meshpool_harness import hrouter as HRR
+            from meshpool_harness.hrouter.route import method_summary
+            sr = HRR.route(str(self._todos[cur].get("content", "")), kind="code" if route.family == "code"
+                           else "cowork", workdir=str(self.root))
+            seen = g.setdefault("step_seen", set())
+            if sr.spec == route.spec or sr.spec in seen or sr.spec in ("chat", "general"):
+                return ""
+            sr.settings = route.settings              # the step runs under the turn's profile (same method set)
+            m = method_summary(sr)
+            if not m:
+                return ""
+            seen.add(sr.spec)
+            return f"For this step ({sr.label}): {m}"
+        except Exception:  # noqa: BLE001 - a hint must never break the turn
+            return ""
+
+    def plan_state(self) -> dict | None:
+        """The plan as a dict {items, current, total, done}, or None when the agent has not written one."""
+        return _PLAN.state(self._todos)
+
+    _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
+    _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
+
+    def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
+        """Run one tool call unless it repeats itself with nothing changed in between. The eval traces had runs of
+        30-50 near-identical inspection commands (byte dumps of an unchanged file) that a note alone never stopped;
+        refusing the repeat, with the reason, is what breaks the loop. An edit in between resets the count, so
+        rerunning a check after changing code is never refused."""
+        try:
+            f = c.get("function", {})
+            name, args = f.get("name", ""), str(f.get("arguments", ""))
+            if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
+                return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
+            exact = name + ":" + args[:2000]
+            # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
+            # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
+            shape = name + ":" + re.sub(r"\d+", "#", args[:2000]) if name in ("bash", "bash_many", "shell") else exact
+            book = g.setdefault("loop", {})
+            edits = self.ws.edits
+            for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
+                runs = [e for e in book.get(key, []) if e == edits]
+                if len(runs) + 1 >= limit and name not in ("todo_write", "update_plan", "ask_user", "finish"):
+                    g["refused"] = g.get("refused", 0) + 1
+                    shown = ("what the command printed" if name in T.CODEX_TOOLS else "what read_file shows")
+                    return ("[Meshpool] Not run: you already made this call (or the same call with only numbers "
+                            f"changed) {len(runs)} times and no file has changed since, so the result would be the "
+                            f"same. The file contents are exactly {shown} (plain text, no hidden "
+                            "characters unless a tool says so). Act on what you have: make the change, run your "
+                            "check, or answer.")
+            for key in {exact, shape}:                 # one count per run, also when the two keys are equal
+                book.setdefault(key, []).append(edits)
+        except Exception:  # noqa: BLE001 - the guard must never break a turn
+            pass
+        return self._run_tool(c, cut=cut)
+
+    @staticmethod
+    def _inspection(name: str, args: str) -> bool:
+        """A call that only reads: read_file, grep, glob, or shell commands that core/tools.read_only accepts."""
+        if name in ("read_file", "grep", "glob"):
+            return True
+        if name in ("bash", "bash_many", "shell"):
+            try:
+                a = json.loads(args or "{}")
+            except ValueError:
+                return False
+            cmds = a.get("commands") if name == "bash_many" else [a.get("command")]
+            if name == "shell" and a.get("command") is not None:
+                cmds = [T.shell_script(a["command"])]          # the script inside ["bash", "-lc", script]
+            cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
+            return bool(cmds) and all(T.read_only(x) for x in cmds)
+        return False
+
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
         """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the
         step budget. They add a short note for the model; they never block anything."""
@@ -1059,17 +1294,21 @@ class Agent:
         for c in calls:
             f = c.get("function", {})
             g["hist"].append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        g["n_calls"] = g.get("n_calls", 0) + len(calls)
         h = g["hist"] = g["hist"][-12:]
         hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
         for k in (2, 3):
             if not hit and len(h) >= 3 * k and h[-k:] == h[-2 * k:-k] == h[-3 * k:-2 * k]:
                 hit = True
-        if hit and g["doom_at"] < len(h) - 6:
-            g["doom_at"] = len(h)
+        if hit and g["doom_at"] < g["n_calls"] - 6:     # can fire again later (the history itself is capped at 12)
+            g["doom_at"] = g["n_calls"]
             notes.append("You are repeating the same tool calls and getting the same results. Stop and reconsider: "
                          "use a different tool, different arguments or a different approach.")
-        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in g["seen"]]
-        g["seen"].update(c["cmd"] for c in new)
+        # Progress is a changed file or a new command that does something; read-only inspection (cat, sed -n, od,
+        # git show, ls) succeeds every time and is not progress.
+        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in g["seen"]
+               and not T.read_only(c["cmd"])]
+        g["seen"].update(c["cmd"] for c in self.ws.commands)
         if new or self.ws.edits != g["edits"]:
             g["last"], g["edits"] = step, self.ws.edits
         elif step - g["last"] in (12, 24) and self.profile == "code":
@@ -1156,9 +1395,12 @@ class Agent:
             raise Interrupted()
 
     def _maybe_compact(self):
-        limit = int(os.environ.get("MH_COMPACT_CHARS", "280000"))   # well under a 128K-token window
+        # Long runs re-sent their whole history on every call (the 50-60-call runs were most of the dev A/B's cost).
+        # Older tool outputs are elided once the context passes the limit, down to 60% of it, so the next trim is
+        # many steps away and the provider's prompt cache is rebuilt rarely. Recent outputs stay verbatim.
+        limit = int(self.hsettings()["compact_chars"])
         if _context_size(self.messages) > limit:
-            _shrink_context(self.messages, limit)
+            _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
 
     def _body(self) -> dict:
@@ -1463,6 +1705,107 @@ class Agent:
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
 
+    def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:
+        """One separate chat completion (fresh messages, no tools) on the same model and endpoint. Goes through
+        _post, so auth, the refused-field list and usage accounting are the agent's own. Raises on failure."""
+        from meshpool_harness import providers as PV
+        prov, model = PV.split(self.current_model())
+        base, key = PV.endpoint(prov)
+        if not key or PV.key_problem(key) or prov == "chatgpt" or os.environ.get("MH_WIRE", "chat") != "chat":
+            raise RuntimeError("no plain chat endpoint for the reviewer")
+        body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+        _apply_refused(body)
+        resp = None
+        for _ in range(3):
+            try:
+                resp, _s = self._post(base, key, body, False)
+                break
+            except RuntimeError as e:
+                if not _adapt_params(body, str(e)):
+                    raise
+        if resp is None:
+            raise RuntimeError("no reply")
+        u = resp.get("usage") or {}
+        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
+        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
+             "calls": 1}
+        for k, v in d.items():
+            turn[k] += v
+            self.usage[k] += v
+        self.emit({"type": "usage", "aux": True, **d})   # a side call (review): not the chat's context size
+        return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+    def _trace_note(self, tool: str, arg: str) -> None:
+        """A trace line for a harness step that is not a tool call (review gate, mutation feedback)."""
+        try:
+            with self._trace_lock:
+                self.trace.append({"tool": tool, "s": 0, "ok": True, "arg": arg})
+        except Exception:  # noqa: BLE001 - tracing must never break the turn
+            pass
+
+    def _mutant_total(self, MU, floor: int) -> int:
+        """How many mutants the feedback would try (cheap, nothing is run); never below the survivors."""
+        try:
+            _, targets = MU.code_under_test(self.root, set(self.ws.turn_files))
+            n = 0
+            for rel in targets:
+                with open(os.path.join(self.root, rel), encoding="utf-8") as f:
+                    n += len(MU.mutants(f.read()))
+            return max(n, floor)
+        except Exception:  # noqa: BLE001
+            return floor
+
+    def _review_change(self, g: dict, turn: dict) -> str:
+        """WP3: the independent review. '' (do nothing) unless the reviewer raised concrete points."""
+        route = getattr(self, "route", None)
+        try:
+            from meshpool_harness.core import review as RV
+            if not RV.enabled(route.spec, route):
+                return ""
+            req = g.get("req")
+            if isinstance(req, list):
+                req = " ".join(p.get("text", "") for p in req if isinstance(p, dict))
+            change = RV.gather_change(self.root, self.ws.turn_files)
+            if not change.strip():
+                return ""
+            cmds = [c for c in self.ws.commands if c.get("after_edit", -1) >= g["edits0"] and c.get("kind") != "read"]
+            reply = self._aux_complete(RV.SYSTEM, RV.build_user(RV.clean_request(req or ""), change,
+                                                                cmds[-1] if cmds else None), turn)
+            self.emit({"type": "status", "text": "Reviewed the change against the request."})
+            f = RV.findings(reply)
+            n = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s", f)) or 1
+            self._trace_note("review", f"{n} findings" if f else "LGTM")
+            return RV.INJECT + f if f else ""
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception:  # noqa: BLE001 - a reviewer error must never break the turn
+            return ""
+
+    def _mutation_feedback(self) -> str:
+        """WP7: tests that still pass when the code under test is deliberately broken. '' when nothing to say."""
+        try:
+            if not self.hsettings()["mutation"]:
+                return ""
+            if self.mode != "auto" or getattr(self.ws, "container", None):
+                return ""       # it runs the project's tests on this computer: only where commands run unasked, never beside a sandbox
+            from meshpool_harness.core import mutate as MU
+            alive = MU.survivors(self.root, set(self.ws.turn_files))
+            self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")
+            if not alive:
+                return ""
+            self.emit({"type": "status", "text": "Checked the tests against deliberately broken code."})
+            return ("[Meshpool] Your tests pass, but they also pass when the code under test is deliberately broken "
+                    "in these ways, so they would not catch these bugs:\n" + MU.format_survivors(alive, 8)
+                    + "\nAdd assertions that fail for each of these changes (exact values at the boundaries, each "
+                    "branch, error paths), run them against the real code, and make sure they still pass there. A change "
+                    "that cannot alter behaviour (e.g. `<` vs `<=` where the values can never be equal) needs no "
+                    "test: skip it in one line.")
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception:  # noqa: BLE001
+            return ""
+
     def _size_with(self, messages: list) -> int:
         """How big the request would be with these messages (the body _post sends)."""
         saved = self.messages
@@ -1520,12 +1863,22 @@ class Agent:
 
     def _post(self, base: str, key: str, body: dict, stream: bool) -> tuple[dict, bool]:
         b = dict(body)
-        if stream:
-            b["stream"] = True
-            b["stream_options"] = {"include_usage": True}
-        req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(b).encode("utf-8"), method="POST",
-                                     headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                              "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
+        from meshpool_harness import providers as _PV
+        # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
+        # (core/anthropic_wire.py), not streamed; every other endpoint speaks chat completions
+        anthropic = _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base()
+        if anthropic:
+            from meshpool_harness.core import anthropic_wire as AW
+            stream = False
+            b = AW.to_request(b)
+            url, hdrs = f"{base}/messages", AW.headers(key)
+        else:
+            if stream:
+                b["stream"] = True
+                b["stream_options"] = {"include_usage": True}
+            url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
+                                     headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
         # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
         # long task the same way ("The read operation timed out").
@@ -1551,7 +1904,8 @@ class Agent:
                 if not stream:
                     raw_body = r.read()
                     try:
-                        return json.loads(raw_body.decode("utf-8", "replace")), False
+                        data = json.loads(raw_body.decode("utf-8", "replace"))
+                        return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
                     except ValueError:                   # a gateway that streams anyway, or sends an error page
                         if raw_body.lstrip().startswith(b"data:"):
                             return sse_to_chat(raw_body.splitlines(keepends=True)), False
@@ -1660,15 +2014,20 @@ class Agent:
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
+        if name == "shell":
+            hit = T.patch_from_shell(args.get("command"))
+            if hit:                            # apply_patch through the shell is an edit like any other
+                name, args = "apply_patch", {"input": hit[0]}
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
-        if self.mode == "edits" and name in ("edit", "write_file"):
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
-        group = "edit" if name in ("edit", "write_file") else "bash" if name in ("bash_many", "probe", "trace") else name
+        group = ("edit" if name in ("edit", "write_file", "apply_patch")
+                 else "bash" if name in ("bash_many", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
         if group in self.always:
@@ -1679,6 +2038,14 @@ class Agent:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
+        elif name == "shell":
+            kind, title, detail = "bash", "Run this command?", (
+                (f"cd {args['workdir']} && " if args.get("workdir") else "") + T.shell_script(args.get("command")))
+        elif name == "apply_patch":
+            files = _patch_files(args.get("input"))
+            kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
+                                                                                        else "") or "files") + "?", \
+                self._diff(name, args)
         elif name == "bash_many":
             cmds = [str(c) for c in args.get("commands") or []]
             kind, title, detail = "bash", f"Run these {len(cmds)} commands?", "\n".join(cmds)
@@ -1722,6 +2089,36 @@ class Agent:
             return ""
 
     def _diff_text(self, name: str, args: dict) -> str:
+        """The diff the user approves (and the tool card shows). Several changes in one edit call (`edits` for one
+        file, `changes` for several) show every file's diff, so an approval never shows less than will change."""
+        if name == "apply_patch":                      # the patch is the diff: what the user approves is what is applied
+            lines = str(args.get("input") or "").splitlines()
+            return "\n".join(lines[:200]) + ("\n..." if len(lines) > 200 else "")
+        if name == "edit" and (isinstance(args.get("edits"), list) or isinstance(args.get("changes"), list)):
+            groups: dict = {}
+            if isinstance(args.get("changes"), list):
+                for c in args["changes"]:
+                    if isinstance(c, dict):
+                        items = c.get("edits") if isinstance(c.get("edits"), list) else [c]
+                        groups.setdefault(str(c.get("path", "")), []).extend(items)
+            if isinstance(args.get("edits"), list):
+                first = [{"old": args["old"], "new": args.get("new", "")}] if args.get("old") is not None else []
+                groups.setdefault(str(args.get("path", "")), []).extend(first + list(args["edits"]))
+            parts = []
+            for path, items in groups.items():
+                try:
+                    p = self.ws._path(path, write=True)
+                    before = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+                except Exception:
+                    before = ""
+                after = before
+                for it in items:
+                    old, new = str((it or {}).get("old", "")), str((it or {}).get("new", ""))
+                    after = after.replace(old, new, 1) if old and after.count(old) == 1 else after + \
+                        f"\n[an edit that matches only after whitespace changes]\n-{old}\n+{new}"
+                parts += list(difflib.unified_diff(before.splitlines(), after.splitlines(), f"a/{path}", f"b/{path}",
+                                                   n=2, lineterm=""))
+            return "\n".join(parts[:300]) + ("\n..." if len(parts) > 300 else "") if parts else "(no change)"
         path = str(args.get("path", ""))
         try:
             p = self.ws._path(path, write=True)
@@ -1772,7 +2169,10 @@ class Agent:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
-                   "diff": self._diff(name, args) if name in ("edit", "write_file") and not bad else ""})
+                   "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
+                                 args["timeout_ms"] / 1000 if name == "shell" and isinstance(
+                                     args.get("timeout_ms"), (int, float)) else None) if isinstance(args, dict) else None,
+                   "diff": self._diff(name, args) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         try:
             if bad:
@@ -1822,11 +2222,28 @@ class Agent:
             elif name == "diagnostics":
                 out = self._wait(_PACKS.diagnostics, self.ws, args.get("paths"), args.get("language"),
                                  bool(args.get("deep")))
+            elif name == "update_plan":                # Codex's plan tool; the plan event is the same one todo_write sends
+                steps = args.get("plan")
+                if not isinstance(steps, list):
+                    raise ToolError("update_plan: `plan` must be a list of {step, status}")
+                items = []
+                for i in steps:
+                    if not isinstance(i, dict) or not isinstance(i.get("step"), str):
+                        raise ToolError("update_plan: every plan item needs a `step` (text) and a `status`")
+                    if i.get("status") not in ("pending", "in_progress", "completed"):
+                        raise ToolError(f"update_plan: status '{i.get('status')}' is not one of pending, in_progress, "
+                                        "completed")
+                    items.append({"content": i["step"], "status": i["status"]})
+                self._todos, self._todo_touched = items, True
+                self.emit(dict(_PLAN.state(items) or {"items": [], "current": 0, "total": 0, "done": 0},
+                               type="plan", entries=items))
+                out = "Plan updated"
             elif name == "todo_write":
                 items = [{"content": str(i.get("content", "")), "status": i.get("status", "pending")}
                          for i in args.get("items") or [] if isinstance(i, dict)]
-                self.emit({"type": "plan", "entries": items})
                 self._todos, self._todo_touched = items, True
+                self.emit(dict(_PLAN.state(items) or {"items": [], "current": 0, "total": 0, "done": 0},
+                               type="plan", entries=items))     # entries: what older front ends read
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
             else:
@@ -1834,9 +2251,9 @@ class Agent:
                 route = getattr(self, "route", None)
                 if name in ("edit", "write_file") and route is not None and route.family == "code":
                     out += _PACKS.quick_check(self.ws, args.get("path", ""))   # a broken edit shows now, at no call
-                if name == "bash":
+                if name in ("bash", "shell"):
                     m = re.match(r"\[exit (\d+)\]", out)
-                    ok = bool(m) and m.group(1) == "0"
+                    ok = (not m and name == "shell") or (bool(m) and m.group(1) == "0")   # shell: a patch has no exit line
                 elif name == "bash_many":
                     ok = "[exit " in out and not re.search(r"\[exit [1-9]", out)
                 elif name in ("probe", "trace"):

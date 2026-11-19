@@ -89,6 +89,8 @@ def save_settings(body: dict) -> dict:
             continue                     # blank key field = keep the saved key
         vals[k] = v
     _key_follows_host(vals)
+    from meshpool_harness import browser_use as BU
+    BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
     if vals.get("GITHUB_TOKEN"):
         try:
             from meshpool_harness.ui import agent_api as _A
@@ -221,6 +223,56 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
+    def _event_stream(self, sid: str, since: int):
+        """Server-Sent Events for one chat: a JSON view of whatever is new, about 30 times a second at most, until the
+        chat is no longer working (then an `end` event). The page falls back to polling if this fails."""
+        A.get(sid)                                    # unknown chat: KeyError -> 404 before any stream starts
+        self.send_response(200)
+        for k, v in (("Content-Type", "text/event-stream; charset=utf-8"), ("Cache-Control", "no-store"),
+                     ("X-Accel-Buffering", "no"), ("X-Content-Type-Options", "nosniff")):
+            self.send_header(k, v)
+        self.end_headers()
+        self.close_connection = True
+        busy = ("starting", "working", "waiting")
+        cursor, last_state, beat, idle_since = since, None, time.time(), None
+
+        def put(text: str):
+            self.wfile.write(text.encode("utf-8"))
+            self.wfile.flush()
+        try:
+            put("retry: 1500\n\n")
+            while True:
+                try:
+                    s = A.get(sid)
+                    n, state = len(s.events), s.state
+                except Exception:  # noqa: BLE001 - a chat whose folder vanished: send what there is, then stop
+                    put("data: " + json.dumps(A.view(sid, cursor), default=str) + "\n\n")
+                    put("event: end\ndata: {}\n\n")
+                    return
+                if n > cursor or state != last_state:
+                    with s.lock:
+                        fresh = s.events[cursor:]
+                    if fresh and state == last_state and all(e.get("type") == "text_delta" for e in fresh):
+                        v = {"id": sid, "state": state, "epoch": s.epoch, "events": fresh, "total": cursor + len(fresh),
+                             "turn_started": getattr(s, "t_turn", None) if state in ("working", "waiting") else None}
+                    else:
+                        v = A.view(sid, cursor)
+                    cursor, last_state, beat = v["total"], state, time.time()
+                    put("data: " + json.dumps(v, default=str) + "\n\n")
+                    idle_since = None if state in busy else (idle_since or time.time())
+                elif state not in busy:
+                    put("event: end\ndata: {}\n\n")
+                    return
+                elif time.time() - beat > 10:
+                    put(": keep-alive\n\n")
+                    beat = time.time()
+                if idle_since and time.time() - idle_since > 0.4:
+                    put("event: end\ndata: {}\n\n")
+                    return
+                time.sleep(0.03)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
@@ -230,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|company\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -292,6 +344,19 @@ class Handler(BaseHTTPRequestHandler):
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
+        m = re.fullmatch(r"/api/agent/([\w-]+)/events", u.path)
+        if m:                                         # a chat's events pushed as they happen (EventSource cannot set headers)
+            q = parse_qs(u.query)
+            if q.get("t", [""])[0] != TOKEN:
+                return self._send(403, {"error": "forbidden"})
+            try:
+                return self._event_stream(m.group(1), max(0, int(q.get("since", ["0"])[0])))
+            except KeyError:
+                return self._send(404, {"error": "Not found."})
+            except ValueError as e:
+                return self._send(400, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
+                return self._send(500, {"error": f"{type(e).__name__}: {e}"})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -299,6 +364,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/settings":
                 return self._send(200, get_settings())
+            if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
+                from meshpool_harness import provider_setup as PS
+                return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
             if u.path == "/api/import":
@@ -336,6 +404,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.models(refresh=q.get("refresh") == "1"))
             if u.path == "/api/projects":
                 return self._send(200, {"projects": W.projects(), "default": str(_default_project())})
+            if u.path in ("/api/profile", "/api/capabilities", "/api/spend", "/api/data", "/api/browser-use",
+                          "/api/computer-status"):
+                from meshpool_harness.ui import settings_v2 as SV
+                if u.path == "/api/browser-use":
+                    return self._send(200, SV.browser_use())
+                if u.path == "/api/computer-status":
+                    return self._send(200, SV.computer_status())
+                if u.path == "/api/profile":
+                    return self._send(200, SV.profile())
+                if u.path == "/api/capabilities":
+                    return self._send(200, {"features": SV.capabilities()})
+                if u.path == "/api/spend":
+                    return self._send(200, {"key": SV.key_spend(q.get("fresh") == "1"), "days": SV.usage_by_day(),
+                                            "billing_url": SV.BILLING_URL})
+                return self._send(200, SV.data_info())
+            m = re.fullmatch(r"/api/pj(?:/(p_[0-9a-f]{10}))?", u.path)
+            if m:                                                  # projects: name, instructions, knowledge, memory
+                from meshpool_harness import project_store as PS
+                return self._send(200, PS.detail(m.group(1)) if m.group(1) else {"projects": PS.list_projects()})
+            m = re.fullmatch(r"/api/pj/(p_[0-9a-f]{10})/file", u.path)
+            if m:                                                  # a knowledge file, for the preview
+                from meshpool_harness import project_store as PS
+                fp = PS.knowledge_path(m.group(1), q.get("name", ""))
+                ctype = mimetypes.guess_type(fp.name)[0] or "application/octet-stream"
+                if ctype in ("text/html", "image/svg+xml", "application/xhtml+xml"):
+                    ctype = "text/plain"
+                return self._send(200, fp.read_bytes(), ctype, {"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"})
             if u.path == "/api/skills":
                 from meshpool_harness import skills as SK
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
@@ -373,10 +468,33 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/git/pr":
                 q = parse_qs(u.query)
                 return self._send(200, W.pr_detail(q.get("root", [""])[0], int(q.get("n", ["0"])[0] or 0)))
+            if u.path == "/api/github/repos":
+                return self._send(200, W.github_repos(parse_qs(u.query).get("q", [""])[0]))
+            if u.path == "/api/github/branches":
+                return self._send(200, W.github_branches(parse_qs(u.query).get("repo", [""])[0]))
+            m = re.fullmatch(r"/api/session/([\w-]+)/(panel|pr)", u.path)
+            if m:                                           # the session side panel: local facts, then GitHub's
+                out = (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1))
+                if m.group(2) == "pr" and isinstance(out, dict) and isinstance(out.get("pr"), dict):
+                    p_ = out["pr"]                         # remembered, so the session row can show it without asking GitHub
+                    A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
+                return self._send(200, out)
             if u.path == "/api/usage":
                 return self._send(200, W.usage())
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
+            if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
+                from meshpool_harness.ui import hub as HUB
+                what = u.path[len("/api/hub/"):]
+                if what == "artifacts":
+                    return self._send(200, HUB.artifacts())
+                if what == "scheduled":
+                    return self._send(200, HUB.scheduled())
+                if what == "search":
+                    return self._send(200, HUB.search(q.get("q", ""), q.get("tab", "all")))
+                if what == "account":
+                    return self._send(200, HUB.account())
+                raise KeyError(what)
             m = re.fullmatch(r"/api/term/(\w+)", u.path)
             if m:
                 return self._send(200, W.term_view(m.group(1), int(q.get("since", "0"))))
@@ -413,14 +531,52 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
+            if u.path in ("/api/provider/test", "/api/provider/save", "/api/provider/use"):
+                from meshpool_harness import provider_setup as PS
+                j = self._json() or {}
+                if u.path.endswith("/test"):
+                    try:
+                        return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
+                                                       j.get("env", "")))
+                    except PS.SetupError as e:
+                        return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
+                                                "base_url": "", "error": str(e)})
+                if u.path.endswith("/save"):
+                    return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
+                                                        j.get("default_model", ""), bool(j.get("allow_custom")),
+                                                        j.get("env", ""), bool(j.get("confirm_env"))), ok=True))
+                return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
                 return self._send(200, get_settings())
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
+                from meshpool_harness import autoupdate as AU
                 from meshpool_harness import updater as UP
-                return self._send(200, UP.check(force=bool(self._json().get("force"))))
+                r = UP.check(force=bool(self._json().get("force")))
+                if r.get("ok") and r.get("newer") and AU.settings()["auto_download"]:
+                    AU.kick()                      # a check by hand also starts the background download
+                return self._send(200, r)
+            if u.path == "/api/update/status":
+                from meshpool_harness import autoupdate as AU
+                return self._send(200, AU.status())
+            if u.path == "/api/update/settings":
+                from meshpool_harness import autoupdate as AU
+                return self._send(200, AU.save_settings(self._json() or {}))
+            if u.path == "/api/update/download":
+                from meshpool_harness import autoupdate as AU
+                AU.kick(manual=True)
+                return self._send(200, {"ok": True})
+            if u.path == "/api/update/apply":     # "Restart to update": the helper installs it after this app quits
+                from meshpool_harness import autoupdate as AU
+                if _running():
+                    return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
+                r = AU.begin_apply()
+                self._send(200, r)
+                if r.get("ok") and r.get("mode") != "code":
+                    threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                return
             if u.path == "/api/update/install":
                 from meshpool_harness import updater as UP
                 if _running():
@@ -559,6 +715,55 @@ class Handler(BaseHTTPRequestHandler):
                 C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
                 C.load_into_env(override=True)
                 return self._send(200, W.models())
+            if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify", "/api/browser-use"):
+                from meshpool_harness.ui import settings_v2 as SV
+                b = self._json()
+                if u.path == "/api/browser-use":
+                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app")))
+                if u.path == "/api/profile":
+                    return self._send(200, SV.save_profile(**{k: b.get(k) for k in SV.PROFILE_KEYS}))
+                if u.path == "/api/capabilities":
+                    return self._send(200, {"features": SV.set_capability(b.get("id", ""), bool(b.get("on")))})
+                if u.path == "/api/notify":
+                    A._notify(str(b.get("title", "Meshpool")), str(b.get("body", "")))
+                    return self._send(200, {"ok": True})
+                if b.get("action") == "export":
+                    import base64
+                    return self._send(200, {"name": "meshpool-export-" + time.strftime("%Y-%m-%d") + ".zip",
+                                            "data": base64.b64encode(SV.export_zip()).decode()})
+                if b.get("action") == "clear_chats":
+                    return self._send(200, {"deleted": SV.clear_chats()})
+                raise ValueError("Unknown action.")
+            if u.path == "/api/pj":
+                from meshpool_harness import project_store as PS
+                b = self._json()
+                return self._send(200, PS.create(b.get("name", ""), b.get("description", ""), b.get("instructions", ""),
+                                                 b.get("link")))
+            m = re.fullmatch(r"/api/pj/(p_[0-9a-f]{10})", u.path)
+            if m:
+                from meshpool_harness import project_store as PS
+                pid, b = m.group(1), self._json()
+                act = b.get("action", "update")
+                if act == "update":
+                    kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
+                    return self._send(200, PS.update(pid, **kw))
+                if act == "delete":
+                    PS.delete(pid)
+                    return self._send(200, {"ok": True})
+                if act == "memory_set":
+                    PS.memory_set(pid, b.get("text", ""))
+                elif act == "memory_add":
+                    PS.memory_add(pid, b.get("text", ""))
+                elif act == "memory_clear":
+                    PS.memory_clear(pid)
+                elif act == "knowledge_add":
+                    import base64
+                    PS.knowledge_add(pid, b.get("name", ""), base64.b64decode(b.get("data", "")))
+                elif act == "knowledge_remove":
+                    PS.knowledge_remove(pid, b.get("name", ""))
+                else:
+                    raise ValueError("Unknown project action.")
+                return self._send(200, PS.detail(pid))
             if u.path == "/api/projects":
                 b = self._json()
                 act = b.get("action", "add")
@@ -720,6 +925,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": f"Could not open the folder on this computer ({e.strerror or e}). "
                                                      f"It is at: {target}"})
                 return self._send(200, {"ok": True})
+            if u.path == "/api/github/workspace":          # clone (or reuse) a repository for a new session
+                return self._send(200, W.github_workspace(self._json()))
+            m = re.fullmatch(r"/api/session/([\w-]+)/bg/stop", u.path)
+            if m:
+                b = self._json()
+                return self._send(200, W.session_bg_stop(m.group(1), b.get("kind", ""), b.get("id", "")))
             if u.path == "/api/term":
                 b = self._json()
                 return self._send(200, W.term_run(b.get("root", ""), b.get("command", ""), b.get("shell", "")))
@@ -832,6 +1043,11 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         ensure_defaults()
     except Exception:
         pass
+    try:                                            # folders and chats from before projects: once, read-only
+        from meshpool_harness import project_store as PS
+        PS.migrate([r.get("workdir") for r in A.listing() if r.get("workdir")])
+    except Exception:  # noqa: BLE001 - a failed migration never keeps the app from opening
+        pass
     httpd = None
     for p in range(port, port + 20):
         try:
@@ -850,6 +1066,13 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    if desktop:                                     # background update checks and downloads; install on quit
+        try:
+            from meshpool_harness import autoupdate as AU
+            ON_QUIT.append(AU.on_quit)
+            AU.start_background(busy=_running)
+        except Exception:  # noqa: BLE001
+            pass
     if on_ready:
         on_ready(port)
     print("")

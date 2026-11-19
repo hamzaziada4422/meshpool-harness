@@ -272,7 +272,7 @@ class Session:
                 raise ValueError(f"{self.harness['name']} cannot run yet. {self.harness.get('setup') or ''}".strip())
             self.kind = kind if kind in HR.MODES else self.harness.get("mode", "code")
             if self.harness["type"] in ("acp", "pi"):
-                if self.harness.get("unsupported"):        # e.g. a Node agent on macOS 10.15
+                if self.harness.get("unsupported"):        # Codex, OpenCode in the packaged app
                     raise ValueError(self.harness["unsupported"])
                 if not self.harness.get("available"):
                     raise ValueError(f"{self.harness['name']} is not installed on this computer. "
@@ -592,7 +592,22 @@ class Session:
                     self.ctx_pending = False
                     try:
                         from meshpool_harness import assistant as AS
-                        body += "\n\n\u200b" + AS.context_block(text, self.workdir)
+                        pid = read_meta(self.id).get("project_id") or ""
+                        body += "\n\n\u200b" + AS.context_block(text, self.workdir, pid)
+                        if pid:
+                            write_meta(self.id, project_ctx=pid)
+                    except Exception:  # noqa: BLE001
+                        pass
+                else:                               # a chat moved into a project later gets the project once, next turn
+                    try:
+                        m = read_meta(self.id)
+                        pid = m.get("project_id") or ""
+                        if pid and m.get("project_ctx") != pid:
+                            from meshpool_harness import assistant as AS
+                            pb = AS.project_block(pid, text)
+                            if pb:
+                                body += "\n\n\u200b" + pb
+                            write_meta(self.id, project_ctx=pid)
                     except Exception:  # noqa: BLE001
                         pass
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
@@ -658,6 +673,8 @@ class Session:
                             with self.lock:
                                 self.state = "idle"
                             break
+                    if not getattr(self, "deleted", False):
+                        write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
                     took = time.time() - self.t_turn
                     if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
                         last = next((e.get("text") for e in reversed(self.events)
@@ -683,7 +700,7 @@ class Session:
             self.agent.save()
         else:
             self.route_addon = addon(r)           # an outside agent: rides on the next message
-        write_meta(self.id, route=r.spec, route_label=r.label)
+        write_meta(self.id, route=r.spec, route_label=r.label, route_profile=r.profile or None)
         self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
     def set_model(self, model: str):
@@ -883,6 +900,7 @@ class Session:
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
+                "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
                 "usage": a.usage, "context": getattr(a, "context", None), "kind": self.kind,
                 "harness": {k: self.harness.get(k) for k in ("id", "name", "type", "description", "models", "provider",
                                                              "providers", "runs_on")},
@@ -905,13 +923,26 @@ class Session:
 # ---------- module API used by server.py ----------------------------------------------------------------------------
 
 def create(body: dict) -> dict:
+    from meshpool_harness import project_store as PS
     from meshpool_harness.ui.desktop import default_project
     wd = (body.get("workdir") or "").strip().strip('"')
-    if not wd or Path(wd).expanduser().resolve() == default_project().resolve():
+    pid = (body.get("project_id") or "").strip()
+    if pid and not PS.get_meta(pid):
+        raise ValueError("That project does not exist any more.")
+    link = (PS.get_meta(pid).get("link") or {}) if pid else {}
+    scratch = False
+    if not wd and link.get("path"):                 # a chat in a project with a linked folder or repository works there
+        wd = link["path"]
+        if not Path(wd).is_dir():
+            raise ValueError(f"This project's folder ({wd}) was moved or deleted. Link it again on the project page.")
+    if not wd:                                      # a chat that needs no folder: it gets a private one
+        wd, scratch = PS.new_scratch(pid), True
+    elif Path(wd).expanduser().resolve() == default_project().resolve():
         wd = str(default_project())
         Path(wd).mkdir(parents=True, exist_ok=True)
     harness, routed = body.get("harness") or None, None
-    kind = body.get("kind") or "code"
+    kind_given = body.get("kind")
+    kind = kind_given or ("code" if link.get("path") else "cowork")
     task = body.get("task") or ""
     hr = None
     try:                                            # the specialised harness: a few ms, no model call
@@ -926,6 +957,12 @@ def create(body: dict) -> dict:
         routed = HRT.route(task, kind, category=spec_of(hr.spec).backend if hr else None,
                            model=body.get("model") or None)
         harness = routed["harness"]
+        if not kind_given:                          # no Work or Code switch: the agent Auto picked decides the kind
+            try:
+                m = HR.get(harness).get("mode")
+                kind = m if m in HR.MODES else kind
+            except (KeyError, ValueError):
+                pass
     model = body.get("model") or None
     try:
         from meshpool_harness import providers as PV
@@ -934,8 +971,15 @@ def create(body: dict) -> dict:
             model = None                            # a model this agent cannot run: it uses its own default
     except (KeyError, ValueError):
         pass
+    plan = body.get("plan")
+    if plan is None:                                # no say in the request: Settings, "Plan first", decides
+        try:
+            from meshpool_harness.ui import settings_v2 as SV2
+            plan = SV2.profile()["plan_first"]
+        except Exception:  # noqa: BLE001
+            plan = False
     s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                kind=kind, model=model, plan=bool(body.get("plan")))
+                kind=kind, model=model, plan=bool(plan))
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -944,24 +988,40 @@ def create(body: dict) -> dict:
                 s.agent.save()
             else:
                 s.route_addon = addon(hr)
-            write_meta(s.id, route=hr.spec, route_label=hr.label)
+            write_meta(s.id, route=hr.spec, route_label=hr.label, route_profile=hr.profile or None)
             if hr.spec not in ("general", "docs"):
                 s.emit({"type": "status", "route": hr.to_dict(),
-                        "text": f"Harness: {hr.label} ({hr.reason})."})
+                        "text": f"Working as: {hr.label}."})
         except Exception:  # noqa: BLE001
             pass
     if routed:
-        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']}. {routed['reason']}"})
+        # The chat shows a short neutral label; why Auto picked it travels with the event for the Session panel.
+        s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
+                "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}})
         write_meta(s.id, routed=routed["harness"])
+    else:
+        try:
+            s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(HR.get(harness or HR.default_for(kind))['name'])}"})
+        except (KeyError, ValueError):
+            pass
+    write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    if pid:
+        PS.touch(pid)
     with LOCK:
         LIVE[s.id] = s
     _start_reaper()
-    try:
-        from meshpool_harness.ui import workbench as W
-        W.add_project(s.workdir)
-    except Exception:  # noqa: BLE001
-        pass
+    if not scratch and not pid:
+        try:
+            from meshpool_harness.ui import workbench as W
+            W.add_project(s.workdir)
+        except Exception:  # noqa: BLE001
+            pass
     return s.view(0)
+
+
+def _short_harness(name: str) -> str:
+    """'Meshpool Work' and 'Meshpool Code' read as MeshPool; Codex, Pi, OpenCode and Hermes keep their names."""
+    return "MeshPool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []
@@ -1037,6 +1097,20 @@ def view(sid: str, since: int) -> dict:
                 "checkpoints_note": "", "events": evs[since:], "total": len(evs), "mcp": None}
 
 
+def _project_of(meta: dict, workdir: str, legacy: dict | None = None) -> str:
+    """The project a chat belongs to: the one stored with it (an empty string means it was taken out of its project);
+    for chats made before projects existed, the project that was made from the folder they work in."""
+    if "project_id" in meta:
+        return meta.get("project_id") or ""
+    if legacy is None:
+        try:
+            from meshpool_harness import project_store as PS
+            legacy = PS.legacy_map()
+        except Exception:  # noqa: BLE001
+            legacy = {}
+    return legacy.get(workdir or "", "")
+
+
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
 
 
@@ -1068,6 +1142,12 @@ def listing() -> list:
                          "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
                          "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
     out = []
+    try:
+        from meshpool_harness import project_store as PS
+        legacy = PS.legacy_map()
+        live_pids = {p["id"] for p in PS.list_projects()}
+    except Exception:  # noqa: BLE001
+        legacy, live_pids = {}, set()
     for r in rows.values():
         if r["id"] in DELETED:
             continue
@@ -1076,6 +1156,13 @@ def listing() -> list:
             continue
         r["title"] = m.get("title") or r["title"]
         r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
+        r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
+        r["scheduled"] = bool(m.get("scheduled"))
+        r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
+        r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
+        if r["project_id"] and r["project_id"] not in live_pids:
+            r["project_id"] = ""
+        r["scratch"] = bool(m.get("scratch"))
         r["kind"] = m.get("kind") or r.get("kind") or "code"
         out.append(r)
     return sorted(out, key=lambda r: -r["updated"])[:400]
@@ -1089,7 +1176,21 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
+        write_meta(sid, unread=act == "unseen")
+    elif act == "move":                               # into a project, or out of it (project_id empty)
+        pid = (body.get("project_id") or "").strip()
+        if pid:
+            from meshpool_harness import project_store as PS
+            if not PS.get_meta(pid):
+                raise ValueError("That project does not exist any more.")
+        if not read_meta(sid):
+            raise KeyError("Chat not found.")
+        write_meta(sid, project_id=pid, project_ctx="" if not pid else None)
     elif act == "delete":
+        scratch_dir = ""
+        if read_meta(sid).get("scratch"):
+            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
         with LOCK:
             DELETED.add(sid)
             s = LIVE.pop(sid, None)
@@ -1104,6 +1205,9 @@ def thread_action(sid: str, body: dict) -> dict:
         d = SESSIONS / sid
         if d.is_dir() and d.parent == SESSIONS:
             shutil.rmtree(d, ignore_errors=True)
+        if scratch_dir:                               # the chat's private folder goes with it
+            from meshpool_harness import project_store as PS
+            PS.remove_scratch(scratch_dir)
     else:
         raise ValueError("Unknown chat action.")
     return {"ok": True}
@@ -1223,7 +1327,7 @@ def run_scheduled(t: dict) -> str:
     if not folder or not Path(folder).expanduser().is_dir():
         folder = ""
     v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                "task": t.get("prompt", "")})
+                "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])

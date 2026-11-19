@@ -5,9 +5,7 @@ name: harness-loop
 on:
   # Model spend is real money, so nothing runs on its own: a push runs only with "[loop]" (or "[probe]", "[swe]") in
   # its commit message, otherwise the jobs are skipped before a runner starts. No schedule until the work is merged.
-  push:
-    branches: [harness-router]
-    paths: ["app/**", "testkit/**", ".github/workflows/harness-loop.yml"]
+  # Manual only: benchmarks run locally (testkit/loop/bench.py), not on Actions minutes.
   workflow_dispatch:
     inputs:
       arms:

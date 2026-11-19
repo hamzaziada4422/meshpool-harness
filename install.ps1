@@ -1,10 +1,10 @@
 # Meshpool for the terminal, on Windows. One command installs it and starts setup (PowerShell):
 #
-#   irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.ps1 | iex
 #
 # With -App it installs the Meshpool app itself instead, the same one the download button gives you:
 #
-#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1))) -App
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.ps1))) -App
 #
 # It installs into %USERPROFILE%\.meshpool-cli and adds the `meshpool` command to your PATH, in this window too. It uses
 # your Python 3.10 or later if you have one; otherwise it downloads a private copy of Python into .meshpool-cli.
@@ -16,7 +16,7 @@
 & {
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
-$Repo = "hamzaaziada/meshpool-harness"
+$Repo = "hamzaziada4422/meshpool-harness"
 $Ref = if ($env:MESHPOOL_REF) { $env:MESHPOOL_REF } else { "main" }
 $Dir = if ($env:MESHPOOL_DIR) { $env:MESHPOOL_DIR } else { Join-Path $env:USERPROFILE ".meshpool-cli" }
 $PyUrl = "https://github.com/astral-sh/python-build-standalone/releases/download/20241016/cpython-3.12.7+20241016-x86_64-pc-windows-msvc-install_only.tar.gz"

@@ -283,6 +283,7 @@ class _Stdio:
                            + (" (install Node.js from nodejs.org)" if spec["command"] in ("npx", "node") else "")
                            + (" (install uv from docs.astral.sh/uv)" if spec["command"] in ("uvx", "uv") else ""))
         self.roots = roots
+        self.grace = 6.0 if any("browser_mcp_server" in str(a) for a in args) else 0.0   # time to exit on EOF
         self.pending: dict[int, dict] = {}
         self.cv = threading.Condition()
         self.alive = True
@@ -387,6 +388,11 @@ class _Stdio:
             self.p.stdin.close()
         except Exception:
             pass
+        if self.grace:                       # the browser server closes its window on EOF, which saves sign-ins
+            try:
+                self.p.wait(timeout=self.grace)
+            except Exception:
+                pass
         try:
             self.p.terminate()
             self.p.wait(timeout=3)

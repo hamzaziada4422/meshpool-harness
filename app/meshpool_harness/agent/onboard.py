@@ -210,11 +210,16 @@ def sub_step(st, which: str) -> bool:
         _p(f"    {st.green('✓')} You are already signed in to {name} on this computer.")
         _use(which)
         return True
+    from meshpool_harness import bundled
+    if bundled.packaged():                        # Codex's sign-in is not part of the installed app
+        _p(st.amber(f"    Signing in to {name} needs Codex, which is not part of the Meshpool app."))
+        _p(st.dim("    Sign in once from a terminal with `npm install -g @openai/codex` and `codex login`, then run "
+                  "`meshpool setup` again, or choose the Meshpool API key."))
+        return False
     npx = shutil.which("npx")
     if not npx:
         _p(st.amber(f"    Signing in to {name} needs Node.js, which is not installed."))
         _p(st.dim("    Install it from https://nodejs.org (the LTS version), then run `meshpool setup` again."))
-        _p(st.dim("    The Meshpool desktop app includes it."))
         return False
     _p(f"  Usage comes out of your {plans} plan. No API key needed.")
     _p()

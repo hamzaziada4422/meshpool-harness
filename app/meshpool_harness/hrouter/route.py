@@ -8,6 +8,7 @@ cost, then time.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -15,6 +16,7 @@ from dataclasses import asdict, dataclass, field
 
 from meshpool_harness import pace as PACE
 
+from . import profiles as PROF
 from . import signals as S
 from .packs import PACKS
 from .specs import SPECS, get
@@ -38,6 +40,12 @@ class Route:
     used_model_call: bool = False
     signals: dict = field(default_factory=dict)
     ms: float = 0.0
+    profile: str = ""                 # the harness profile this route runs under (profiles.py); "" = not resolved
+    settings: dict = field(default_factory=dict)   # that profile's complete settings (engine, plan, review, ...)
+    harness: str = ""                 # the agent harness the scorecard picks (harness_select.py); "" = not asked
+    harness_reason: str = ""          # why; set only when MH_HARNESS_ROUTER=1
+    category: str = ""                # the classifier's category for that pick
+    decision_id: str = ""             # the routing log's id for this pick (harness_select.log_outcome)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -53,6 +61,16 @@ class Route:
             parts.append({"typescript": "TypeScript", "javascript": "JavaScript", "csharp": "C#", "cpp": "C++"}.get(
                 self.language, self.language.capitalize()))
         return " · ".join(parts)
+
+    @property
+    def chip(self) -> str:
+        """The route chip's text: the label plus the harness profile when it is not the default "full"."""
+        return self.label + (f" [{self.profile}]" if self.profile and self.profile != "full" else "")
+
+    @property
+    def engine(self) -> str:
+        """Which bundled agent the profile asks for: meshpool (wired), pi or hermes (exposed for the app)."""
+        return (self.settings or {}).get("engine") or "meshpool"
 
 
 def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Route:
@@ -74,6 +92,7 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
         other = {k: v for k, v in fams.items() if k not in ("code", "research")}
         if repo or langs or any(S.EXT_LANG.get(Path(f).suffix) for f in files):
             other.pop("docs", None)        # "the sales report is wrong" in a code project is code, not a document
+            other.pop("automation", None)  # "the daily job runs at the wrong time": the code's domain, not a schedule
         top = max(other, key=other.get) if other else ""
         if top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
             fam, why, conf = top, f"{top} words in a Code chat", 0.7
@@ -167,6 +186,18 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
                 r.spec, r.confidence, r.base = sid, round(c, 2), get(sid).base
                 r.family = sid.split(".")[0]
                 r.sub = sid.split(".", 1)[1] if "." in sid else ""
+    r.profile, r.settings = PROF.resolve(r)
+    if os.environ.get("MH_HARNESS_ROUTER") == "1" and not force:
+        try:                                    # which agent harness runs it; never fails a task
+            from . import harness_select as HS
+            h = HS.select(text, workdir, model, files=files, kind=kind, client=client, route=r)
+            r.harness, r.harness_reason, r.category = h["harness"], h["reason"], h["category"]
+            r.decision_id = h.get("decision_id", "")
+            r.used_model_call = r.used_model_call or bool(h["classifier_tokens"])
+            if h["profile"] and h["profile"] != r.profile and not PROF.forced():   # the engine runs under the profile the scorecard chose
+                r.profile, r.settings = h["profile"], PROF.settings(h["profile"]) or r.settings
+        except Exception:  # noqa: BLE001
+            pass
     r.ms = round((time.perf_counter() - t0) * 1000, 2)
     return r
 
@@ -183,11 +214,27 @@ def _keys(r: Route) -> list[str]:
     return ks
 
 
+def _methods(r: Route) -> str | None:
+    """The spec-text set the route's profile selects (None: the built-in texts)."""
+    return (getattr(r, "settings", None) or {}).get("methods") or None
+
+
+def method_summary(r: Route) -> str:
+    """One short sentence of the route's method (the first sentence of its spec addon), '' when it has none."""
+    from .specs import overrides
+    base, ov = get(r.spec).addon, overrides(_methods(r))
+    for k in _keys(r):
+        if ov.get(k, {}).get("addon") is not None:
+            base = ov[k]["addon"]
+    m = re.match(r"\s*(.+?(?:[.!?](?=\s)|\n|$))", base or "", re.S)
+    return " ".join(m.group(1).split())[:200] if m else ""
+
+
 def addon(r: Route) -> str:
     """The prompt text a route adds: the spec's method, the sub-subtask's method, the language pack, and any
     data-driven overrides (most specific wins for "addon"; every "addon_extra" adds up)."""
     from .specs import VARIANT_ADDON, overrides
-    sp, ov = get(r.spec), overrides()
+    sp, ov = get(r.spec), overrides(_methods(r))
     base = sp.addon
     for k in _keys(r):
         if ov.get(k, {}).get("addon") is not None:
@@ -203,7 +250,7 @@ def addon(r: Route) -> str:
 
 def dropped(r: Route) -> set:
     from .specs import overrides
-    drop, ov = set(get(r.spec).drop), overrides()
+    drop, ov = set(get(r.spec).drop), overrides(_methods(r))
     for k in _keys(r):
         if "drop" in ov.get(k, {}):
             drop = set(ov[k]["drop"])
@@ -212,7 +259,7 @@ def dropped(r: Route) -> set:
 
 def tools(r: Route) -> list[str]:
     from .specs import overrides
-    t, ov = list(get(r.spec).tools), overrides()
+    t, ov = list(get(r.spec).tools), overrides(_methods(r))
     for k in _keys(r):
         if "tools" in ov.get(k, {}):
             t = list(ov[k]["tools"])

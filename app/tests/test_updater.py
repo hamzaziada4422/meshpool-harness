@@ -264,9 +264,17 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
     monkeypatch.setattr(U, "check", lambda force=False: {"ok": True, "newer": True, "kind": "win-app",
                                                          "current": "0.1.0", "latest": "0.2.0", "tag": "v0.2.0",
                                                          "assets": [], "url": "u"})
-    seen = []
-    monkeypatch.setattr(U, "_installer", lambda v, why: seen.append(why) or {"ok": True, "action": "installer"})
-    assert U.install()["action"] == "installer" and seen
+    from meshpool_harness import autoupdate as AU
+    seen = []                                   # the full installer is now fetched by the background updater
+    monkeypatch.setattr(AU, "pipeline", lambda v, download=True: seen.append(v["tag"]))
+    r = U.install()
+    assert r["action"] == "downloading"
+    import time
+    for _ in range(50):
+        if seen:
+            break
+        time.sleep(0.05)
+    assert seen == ["v0.2.0"]
 
 
 def test_a_release_still_uploading_is_not_offered():

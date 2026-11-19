@@ -93,10 +93,10 @@ const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.l
   };
   const ids = await p.evaluate(() => S.threads.filter(t => !t.archived).slice(0, 4).map(t => t.id));
   for (const id of ids) await step(`open thread ${id.slice(0, 6)}`, () => p.click(`.th[data-id="${id}"]`));
-  await step("open Diff panel", () => p.click('[data-panel="diff"]'));
-  await step("close Diff panel", () => p.click('[data-panel="diff"]'));
-  await step("switch to Work mode", () => p.click('.modesw [data-mode="cowork"]'));
-  await step("switch to Code mode", () => p.click('.modesw [data-mode="code"]'));
+  await step("open the side panel", () => p.click("#panelBtn"));
+  await step("close the side panel", () => p.click("#panelBtn"));
+  await step("open a new chat", () => p.evaluate(() => newThread()));
+  await step("go back to the first chat", () => p.evaluate(() => { const t = S.threads.find(t => !t.archived); if (t) openThread(t.id); }));
   await step("new thread", () => p.evaluate(() => newThread()));
   await step("toggle Steps", () => p.keyboard.press("Control+e"));
   check("no page errors", !errs.length, errs.join(" | "));

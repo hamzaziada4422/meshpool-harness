@@ -1,0 +1,60 @@
+
+== a. open the app (2.5s, 153 frames)
+   CLS 0.0001  top shifts: [[90,0.0001,"#betaBtn"],[107,0,"#attBtn"]]
+   long tasks: 0 (total 0 ms, max 0 ms)
+   DOM mutations/frame: mean 1.6  p95 0  max 133;  message-list rebuilds 0;  #working moves 0;  live-message rewrites 0
+   scroll: forward jumps>150px 0, backward steps 0, transcript shrinks>20px 0, max gap below bottom 0px;  growth events/s 0 (median 0px)
+   element rebuilds by region (header, composer bar, sidebar, panel...): {"sideList":1,"topbar":3,"cbar":4}
+   landmark geometries seen (1 = never moved): {"#composer":1,"#topbar":1,"#sideList":1,".side":1,"#conv":1,"#colw":1,"#panel":1}
+PASS open: CLS  0.0001 <= 0.02
+PASS open: no long task over 200 ms  max 0
+setup chats...
+stream scenario...
+
+== b. send + stream a long reply with 3 tool calls (23.8s, 1426 frames)
+   CLS 0.002  top shifts: [[27273,0.002,"div.msg-ai"]]
+   long tasks: 0 (total 0 ms, max 0 ms)
+   DOM mutations/frame: mean 3  p95 0  max 126;  message-list rebuilds 0;  #working moves 10;  live-message rewrites 959
+   scroll: forward jumps>150px 1, backward steps 1, transcript shrinks>20px 1, max gap below bottom 0px;  growth events/s 1.5 (median 23px)
+   element rebuilds by region (header, composer bar, sidebar, panel...): {"topbar":5,"cbar":5,"panel":167,"sideList":2}
+   scroll events [t ms, scroll, height]: [[14089,"scroll +208","height +208"],[27255,"scroll -72","height -72"]]
+   landmark geometries seen (1 = never moved): {"#composer":2,"#topbar":2,"#sideList":1,".side":1,"#conv":2,"#colw":2,"#panel":2}
+   requests: {"seconds":23.9,"thread":55,"list":9,"other":4,"threadPollsPerSec":2.3}
+PASS stream: CLS  0.002 <= 0.02
+FAIL stream: no backward scroll steps  1
+FAIL stream: no forward scroll jumps > 150px  1
+FAIL stream: transcript never shrinks (no raw-to-Markdown swap)  1
+PASS stream: message list not rebuilt  0
+FAIL stream: no frame with more than 60 DOM mutations (updates are paced, not dumped)  max 126, active frames 2.5/s
+FAIL stream: smooth growth (>= 20 growth events/s)  1.5/s, median 23px
+FAIL stream: composer, top bar and sidebar do not move  2 geometry changes
+PASS stream: no long task over 100 ms  max 0
+
+== c. switch between chats (8 switches) (7.6s, 456 frames)
+   CLS 0  top shifts: []
+   long tasks: 0 (total 0 ms, max 0 ms)
+   DOM mutations/frame: mean 41.7  p95 0  max 3037;  message-list rebuilds 8;  #working moves 0;  live-message rewrites 5754
+   scroll: forward jumps>150px 6, backward steps 6, transcript shrinks>20px 6, max gap below bottom 0px;  growth events/s 0.8 (median 1241px)
+   element rebuilds by region (header, composer bar, sidebar, panel...): {"topbar":16,"cbar":16,"panel":48}
+   scroll events [t ms, scroll, height]: [[29788,"scroll -1261","height -1261"],[30771,"scroll +1241","height +1241"],[31705,"scroll -1241","height -1241"],[31721,"scroll +1241","height +1241"],[32655,"scroll -1241","height -1241"],[32671,"scroll +1241","height +1241"],[33605,"scroll -1241","height -1241"],[34571,"scroll +1241","height +1241"]]
+   landmark geometries seen (1 = never moved): {"#composer":1,"#topbar":1,"#sideList":1,".side":1,"#conv":1,"#colw":1,"#panel":1}
+   blank frames/switch 1, distinct transcript heights/switch 0.4
+PASS switch: CLS  0
+PASS switch: no blank frames while a chat loads (<= 2 per switch)  1 per switch
+PASS switch: a chat appears in one layout (<= 2 distinct heights per switch)  0.4 per switch
+PASS switch: composer, top bar and sidebar do not move  0
+PASS switch: no long task over 150 ms  max 0
+
+== d. sidebar toggle, side panels, settings, pickers (9.5s, 567 frames)
+   CLS 0  top shifts: []
+   long tasks: 0 (total 0 ms, max 0 ms)
+   DOM mutations/frame: mean 0.7  p95 0  max 52;  message-list rebuilds 0;  #working moves 0;  live-message rewrites 0
+   scroll: forward jumps>150px 0, backward steps 4, transcript shrinks>20px 4, max gap below bottom 0px;  growth events/s 0.3 (median 46px)
+   element rebuilds by region (header, composer bar, sidebar, panel...): {"topbar":8,"panel":11}
+   scroll events [t ms, scroll, height]: [[37438,"scroll -46","height -46"],[38988,"scroll -46","height -46"],[41254,"scroll -46","height -46"],[42804,"scroll -46","height -46"]]
+   landmark geometries seen (1 = never moved): {"#composer":3,"#topbar":3,"#sideList":2,".side":2,"#conv":3,"#colw":3,"#panel":2}
+PASS panels: CLS  0
+PASS panels: no long task over 150 ms  max 0
+PASS no page errors
+
+13/19 checks pass

@@ -13,9 +13,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import bench  # noqa: E402
 
-NAMES = {"routed": "Meshpool V2", "v1": "Meshpool V1", "pi": "Pi", "codex": "Codex", "opencode": "OpenCode",
+NAMES = {"routed": "Meshpool V3", "v2": "Meshpool V2", "v1": "Meshpool V1", "pi": "Pi", "codex": "Codex", "opencode": "OpenCode",
          "hermes": "Hermes"}
-ORDER = ["routed", "v1", "codex", "opencode", "pi", "hermes"]
+ORDER = ["routed", "v2", "v1", "codex", "opencode", "pi", "hermes"]
 SLEEP_S = 3600
 
 
@@ -62,9 +62,9 @@ def main():
                    f"{sum(r.get('prompt_tokens', 0) for r in rs) / n:,.0f} | "
                    f"{sum(r.get('completion_tokens', 0) for r in rs) / n:,.0f} | "
                    f"{sum(r.get('model_calls', 0) for r in rs) / n:.1f} |")
-    out += ["", "Meshpool V2 against each harness on the same tasks (quality: McNemar exact; cost and time: paired "
+    out += ["", "Meshpool V3 against each harness on the same tasks (quality: McNemar exact; cost and time: paired "
             "bootstrap 95% interval of the ratio, over tasks both solved):", "",
-            "| vs | Solved only by Meshpool V2 | Solved only by them | Quality | Cost ratio | Time ratio |",
+            "| vs | Solved only by Meshpool V3 | Solved only by them | Quality | Cost ratio | Time ratio |",
             "|---|---|---|---|---|---|"]
     for x in arms:
         if x == "routed":

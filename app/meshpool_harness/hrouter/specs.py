@@ -45,13 +45,16 @@ SPECS = {s.id: s for s in [
 
     Spec("code.debug", "Debug", "code", "code",
          "Debugging: match the effort to the bug. If the error and the code it points to make the cause clear, fix "
-         "it now and run the failing command once to confirm. Otherwise:\n"
+         "it now and confirm as in step 4. Otherwise:\n"
          "1. Reproduce: run the failing command or test (or the smallest script that shows the bug). If a "
          "<reproduction> block is in the request, that run is done: start from its output.\n"
          "2. Locate: read the traceback from the deepest project frame; test one hypothesis at a time with a command, "
          "not by rereading code. diagnostics finds syntax and type errors across files.\n"
-         "3. Fix the cause with the smallest edit. Never change a test to make it pass.\n"
-         "4. Verify: rerun the reproduction and the nearest tests. For a regression, `git log -p` or "
+         "3. Fix the cause with the smallest edit. Never change a test to make it pass. Fix every place that shares "
+         "the cause (the same pattern elsewhere in the project), not only the line in the traceback.\n"
+         "4. Verify: rerun the reproduction and the nearest tests, then probe the neighbouring cases of the same bug "
+         "(the boundary just before and after, empty input, repeated calls, other time zones or locales if relevant) "
+         "with a short script. For a regression, `git log -p` or "
          "`git bisect run <check>` finds the change that broke it.\n"
          "Edits to code files come back with a syntax and bug check; fix what it reports first. Run the tests for the "
          "code you changed (one file, or -k by name), not the whole suite. Solve it from the code: never fetch the "
@@ -59,10 +62,20 @@ SPECS = {s.id: s for s in [
          "cause (file:line), the fix, and the command that now passes.",
          ("diagnostics",), LEAN_FOCUSED),
     Spec("code.build", "Build", "code", "code",
-         "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
-         "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
-         "once. Do not add dependencies, files or abstractions the task does not need. Never fetch the project's own "
-         "upstream solution online. Reply in a few lines: what you built and the command that shows it works.",
+         "Building. Correctness first: the request is the spec, and hidden checks will test every rule in it.\n"
+         "1. Requirements: list every rule the request states or the existing code and tests imply: each tie-break, "
+         "boundary (empty, one item, equal values, exact limits), invalid input and the exact error type or message, "
+         "ordering, units, and any size or speed limit. When the request is short or vague, read the nearby code, "
+         "tests and data to infer the intended behaviour, and state your assumption in one line.\n"
+         "2. Follow the closest existing pattern in the project. Do not add dependencies or abstractions it does not "
+         "need. Edits come back with a syntax and bug check.\n"
+         "3. Check with ONE script (e.g. `_check.py`) that you extend and rerun, not many one-off commands. It covers "
+         "each requirement with an exact expected value, and times a realistically large input if size or speed is "
+         "mentioned. Fix what it shows and rerun it; when it passes, stop testing.\n"
+         "4. Before you finish, go through your requirement list once more and confirm each is covered by a passing "
+         "check. Delete the check script unless tests were asked for.\n"
+         "Never fetch the project's own upstream solution online. Reply in a few lines: what you built and the "
+         "command that shows it works.",
          ("diagnostics",)),
     Spec("code.refactor", "Refactor", "code", "code",
          "Refactoring method: behaviour must not change. Run the tests before you start and after each step. For "
@@ -75,9 +88,11 @@ SPECS = {s.id: s for s in [
          "edge cases, missing tests, in order of severity, each as `file:line: problem -> suggested fix`. Skip "
          "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.test", "Tests", "code", "code",
-         "Testing method: find the project's test framework and an existing test file to copy the style from. Test "
-         "behaviour through the public interface, including edge cases and the error path. Run the new tests and "
-         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_FOCUSED),
+         "Testing method: find the project's test framework and an existing test file to copy the style from. Good "
+         "tests fail when the code is wrong in any small way: assert exact values (not just types or truthiness), "
+         "cover every branch, each boundary (n-1, n, n+1, empty, zero, negative), each error path with its exact "
+         "exception and message, and rounding or ordering details. Test through the public interface. Run the new "
+         "tests and show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.terminal", "Terminal", "code", "terminal",
          "Terminal work: check the environment before changing it (versions, what is installed, existing config). "
          "Batch independent checks in one bash_many call. Prefer reversible steps and say what you changed outside "
@@ -91,9 +106,13 @@ SPECS = {s.id: s for s in [
          "in full, and cite every fact with its link. Prefer primary sources (filings, official pages, papers) over "
          "aggregators. Report what you could not verify. Stop when each claim you need has a source."),
     Spec("data", "Data", "work", "data",
-         "Data analysis: look at the schema and a sample before analysing. Compute with code (pandas, or DuckDB SQL "
-         "for large files) and quote only numbers your code printed. State the method in one line, then the findings "
-         "with the numbers; a chart only when it helps."),
+         "Data analysis: look at the schema and a sample before analysing. Real data is dirty; before computing the "
+         "answer, check with code and handle: duplicate rows or records, keys that differ only by case, spaces or "
+         "leading zeros, mixed units or currencies (convert), mixed date formats and time zones, and missing or "
+         "invalid values, in one script. Compute the answer from the cleaned data and, in the same script, cross-check "
+         "it once another way (a different grouping or a SQL query); if the two disagree, find out why. Quote "
+         "only numbers your code printed. State the method and the cleaning you did in one or two lines, then the "
+         "findings with the numbers; a chart only when it helps."),
     Spec("docs", "Documents", "work", "documents", ""),
     Spec("browser", "Browser", "work", "browser",
          "Web task: use fetch_url for public pages; use the browser only for sign-ins, clicks and forms. Confirm with "
@@ -123,6 +142,14 @@ VARIANT_ADDON = {
     "code.debug.perf": "Too slow: time the slow call on realistic input first, find the hot spot (nested loops over the "
                        "data, repeated work, N+1 calls), replace it with a dict/set index, sorting once or batching, "
                        "keep the output identical, then time it again and report both numbers.",
+    "code.build.algorithm": "Algorithm from a spec: before coding, write the rules as a numbered list. Implement, then "
+                            "write a slow brute-force version that follows the rules literally and compare both on a "
+                            "few hundred seeded random small inputs, plus the examples in the request; then time one "
+                            "input at the largest size the request implies.",
+    "code.build.feature": "Behaviour change across existing code: first list every place the change must reach (grep "
+                          "every read and write path of the affected data, every caller, every public function named), "
+                          "and the behaviours that must stay the same. Change them all, then run a script that checks "
+                          "each listed path, including the unchanged behaviours and error cases.",
     "code.build.cli": "A command-line change: follow the existing argument parsing and output style, keep current "
                       "outputs unchanged, and run two or three real invocations (including the default) to check.",
     "code.build.api": "An API change: follow the existing handlers and response shapes, validate inputs at the "
@@ -130,26 +157,32 @@ VARIANT_ADDON = {
                       "and a bad input.",
     "code.build.ui": "A UI change: follow the existing components and styles; keep markup accessible (labels, focus, "
                      "keyboard).",
-    "code.build.function": "A new function or class: match the module's style, handle the edge cases the request "
-                           "names (empty, invalid, boundary), and run a few calls that show it works.",
+    "code.build.function": "A new function or class: match the module's style and handle every edge case the "
+                           "request names or implies (empty, invalid, boundary, ties); your check script covers each.",
 }
 
 
 # ---------- data-driven overrides: the harness optimizer (testkit/loop/optimize.py) edits these, not the code --------
-def overrides() -> dict:
+def overrides(methods: str | None = None) -> dict:
     """{spec or spec.variant or spec.variant.language: {"addon": str, "addon_extra": str, "drop": [...],
-    "tools": [...]}} from app/defaults/specs.json, then <data folder>/specs.json, then MH_SPECS_FILE (later wins)."""
+    "tools": [...]}} from app/defaults/specs.json, then <data folder>/specs.json, then the profile's methods set
+    (app/defaults/methods/<name>.json), then MH_SPECS_FILE (later wins: an explicit env file beats the profile)."""
     import json
     import os
     from pathlib import Path
     from meshpool_harness import config as C
     out: dict = {}
-    for p in (C.APP / "defaults" / "specs.json", C.home() / "specs.json", os.environ.get("MH_SPECS_FILE") or ""):
+    layers: list = [C.APP / "defaults" / "specs.json", C.home() / "specs.json"]
+    if methods:
+        from .profiles import methods_specs
+        layers.append(methods_specs(methods))
+    layers.append(os.environ.get("MH_SPECS_FILE") or "")
+    for p in layers:
         try:
-            d = json.loads(Path(p).read_text(encoding="utf-8")) if p else {}
+            d = p if isinstance(p, dict) else (json.loads(Path(p).read_text(encoding="utf-8")) if p else {})
         except (OSError, ValueError):
             continue
-        for k, v in (d.get("specs") or {}).items():
+        for k, v in ((d.get("specs") if "specs" in d else d) or {}).items():
             if isinstance(v, dict):
                 out.setdefault(k, {}).update(v)
     return out
