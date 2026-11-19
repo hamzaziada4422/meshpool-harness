@@ -42,6 +42,7 @@ ARMS = {
     "routed-fast": {"MH_HROUTER": "1", "MH_SKILLS": ""},
     "v1": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-v1" / "app")},
     "v2": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-v2" / "app")},
+    "v3": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-eval" / "app")},
     "routed-full": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_LEAN_TOOLS": "0"},   # every tool: the lean A/B
 }
 
