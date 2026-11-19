@@ -139,7 +139,7 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     elif arm.split("@")[0] in ACP_ARMS:
         res = run_acp_agent(arm.split("@")[0], task, wd)
     else:
-        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", 30))
+        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
            "secs": round(time.time() - t0, 1), "route": res.get("route"), "model": res.get("model"),

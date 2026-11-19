@@ -45,13 +45,16 @@ SPECS = {s.id: s for s in [
 
     Spec("code.debug", "Debug", "code", "code",
          "Debugging: match the effort to the bug. If the error and the code it points to make the cause clear, fix "
-         "it now and run the failing command once to confirm. Otherwise:\n"
+         "it now and confirm as in step 4. Otherwise:\n"
          "1. Reproduce: run the failing command or test (or the smallest script that shows the bug). If a "
          "<reproduction> block is in the request, that run is done: start from its output.\n"
          "2. Locate: read the traceback from the deepest project frame; test one hypothesis at a time with a command, "
          "not by rereading code. diagnostics finds syntax and type errors across files.\n"
-         "3. Fix the cause with the smallest edit. Never change a test to make it pass.\n"
-         "4. Verify: rerun the reproduction and the nearest tests. For a regression, `git log -p` or "
+         "3. Fix the cause with the smallest edit. Never change a test to make it pass. Fix every place that shares "
+         "the cause (the same pattern elsewhere in the project), not only the line in the traceback.\n"
+         "4. Verify: rerun the reproduction and the nearest tests, then probe the neighbouring cases of the same bug "
+         "(the boundary just before and after, empty input, repeated calls, other time zones or locales if relevant) "
+         "with a short script. For a regression, `git log -p` or "
          "`git bisect run <check>` finds the change that broke it.\n"
          "Edits to code files come back with a syntax and bug check; fix what it reports first. Run the tests for the "
          "code you changed (one file, or -k by name), not the whole suite. Solve it from the code: never fetch the "
@@ -59,10 +62,22 @@ SPECS = {s.id: s for s in [
          "cause (file:line), the fix, and the command that now passes.",
          ("diagnostics",), LEAN_FOCUSED),
     Spec("code.build", "Build", "code", "code",
-         "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
-         "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
-         "once. Do not add dependencies, files or abstractions the task does not need. Never fetch the project's own "
-         "upstream solution online. Reply in a few lines: what you built and the command that shows it works.",
+         "Building. Correctness first: the request is the spec, and hidden checks will test every rule in it.\n"
+         "1. Requirements: list every rule the request states or the existing code and tests imply: each tie-break, "
+         "boundary (empty, one item, equal values, exact limits), invalid input and the exact error type or message, "
+         "ordering, units, and any size or speed limit. When the request is short or vague, read the nearby code, "
+         "tests and data to infer the intended behaviour, and state your assumption in one line.\n"
+         "2. Follow the closest existing pattern in the project. Do not add dependencies or abstractions it does not "
+         "need. Edits come back with a syntax and bug check.\n"
+         "3. Check with ONE script (e.g. `_check.py`) that you extend and rerun, not many one-off commands. It covers "
+         "each requirement with an exact expected value. For logic with many cases, also write a slow, obviously "
+         "correct reference that follows the request literally and compare the real code against it on a few "
+         "hundred random small inputs (seeded); every mismatch is a bug in one of the two, decide which from the "
+         "request. If size or speed is mentioned, time a realistically large input.\n"
+         "4. Before you finish, go through your requirement list once more and confirm each is covered by a passing "
+         "check. Delete the check script unless tests were asked for.\n"
+         "Never fetch the project's own upstream solution online. Reply in a few lines: what you built and the "
+         "command that shows it works.",
          ("diagnostics",)),
     Spec("code.refactor", "Refactor", "code", "code",
          "Refactoring method: behaviour must not change. Run the tests before you start and after each step. For "
@@ -75,9 +90,11 @@ SPECS = {s.id: s for s in [
          "edge cases, missing tests, in order of severity, each as `file:line: problem -> suggested fix`. Skip "
          "style nits a formatter would fix. If nothing is wrong, say so in one line.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.test", "Tests", "code", "code",
-         "Testing method: find the project's test framework and an existing test file to copy the style from. Test "
-         "behaviour through the public interface, including edge cases and the error path. Run the new tests and "
-         "show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_FOCUSED),
+         "Testing method: find the project's test framework and an existing test file to copy the style from. Good "
+         "tests fail when the code is wrong in any small way: assert exact values (not just types or truthiness), "
+         "cover every branch, each boundary (n-1, n, n+1, empty, zero, negative), each error path with its exact "
+         "exception and message, and rounding or ordering details. Test through the public interface. Run the new "
+         "tests and show they pass; when fixing a bug, show the test fails without the fix.", ("diagnostics",), LEAN_FOCUSED),
     Spec("code.terminal", "Terminal", "code", "terminal",
          "Terminal work: check the environment before changing it (versions, what is installed, existing config). "
          "Batch independent checks in one bash_many call. Prefer reversible steps and say what you changed outside "
@@ -91,9 +108,13 @@ SPECS = {s.id: s for s in [
          "in full, and cite every fact with its link. Prefer primary sources (filings, official pages, papers) over "
          "aggregators. Report what you could not verify. Stop when each claim you need has a source."),
     Spec("data", "Data", "work", "data",
-         "Data analysis: look at the schema and a sample before analysing. Compute with code (pandas, or DuckDB SQL "
-         "for large files) and quote only numbers your code printed. State the method in one line, then the findings "
-         "with the numbers; a chart only when it helps."),
+         "Data analysis: look at the schema and a sample before analysing. Real data is dirty; before computing the "
+         "answer, check with code and handle: duplicate rows or records, keys that differ only by case, spaces or "
+         "leading zeros, mixed units or currencies (convert), mixed date formats and time zones, and missing or "
+         "invalid values. Then compute the answer from the cleaned data, and once more an independent way (e.g. "
+         "pandas and DuckDB SQL, or a different grouping); if the two disagree, find out why before answering. Quote "
+         "only numbers your code printed. State the method and the cleaning you did in one or two lines, then the "
+         "findings with the numbers; a chart only when it helps."),
     Spec("docs", "Documents", "work", "documents", ""),
     Spec("browser", "Browser", "work", "browser",
          "Web task: use fetch_url for public pages; use the browser only for sign-ins, clicks and forms. Confirm with "
@@ -130,8 +151,8 @@ VARIANT_ADDON = {
                       "and a bad input.",
     "code.build.ui": "A UI change: follow the existing components and styles; keep markup accessible (labels, focus, "
                      "keyboard).",
-    "code.build.function": "A new function or class: match the module's style, handle the edge cases the request "
-                           "names (empty, invalid, boundary), and run a few calls that show it works.",
+    "code.build.function": "A new function or class: match the module's style and handle every edge case the "
+                           "request names or implies (empty, invalid, boundary, ties); your check script covers each.",
 }
 
 
