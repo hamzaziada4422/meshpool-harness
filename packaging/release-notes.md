@@ -1,12 +1,14 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
-**New in 0.0.7** (checkpoint build from the harness-router work; not yet merged into main)
-- **Harness router.** Every chat is routed to a specialised harness: Chat, Debug, Build, Refactor, Review, Tests, Terminal, Explain, Research, Data, Documents, Browser or Automation. It decides in under a millisecond, with no model call unless unsure. The pick shows as a chip at the top of the chat; click it to switch.
-- **Cheaper on every model we measured.** Same tasks, same model, same hour, graded by code: 35 to 45% less per solved task on DeepSeek V4.1 Flash, GPT-6 Luna, Claude Haiku 5.5, GLM 4.7, Meshpool Balanced and Kimi K3, with the same tasks solved.
-- **Faster, shorter chat.** Skills load when needed instead of every skill going with every message (the Work prompt went from about 9,500 to 3,000 tokens). Answers lead with the result, and Meshpool asks questions only when a choice is really open.
-- **Debugging that reproduces first.** When you name the failing command or test, Meshpool runs it before the model starts. Every edit to a code file comes back with an instant syntax and bug check (the newest Python on your computer, Ruff, node, JSON/TOML/YAML). A new diagnostics tool checks a whole project with tsc, cargo, go, javac and more.
-- **Sturdier with any model.** A model that refuses a setting (for example Kimi and `temperature`) is adjusted and retried automatically. A spent budget or quota stops at once with a clear message instead of waiting on retries.
-- Fixed: every chat in the sidebar read "NaN d ago".
+**New in 0.0.7**
+- **A new look, built for everyday use.** Chats no longer need a folder. Projects hold their own instructions, files and memory. The sidebar has Pinned and Recents with unread dots, chats group by date, and every chat has a menu to rename, pin, move, archive or delete it. Search finds chats, projects, artifacts and scheduled tasks in one place. Settings is one window with plain sections. Streaming is smooth: no jumps, no flicker.
+- **MeshPool Auto with a stronger engine.** Coding work runs on MeshPool's new engine, built on the open-source Codex design (Apache-2.0) with MeshPool's routing, loop guard and context trimming on top. On our 52-task hard suite (same model for every agent, graded by hidden tests) it solved 47/52, the same as Codex, about twice as fast as MeshPool's previous engine. Full numbers: docs/results/v3/.
+- **Connect any model in three steps.** Enter a base URL and API key, press Test connection, pick your default model from the list it returns, save. Works with OpenAI- and Anthropic-style endpoints; switching endpoints never gets stuck on an old model list. MeshPool also finds a ChatGPT sign-in from the Codex command line and API keys in your environment, and uses them only if you say so.
+- **Everything is inside the app.** LibreOffice (trimmed to what slides, sheets and documents need), Node, Git and a browser ship inside MeshPool. Nothing is borrowed from your computer or downloaded later.
+- **Updates install themselves.** MeshPool downloads updates in the background, checks them against their published checksums, and installs when you restart or quit.
+- **A new terminal app.** `meshpool` in a terminal: a clean input box, tool steps with timings, collapsible output, Markdown answers, slash commands (/model, /login, /help and more) and Shift+Tab to change permissions.
+- **Session panel.** The repository, branch, pull request (with Mark ready), connectors used, files made and background tasks of the current chat, in one side panel. Start a session straight from a GitHub repository without cloning it yourself.
+- **Mac with Intel** now needs macOS 11 or later. Codex and OpenCode are no longer bundled, so ChatGPT sign-in is not offered in the app.
 
 **New in 0.0.6**
 - The New chat button works again. Clicking it did nothing before; Ctrl+N and /new were not affected. If an earlier version saved the click as your folder, it is ignored, so updating fixes the home screen.
@@ -15,15 +17,15 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - Word, Excel and PowerPoint requests with no content, or sent to the wrong engine, are refused with a clear message instead of producing an empty file. Meshpool Work in other editors (over ACP) gets the same Office tools as the app.
 - Meshpool Code shows the project lines a failing command points to, and rejects an edit that would change nothing.
 
-- **Agents:** Meshpool Auto (picks per task: quality first, then cost and speed), Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or add your own.
-- **Runs on** your Meshpool API key, any OpenAI-compatible key, or your ChatGPT plan.
+- **Agents:** MeshPool Auto (picks the setup per task: quality first, then cost and speed), MeshPool Code, MeshPool Work, Pi and Hermes, or add your own.
+- **Runs on** your MeshPool API key or any OpenAI- or Anthropic-compatible endpoint and key.
 - **Office files** checked before they reach you: Word, Excel with live formulas, PowerPoint, PDF.
 - **Decks** in a top strategy firm's style by default: the answer first in an executive summary, an agenda and section tracker, takeaway titles, a different exhibit on every page, Segoe UI and line icons. Add slides to your own deck in its look.
 
 | Computer | Download |
 |---|---|
 | Mac with Apple silicon | Meshpool.dmg |
-| Mac with Intel | Meshpool-Intel.dmg |
+| Mac with Intel (macOS 11 or later) | Meshpool-Intel.dmg |
 | Windows 10 or 11 | Meshpool-Setup.exe |
 
 **Setup guide** ([full guide](https://github.com/hamzaziada4422/meshpool-harness/blob/main/docs/SETUP.md))
