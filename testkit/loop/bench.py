@@ -276,7 +276,15 @@ def cost(row: dict, prices: dict) -> float:
             + row.get("completion_tokens", 0) * prices["out"]) / 1e6
 
 
+def _stay_awake() -> None:
+    """macOS: a sleeping laptop pauses the run and its clock keeps going (5-hour "tasks"). caffeinate holds the
+    machine awake for as long as this process lives."""
+    if sys.platform == "darwin" and shutil.which("caffeinate"):
+        subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
 def run(args) -> int:
+    _stay_awake()
     tasks = load_suites(args.suites.split(","))
     if args.tasks:
         tasks = [t for t in tasks if t["id"] in set(args.tasks.split(","))]
@@ -445,8 +453,9 @@ def compare(by: dict, keys: list, a: str, b: str) -> dict:
     only_b = sum(y["pass"] and not x["pass"] for x, y in pairs)
     p = mcnemar_p(only_a, only_b)
     solved = [(x, y) for x, y in pairs if x["pass"] and y["pass"]]     # cost and time where both solved
+    timed = [(x, y) for x, y in solved if x.get("secs", 0) < 3600 and y.get("secs", 0) < 3600]   # not across a sleep
     cost = ratio_ci([(x.get("usd", 0), y.get("usd", 0)) for x, y in solved])
-    secs = ratio_ci([(x.get("secs", 0), y.get("secs", 0)) for x, y in solved])
+    secs = ratio_ci([(x.get("secs", 0), y.get("secs", 0)) for x, y in timed])
     quality = ("better" if only_a > only_b and p < 0.05 else "worse" if only_b > only_a and p < 0.05 else "tie")
     cheaper = "cheaper" if cost[2] < 1 else "costlier" if cost[1] > 1 else "same cost"
     faster = "faster" if secs[2] < 1 else "slower" if secs[1] > 1 else "same speed"

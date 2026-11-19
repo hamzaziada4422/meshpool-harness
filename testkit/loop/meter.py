@@ -45,6 +45,12 @@ def make_handler(upstream: str, log_path: str):
         def log_message(self, *a):
             pass
 
+        def handle(self):                              # a client that hangs up mid-stream is not an error to print
+            try:
+                super().handle()
+            except (ConnectionResetError, BrokenPipeError):
+                pass
+
         def _route(self):
             parts = self.path.split("/")
             # /m/<task>/<arm>/<rep>/v1/...
