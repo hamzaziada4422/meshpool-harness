@@ -219,7 +219,7 @@ def test_a_chat_needs_no_folder(home, monkeypatch):
     assert wd.parent == PS.chats_root().resolve() and wd.is_dir() and not added
     assert A.read_meta(v["id"])["scratch"] is True and A.read_meta(v["id"])["project_id"] == ""
     # the private folder goes with the chat; a chat in a folder the user chose does not remove it
-    A._saved = lambda sid: {"workdir": str(wd)}
+    monkeypatch.setattr(A, "_saved", lambda sid: {"workdir": str(wd)})
     A.thread_action(v["id"], {"action": "delete"})
     assert not wd.exists()
 
