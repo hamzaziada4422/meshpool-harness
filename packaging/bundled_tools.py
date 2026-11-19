@@ -51,8 +51,9 @@ LO_EXE = {"mac-arm64": "LibreOffice.app/Contents/MacOS/soffice", "mac-x64": "Lib
 # Windows: MinGit from Git for Windows (zip, already how the release workflow gets it). Pin it by filling in the two
 # values (needs GitHub access, which the authoring session did not have):
 #   gh release view --repo git-for-windows/git --json tagName,assets -q '.tagName, (.assets[]|select(.name|test("^MinGit-[0-9.]+-64-bit.zip$"))|.name+" "+.digest)'
-MINGIT_URL = "FILL-IN"                # https://github.com/git-for-windows/git/releases/download/v<ver>.windows.<n>/MinGit-<ver>-64-bit.zip
-MINGIT_SHA256 = "FILL-IN"             # hex digest of that zip (Git for Windows lists it in the release notes)
+# Git for Windows 2.56.1 (v2.56.1.windows.1). The hash is the release notes' and was checked against the download.
+MINGIT_URL = "https://github.com/git-for-windows/git/releases/download/v2.56.1.windows.1/MinGit-2.56.1-64-bit.zip"
+MINGIT_SHA256 = "4a92850b6e917da4fd010669b614b55dccf5b0ec333a534cc4be4700dfefdafd"
 # macOS: git has no official macOS binary, so it is built from the pinned source tarball by packaging/mac/build_git.sh.
 GIT_VERSION = "2.56.1"
 GIT_SOURCE_SHA256 = "f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34a607f"   # from kernel.org sha256sums.asc

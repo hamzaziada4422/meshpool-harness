@@ -155,9 +155,7 @@ jobs:
           NODE=$(curl -fsSL https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt | grep -oE 'node-v22\.[0-9.]+-win-x64\.zip' | head -1)
           curl -fsSLo node.zip "https://nodejs.org/dist/latest-v22.x/$NODE"
           python -m zipfile -e node.zip . && mv "${NODE%.zip}" node-win && rm node.zip
-          MG=$(gh release view --repo git-for-windows/git --json assets -q '.assets[].name' | grep -E '^MinGit-[0-9.]+-64-bit\.zip$' | head -1)
-          gh release download --repo git-for-windows/git -p "$MG"
-          python -m zipfile -e "$MG" git-win && rm "$MG"
+          # MinGit: build_all.py fetches the pinned, checksum-verified zip (packaging/bundled_tools.py)
           mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
           mkdir -p win/Meshpool
           # Meshpool.exe carries the version: rewrite winres.json from __version__ and recompile its resource here,
