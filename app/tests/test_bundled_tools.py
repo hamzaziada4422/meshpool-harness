@@ -295,6 +295,16 @@ def test_intel_and_apple_silicon_both_need_macos_11():
         assert "MIN=10.15" not in text and "min=10.15" not in text, f
 
 
+def test_publish_step_still_attaches_files_to_a_release_published_by_hand():
+    """A release published on GitHub (what starts the workflow) is already public but has no files yet: only a public
+    release that already carries SHA256SUMS.txt is left alone. And the Mac Git must not install 140 hard links."""
+    text = (ROOT / ".github/workflows/release.yml").read_text()
+    i = text.index("isDraft -q .isDraft")
+    cond = text[i:i + 400]
+    assert "grep -qx SHA256SUMS.txt" in cond, "the already-public branch must also require the uploaded SHA256SUMS.txt"
+    assert "NO_INSTALL_HARDLINKS=1" in (ROOT / "packaging/mac/build_git.sh").read_text()
+
+
 def test_auto_routing_never_picks_codex_or_opencode_in_the_packaged_app(app, monkeypatch, tmp_path):
     """Auto is the product: even when the benchmark table ranks Codex and OpenCode first, a packaged app skips them."""
     from meshpool_harness import harness_router as HRT

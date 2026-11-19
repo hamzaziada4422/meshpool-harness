@@ -105,7 +105,7 @@ def known_roots() -> list[Path]:
         roots += [Path(s.workdir) for s in A.LIVE.values()]
     try:                                           # folders linked to a project
         from meshpool_harness import project_store as PS
-        roots += [Path(r["link"]["path"]) for r in PS.list_projects() if r.get("link")]
+        roots += [Path(x) for x in PS.linked_paths()]
     except Exception:  # noqa: BLE001
         pass
     return roots

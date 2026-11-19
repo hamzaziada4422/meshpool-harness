@@ -249,6 +249,17 @@ def test_plan_first_setting_applies_only_when_the_request_does_not_say(home, mon
     assert seen == [False]
 
 
+def test_a_linked_folder_is_browsable_and_another_is_not(home, tmp_path):
+    site, other = tmp_path / "site", tmp_path / "other"
+    site.mkdir()
+    other.mkdir()
+    PS.create("Site", link={"type": "folder", "path": str(site)})
+    assert PS.linked_paths() == [str(site.resolve())]
+    assert W.check_root(str(site)) == site.resolve()
+    with pytest.raises(ValueError):
+        W.check_root(str(other))
+
+
 def test_a_chat_in_a_linked_project_works_in_the_folder(home, tmp_path, monkeypatch):
     monkeypatch.setattr(A, "Session", FakeSession)
     site = tmp_path / "site"
