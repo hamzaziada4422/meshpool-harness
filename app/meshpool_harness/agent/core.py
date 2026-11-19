@@ -1012,9 +1012,9 @@ class Agent:
                     if len(batch) > 1:               # independent lookups: run together, answer in the asked order
                         from concurrent.futures import ThreadPoolExecutor
                         with ThreadPoolExecutor(max_workers=min(6, len(batch))) as ex:
-                            outs = list(ex.map(lambda c: self._run_tool(c, cut=c["id"] in cut), batch))
+                            outs = list(ex.map(lambda c: self._guarded_tool(c, g, cut=c["id"] in cut), batch))
                     else:
-                        outs = [self._run_tool(batch[0], cut=batch[0]["id"] in cut)]
+                        outs = [self._guarded_tool(batch[0], g, cut=batch[0]["id"] in cut)]
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
@@ -1120,6 +1120,36 @@ class Agent:
         """The plan as a dict {items, current, total, done}, or None when the agent has not written one."""
         return _PLAN.state(self._todos)
 
+    _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
+    _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
+
+    def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
+        """Run one tool call unless it repeats itself with nothing changed in between. The eval traces had runs of
+        30-50 near-identical inspection commands (byte dumps of an unchanged file) that a note alone never stopped;
+        refusing the repeat, with the reason, is what breaks the loop. An edit in between resets the count, so
+        rerunning a check after changing code is never refused."""
+        try:
+            f = c.get("function", {})
+            name, args = f.get("name", ""), str(f.get("arguments", ""))
+            exact = name + ":" + args[:2000]
+            shape = name + ":" + re.sub(r"\d+", "#", args[:2000])
+            book = g.setdefault("loop", {})
+            edits = self.ws.edits
+            for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
+                runs = [e for e in book.get(key, []) if e == edits]
+                if len(runs) + 1 >= limit and name not in ("todo_write", "ask_user", "finish"):
+                    g["refused"] = g.get("refused", 0) + 1
+                    return ("[Meshpool] Not run: you already made this call (or the same call with only numbers "
+                            f"changed) {len(runs)} times and no file has changed since, so the result would be the "
+                            "same. The file contents are exactly what read_file shows (plain text, no hidden "
+                            "characters unless a tool says so). Act on what you have: make the change, run your "
+                            "check, or answer.")
+            for key in {exact, shape}:                 # one count per run, also when the two keys are equal
+                book.setdefault(key, []).append(edits)
+        except Exception:  # noqa: BLE001 - the guard must never break a turn
+            pass
+        return self._run_tool(c, cut=cut)
+
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
         """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the
         step budget. They add a short note for the model; they never block anything."""
@@ -1127,17 +1157,21 @@ class Agent:
         for c in calls:
             f = c.get("function", {})
             g["hist"].append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        g["n_calls"] = g.get("n_calls", 0) + len(calls)
         h = g["hist"] = g["hist"][-12:]
         hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
         for k in (2, 3):
             if not hit and len(h) >= 3 * k and h[-k:] == h[-2 * k:-k] == h[-3 * k:-2 * k]:
                 hit = True
-        if hit and g["doom_at"] < len(h) - 6:
-            g["doom_at"] = len(h)
+        if hit and g["doom_at"] < g["n_calls"] - 6:     # can fire again later (the history itself is capped at 12)
+            g["doom_at"] = g["n_calls"]
             notes.append("You are repeating the same tool calls and getting the same results. Stop and reconsider: "
                          "use a different tool, different arguments or a different approach.")
-        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in g["seen"]]
-        g["seen"].update(c["cmd"] for c in new)
+        # Progress is a changed file or a new command that does something; read-only inspection (cat, sed -n, od,
+        # git show, ls) succeeds every time and is not progress.
+        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in g["seen"]
+               and not T.read_only(c["cmd"])]
+        g["seen"].update(c["cmd"] for c in self.ws.commands)
         if new or self.ws.edits != g["edits"]:
             g["last"], g["edits"] = step, self.ws.edits
         elif step - g["last"] in (12, 24) and self.profile == "code":
