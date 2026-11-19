@@ -394,6 +394,9 @@ def _summary_of(name: str, args: dict) -> str:
         return args.get("command", "")
     if name == "bash_many":
         return " ; ".join(str(c) for c in args.get("commands") or [])[:400]
+    if name == "edit" and isinstance(args.get("changes"), list):     # one call, several files
+        paths = list(dict.fromkeys(str(c.get("path", "")) for c in args["changes"] if isinstance(c, dict)))
+        return ", ".join(paths[:6]) + (f" (+{len(paths) - 6} more)" if len(paths) > 6 else "")
     if name in ("read_file", "write_file", "edit"):
         s = args.get("path", "")
         if name == "read_file" and (args.get("start") or args.get("end")):
@@ -703,10 +706,15 @@ class Agent:
         if len(self.messages) <= 1:
             self.messages = [{"role": "system", "content": self.system_prompt()}]
 
+    def hsettings(self) -> dict:
+        """The routed harness profile's settings, with explicit env flags on top (hrouter/profiles.py)."""
+        from meshpool_harness.hrouter.profiles import effective
+        return effective(getattr(self, "route", None))
+
     def _dropped(self) -> set:
         """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0."""
         route = getattr(self, "route", None)
-        if route is None or self.plan or os.environ.get("MH_LEAN_TOOLS", "1") == "0":
+        if route is None or self.plan or not self.hsettings()["lean_tools"]:
             return set()
         from meshpool_harness.hrouter.route import dropped
         d = dropped(route)
@@ -1104,7 +1112,7 @@ class Agent:
         one nudge to write the plan if the first calls went by without one."""
         if any(c.get("function", {}).get("name") == "todo_write" for c in calls):
             g["since_todo"] = 0
-            return ""
+            return self._step_method(g)
         g["since_todo"] += len(calls)
         if not self._todo_touched:
             if g["since_todo"] >= 3 and not g["plan_asked"]:
@@ -1115,6 +1123,34 @@ class Agent:
             g["since_todo"] = 0
             return _PLAN.reminder(self._todos, "Update the plan with todo_write as steps finish.")
         return ""
+
+    def _step_method(self, g: dict) -> str:
+        """Per-step method (profile "step_methods"): when the plan's current step changes, route its text with hrouter
+        (no tokens); if that step is another sub-harness than the turn's and has a method, one short line with the
+        first sentence of it, at most once per sub-harness per turn."""
+        route = getattr(self, "route", None)
+        try:
+            if route is None or not self.hsettings()["step_methods"]:
+                return ""
+            cur = _PLAN.current(self._todos)
+            if cur < 0 or cur == g.get("step_cur"):
+                return ""
+            g["step_cur"] = cur
+            from meshpool_harness import hrouter as HRR
+            from meshpool_harness.hrouter.route import method_summary
+            sr = HRR.route(str(self._todos[cur].get("content", "")), kind="code" if route.family == "code"
+                           else "cowork", workdir=str(self.root))
+            seen = g.setdefault("step_seen", set())
+            if sr.spec == route.spec or sr.spec in seen or sr.spec in ("chat", "general"):
+                return ""
+            sr.settings = route.settings              # the step runs under the turn's profile (same method set)
+            m = method_summary(sr)
+            if not m:
+                return ""
+            seen.add(sr.spec)
+            return f"For this step ({sr.label}): {m}"
+        except Exception:  # noqa: BLE001 - a hint must never break the turn
+            return ""
 
     def plan_state(self) -> dict | None:
         """The plan as a dict {items, current, total, done}, or None when the agent has not written one."""
@@ -1261,7 +1297,7 @@ class Agent:
         # Long runs re-sent their whole history on every call (the 50-60-call runs were most of the dev A/B's cost).
         # Older tool outputs are elided once the context passes the limit, down to 60% of it, so the next trim is
         # many steps away and the provider's prompt cache is rebuilt rarely. Recent outputs stay verbatim.
-        limit = int(os.environ.get("MH_COMPACT_CHARS", "160000"))
+        limit = int(self.hsettings()["compact_chars"])
         if _context_size(self.messages) > limit:
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
@@ -1624,7 +1660,7 @@ class Agent:
         route = getattr(self, "route", None)
         try:
             from meshpool_harness.core import review as RV
-            if not RV.enabled(route.spec):
+            if not RV.enabled(route.spec, route):
                 return ""
             req = g.get("req")
             if isinstance(req, list):
@@ -1648,7 +1684,7 @@ class Agent:
     def _mutation_feedback(self) -> str:
         """WP7: tests that still pass when the code under test is deliberately broken. '' when nothing to say."""
         try:
-            if os.environ.get("MH_MUTATION", "1") == "0":
+            if not self.hsettings()["mutation"]:
                 return ""
             from meshpool_harness.core import mutate as MU
             alive = MU.survivors(self.root, set(self.ws.turn_files))
@@ -1926,6 +1962,33 @@ class Agent:
             return ""
 
     def _diff_text(self, name: str, args: dict) -> str:
+        """The diff the user approves (and the tool card shows). Several changes in one edit call (`edits` for one
+        file, `changes` for several) show every file's diff, so an approval never shows less than will change."""
+        if name == "edit" and (isinstance(args.get("edits"), list) or isinstance(args.get("changes"), list)):
+            groups: dict = {}
+            if isinstance(args.get("changes"), list):
+                for c in args["changes"]:
+                    if isinstance(c, dict):
+                        items = c.get("edits") if isinstance(c.get("edits"), list) else [c]
+                        groups.setdefault(str(c.get("path", "")), []).extend(items)
+            if isinstance(args.get("edits"), list):
+                first = [{"old": args["old"], "new": args.get("new", "")}] if args.get("old") is not None else []
+                groups.setdefault(str(args.get("path", "")), []).extend(first + list(args["edits"]))
+            parts = []
+            for path, items in groups.items():
+                try:
+                    p = self.ws._path(path, write=True)
+                    before = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+                except Exception:
+                    before = ""
+                after = before
+                for it in items:
+                    old, new = str((it or {}).get("old", "")), str((it or {}).get("new", ""))
+                    after = after.replace(old, new, 1) if old and after.count(old) == 1 else after + \
+                        f"\n[an edit that matches only after whitespace changes]\n-{old}\n+{new}"
+                parts += list(difflib.unified_diff(before.splitlines(), after.splitlines(), f"a/{path}", f"b/{path}",
+                                                   n=2, lineterm=""))
+            return "\n".join(parts[:300]) + ("\n..." if len(parts) > 300 else "") if parts else "(no change)"
         path = str(args.get("path", ""))
         try:
             p = self.ws._path(path, write=True)

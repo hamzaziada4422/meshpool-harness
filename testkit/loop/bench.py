@@ -47,6 +47,16 @@ ARMS = {
 }
 
 
+def arm_env(arm: str) -> dict:
+    """The environment of an arm. "profile:<name>" runs the routed MeshPool agent with that harness profile forced
+    (hrouter/profiles.py); the arm keeps its "profile:<name>" label in the results."""
+    base = arm.split("@")[0]
+    if base.startswith("profile:"):
+        name = base.split(":", 1)[1]
+        return {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_HARNESS_PROFILE": name, "MH_PROFILE": name}
+    return ARMS.get(arm, {"MH_HROUTER": "1"})
+
+
 # ---------- tasks --------------------------------------------------------------------------------------------------
 EXTRA_ENV: dict = {}       # arm -> extra environment (--arm-env), e.g. a candidate harness's MH_SPECS_FILE
 
@@ -144,7 +154,8 @@ def child(task_json: str, arm: str, out_path: str) -> None:
         res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
-           "secs": round(time.time() - t0, 1), "route": res.get("route"), "model": res.get("model"),
+           "secs": round(time.time() - t0, 1), "route": res.get("route"), "route_keys": res.get("route_keys"),
+           "profile": res.get("profile"), "model": res.get("model"),
            "error": res.get("error"), "answer_words": len((res.get("answer") or "").split()),
            "trace": res.get("trace") or [], **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
@@ -333,7 +344,7 @@ def run(args) -> int:
         if False:
             pass
         else:
-            env = dict(os.environ, **ARMS.get(arm, {"MH_HROUTER": "1"}), **EXTRA_ENV.get(arm, {}))
+            env = dict(os.environ, **arm_env(arm), **EXTRA_ENV.get(arm, {}))
             if model:
                 env["MH_MODEL"] = model
             if args.meter_port:

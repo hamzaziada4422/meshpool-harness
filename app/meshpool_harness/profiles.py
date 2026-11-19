@@ -14,7 +14,7 @@ def load_all() -> dict:
 
 def for_model(model: str, override: str | None = None) -> dict:
     allp = load_all()
-    if override:
+    if override and override in allp:        # MH_PROFILE can also name a harness profile (hrouter/profiles.py): ignored here
         return allp[override]
     for name, p in allp.items():
         if any(m in model for m in p.get("match", [])):

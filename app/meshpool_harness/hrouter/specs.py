@@ -163,20 +163,26 @@ VARIANT_ADDON = {
 
 
 # ---------- data-driven overrides: the harness optimizer (testkit/loop/optimize.py) edits these, not the code --------
-def overrides() -> dict:
+def overrides(methods: str | None = None) -> dict:
     """{spec or spec.variant or spec.variant.language: {"addon": str, "addon_extra": str, "drop": [...],
-    "tools": [...]}} from app/defaults/specs.json, then <data folder>/specs.json, then MH_SPECS_FILE (later wins)."""
+    "tools": [...]}} from app/defaults/specs.json, then <data folder>/specs.json, then the profile's methods set
+    (app/defaults/methods/<name>.json), then MH_SPECS_FILE (later wins: an explicit env file beats the profile)."""
     import json
     import os
     from pathlib import Path
     from meshpool_harness import config as C
     out: dict = {}
-    for p in (C.APP / "defaults" / "specs.json", C.home() / "specs.json", os.environ.get("MH_SPECS_FILE") or ""):
+    layers: list = [C.APP / "defaults" / "specs.json", C.home() / "specs.json"]
+    if methods:
+        from .profiles import methods_specs
+        layers.append(methods_specs(methods))
+    layers.append(os.environ.get("MH_SPECS_FILE") or "")
+    for p in layers:
         try:
-            d = json.loads(Path(p).read_text(encoding="utf-8")) if p else {}
+            d = p if isinstance(p, dict) else (json.loads(Path(p).read_text(encoding="utf-8")) if p else {})
         except (OSError, ValueError):
             continue
-        for k, v in (d.get("specs") or {}).items():
+        for k, v in ((d.get("specs") if "specs" in d else d) or {}).items():
             if isinstance(v, dict):
                 out.setdefault(k, {}).update(v)
     return out

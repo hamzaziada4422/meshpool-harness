@@ -131,3 +131,18 @@ def test_single_edit_unchanged(tmp_path):
         ws.edit("zz.py", "a", "b")
     with pytest.raises(ToolError):
         ws.edit()
+
+
+def test_approval_diff_shows_every_file_of_a_multi_edit(tmp_path):
+    """Supervised mode approves an edit by its diff: a multi-file edit must show all of it, never an empty diff."""
+    from meshpool_harness.agent.core import Agent, _summary_of
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n")
+    (tmp_path / "b.py").write_text("z = 3\n")
+    a = Agent(str(tmp_path), mode="auto", sessions_dir=str(tmp_path / "_s"))
+    args = {"changes": [{"path": "a.py", "edits": [{"old": "x = 1", "new": "x = 10"}, {"old": "y = 2", "new": "y = 20"}]},
+                        {"path": "b.py", "old": "z = 3", "new": "z = 30"}]}
+    d = a._diff_text("edit", args)
+    assert "+x = 10" in d and "+y = 20" in d and "+z = 30" in d and "b/b.py" in d
+    assert _summary_of("edit", args) == "a.py, b.py"
+    d1 = a._diff_text("edit", {"path": "a.py", "edits": [{"old": "y = 2", "new": "y = 5"}]})
+    assert "+y = 5" in d1

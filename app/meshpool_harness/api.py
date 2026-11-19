@@ -80,6 +80,7 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
     if model:
         a.model = model
     route = None
+    from meshpool_harness.hrouter.route import _keys
     if os.environ.get("MH_HROUTER", "1") != "0":   # the specialised harness, as the app picks it (0: the base agent)
         from meshpool_harness import hrouter as HRR
         from meshpool_harness import pace as PACE
@@ -96,7 +97,8 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
              "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
              **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
-           "usage": usage, "route": route.spec if route else None, "model": a.current_model(),
+           "usage": usage, "route": route.spec if route else None,
+           "route_keys": _keys(route) if route else [], "profile": route.profile if route else None, "model": a.current_model(),
            "receipt": getattr(a, "last_receipt", ""), "trace": getattr(a, "trace", [])[-120:],
            "plan": a.plan_state()}
     if errors and not capped:

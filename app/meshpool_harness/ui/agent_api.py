@@ -683,7 +683,7 @@ class Session:
             self.agent.save()
         else:
             self.route_addon = addon(r)           # an outside agent: rides on the next message
-        write_meta(self.id, route=r.spec, route_label=r.label)
+        write_meta(self.id, route=r.spec, route_label=r.label, route_profile=r.profile or None)
         self.emit({"type": "status", "route": r.to_dict(), "text": f"Harness: {r.label} (picked by you)."})
 
     def set_model(self, model: str):
@@ -944,7 +944,7 @@ def create(body: dict) -> dict:
                 s.agent.save()
             else:
                 s.route_addon = addon(hr)
-            write_meta(s.id, route=hr.spec, route_label=hr.label)
+            write_meta(s.id, route=hr.spec, route_label=hr.label, route_profile=hr.profile or None)
             if hr.spec not in ("general", "docs"):
                 s.emit({"type": "status", "route": hr.to_dict(),
                         "text": f"Harness: {hr.label} ({hr.reason})."})

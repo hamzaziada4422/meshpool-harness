@@ -23,9 +23,10 @@ INJECT = ("[Meshpool] A second reviewer read your change against the request and
 _TAGS = re.compile(r"\n*<(reproduction|environment_snapshot|repo_map|repo-map)\b.*", re.S)
 
 
-def enabled(spec: str) -> bool:
-    v = os.environ.get("MH_REVIEW", "1")
-    return v != "0" and spec in REVIEW_SPECS
+def enabled(spec: str, route=None) -> bool:
+    """On for the review specs unless the route's harness profile or MH_REVIEW (which wins) turns it off."""
+    from meshpool_harness.hrouter.profiles import effective
+    return spec in REVIEW_SPECS and bool(effective(route)["review"])
 
 
 def clean_request(text: str) -> str:

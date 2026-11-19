@@ -17,9 +17,10 @@ _FILE = re.compile(r"[\w./-]+\.(?:py|js|ts|tsx|jsx|go|rs|java|rb|php|c|cpp|h|md|
 _FOCUSED = {"code.debug", "code.review", "code.explain", "code.terminal", "code.test"}
 
 
-def mode() -> str:
-    m = os.environ.get("MH_PLAN", "auto").strip().lower()
-    return "1" if m in ("1", "on", "always", "true") else "0" if m in ("0", "off", "never", "false") else "auto"
+def mode(route=None) -> str:
+    """auto | 1 | 0: MH_PLAN when set, else the route's harness profile (default auto)."""
+    from meshpool_harness.hrouter.profiles import effective
+    return {"on": "1", "off": "0"}.get(effective(route)["plan"], "auto")
 
 
 def every() -> int:
@@ -37,7 +38,7 @@ def signals(text: str) -> dict:
 
 def needed(route, text: str, plan_mode: bool = False) -> bool:
     """Does this request need a written plan? route: an hrouter Route or None."""
-    m = mode()
+    m = mode(route)
     if plan_mode or m == "0":
         return False
     if m == "1":
