@@ -48,6 +48,14 @@ FIELDS = [
      "parts on to sub-agents of their own."),
     ("MH_MAX_INFLIGHT", "Model calls at the same time", "4", "Per key, across all chats and sub-agents. While the "
      "endpoint is recovering from an outage, calls go one at a time."),
+    ("MH_BROWSER_USE", "Browser use: which browser", "meshpool",
+     "meshpool: Meshpool's own browser window (default). installed: the Chrome, Edge or Brave on this computer, with a "
+     "profile folder that belongs to Meshpool (Chrome does not allow automation of your everyday profile). attach: "
+     "connect to a browser you started with --remote-debugging-port."),
+    ("MH_BROWSER_CDP_URL", "Browser use: debugging address (attach)", "http://127.0.0.1:9222",
+     "Where your browser listens when you started it with --remote-debugging-port=9222 and its own --user-data-dir."),
+    ("MH_BROWSER_APP", "Browser use: which installed browser", "",
+     "chrome, edge or brave. Empty: the first one found."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
                                        "the GitHub MCP server. Create one at github.com/settings/tokens."),
     ("BRAVE_SEARCH_API_KEY", "Brave Search API key", "", "Optional. Faster, steadier web search (free tier at brave.com/search/api)."),
@@ -304,6 +312,14 @@ def system_check() -> list[dict]:
     else:
         rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
                      "fix": "Run: meshpool install-browser"})
+    try:
+        from meshpool_harness.agent import computer_mcp_server as CU
+        st = CU.computer_status()
+        rows.append({"name": "Computer use", "optional": True, "ok": st["ready"],
+                     "detail": "ready" if st["ready"] else st["summary"],
+                     "fix": " ".join(f"{i['name']}: {i['fix']}" for i in st["items"] if i["fix"])})
+    except Exception as e:  # noqa: BLE001  a failing probe must never break the settings page
+        rows.append({"name": "Computer use", "optional": True, "ok": False, "detail": f"check failed ({e})", "fix": ""})
     from meshpool_harness import office_runtime
     lo = office_runtime.describe()
     rows.append({"name": "LibreOffice", "optional": True, "ok": bool(lo["path"]),

@@ -89,6 +89,8 @@ def save_settings(body: dict) -> dict:
             continue                     # blank key field = keep the saved key
         vals[k] = v
     _key_follows_host(vals)
+    from meshpool_harness import browser_use as BU
+    BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
     if vals.get("GITHUB_TOKEN"):
         try:
             from meshpool_harness.ui import agent_api as _A
@@ -402,8 +404,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.models(refresh=q.get("refresh") == "1"))
             if u.path == "/api/projects":
                 return self._send(200, {"projects": W.projects(), "default": str(_default_project())})
-            if u.path in ("/api/profile", "/api/capabilities", "/api/spend", "/api/data"):
+            if u.path in ("/api/profile", "/api/capabilities", "/api/spend", "/api/data", "/api/browser-use",
+                          "/api/computer-status"):
                 from meshpool_harness.ui import settings_v2 as SV
+                if u.path == "/api/browser-use":
+                    return self._send(200, SV.browser_use())
+                if u.path == "/api/computer-status":
+                    return self._send(200, SV.computer_status())
                 if u.path == "/api/profile":
                     return self._send(200, SV.profile())
                 if u.path == "/api/capabilities":
@@ -708,9 +715,11 @@ class Handler(BaseHTTPRequestHandler):
                 C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
                 C.load_into_env(override=True)
                 return self._send(200, W.models())
-            if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify"):
+            if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify", "/api/browser-use"):
                 from meshpool_harness.ui import settings_v2 as SV
                 b = self._json()
+                if u.path == "/api/browser-use":
+                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app")))
                 if u.path == "/api/profile":
                     return self._send(200, SV.save_profile(**{k: b.get(k) for k in SV.PROFILE_KEYS}))
                 if u.path == "/api/capabilities":

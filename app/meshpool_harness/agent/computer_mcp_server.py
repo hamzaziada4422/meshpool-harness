@@ -31,7 +31,11 @@ MODS = {"cmd": "cmd", "command": "cmd", "meta": "cmd", "super": "cmd", "win": "c
 
 
 def _parse_combo(combo: str) -> tuple[list[str], str]:
-    parts = [p.strip().lower() for p in combo.replace("-", "+").split("+") if p.strip()]
+    c = combo.strip().lower()
+    if c == "-" or c.endswith(("+-", "--")):              # the minus key itself (cmd+- zooms out)
+        parts = [p.strip() for p in c[:-1].replace("-", "+").split("+") if p.strip()] + ["-"]
+    else:
+        parts = [p.strip() for p in c.replace("-", "+").split("+") if p.strip()]
     if not parts:
         raise ToolFailed("Give a key, for example enter, tab, cmd+c or ctrl+shift+t.")
     mods = [MODS[p] for p in parts[:-1] if p in MODS]
@@ -65,13 +69,14 @@ class Mac:
 
     def grab(self) -> "Image":
         from PIL import Image
+        if _mac_screen_access() is False:      # without it screencapture still "works": it returns only the wallpaper
+            raise ToolFailed("macOS has not allowed Meshpool to record the screen. " + _MAC_SCREEN_FIX)
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         try:
             r = subprocess.run(["screencapture", "-x", "-m", "-t", "png", path], capture_output=True, timeout=20)
             if r.returncode != 0 or os.path.getsize(path) == 0:
-                raise ToolFailed("macOS blocked the screenshot. In Meshpool, open Settings and allow Screen Recording, "
-                                 "then reopen Meshpool.")
+                raise ToolFailed("macOS blocked the screenshot. " + _MAC_SCREEN_FIX)
             img = Image.open(path)
             img.load()
             return img
@@ -143,9 +148,22 @@ class Mac:
             self._post(ev)
 
     def open_app(self, name: str) -> str:
-        r = subprocess.run(["open", "-a", name], capture_output=True, text=True, timeout=30)
+        name = str(name or "").strip()
+        if not name:
+            raise ToolFailed("Name the app, file or web address to open.")
+        # an app name goes through -a; a web address or an existing file or folder is opened by `open` itself (-a would
+        # look for an app of that name). No shell is involved; "--" keeps a name from being read as an option.
+        is_url = bool(re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", name))
+        target = name if is_url else os.path.expanduser(name)
+        if is_url or os.path.exists(target):
+            args = ["open", "--", target]
+        elif name.startswith("-"):
+            raise ToolFailed(f"Refused to open {name!r}: an app name cannot start with a dash.")
+        else:
+            args = ["open", "-a", name]
+        r = subprocess.run(args, capture_output=True, text=True, timeout=30)
         if r.returncode != 0:
-            raise ToolFailed(f"Could not open {name}: {r.stderr.strip()}")
+            raise ToolFailed(f"Could not open {name}: {(r.stderr or '').strip()}")
         return f"Opened {name}."
 
     def frontmost(self) -> str:
@@ -157,14 +175,7 @@ class Mac:
             return ""
 
     def can_control(self) -> bool:
-        try:
-            import ctypes
-            import ctypes.util
-            ax = ctypes.cdll.LoadLibrary(ctypes.util.find_library("ApplicationServices"))
-            ax.AXIsProcessTrusted.restype = ctypes.c_bool
-            return bool(ax.AXIsProcessTrusted())
-        except Exception:  # noqa: BLE001
-            return True
+        return _mac_accessibility() is not False           # cannot tell: try, and the click says if macOS refused
 
 
 # ======================================= Windows ====================================================================
@@ -207,8 +218,12 @@ class Win:
         return self.u.GetSystemMetrics(0), self.u.GetSystemMetrics(1)
 
     def grab(self):
-        import mss
         from PIL import Image
+        try:
+            import mss
+        except ImportError:                    # the app does not ship mss: Pillow grabs the primary screen itself
+            from PIL import ImageGrab
+            return ImageGrab.grab()
         with mss.mss() as m:
             mon = m.monitors[1]
             s = m.grab(mon)
@@ -316,7 +331,8 @@ def os_() -> Mac | Win:
         elif os.name == "nt":
             _OS = Win()
         else:
-            raise ToolFailed("Computer use runs on macOS and Windows.")
+            raise ToolFailed("Computer use is not supported on Linux yet: it runs on macOS and Windows. Use the browser "
+                             "tools for web pages and the shell for everything else.")
     return _OS
 
 
@@ -327,8 +343,126 @@ def _pt(x, y) -> tuple[float, float]:
 
 def _need_control():
     if not os_().can_control():
-        raise ToolFailed("macOS has not allowed Meshpool to control the mouse and keyboard. In Meshpool, open Settings, "
-                         "then Permissions, and allow Accessibility.")
+        raise ToolFailed("macOS has not allowed Meshpool to control the mouse and keyboard. " + _MAC_AX_FIX)
+
+
+# ---------- self-check: what is needed, what is missing -------------------------------------------------------------
+_MAC_SCREEN_FIX = ("Open System Settings > Privacy & Security > Screen Recording (macOS 15 and later: Screen & System "
+                   "Audio Recording; macOS 12 or older: System Preferences > Security & Privacy > Privacy), switch "
+                   "Meshpool on, then quit and reopen Meshpool.")
+_MAC_AX_FIX = ("Open System Settings > Privacy & Security > Accessibility (macOS 12 or older: System Preferences > "
+               "Security & Privacy > Privacy > Accessibility), switch Meshpool on, then quit and reopen Meshpool.")
+
+
+def _have(module: str) -> bool:
+    import importlib.util
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+def _mac_screen_access() -> bool | None:
+    """Screen Recording allowed for Meshpool? CGPreflightScreenCaptureAccess asks without showing a prompt. None when
+    it cannot be told (an older macOS or no pyobjc)."""
+    try:
+        import Quartz
+        fn = getattr(Quartz, "CGPreflightScreenCaptureAccess", None)
+        return None if fn is None else bool(fn())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _mac_accessibility() -> bool | None:
+    """Accessibility (mouse and keyboard control) allowed? AXIsProcessTrusted does not prompt. None: cannot tell."""
+    try:
+        import ctypes
+        import ctypes.util
+        lib = ctypes.util.find_library("ApplicationServices")
+        if not lib:
+            return None
+        ax = ctypes.cdll.LoadLibrary(lib)
+        ax.AXIsProcessTrusted.restype = ctypes.c_bool
+        return bool(ax.AXIsProcessTrusted())
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _win_desktop() -> tuple[bool | None, str]:
+    """(ok, name): whether the desktop that receives input can be reached. A locked screen, the sign-in screen and the
+    secure desktop (UAC prompts) cannot: OpenInputDesktop fails there."""
+    try:
+        import ctypes
+        u = ctypes.windll.user32
+        u.OpenInputDesktop.restype = ctypes.c_void_p
+        h = u.OpenInputDesktop(0, False, 0x0001 | 0x0100)       # DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP
+        if not h:
+            return False, ""
+        buf = ctypes.create_unicode_buffer(256)
+        need = ctypes.c_ulong(0)
+        u.GetUserObjectInformationW(ctypes.c_void_p(h), 2, buf, ctypes.sizeof(buf), ctypes.byref(need))   # UOI_NAME
+        u.CloseDesktop(ctypes.c_void_p(h))
+        return (buf.value or "Default").lower() == "default", buf.value or "Default"
+    except Exception:  # noqa: BLE001
+        return None, ""
+
+
+def computer_status(platform: str | None = None) -> dict:
+    """What computer use needs on this computer and what is missing:
+    {platform, supported, ready, summary, items: [{name, ok (True, False, None = cannot tell), detail, fix}]}.
+    Cheap and side-effect free: no prompt, no screenshot."""
+    plat = platform or ("darwin" if sys.platform == "darwin" else "win32" if os.name == "nt" else "linux")
+    items: list[dict] = []
+
+    def item(name, ok, detail, fix=""):
+        items.append({"name": name, "ok": ok, "detail": detail, "fix": "" if ok else fix})
+
+    if plat == "darwin":
+        name, supported = "macOS", True
+        for label, probe, fix in (("Screen Recording", _mac_screen_access, _MAC_SCREEN_FIX),
+                                  ("Accessibility", _mac_accessibility, _MAC_AX_FIX)):
+            ok = probe()
+            item(label, ok, {True: "allowed", False: "not allowed", None: "could not be checked"}[ok],
+                 fix if ok is False else "Could not be checked from here. If a click or screenshot fails, " + fix)
+        item("Quartz (pyobjc)", _have("Quartz"), "installed" if _have("Quartz") else "missing",
+             "Reinstall Meshpool: its Python is missing the macOS bridge (pyobjc-framework-Quartz).")
+        item("Pillow", _have("PIL"), "installed" if _have("PIL") else "missing", "Reinstall Meshpool (Pillow is missing).")
+    elif plat.startswith("win"):
+        name, supported = "Windows", True
+        ok, dname = _win_desktop()
+        item("Desktop", ok, {True: "unlocked", False: "locked, or showing a secure prompt (sign-in, UAC)",
+                             None: "could not be checked"}[ok],
+             "Unlock the computer and close any Windows security prompt: the mouse and keyboard cannot be used on a "
+             "locked screen or the secure desktop.")
+        item("Screen capture", _have("PIL"), "Pillow" + (" and mss" if _have("mss") else ""),
+             "Reinstall Meshpool (Pillow is missing).")
+        # no permission to ask for; programs running as administrator ignore a normal program's mouse and keyboard
+        items.append({"name": "Permissions", "ok": True, "fix": "",
+                      "detail": "none needed. Apps running as administrator ignore input from a normal program: run "
+                                "Meshpool as administrator to control those."})
+    else:
+        name, supported = "Linux", False
+        item("Computer use", False, "not supported on Linux yet",
+             "Computer use runs on macOS and Windows. On Linux, use the browser tools for web pages and the shell for "
+             "everything else.")
+    ready = supported and all(i["ok"] is True for i in items)
+    bad = [i for i in items if i["ok"] is not True]
+    summary = (f"Computer use is ready on {name}." if ready else
+               "Computer use is not supported on Linux yet." if not supported else
+               f"Computer use needs attention on {name}: " + "; ".join(f"{i['name']} {i['detail']}" for i in bad) + ".")
+    return {"platform": name.lower(), "supported": supported, "ready": ready, "summary": summary, "items": items}
+
+
+def format_status(st: dict) -> str:
+    lines = [st["summary"]]
+    for i in st["items"]:
+        mark = {True: "ok", False: "MISSING", None: "unknown"}[i["ok"]]
+        lines.append(f"- {i['name']}: {mark} ({i['detail']})" + (f"\n  To fix: {i['fix']}" if i["fix"] else ""))
+    return "\n".join(lines)
+
+
+def computer_check() -> str:
+    return format_status(computer_status())
 
 
 # ---------- tools --------------------------------------------------------------------------------------------------
@@ -403,7 +537,7 @@ def screen_info() -> str:
     w, h = o.screen_size()
     return (f"Screen {w}x{h} ({'macOS points' if sys.platform == 'darwin' else 'pixels'}). Screenshots are scaled to at "
             f"most {MAX_W} wide; always use the latest screenshot's pixel coordinates. Front app: {o.frontmost() or 'unknown'}."
-            + ("" if o.can_control() else " Control is not allowed yet: ask the user to allow Accessibility in Meshpool's Settings."))
+            + ("" if o.can_control() else " Control is not allowed yet: ask the user to allow Accessibility. " + _MAC_AX_FIX))
 
 
 N = {"type": "number"}
@@ -425,6 +559,9 @@ TOOLS = {
     "open_app": Tool(open_app, "Open an app by name (Safari, Notes, Excel, Calculator) or a file or web address.",
                      {"name": {"type": "string"}}, ["name"]),
     "screen_info": Tool(screen_info, "Screen size, the front app, and whether control is allowed."),
+    "computer_check": Tool(computer_check, "Check that computer use can work on this computer: lists what is needed "
+                           "(macOS Screen Recording and Accessibility, an unlocked Windows desktop) and what is "
+                           "missing, with the exact steps to fix it. Call it first when a screenshot or click fails."),
 }
 
 
