@@ -71,6 +71,19 @@ jobs:
           mkdir -p pi && npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
       - name: Build the app trees
         run: python3 packaging/build_all.py --only=mac-arm64,mac-x64
+      - name: Check the app trees before signing and the disk images (fails in minutes, not after an hour)
+        run: |
+          set -euo pipefail
+          rm -rf deps/download-cache; df -h . | tail -1          # the downloads are unpacked by now; disk is tight
+          # a link that points nowhere or outside the app makes `codesign --verify --strict` reject the whole app
+          bad=$(find dist-src/app-mac-*/Meshpool.app -type l \( ! -exec test -e {} \; -o -lname '/*' \) -print)
+          [ -z "$bad" ] || { echo "links that codesign rejects:"; echo "$bad"; exit 1; }
+          # the pruned LibreOffice draws a deck, recalculates a workbook and converts a document, in each tree's own Python
+          for a in arm64 x64; do
+            R=dist-src/app-mac-$a/Meshpool.app/Contents/Resources
+            if [ $a = x64 ]; then run=(arch -x86_64); else run=(); fi
+            ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
+          done
       - name: Launchers, sign, disk images
         env:
           # Signing and notarization. Empty until the owner's Apple Developer account is set up; sign.sh then does
@@ -109,7 +122,11 @@ jobs:
           for f in Meshpool Meshpool-Intel; do
             T=$(mktemp -d)
             MNT=$(hdiutil attach -nobrowse -readonly "dist-src/out/$f.dmg" | awk '/Volumes/{print substr($0, index($0,"/Volumes"))}')
-            ditto "$MNT/Meshpool.app" "$T/Meshpool.app"; hdiutil detach -quiet "$MNT"
+            ditto "$MNT/Meshpool.app" "$T/Meshpool.app"
+            for try in 1 2 3 4; do
+              if hdiutil detach -quiet "$MNT"; then break; fi
+              if [ "$try" = 4 ]; then hdiutil detach -force "$MNT"; else sleep $((try * 5)); fi
+            done
             R="$T/Meshpool.app/Contents/Resources"
             if [ "$f" = Meshpool-Intel ]; then run=(arch -x86_64); else run=(); fi
             echo "== $f.dmg"
@@ -118,6 +135,7 @@ jobs:
             ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_lo_prune.py "$R/app/vendor/libreoffice/LibreOffice.app/Contents/MacOS/soffice"
             # the pruned Hermes (bundled_tools.hermes_ignore) must still start its ACP adapter and finish a turn against a mock model
             ${run[@]+"${run[@]}"} "$R/python/bin/python3" packaging/verify_hermes_prune.py "$R/app/vendor/hermes"
+            rm -rf "$T"
           done
       - uses: actions/upload-artifact@v4
         with:

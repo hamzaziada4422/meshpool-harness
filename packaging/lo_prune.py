@@ -399,6 +399,16 @@ def prune(dest: Path, plat: str, dry_run: bool = False, log=print, check: bool =
                     hit.unlink()
                 except OSError:
                     pass
+        # A link whose target was pruned (Mac: Frameworks/libjava_uno.jnilib -> libjava_uno.dylib) would make
+        # `codesign --verify --strict` reject the whole app ("invalid destination for symbolic link in bundle").
+        for root, dirs, files in os.walk(dest):
+            for n in dirs + files:
+                q = os.path.join(root, n)
+                if os.path.islink(q) and not os.path.exists(q):
+                    try:
+                        os.unlink(q)
+                    except OSError:
+                        pass
         gone = [f for f in MUST_KEEP[plat] if not (dest / f).exists()] if check else []
         if gone:
             raise RuntimeError(f"LibreOffice prune removed required files: {', '.join(gone)}")

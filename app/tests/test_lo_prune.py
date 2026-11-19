@@ -218,3 +218,21 @@ def test_pruned_system_libreoffice_still_converts(tmp_path):
     r = subprocess.run([sys.executable, str(ROOT / "packaging" / "verify_lo_prune.py"), str(dst / "program" / "soffice")],
                        capture_output=True, text=True, timeout=900)
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-1000:]
+
+
+def test_no_link_is_left_pointing_at_a_pruned_file(tmp_path):
+    """The Mac LibreOffice has Frameworks/libjava_uno.jnilib -> libjava_uno.dylib; pruning the dylib left a dangling
+    link, which `codesign --verify --strict` rejects for the whole app. Links that still resolve stay."""
+    keep, drop = TREES["mac"]
+    for f in keep + drop:
+        touch(tmp_path, f)
+    fw = tmp_path / "LibreOffice.app/Contents/Frameworks"
+    touch(tmp_path, "LibreOffice.app/Contents/Frameworks/libjava_uno.dylib")
+    (fw / "libjava_uno.jnilib").symlink_to("libjava_uno.dylib")
+    (fw / "libmerged.link").symlink_to("libmergedlo.dylib")
+    LP.prune(tmp_path, "mac", log=lambda *a: None)
+    assert not (fw / "libjava_uno.dylib").exists()
+    assert not (fw / "libjava_uno.jnilib").is_symlink()           # removed, not left dangling
+    assert (fw / "libmerged.link").is_symlink() and (fw / "libmerged.link").exists()
+    dangling = [p for p in tmp_path.rglob("*") if p.is_symlink() and not p.exists()]
+    assert dangling == []

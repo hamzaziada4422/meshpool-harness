@@ -24,7 +24,8 @@ for a in arm64 x64; do
   done
   cp "$REPO/THIRD_PARTY_NOTICES.md" "$REPO/app/requirements.txt" "$REPO/packaging/requirements-cli.txt" "$R/app/"
   cp "$REPO/packaging/hermes-NOTICE-MESHPOOL.txt" "$R/app/vendor/hermes/NOTICE-MESHPOOL.txt"
-  (cd "$R/app/vendor/hermes" && patch -p1 -N -s < "$REPO/packaging/hermes-acp-server.patch" >/dev/null 2>&1 || true)
+  # Hermes arrives patched (deps/vendor-hermes); patching again here wrote *.rej files into the app
+  find "$R/app/vendor/hermes" \( -name '*.rej' -o -name '*.orig' \) -delete
   # The oldest macOS the app opens on: 11 on Apple silicon and on Intel (MIN_MACOS in packaging/build_all.py)
   MIN=11.0
   sed -e "s/@VERSION_NUM@/$NUM/g" -e "s/@VERSION@/$VER/g" -e "s/@MIN_MACOS@/$MIN/g" "$REPO/packaging/mac/Info.plist" > "$APP/Contents/Info.plist"
@@ -47,11 +48,13 @@ for a in arm64 x64; do
   codesign --verify --deep --strict "$APP" || { echo "repack.sh: $APP fails codesign --verify --deep --strict"; exit 1; }
   echo "signature ok ($a) $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
   ST="$W/stage-$a"; rm -rf "$ST"; mkdir -p "$ST"; ditto "$APP" "$ST/Meshpool.app"; ln -s /Applications "$ST/Applications"
+  SIZE_MB=$(( $(du -sm "$ST" | cut -f1) * 12 / 10 + 200 ))
   NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
   rm -f "$W/$NAME-udzo.dmg"
   # hdiutil sometimes fails with "Resource busy" on a loaded machine; try again before giving up
   ok=; for try in 1 2 3 4; do
-    hdiutil create -quiet -volname Meshpool -srcfolder "$ST" -ov -format UDZO "$W/$NAME-udzo.dmg" && { ok=1; break; }
+    # an explicit size: hdiutil's own estimate for ~50,000 files can come out too small ("No space left on device")
+    hdiutil create -quiet -volname Meshpool -srcfolder "$ST" -ov -format UDZO -size "${SIZE_MB}m" "$W/$NAME-udzo.dmg" && { ok=1; break; }
     echo "hdiutil create failed (attempt $try), retrying"; sleep $((try * 10))
   done
   [ -n "$ok" ] || exit 1
@@ -62,7 +65,7 @@ for a in arm64 x64; do
     echo "hdiutil convert failed (attempt $try), retrying"; sleep $((try * 10))
   done
   [ -n "$ok" ] || { echo "could not build $NAME.dmg"; exit 1; }
-  rm -f "$W/$NAME-udzo.dmg"; echo "built $NAME.dmg"
+  rm -f "$W/$NAME-udzo.dmg"; rm -rf "$ST"; echo "built $NAME.dmg"; df -h "$W" | tail -1      # disk is tight on the runner
 done
 for f in Meshpool.dmg Meshpool-Intel.dmg; do        # never hand the publish step half a release
   [ -s "$OUT/$f" ] || { echo "missing $f"; exit 1; }
