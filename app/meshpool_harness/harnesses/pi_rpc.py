@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -42,12 +43,9 @@ class PiError(Exception):
 
 
 def node_exe() -> str | None:
-    """The Node runtime bundled with the app, else one on PATH (development)."""
-    base = C.APP.parent / "node"
-    for p in (base / "node.exe", base / "bin" / "node"):
-        if p.is_file():
-            return str(p)
-    return shutil.which("node")
+    """The Node runtime bundled with the app; one on PATH only in a source checkout (never in the packaged app)."""
+    from meshpool_harness import bundled
+    return bundled.node_exe()
 
 
 def pi_cli() -> Path | None:
@@ -119,9 +117,13 @@ def prepare(root: Path) -> Path:
     (h / "sessions").mkdir(parents=True, exist_ok=True)
     from meshpool_harness import providers as PV
     base = PV.key_base()
-    models = {"providers": {"meshpool": {
-        "baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
-        "compat": {"supportsDeveloperRole": False}, "models": _models()}}}
+    if PV.key_wire() == "anthropic":           # an Anthropic Messages endpoint: Pi's own Anthropic client, whose SDK
+        key_provider = {"baseUrl": re.sub(r"/v1/?$", "", base),        # adds /v1/messages itself
+                        "api": "anthropic-messages", "apiKey": "$MESHPOOL_API_KEY", "models": _models()}
+    else:
+        key_provider = {"baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
+                        "compat": {"supportsDeveloperRole": False}, "models": _models()}
+    models = {"providers": {"meshpool": key_provider}}
     for prov, env in (("chatgpt", "MESHPOOL_CHATGPT_RELAY_KEY"),):
         if PV.ready(prov):                     # the other providers Pi can use, keys from its environment
             ids, _ = PV.list_models(prov)      # ChatGPT: the local relay, which holds the sign-in
@@ -253,9 +255,6 @@ class PiAgent:
     def _start(self):
         if self._p and self._p.poll() is None:
             return
-        from meshpool_harness.harnesses import unsupported
-        if unsupported("pi"):                   # Node needs macOS 11: say so rather than fail to load
-            raise PiError(unsupported("pi"))
         node, cli = node_exe(), pi_cli()
         if not (node and cli):
             raise PiError("Pi is not included in this copy of Meshpool. Reinstall Meshpool to get it back.")
@@ -503,6 +502,7 @@ class PiAgent:
         if self._text:
             txt = "".join(self._text)
             self._text = []
+            self._turn_reply = txt                       # the turn's last reply, for send()'s return value
             self._emit({"type": "assistant", "text": txt, "streamed": True, "has_tools": has_tools})
 
     # ---------- model ------------------------------------------------------------------------------------------
@@ -541,6 +541,7 @@ class PiAgent:
                     "Do not change any files or run commands that change anything; the user will review the plan "
                     "first.\n\n" + text)
         self._text, self._denied = [], set()
+        self._turn_reply = ""
         self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         final = ""
         try:
@@ -571,6 +572,9 @@ class PiAgent:
                     break
             final = "".join(self._text)
             self._flush_text()
+            # Text is flushed into the chat at each message boundary, so the buffer is often empty by now: the
+            # answer is the turn's last flushed reply (send() returned "" before, to schedules and sub-agents).
+            final = final or self._turn_reply
             if self._stop:
                 self._emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
             try:

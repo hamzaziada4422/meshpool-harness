@@ -1,8 +1,10 @@
 """Meshpool Browser: browser use for any harness, as an MCP server. Built in; nothing to install.
 
-The agent drives a real, visible browser window: Google Chrome or Microsoft Edge when installed, otherwise a
-Chromium that Meshpool downloads once into its data folder. The browser keeps its own profile in the Meshpool data
-folder, so sign-ins persist between sessions and never touch your everyday browser profile.
+The agent drives a real, visible browser window. Which browser is the MH_BROWSER_USE setting (browser_use.py):
+meshpool (default: the app's bundled Chromium; in a source checkout Chrome or Edge when installed, else a Chromium
+fetched once), installed (the Chrome, Edge or Brave program on this computer, with a Meshpool-owned profile) or attach
+(connect to a browser started with --remote-debugging-port). Meshpool's profile lives in the Meshpool data folder, so
+sign-ins persist between sessions and never touch your everyday browser profile.
 
 Pages are described as text: title, address, the visible text, and numbered interactive elements ([e12] button
 "Sign in"). The agent acts on those numbers, so it works with any model, including ones that cannot see images.
@@ -17,6 +19,7 @@ import threading
 import time
 from pathlib import Path
 
+from meshpool_harness import browser_use as BU
 from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, image_png, serve, text
 
 SNAPSHOT_JS = r"""() => {
@@ -68,7 +71,8 @@ class Browser:
 
     def __init__(self):
         self.q: queue.Queue = queue.Queue()
-        self.pw = self.ctx = self.page = None
+        self.pw = self.ctx = self.page = self.cdp = None
+        self.mode = ""
         self.channel = ""
         threading.Thread(target=self._loop, daemon=True).start()
 
@@ -92,53 +96,124 @@ class Browser:
 
     # ---------- start ----------------------------------------------------------------------------------------------
     def _install_chromium(self):
-        env = dict(os.environ)
-        env.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(_home() / "browsers"))
+        # Installs where the Playwright driver looks (the process's PLAYWRIGHT_BROWSERS_PATH, else its default
+        # cache): the driver reads that variable once, at start.
         r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], capture_output=True, text=True,
-                           env=env, timeout=900)
+                           env=dict(os.environ), timeout=900)
         if r.returncode != 0:
             raise ToolFailed("Could not download the browser engine: " + (r.stderr or r.stdout)[-400:])
 
+    def _alive(self) -> bool:
+        """Whether the browser we started (or attached to) is still there; resets state when the user closed it."""
+        try:
+            if self.cdp is not None and not self.cdp.is_connected():
+                raise RuntimeError("detached")
+            if self.page is None or self.page.is_closed():
+                self.page = (self.ctx.pages[-1] if self.ctx.pages and self.cdp is None else self.ctx.new_page())
+            return True
+        except Exception:  # noqa: BLE001  the window was closed by the user: start again
+            self.ctx = self.page = self.cdp = None
+            return False
+
     def ensure(self):
-        from meshpool_harness import macos
-        if macos.too_old():                  # Chromium (and the Node Playwright drives it with) needs macOS 11
-            raise ToolFailed(macos.note("Browser use", macos.BROWSER_INSTEAD))
-        if self.ctx is not None:
-            try:
-                if self.page is None or self.page.is_closed():
-                    self.page = self.ctx.pages[-1] if self.ctx.pages else self.ctx.new_page()
-                return
-            except Exception:  # noqa: BLE001  the window was closed by the user: start again
-                self.ctx = self.page = None
+        from meshpool_harness import bundled
+        mode = BU.mode()
+        if mode == "meshpool":
+            why = bundled.browser_needs_newer_macos()   # the app opens on macOS 11, its Chromium needs 13
+            if why:
+                raise ToolFailed(why)
+        if self.ctx is not None and self._alive():
+            return
+        own = mode == "meshpool" and bundled.packaged()     # the app's own Chromium (app/vendor/browsers)
+        if own:
+            # before the driver starts: it reads this once, so setting it later would never reach it
+            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled.browsers_dir())
         from playwright.sync_api import sync_playwright
         if self.pw is None:
             self.pw = sync_playwright().start()
         headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"
-        channels = ["chrome", "msedge", ""] if sys.platform != "linux" else ["chrome", ""]
-        if os.environ.get("MH_BROWSER_CHANNEL") is not None:
+        if mode == "attach":
+            self._attach()
+        elif mode == "installed":
+            self._launch_installed(headless)
+        else:
+            self._launch_meshpool(headless, own)
+        self.mode = mode
+        self.ctx.set_default_timeout(20000)
+        if self.page is None or self.page.is_closed():
+            self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+
+    def _launch(self, prof: Path, **kw):
+        prof.mkdir(parents=True, exist_ok=True)
+        return self.pw.chromium.launch_persistent_context(
+            str(prof), headless=kw.pop("headless"), no_viewport=True,
+            args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"], **kw)
+
+    def _launch_meshpool(self, headless: bool, own: bool):
+        channels = [""] if own else ["chrome", "msedge", ""] if sys.platform != "linux" else ["chrome", ""]
+        if os.environ.get("MH_BROWSER_CHANNEL") is not None and not own:
             channels = [os.environ["MH_BROWSER_CHANNEL"]]
         last = None
         for attempt in range(2):
             for ch in channels:
-                prof = _home() / "browser-profile" / (ch or "chromium")
-                prof.mkdir(parents=True, exist_ok=True)
                 try:
-                    self.ctx = self.pw.chromium.launch_persistent_context(
-                        str(prof), channel=ch or None, headless=headless, no_viewport=True,
-                        args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"])
+                    self.ctx = self._launch(_home() / "browser-profile" / (ch or "chromium"), headless=headless,
+                                            channel=ch or None)
                     self.channel = ch or "chromium"
-                    break
+                    return
                 except Exception as e:  # noqa: BLE001
                     last = e
-            if self.ctx is not None:
-                break
-            if attempt == 0:
-                self._install_chromium()                      # no Chrome or Edge here: fetch Chromium once
+            # Download Chromium only when it is missing (never when the profile is merely in use), and never in the
+            # packaged app: Chromium ships inside it.
+            if attempt == 0 and not own and "xecutable doesn't exist" in str(last):
+                self._install_chromium()
                 channels = [""]
-        if self.ctx is None:
-            raise ToolFailed(f"Could not start a browser: {last}")
-        self.ctx.set_default_timeout(20000)
-        self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+            else:
+                break
+        raise ToolFailed(f"Could not start a browser: {last}")
+
+    def _launch_installed(self, headless: bool):
+        found = BU.pick_installed()
+        if not found:
+            raise ToolFailed(BU.installed_missing_message())
+        try:
+            self.ctx = self._launch(_home() / "browser-profile" / f"installed-{found['key']}", headless=headless,
+                                    executable_path=found["path"])
+        except Exception as e:  # noqa: BLE001
+            raise ToolFailed(f"Could not start {found['name']} ({found['path']}): {e}. Close any window that is "
+                             "using Meshpool's profile folder, or choose Meshpool's browser under Settings > Capabilities > Browser for browser use.")
+        self.channel = "installed:" + found["key"]
+
+    def _attach(self):
+        url = BU.cdp_url()
+        err = BU.probe_cdp(url)
+        if err:
+            raise ToolFailed(err)
+        try:
+            self.cdp = self.pw.chromium.connect_over_cdp(url, timeout=15000)
+        except Exception as e:  # noqa: BLE001
+            raise ToolFailed(f"Could not connect to the browser at {url}: {e}. " + BU.attach_hint(url))
+        self.ctx = self.cdp.contexts[0] if self.cdp.contexts else self.cdp.new_context()
+        self.page = self.ctx.new_page()             # a tab of our own: the user's open tab is never navigated away
+        self.channel = "attached"
+
+    def shutdown(self):
+        """Close the browser cleanly (so cookies and local storage reach the profile folder) or, when attached, only
+        disconnect. Called when the agent closes the server."""
+        try:
+            if self.cdp is not None:
+                self.cdp.close()                    # a CDP connection: leaves the user's browser running
+            elif self.ctx is not None:
+                self.ctx.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.ctx = self.page = self.cdp = None
+        try:
+            if self.pw is not None:
+                self.pw.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.pw = None
 
     # ---------- helpers ------------------------------------------------------------------------------------------
     def settle(self):
@@ -318,13 +393,9 @@ def browser_wait(seconds: float = 2) -> str:
 
 def browser_close() -> str:
     def go():
-        if B.ctx is not None:
-            try:
-                B.ctx.close()
-            except Exception:  # noqa: BLE001
-                pass
-        B.ctx = B.page = None
-        return "Browser closed."
+        was = B.cdp is not None
+        B.shutdown()
+        return "Disconnected from your browser; it stays open." if was else "Browser closed."
     return B.run(go)
 
 
@@ -361,9 +432,34 @@ def _fix_type_args():
     t.fn = lambda ref, text="", submit=False: browser_type(ref, text_=text, submit=submit)
 
 
+def _close_for_exit(timeout: float = 8):
+    """Close the browser on the way out: Chromium writes cookies to disk in batches, so a process that is simply
+    killed can lose a sign-in made seconds before."""
+    try:
+        B.run(B.shutdown, timeout=timeout)
+    except BaseException:  # noqa: BLE001
+        pass
+
+
+def _exit_cleanly():
+    import signal
+
+    def bye(*_):
+        _close_for_exit(5)
+        os._exit(0)
+    for sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if sig is not None:
+            try:
+                signal.signal(sig, bye)
+            except (ValueError, OSError):
+                pass
+
+
 def main():
     _fix_type_args()
+    _exit_cleanly()
     serve("meshpool-browser", TOOLS, instructions="Use browser_open, then act on the [eN] numbers from the snapshot.")
+    _close_for_exit()                       # stdin closed: the agent is done with us
 
 
 if __name__ == "__main__":

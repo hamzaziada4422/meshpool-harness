@@ -21,6 +21,14 @@ def memory_save(fact: str) -> str:
     return A.remember(fact)
 
 
+def project_note(note: str, folder: str = "") -> str:
+    import os
+    if not A.settings()["memory_on"]:
+        raise ToolFailed("The user turned memory off in Meshpool settings.")
+    root = folder or os.environ.get("MESHPOOL_PROJECT", "") or os.getcwd()
+    return A.remember_project(root, note)
+
+
 def memory_view() -> str:
     return A.memory() or "Memory is empty."
 
@@ -67,6 +75,10 @@ TOOLS = {
                         "those stay in the chat. One short sentence per call, no dashes. Never save secrets, "
                         "passwords or keys.",
                         {"fact": {"type": "string"}}, ["fact"]),
+    "project_note": Tool(_wrap(project_note), "Save one durable fact about this project for future chats in it: the "
+                         "command that runs its tests or build, a convention, where something lives, a known pitfall. "
+                         "One short sentence. Not tasks or progress; never secrets.",
+                         {"note": {"type": "string"}, "folder": {"type": "string"}}, ["note"]),
     "memory_view": Tool(memory_view, "Show everything in Meshpool memory."),
     "memory_forget": Tool(_wrap(memory_forget), "Remove memory lines that contain the given text. Use it when the "
                           "user asks you to forget something or a saved fact is wrong.", {"text": {"type": "string"}},

@@ -1,9 +1,11 @@
 # Tests on every pull request and on main: the checks the pull request view (and GitHub) show for each change.
 name: tests
+# Actions minutes are limited: tests run only when started by hand (before a release) or when main changes. Not on
+# every pull-request push: agent branches push many times a day. Run docs/plan/ci_local.sh locally first.
 on:
-  pull_request:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**/*.md", "testkit/**", ".github/workflows/harness-loop.yml"]
   workflow_dispatch:
 concurrency:
   group: tests-${{ github.ref }}
@@ -17,6 +19,9 @@ jobs:
     env:
       # one place for Chromium: the install step and the app under test (which only sets a default) both use it
       PLAYWRIGHT_BROWSERS_PATH: /home/runner/pw-browsers
+      # The app itself never uses a LibreOffice found on the computer (it ships its own). The tests run from a source
+      # checkout on a runner with the apt LibreOffice below, so they opt in to that copy.
+      MH_ALLOW_SYSTEM_SOFFICE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

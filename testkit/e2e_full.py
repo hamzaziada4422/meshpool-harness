@@ -194,7 +194,7 @@ v = call("/api/agent", {"workdir": P, "harness": "meshpool-auto", "kind": "cowor
 st = [e["text"] for e in v.get("events", []) if e["type"] == "status"] if "events" in v else []
 vv = call(f"/api/agent/{v.get('id')}?since=0")
 check("auto thread created with routed harness", vv.get("harness", {}).get("id") not in (None, "meshpool-auto")
-      and any("Meshpool Auto picked" in (e.get("text") or "") for e in vv.get("events", [])), vv.get("harness"))
+      and any((e.get("text") or "").startswith("Using ") for e in vv.get("events", [])), vv.get("harness"))
 
 # A thread naming an agent an older version had (saved chats, scheduled tasks) opens in Meshpool Code
 v = call("/api/agent", {"workdir": P, "harness": "claude-code", "kind": "code", "mode": "auto"})

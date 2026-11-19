@@ -40,7 +40,37 @@ def sh(args, timeout=600, **kw):
 def load(ids=None):
     from datasets import load_dataset
     rows = list(load_dataset(DATASET, split="test"))
+    for r in rows:                     # SWE-bench's published per-task images
+        r.setdefault("image", f"swebench/sweb.eval.x86_64.{r['instance_id'].replace('__', '_1776_')}:latest".lower())
     return [r for r in rows if not ids or r["instance_id"] in ids]
+
+
+def solve_with(solver: str, task: str, workdir: str, model: str, max_turns: int, usage: dict) -> dict:
+    """The app's chat agent (what users run; MH_HROUTER picks routed or base) or Pi through Meshpool's own Pi
+    integration, on the same task text, endpoint and model as the engine loop."""
+    if solver == "agent":
+        from meshpool_harness import run_task
+        res = run_task(task, workdir=workdir, engine="agent", max_steps=max_turns, model=model)
+        u = res.get("usage") or {}
+        usage.update(calls=u.get("model_calls", 0), prompt=u.get("prompt_tokens", 0),
+                     cached=u.get("cached_tokens", 0), completion=u.get("completion_tokens", 0))
+        return {"ok": res.get("ok"), "turns": res.get("turns"), "reason": res.get("reason") or res.get("error"),
+                "route": res.get("route")}
+    if solver == "pi":
+        from meshpool_harness.harnesses import PI
+        from meshpool_harness.harnesses.pi_rpc import PiAgent
+        a = PiAgent(dict(PI), workdir, mode="auto")
+        a.model = model
+        try:
+            a.send(task)
+        finally:
+            try:
+                a.close()
+            except Exception:  # noqa: BLE001
+                pass
+        usage.update(calls=a.usage["calls"], prompt=a.usage["in"], cached=a.usage["cached"], completion=a.usage["out"])
+        return {"ok": True, "reason": "pi"}
+    raise ValueError(f"unknown solver {solver}")
 
 
 # ---------- one arm on one task (runs in a child process with the arm's env) ---------------------------------------
@@ -83,9 +113,13 @@ def run_one(inst_path: str, arm: str, out_path: str, model: str, max_turns: int)
             f"<issue>\n{inst['problem_statement']}\n</issue>")
     row, t0 = {}, time.time()
     try:
-        res = solve(task, workdir=workdir, task_id=f"{inst['instance_id']}-{arm}", max_turns=max_turns,
-                    model=model, client=Counting())
-        row = {k: res.get(k) for k in ("ok", "turns", "reason", "commands", "edits", "attempts")}
+        solver = os.environ.get("MH_AB_SOLVER", "engine")
+        if solver != "engine":
+            row = solve_with(solver, task, workdir, model, max_turns, usage)
+        else:
+            res = solve(task, workdir=workdir, task_id=f"{inst['instance_id']}-{arm}", max_turns=max_turns,
+                        model=model, client=Counting())
+            row = {k: res.get(k) for k in ("ok", "turns", "reason", "commands", "edits", "attempts")}
     except Exception as e:  # noqa: BLE001 - an agent crash is a failed attempt, not an infra error
         row = {"ok": False, "reason": f"crash: {type(e).__name__}: {str(e)[:300]}"}
     row["secs"] = round(time.time() - t0, 1)

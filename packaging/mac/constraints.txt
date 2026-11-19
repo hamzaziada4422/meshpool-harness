@@ -1,4 +1,4 @@
-# Mac builds: Apple silicon runs on macOS 11 and later, Intel on 10.15 and later. packaging/mac/check_minos.py checks
+# Mac builds: Apple silicon and Intel run on macOS 11 and later. packaging/mac/check_minos.py checks
 # the real files (each architecture's slice), whatever the wheel tags say.
 # Every pypdfium2 5.x library needs macOS 12 (whatever its wheel tag says); 4.30.1 is the newest that runs on 11, and
 # its Intel library needs 10.13.

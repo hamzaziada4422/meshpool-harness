@@ -2,7 +2,7 @@
 
 `run_task` never raises for a failed task. Gateway errors, model errors, tool crashes and bad input all come back as
 {"ok": False, "error": "..."}, so a bad network moment or a broken task cannot take the host app down. It does not
-call sys.exit, and it writes only inside `workdir` (its .run/ folder) unless the app sets MH_TIMING_LOG or
+call sys.exit, and it writes only inside `workdir` (plus a temporary session folder it removes) unless the app sets MH_TIMING_LOG or
 MH_USAGE_LOG.
 
     from meshpool_harness import run_task
@@ -58,14 +58,37 @@ def run_task(task: str, *, workdir: str, engine: str = "code", task_id: str | No
 
 def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model: str | None = None, **_) -> dict:
     """Run the app's chat agent (agent/core.py) on one task with no person in the loop: every tool is allowed
-    (permission mode "auto"), no MCP servers, and its session files go to workdir/.run/agent. The result has the same
+    (permission mode "auto"), no MCP servers. Its session files go to a temporary folder that is removed afterwards
+    (MH_RUN_SESSIONS keeps them in that folder instead): inside the project, the agent found and read its own
+    session.json and commands log, three or four wasted calls per task in the loop's traces. The result has the same
     keys as the engines, so benchmarks can score the agent users actually run."""
+    import shutil
+    import tempfile
+    keep = os.environ.get("MH_RUN_SESSIONS")
+    sessions = keep or tempfile.mkdtemp(prefix="mh-run-")       # removed below: no stray files anywhere
+    try:
+        return _run_agent_in(task, workdir, profile, max_steps, model, sessions)
+    finally:
+        if not keep:
+            shutil.rmtree(sessions, ignore_errors=True)
+
+
+def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: str | None, sessions: str) -> dict:
+    t_start = time.time()
     from meshpool_harness.agent.core import Agent
     events: list = []
-    a = Agent(workdir, mode="auto", max_steps=max_steps, profile=profile, emit=events.append,
-              sessions_dir=os.path.join(workdir, ".run", "agent"))
+    a = Agent(workdir, mode="auto", max_steps=max_steps, profile=profile, emit=events.append, sessions_dir=sessions)
     if model:
         a.model = model
+    route = None
+    from meshpool_harness.hrouter.route import _keys
+    if os.environ.get("MH_HROUTER", "1") != "0":   # the specialised harness, as the app picks it (0: the base agent)
+        from meshpool_harness import hrouter as HRR
+        from meshpool_harness import pace as PACE
+        route = HRR.route(task, kind="code" if profile == "code" else "cowork", workdir=workdir)
+        a.set_route(route, task)
+        a.lane = "chat" if route.lane == "chat" and PACE.classify(task) == "quick" else \
+            (route.lane if route.lane != "chat" else "task")
     answer = a.send(task)
     errors = [e.get("text", "") for e in events if e.get("type") == "error"]
     steps = sum(1 for e in events if e.get("type") == "assistant")
@@ -75,7 +98,15 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
              "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
              **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
-           "usage": usage}
+           "usage": usage, "route": route.spec if route else None,
+           "route_keys": _keys(route) if route else [], "profile": route.profile if route else None, "model": a.current_model(),
+           "receipt": getattr(a, "last_receipt", ""), "trace": getattr(a, "trace", [])[-120:],
+           "plan": a.plan_state()}
     if errors and not capped:
         out["error"] = errors[-1][:500]
+    if route is not None and getattr(route, "decision_id", ""):      # observability: the routed run's outcome
+        from meshpool_harness.hrouter import harness_select as HS
+        out["routing"] = {"decision_id": route.decision_id, "harness": route.harness, "category": route.category,
+                          "reason": route.harness_reason}
+        HS.log_outcome(route.decision_id, ok=out["ok"], secs=time.time() - t_start, usage=usage, error=out.get("error"))
     return out

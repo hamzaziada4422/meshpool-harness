@@ -16,10 +16,10 @@ FINANCE_SHEETS = re.compile(r"comps|precedent|dcf|valuation", re.I)
 
 def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     """Round-trip through LibreOffice headless so every formula gets a computed cached value."""
-    from meshpool_harness.config import find_soffice
+    from meshpool_harness.office_runtime import find_soffice, missing_reason
     soffice = find_soffice()
     if not soffice:
-        raise RuntimeError("LibreOffice not installed")
+        raise RuntimeError(f"LibreOffice not installed ({missing_reason()})")
     out = Path(out_dir or tempfile.mkdtemp(prefix="recalc_"))
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:

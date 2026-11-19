@@ -1,0 +1,160 @@
+{
+ "providers": {
+  "meshpool": {
+   "baseUrl": "http://127.0.0.1:18765/v1",
+   "api": "openai-completions",
+   "apiKey": "$MESHPOOL_API_KEY",
+   "compat": {
+    "supportsDeveloperRole": false
+   },
+   "models": [
+    {
+     "id": "deepseek-v4.1",
+     "name": "deepseek-v4.1",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "deepseek-v4.1-flash",
+     "name": "deepseek-v4.1-flash",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "deepseek/deepseek-v4.1-flash",
+     "name": "deepseek/deepseek-v4.1-flash",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "mistralai/devstral-2",
+     "name": "mistralai/devstral-2",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "moonshotai/kimi-k2",
+     "name": "moonshotai/kimi-k2",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "openai/gpt-5.1",
+     "name": "openai/gpt-5.1",
+     "reasoning": false,
+     "input": [
+      "text",
+      "image"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "openai/gpt-5.1-mini",
+     "name": "openai/gpt-5.1-mini",
+     "reasoning": false,
+     "input": [
+      "text",
+      "image"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "qwen/qwen3-coder",
+     "name": "qwen/qwen3-coder",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    },
+    {
+     "id": "z-ai/glm-5",
+     "name": "z-ai/glm-5",
+     "reasoning": false,
+     "input": [
+      "text"
+     ],
+     "contextWindow": 128000,
+     "maxTokens": 16384,
+     "cost": {
+      "input": 0,
+      "output": 0,
+      "cacheRead": 0,
+      "cacheWrite": 0
+     }
+    }
+   ]
+  }
+ }
+}

@@ -1,0 +1,28 @@
+{
+ "default": "codex",
+ "assign": {},
+ "profiles": {
+  "full-noplan": {
+   "extends": "full",
+   "plan": "off"
+  },
+  "full-noplan-stop": {
+   "extends": "full",
+   "plan": "off",
+   "methods": "stop"
+  },
+  "lean-stop": {
+   "extends": "lean",
+   "methods": "v2-stop"
+  },
+  "codex": {
+   "plan": "off",
+   "review": false,
+   "mutation": false,
+   "step_methods": false,
+   "methods": "v2-stop",
+   "engine_style": "codex"
+  }
+ },
+ "_source": "Codex-design engine for every route: measured on the 52 eval tasks (runs-v2/codexengine-eval): 47/52, tie with Codex (47/52), $0.0034/task, median 19 s; 2x faster than the previous assignment. See docs/results/v3/CODEX_ENGINE_EVAL.md"
+}

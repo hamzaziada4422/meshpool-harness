@@ -1,7 +1,7 @@
 """Swap installed packages built for a newer macOS than the app promises for older builds of the same version.
 
 Usage: <the runtime's python> old_macos_wheels.py arm64|x86_64 [MIN]
-  MIN defaults to the app's minimum for that architecture: 11.0 on Apple silicon, 10.15 on Intel.
+  MIN defaults to the app's minimum: 11.0 on Apple silicon and on Intel.
 pip on the build machine picks the wheel for the newest macOS it runs (numpy, for one, ships a macOS 14 build next to
 its older one). Each package whose libraries need more than MIN (read from the files themselves, this architecture's
 slice of universal ones; the wheel tag when it lists none) is reinstalled from a wheel of the same version tagged for
@@ -20,7 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from check_minos import minos, parse  # noqa: E402
 
-DEFAULT_MIN = {"arm64": (11, 0), "x86_64": (10, 15)}
+DEFAULT_MIN = {"arm64": (11, 0), "x86_64": (11, 0)}
 
 
 def platforms(arch: str, want: tuple) -> list[str]:

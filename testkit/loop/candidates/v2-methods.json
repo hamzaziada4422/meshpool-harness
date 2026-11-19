@@ -1,0 +1,16 @@
+{
+ "specs": {
+  "code.build": {
+   "addon": "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program once. Do not add dependencies, files or abstractions the task does not need. Never fetch the project's own upstream solution online. Reply in a few lines: what you built and the command that shows it works."
+  },
+  "code.debug": {
+   "addon": "Debugging: match the effort to the bug. If the error and the code it points to make the cause clear, fix it now and run the failing command once to confirm. Otherwise:\n1. Reproduce: run the failing command or test (or the smallest script that shows the bug). If a <reproduction> block is in the request, that run is done: start from its output.\n2. Locate: read the traceback from the deepest project frame; test one hypothesis at a time with a command, not by rereading code. diagnostics finds syntax and type errors across files.\n3. Fix the cause with the smallest edit. Never change a test to make it pass.\n4. Verify: rerun the reproduction and the nearest tests. For a regression, `git log -p` or `git bisect run <check>` finds the change that broke it.\nEdits to code files come back with a syntax and bug check; fix what it reports first. Run the tests for the code you changed (one file, or -k by name), not the whole suite. Solve it from the code: never fetch the project's own upstream fix (its pull requests, commits or patches) online. Reply in two or three lines: the cause (file:line), the fix, and the command that now passes."
+  },
+  "code.test": {
+   "addon": "Testing method: find the project's test framework and an existing test file to copy the style from. Test behaviour through the public interface, including edge cases and the error path. Run the new tests and show they pass; when fixing a bug, show the test fails without the fix."
+  },
+  "data": {
+   "addon": "Data analysis: look at the schema and a sample before analysing. Compute with code (pandas, or DuckDB SQL for large files) and quote only numbers your code printed. State the method in one line, then the findings with the numbers; a chart only when it helps."
+  }
+ }
+}

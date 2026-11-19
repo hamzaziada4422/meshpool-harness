@@ -34,7 +34,7 @@ AUTO = {"id": "meshpool-auto", "name": "Meshpool Auto", "mode": "any", "type": "
 # The official Codex agent, over the Agent Client Protocol. It is a harness (which agent runs); the provider of the
 # thread's model decides the credentials it runs on (see credentials() below).
 CODEX_ACP = "@agentclientprotocol/codex-acp@2.6.0"
-NODE_NOTE = "It needs Node.js, which the Meshpool app includes; from the command line, install Node.js first."
+NODE_NOTE = "It needs Node.js: install it first (the Meshpool app does not include this agent)."
 # Codex: the same official agent on the Meshpool key, another API key (its own config in the Meshpool data folder
 # points it at that endpoint) or the user's ChatGPT sign-in (Codex's own login in ~/.codex).
 CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models": "meshpool", "login": "codex",
@@ -59,7 +59,18 @@ OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp",
             "tagline": "The open-source coding agent, with its own tools and plans",
             "description": ("OpenCode, the popular open-source coding agent, on your Meshpool key, another API key or "
                             "your ChatGPT sign-in. Uses your connected apps and skills.")}
-RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", "opencode", *LEGACY}
+# Claude Code, over ACP through the Claude agent adapter. It runs under the user's own Claude Code sign-in on this
+# computer (`claude`); Meshpool never reads that sign-in, only starts the agent, and the agent talks to Anthropic as
+# the user's own Claude Code. Listed only when the `claude` command is installed.
+CLAUDE_ACP = "@agentclientprotocol/claude-agent-acp@0.109.0"
+CLAUDE_AGENT = {"id": "claude-agent", "name": "Claude Code", "mode": "code", "type": "acp", "models": "harness",
+                "login": "claude", "command": "npx", "args": ["-y", CLAUDE_ACP], "share_mcp": True,
+                "install": NODE_NOTE,
+                "tagline": "Anthropic's coding agent, on your own Claude Code sign-in",
+                "description": ("Anthropic's Claude Code agent, started the way you run it in a terminal: it uses "
+                                "the Claude Code sign-in already on this computer, never an API key from Meshpool.")}
+RESERVED = {"meshpool-code", "meshpool-work", "hermes", "pi", "meshpool-auto", "codex", "opencode", "claude-agent",
+            *LEGACY}
 ID_RE = r"[A-Za-z0-9_.-]{1,60}"
 HERMES_NOTE = ("Best for ongoing work where memory matters: Hermes remembers what it learns across chats, uses "
                "the web, files and terminal, and makes Office files.")
@@ -183,6 +194,10 @@ def prepare_hermes(model: str | None = None) -> None:
               "default": bare if p_ == prov and bare else "deepseek-v4.1-flash",
               "api_key": key})
     m.pop("key_env", None)
+    if prov == "key" and PV.key_wire() == "anthropic":
+        m["api_mode"] = "anthropic_messages"    # an Anthropic Messages endpoint (Hermes strips the /v1 itself)
+    else:
+        m.pop("api_mode", None)                 # chat completions; never a mode left from an earlier endpoint
     cfg["model"] = m
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     ts = tools.get("tool_search") if isinstance(tools.get("tool_search"), dict) else {}
@@ -269,36 +284,46 @@ def _available(d: dict) -> bool:
     return bool(shutil.which(cmd) or (cmd and Path(cmd).exists()))
 
 
+# Codex and OpenCode are the benchmark's agents (testkit/loop/bench.py runs them with npx), not part of the product:
+# the installers do not ship them, so a packaged app never offers them (no npx, no copy from the customer's machine).
+NOT_SHIPPED = ("codex", "opencode", "claude-agent")   # claude-agent: its ACP adapter is not bundled yet (0.0.8)
+
+
 def unsupported(hid: str) -> str:
-    """Why a built-in agent cannot run on this computer at all, or "". The Node agents (Pi, Codex, OpenCode) need
-    macOS 11 or later: the Intel Mac app opens on 10.15, but its Node does not (macos.py)."""
-    from meshpool_harness import macos
-    if hid in macos.NODE_AGENTS and macos.too_old():
-        name = next((h["name"] for h in (PI, CODEX, OPENCODE) if h["id"] == hid), hid)
-        return macos.note(name)
+    """Why a built-in agent cannot run in this copy of Meshpool, or "". Codex and OpenCode are not in the installed
+    app; a source checkout and the benchmark still run them with npx."""
+    from meshpool_harness import bundled
+    if hid in NOT_SHIPPED and bundled.packaged():
+        name = next((h["name"] for h in (CODEX, OPENCODE, CLAUDE_AGENT) if h["id"] == hid), hid)
+        return f"{name} is not part of the Meshpool app."
     return ""
 
 
-def _node_agent(h: dict, available: bool, **extra) -> dict:
-    """A Node agent's row: unavailable, with the reason as its install note, where this macOS cannot run it."""
+def _npx_agent(h: dict, available: bool | None = None, **extra) -> dict:
+    """A built-in agent that runs with npx (Codex, OpenCode). In the packaged app it is listed as unavailable and
+    hidden: it is not shipped, and there is no install to point the customer at."""
+    if available is None:
+        available = _available(h)
     why = unsupported(h["id"])
     row = dict(h, available=available and not why, builtin=True, **extra, **credentials(h["id"]))
     if why:
-        row.update(unsupported=why, install=why)
+        row.update(unsupported=why, install="", hidden=True)
     return row
 
 
 def load_all() -> list[dict]:
     from meshpool_harness.harnesses import pi_rpc
     out = [dict(BUILTIN[0], available=True, builtin=True, **credentials("meshpool-code"))]
-    if unsupported("pi") or pi_rpc.available():
-        out.append(_node_agent(PI, True))
+    if pi_rpc.available():
+        out.append(dict(PI, available=True, builtin=True, **credentials("pi")))
     bh = _bundled_hermes()
     if bh:
         out.append(dict(bh, available=True, builtin=True, **credentials("hermes")))
     out += [dict(b, available=True, builtin=True, **credentials(b["id"])) for b in BUILTIN[1:]]
-    out.append(_node_agent(CODEX, _available(CODEX), signed_in=signed_in(CODEX["login"])))
-    out.append(_node_agent(OPENCODE, _available(OPENCODE)))
+    out.append(_npx_agent(CODEX, signed_in=signed_in(CODEX["login"])))
+    out.append(_npx_agent(OPENCODE))
+    if shutil.which("claude"):                       # Claude Code is installed (and signed in by the user themselves)
+        out.append(_npx_agent(CLAUDE_AGENT))
     out.insert(0, dict(AUTO, available=True, builtin=True, **credentials("meshpool-auto")))
     if folder().exists():
         for p in sorted(folder().glob("*.json")):
@@ -339,14 +364,16 @@ def signed_in(which: str) -> bool:
 
 
 def npx() -> str:
-    return shutil.which("npx") or "npx"
+    return shutil.which("npx") or "npx"       # source checkouts only: the packaged app has no Codex
 
 
 def login(which: str) -> dict:
     """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself."""
     import subprocess
-    if which == "codex" and unsupported("codex"):      # the sign-in runs on Node, which needs macOS 11
-        raise ValueError(unsupported("codex"))
+    if which == "codex" and unsupported("codex"):      # Codex's sign-in is not part of the packaged app
+        raise ValueError("Signing in with ChatGPT needs Codex, which is not part of the Meshpool app. Use the Meshpool "
+                         "API key or another API key, or sign in once with `codex login` from a terminal "
+                         "(npm install -g @openai/codex): Meshpool then uses that sign-in.")
     if which == "codex":
         cmd = [npx(), "-y", "@openai/codex@latest", "login"]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,

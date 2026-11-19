@@ -1,0 +1,210 @@
+# The harness loop: every day (and on demand) the routed harnesses race the base agent on the same tasks, with the
+# same cheap model, at the same hour, graded by code. A regression fails the run; every run's table is kept on the
+# loop-history branch so the trend is visible. Needs the repository secrets MESHPOOL_API_KEY and MESHPOOL_BASE_URL.
+name: harness-loop
+on:
+  # Model spend is real money, so nothing runs on its own: a push runs only with "[loop]" (or "[probe]", "[swe]") in
+  # its commit message, otherwise the jobs are skipped before a runner starts. No schedule until the work is merged.
+  # Manual only: benchmarks run locally (testkit/loop/bench.py), not on Actions minutes.
+  workflow_dispatch:
+    inputs:
+      arms:
+        description: "Arms (base, routed, routed-fast, pi, codex)"
+        default: "base,routed"
+      suites:
+        description: "Suites (chat, debug, build)"
+        default: "chat,debug,build"
+      budget:
+        description: "Stop starting tasks above this estimated spend (USD)"
+        default: "1.50"
+      model:
+        description: "Model for every arm (blank: the MH_MODEL repository variable, else deepseek-v4.1-flash)"
+        default: ""
+      fast_model:
+        description: "Fast model for the routed-fast arm's chat lane"
+        default: ""
+      models:
+        description: "Comma list: run every arm on each of these models (blank: one model, see 'model')"
+        default: ""
+      probe_only:
+        description: "Only probe which models answer and call tools (a few tokens per model)"
+        type: boolean
+        default: false
+      swe_n:
+        description: "SWE-bench Verified: number of tasks (0 or blank: skip)"
+        default: ""
+      swe_arms:
+        description: "SWE-bench arms (routed, base, pi, engine)"
+        default: ""
+      probe_filter:
+        description: "Probe only model ids containing any of these comma-separated words (blank: all)"
+        default: ""
+concurrency:
+  group: harness-loop
+  cancel-in-progress: false
+permissions:
+  contents: write
+jobs:
+  loop:
+    if: ${{ github.event_name != 'push' || contains(github.event.head_commit.message, '[loop]') || contains(github.event.head_commit.message, '[probe]') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
+      MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
+      MH_MODEL: ${{ inputs.model || vars.MH_MODEL || 'deepseek-v4.1-flash' }}
+      RUN_LOOP: ${{ (github.event_name == 'workflow_dispatch' && !inputs.probe_only) || (github.event_name == 'push' && contains(github.event.head_commit.message, '[loop]')) }}
+      MESHPOOL_HOME: ${{ github.workspace }}/.mhhome
+    steps:
+      - uses: actions/checkout@v4
+      - name: Key present
+        run: |
+          if [ -z "$MESHPOOL_API_KEY" ]; then
+            echo "::error::Add the MESHPOOL_API_KEY (and MESHPOOL_BASE_URL) repository secrets to run the loop."
+            exit 1
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-cli.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Python packages
+        run: pip install -r packaging/requirements-cli.txt ruff
+      - name: Settings (inputs when started by hand, else testkit/loop/ci.json)
+        id: cfg
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          c = json.load(open("testkit/loop/ci.json"))
+          ins = json.loads(os.environ["INPUTS"] or "{}")
+          for k in ("arms", "suites", "budget", "models", "fast_model", "probe_filter", "repeats", "cap_start_spend",
+                    "cap_usd"):
+              v = ins.get(k) or c.get(k, "")
+              print(f"{k}={v}")
+          PY
+        env:
+          INPUTS: ${{ toJSON(inputs) }}
+      - name: Hermes (for the hermes arm), the same commit and patch the app ships
+        if: contains(steps.cfg.outputs.arms, 'hermes')
+        run: |
+          git clone -q https://github.com/NousResearch/hermes-agent app/vendor/hermes
+          (cd app/vendor/hermes && git checkout -q b6b53c69a6ed49cb099cf1bfe76b5e6edd718e5a && git apply --ignore-whitespace ../../../packaging/hermes-acp-server.patch && rm -rf .git)
+          python packaging/hermes_requirements.py app/vendor/hermes > /tmp/hermes-req.txt && pip install -q -r /tmp/hermes-req.txt
+      - name: Pi (for the pi and pi-routed arms), where the app looks for it
+        if: contains(steps.cfg.outputs.arms, 'pi')
+        run: mkdir -p app/vendor/pi && npm install --prefix app/vendor/pi --no-audit --no-fund "@earendil-works/pi-coding-agent@1.5.2" >/dev/null
+      - name: Probe the endpoint's models (chat + tool call, a few tokens each)
+        run: |
+          python testkit/loop/models.py --out loop-out --only "${{ steps.cfg.outputs.probe_filter }}" | tail -n 200
+          cat loop-out/models.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Run the loop
+        id: loop
+        if: env.RUN_LOOP == 'true'
+        run: |
+          set +e
+          export MH_BENCH_START_SPEND="${{ steps.cfg.outputs.cap_start_spend }}"
+          [ "$MH_BENCH_START_SPEND" = "None" ] && unset MH_BENCH_START_SPEND
+          export MH_BENCH_CAP_USD="${{ steps.cfg.outputs.cap_usd || 25 }}"
+          python testkit/loop/bench.py \
+            --arms "${{ steps.cfg.outputs.arms }}" \
+            --suites "${{ steps.cfg.outputs.suites }}" \
+            --budget "${{ steps.cfg.outputs.budget }}" \
+            --fast-model "${{ steps.cfg.outputs.fast_model }}" \
+            --models "${{ steps.cfg.outputs.models }}" \
+            --repeats "${{ steps.cfg.outputs.repeats || 1 }}" \
+            --prices loop-out/models.json \
+            --out loop-out
+          echo "code=$?" >> "$GITHUB_OUTPUT"
+          cat loop-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: harness-loop-${{ github.run_id }}
+          path: loop-out
+      - name: Keep the run on the loop-history branch
+        if: env.RUN_LOOP == 'true'
+        run: |
+          stamp=$(date -u +%Y-%m-%dT%H%M)
+          git config user.name "harness-loop"
+          git config user.email "harness-loop@users.noreply.github.com"
+          git fetch origin loop-history || true
+          if git rev-parse --verify origin/loop-history >/dev/null 2>&1; then
+            git worktree add hist origin/loop-history
+          else
+            git worktree add --detach hist && (cd hist && git checkout --orphan loop-history && git rm -rqf .)
+          fi
+          mkdir -p hist/runs
+          cp loop-out/summary.md "hist/runs/$stamp-$MH_MODEL.md"
+          cp loop-out/summary.md hist/LEADERBOARD.md
+          cp loop-out/results.jsonl "hist/runs/$stamp-$MH_MODEL.jsonl"
+          (cd hist && ls -1 runs/*.md | sort -r | sed 's/^/- /' > INDEX.md && git add -A \
+            && git commit -qm "loop $stamp $MH_MODEL" && git push origin HEAD:loop-history)
+      - name: Fail on a regression
+        if: env.RUN_LOOP == 'true' && steps.loop.outputs.code != '0'
+        run: |
+          echo "::error::The routed harnesses solved fewer tasks than the base agent. See the summary."
+          exit 1
+
+  swe:
+    # Real issues from SWE-bench Verified, graded by SWE-bench's own eval scripts in each task's container:
+    # routed vs base app agent vs Pi, same model, same hour. Runs on "[swe]" in a pushed commit message or by hand.
+    if: ${{ (github.event_name == 'push' && contains(github.event.head_commit.message, '[swe]')) || (github.event_name == 'workflow_dispatch' && inputs.swe_n != '' && inputs.swe_n != '0') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      MESHPOOL_API_KEY: ${{ secrets.MESHPOOL_API_KEY }}
+      MESHPOOL_BASE_URL: ${{ secrets.MESHPOOL_BASE_URL }}
+      MESHPOOL_HOME: ${{ github.workspace }}/.mhhome
+    steps:
+      - uses: actions/checkout@v4
+      - name: Disk space for task images
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h / | tail -1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packaging/requirements-cli.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Packages, SWE-bench and Pi
+        run: |
+          pip install -r packaging/requirements-cli.txt ruff swebench datasets
+          mkdir -p app/vendor/pi && npm install --prefix app/vendor/pi --no-audit --no-fund "@earendil-works/pi-coding-agent@1.5.2" >/dev/null
+      - name: Settings (inputs when started by hand, else testkit/loop/ci.json "swe")
+        id: cfg
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os
+          c = json.load(open("testkit/loop/ci.json")).get("swe", {})
+          ins = json.loads(os.environ["INPUTS"] or "{}")
+          print("n=" + str(ins.get("swe_n") or c.get("n", 12)))
+          print("model=" + (ins.get("model") or c.get("model", "deepseek-v4.1-flash")))
+          print("arms=" + (ins.get("swe_arms") or c.get("arms", "routed,base,pi")))
+          PY
+        env:
+          INPUTS: ${{ toJSON(inputs) }}
+      - name: Run
+        run: |
+          ARGS=""
+          for a in $(echo "${{ steps.cfg.outputs.arms }}" | tr ',' ' '); do
+            case "$a" in
+              routed) ARGS="$ARGS --arm routed:MH_AB_SOLVER=agent,MH_HROUTER=1" ;;
+              base)   ARGS="$ARGS --arm base:MH_AB_SOLVER=agent,MH_HROUTER=0,MH_SKILLS=full" ;;
+              pi)     ARGS="$ARGS --arm pi:MH_AB_SOLVER=pi" ;;
+              engine) ARGS="$ARGS --arm engine:MH_AB_SOLVER=engine" ;;
+            esac
+          done
+          python testkit/swe_ab.py $ARGS --n "${{ steps.cfg.outputs.n }}" --seed 7 --parallel 2 \
+            --model "${{ steps.cfg.outputs.model }}" --max-turns 60 --task-timeout 1500 --out swe-out | tee swe-out.txt
+          { echo '## SWE-bench Verified'; echo '```'; tail -n 40 swe-out.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swe-${{ github.run_id }}
+          path: |
+            swe-out
+            swe-out.txt

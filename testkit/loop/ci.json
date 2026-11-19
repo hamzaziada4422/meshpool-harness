@@ -1,0 +1,16 @@
+{
+ "arms": "routed,pi,codex,opencode,hermes",
+ "suites": "chat,debug,build,hard,data,deep",
+ "budget": "4.00",
+ "models": "deepseek-v4.1-flash",
+ "fast_model": "",
+ "probe_filter": "",
+ "swe": {
+  "n": 12,
+  "model": "deepseek-v4.1-flash",
+  "arms": "routed,base,pi"
+ },
+ "repeats": 2,
+ "cap_usd": 25,
+ "cap_start_spend": 23.7786
+}

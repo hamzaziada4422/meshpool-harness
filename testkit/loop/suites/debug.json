@@ -1,0 +1,95 @@
+[
+ {
+  "id": "dbg-py-syntax",
+  "mode": "code",
+  "prompt": "python calc.py crashes with a SyntaxError. Fix it.",
+  "files": {
+   "calc.py": "def add(a, b)\n    return a + b\n\nif __name__ == '__main__':\n    print(add(2, 3))\n"
+  },
+  "grade": {
+   "check": "python3 calc.py | grep -q 5"
+  }
+ },
+ {
+  "id": "dbg-py-offbyone",
+  "mode": "code",
+  "prompt": "test_stats.py fails. Fix the bug in stats.py (do not change the test).",
+  "files": {
+   "stats.py": "def mean(xs):\n    total = 0\n    for i in range(len(xs) - 1):\n        total += xs[i]\n    return total / len(xs)\n",
+   "test_stats.py": "from stats import mean\nassert mean([1, 2, 3]) == 2\nassert mean([10]) == 10\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_stats.py && git diff --quiet -- test_stats.py"
+  }
+ },
+ {
+  "id": "dbg-py-traceback",
+  "mode": "code",
+  "prompt": "Running python app.py gives:\nTraceback (most recent call last):\n  File \"app.py\", line 4, in <module>\n    print(greet(user))\n  File \"util.py\", line 2, in greet\n    return 'Hello, ' + user['name'].title()\nKeyError: 'name'\nFix it so it prints Hello, Ada.",
+  "files": {
+   "util.py": "def greet(user):\n    return 'Hello, ' + user['name'].title()\n",
+   "app.py": "from util import greet\n\nuser = {'first_name': 'ada'}\nprint(greet(user))\n"
+  },
+  "grade": {
+   "check": "python3 app.py | grep -q 'Hello, Ada'"
+  }
+ },
+ {
+  "id": "dbg-py-mutable-default",
+  "mode": "code",
+  "prompt": "test_cart.py fails: items leak between carts. Fix cart.py.",
+  "files": {
+   "cart.py": "class Cart:\n    def __init__(self, items=[]):\n        self.items = items\n\n    def add(self, x):\n        self.items.append(x)\n",
+   "test_cart.py": "from cart import Cart\na = Cart(); a.add(1)\nb = Cart()\nassert b.items == [], b.items\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_cart.py && git diff --quiet -- test_cart.py"
+  }
+ },
+ {
+  "id": "dbg-js-syntax",
+  "mode": "code",
+  "prompt": "node index.js fails to start. Fix it.",
+  "files": {
+   "index.js": "function total(xs) {\n  return xs.reduce((a, b) => a + b, 0)\n\nconsole.log(total([1, 2, 3]))\n"
+  },
+  "grade": {
+   "check": "node index.js | grep -q 6"
+  }
+ },
+ {
+  "id": "dbg-js-async",
+  "mode": "code",
+  "prompt": "node main.js prints undefined instead of 42. Fix it.",
+  "files": {
+   "main.js": "async function load() {\n  return 42\n}\n\nfunction main() {\n  const v = load()\n  console.log(v.value)\n}\nmain()\n"
+  },
+  "grade": {
+   "check": "node main.js | grep -qx 42"
+  }
+ },
+ {
+  "id": "dbg-json-config",
+  "mode": "code",
+  "prompt": "python run.py fails reading config.json. Fix the config file.",
+  "files": {
+   "config.json": "{\n  \"name\": \"svc\",\n  \"port\": 8080,\n}\n",
+   "run.py": "import json\nc = json.load(open('config.json'))\nprint(c['port'])\n"
+  },
+  "grade": {
+   "check": "python3 run.py | grep -q 8080"
+  }
+ },
+ {
+  "id": "dbg-py-regression",
+  "mode": "code",
+  "prompt": "slugify('Hello World!') should return 'hello-world' but test_slug.py fails. Fix slug.py.",
+  "files": {
+   "slug.py": "import re\n\ndef slugify(s):\n    s = s.lower().strip()\n    s = re.sub(r'[^a-z0-9]+', '-', s)\n    return s\n",
+   "test_slug.py": "from slug import slugify\nassert slugify('Hello World!') == 'hello-world', slugify('Hello World!')\nassert slugify('  a  b ') == 'a-b'\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_slug.py && git diff --quiet -- test_slug.py"
+  }
+ }
+]

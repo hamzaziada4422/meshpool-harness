@@ -7,8 +7,34 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const fmt = n => Number(n || 0).toLocaleString("en-US");
 const isMac = /Mac/i.test(navigator.platform || navigator.userAgent);
 const MOD = isMac ? "⌘" : "Ctrl+";
+// The route chip's menu: pick the harness for this chat (applies from the next message).
+const ROUTES = [["chat", "Chat", "Quick answers, rewrites, questions"], ["research", "Research", "Sourced answers from the web"],
+  ["data", "Data", "Analyse files and numbers"], ["docs", "Documents", "Word, Excel, PowerPoint, PDF"],
+  ["code.debug", "Debug", "Find and fix what is broken"], ["code.build", "Build", "Write new code"],
+  ["code.review", "Review", "Review changes, no edits"], ["code.refactor", "Refactor", "Restructure without changing behaviour"],
+  ["code.test", "Tests", "Write and run tests"], ["code.terminal", "Terminal", "Install, configure, deploy"],
+  ["browser", "Browser", "Websites, forms, sign-ins"], ["automation", "Automation", "Scheduled and repeating work"]];
+function routeMenu(anchor) {
+  document.querySelector(".routemenu")?.remove();
+  const m = document.createElement("div"); m.className = "routemenu"; m.setAttribute("role", "menu");
+  m.innerHTML = ROUTES.map(([id, name, d]) => `<button role="menuitem" data-spec="${id}"><b>${name}</b><small>${d}</small></button>`).join("");
+  anchor.appendChild(m);
+  const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
+  setTimeout(() => document.addEventListener("mousedown", close), 0);
+  m.addEventListener("keydown", e => { if (e.key === "Escape") m.remove(); });
+  m.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    m.remove();
+    const c = S.cur; if (!c) return;
+    try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
+    catch (e) { toast(e.message); }
+  });
+  m.querySelector("button")?.focus();
+}
 function ago(t) {
-  const s = Math.max(0, Date.now() / 1000 - (t || 0));
+  if (typeof t === "string") t = isNaN(Number(t)) ? Date.parse(t) / 1000 : Number(t);   // ISO or numeric text
+  if (!t || isNaN(t)) return "";
+  if (t > 1e12) t = t / 1000;                                                           // milliseconds
+  const s = Math.max(0, Date.now() / 1000 - t);
   if (s < 60) return "now"; if (s < 3600) return Math.floor(s / 60) + "m"; if (s < 86400) return Math.floor(s / 3600) + "h";
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
@@ -61,9 +87,16 @@ function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage
 
 const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const ICON = {
+  pin: I('<path d="M12 17v5"/><path d="M9 4h6l-1 5.5 3 3.5H7l3-3.5z"/>', 15), trash: I('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>', 15),
+  archive: I('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/>', 15), book: I('<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>', 15),
+  brain: I('<path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/><circle cx="12" cy="12" r="2.5"/>', 15),
+  sliders: I('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>', 15),
+  pencil: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>', 15), link: I('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', 15),
+  upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>', 15),
   plus: I('<path d="M12 5v14M5 12h14"/>'), search: I('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   folder: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   chev: I('<path d="m6 9 6 6 6-6"/>', 14), chevR: I('<path d="m9 6 6 6-6 6"/>', 14),
+  cloud: I('<path d="M7 18a4 4 0 0 1-.6-8A6 6 0 0 1 18 9.5a4.2 4.2 0 0 1-.5 8.5z"/>', 14),
   gear: I('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
   send: I('<path d="M12 19V5M5 12l7-7 7 7"/>'), stop: I('<rect x="7" y="7" width="10" height="10" rx="1.5" fill="currentColor"/>'),
   clip: I('<path d="m21 11-8.6 8.6a5 5 0 0 1-7-7l8.5-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.3-2.3l7.9-8"/>'),
@@ -88,6 +121,31 @@ const ICON = {
   pr: I('<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4m0 0 2-2m-2 2 2 2"/>'),
   eye: I('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   plug: I('<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0zM12 17v5"/>'),
+  card: I('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/>'),
+  palette: I('<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-1.3-1-1.5-1-2.6 0-.9.7-1.7 1.7-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>'),
+  bell: I('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/>'),
+  sun: I('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>'),
+  moon: I('<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>'),
+  stack: I('<rect x="4" y="3" width="16" height="6" rx="2"/><path d="M6 9v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9M8 14v5a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-5"/>'),
+  cube: I('<path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
+  clock: I('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
+  codebr: I('<path d="m8 8-5 4 5 4M16 8l5 4-5 4M14 5l-4 14"/>'),
+  filter: I('<path d="M4 6h16M7 12h10M10 18h4"/>'),
+  monitor: I('<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>'),
+  ext: I('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>', 14),
+  grid: I('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>'),
+  lines: I('<path d="M4 6h16M4 12h16M4 18h16"/>'),
+  sort: I('<path d="M7 4v16M7 20l-3-3M7 20l3-3M17 20V4M17 4l-3 3M17 4l3 3"/>'),
+  warn: I('<path d="M12 3 2 20h20z"/><path d="M12 10v4M12 17.5v.01"/>', 14),
+  lock: I('<rect x="5" y="10" width="14" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>', 14),
+  copy: I('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>', 14),
+  flag: I('<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>'),
+  folderopen: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1H7l-4 8z"/><path d="M3 17l3-7h17l-3 7z"/>', 14),
+  help: I('<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.01"/>'),
+  logout: I('<path d="M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4M16 8l4 4-4 4M20 12H9"/>'),
+  globe2: I('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  share: I('<path d="M12 15V4M8 8l4-4 4 4M5 13v6a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-6"/>'),
+  dl: I('<path d="M12 4v11M8 11l4 4 4-4M5 19h14"/>'),
   file: I('<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>', 14), dir: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>', 14),
 };
 
@@ -107,21 +165,23 @@ const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(bod
 // Shorten at a word boundary with an ellipsis (the full text stays in the tooltip).
 function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); const i = c.lastIndexOf(" "); return (i > n * 0.6 ? c.slice(0, i) : c).replace(/[,;:.]$/, "") + "…"; }
 
-function toast(text, ms = 2600, action) {
+function toast(text, ms = 5000, action) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
   if ([...box.children].some(x => x.firstChild?.nodeValue === text && !x.classList.contains("out"))) return;
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
   if (action) { const b = document.createElement("button"); b.className = "tact"; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); ms = Math.max(ms, 6000); }
-  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 160); }, ms);
+  const gone = () => { t.classList.add("out"); setTimeout(() => t.remove(), 160); };
+  if (store("popups") === "keep") { const x = document.createElement("button"); x.className = "tact tx"; x.setAttribute("aria-label", "Dismiss"); x.innerHTML = ICON.x; x.onclick = gone; t.appendChild(x); }
+  else setTimeout(gone, ms);
 }
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
-function ask({title, text = "", value, ok = "OK", danger = false}) {
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
-    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
     const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
@@ -133,7 +193,7 @@ function ask({title, text = "", value, ok = "OK", danger = false}) {
   });
 }
 /* Beta: anything that breaks can be reported in one click, with what a fix needs and nothing from the chat itself. */
-const ISSUES = "https://github.com/hamzaaziada/meshpool-harness/issues/new";
+const ISSUES = "https://github.com/hamzaziada4422/meshpool-harness/issues/new";
 async function reportProblem(what = "") {
   if (!S.version) { try { S.version = (await api("/api/about")).version; } catch (e) { S.version = "unknown"; } }
   const v = S.cur?.view || {};
@@ -146,285 +206,157 @@ function openExternal(url) { post("/api/open-url", {url}).catch(() => { if (/^ht
 
 /* ================================== state ================================== */
 const S = {
-  settings: null, models: null, projects: [], threads: [], skills: [], harnesses: [], defaults: {},
-  cur: null,                         // the open thread: {id, total, view, epoch, ...}
-  appMode: store("appmode") || "cowork",
-  draft: {project: folderOrNone(store("project")), harness: "", model: store("model") || "", mode: store("mode") || "ask", plan: false},
-  panel: store("panel") || null, steps: store("steps") ?? true, attachments: [], showArchived: false, closedProjects: new Set(store("closed") || []),
+  settings: null, models: null, projects: [], pj: [], threads: [], skills: [], harnesses: [], defaults: {},
+  cur: null,                         // the open chat: {id, total, view, epoch, ...}
+  view: "chat",                      // "chat" (a chat or the new-chat home), "project" (a project's page) or "page" (a gallery)
+  pjId: "",                          // the project page that is open
+  mode: store("appmode") === "code" ? "code" : "chat",   // the sidebar mode: Chat or Code
+  page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
+  // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
+  // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false},
+  panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
+  collapsed: new Set(store("collapsed") || []),
 };
-const MODES = {ask: ["Supervised", "Asks before edits and commands"], edits: ["Auto-accept edits", "Edits go through; commands still ask"], auto: ["Full access", "Edits and commands run without asking"]};
+// What a chat may do without asking. The keys are what the server stores; the words are for people.
+const MODES = {ask: ["Manual", "Asks before it edits files or runs commands"], edits: ["Auto", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
 
 function isDark() { const t = store("theme") || "system"; return t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches); }
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
 try { matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyAppearance()); } catch (e) { /* old webviews */ }
 function applyAppearance() {
+  const w = store("width") || "narrow", d = store("density") || "comfortable";
+  document.documentElement.style.setProperty("--colw", {narrow: "656px", normal: "760px", wide: "960px"}[w] || "656px");
+  if (d === "compact") document.documentElement.dataset.density = "compact"; else document.documentElement.removeAttribute("data-density");
   document.querySelectorAll(".mlogo").forEach(i => i.src = logoSrc());
+  const R = document.documentElement, ff = store("font") || "plex", rf = store("rfont") || "match";
+  R.style.setProperty("--body", ff === "system" ? 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif' : '"IBM Plex Sans","Segoe UI",system-ui,sans-serif');
+  R.style.setProperty("--resp", rf === "serif" ? 'Georgia,"Times New Roman",serif' : rf === "system" ? 'system-ui,-apple-system,"Segoe UI",sans-serif' : "inherit");
+  R.style.setProperty("--mono", store("codefont") ? `${store("codefont")},"IBM Plex Mono",ui-monospace,Consolas,monospace` : '"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace');
+  R.style.setProperty("--code-fs", (store("codesize") || 13) + "px");
+  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
   const t = store("theme") || "system", z = store("size") || "normal";
   if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
   if (z === "normal") document.documentElement.removeAttribute("data-size"); else document.documentElement.dataset.size = z;
 }
 applyAppearance();
 
-/* ================================== shell ================================== */
-function shell() {
-  $("#root").innerHTML = `
-  <div class="app" id="app">
-    <aside class="side" aria-label="Chats">
-      <div class="side-top">
-        <div class="brandrow">
-          <img class="mlogo" src="${logoSrc()}" alt="Meshpool">
-          <button class="beta" id="betaBtn" title="Meshpool is in beta: some things may not work yet. Click to report a problem.">Beta</button>
-          <span class="sp"></span>
-          <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
-        </div>
-        <div class="modesw" role="tablist" aria-label="Mode">
-          <button role="tab" data-mode="cowork" aria-selected="${S.appMode === "cowork"}">${ICON.chat}<span>Work</span></button>
-          <button role="tab" data-mode="code" aria-selected="${S.appMode === "code"}">${ICON.term}<span>Code</span></button>
-        </div>
-        <button class="newbtn" id="newThread" title="New chat (${MOD}N)">${ICON.plus}<span>New chat</span></button>
-        <label class="search">${ICON.search}<input id="q" placeholder="Search chats" aria-label="Search chats" title="Search chats (${MOD}K)"><button class="qx" id="qx" aria-label="Clear search" hidden>${ICON.x}</button></label>
-      </div>
-      <div class="side-list" id="sideList"></div>
-      <button class="updbar" id="updBar" hidden></button>
-      <div class="side-foot">
-        <button id="openSettings" title="Settings (${MOD},)">${ICON.gear}<span>Settings</span><span class="kdot" id="kdot" style="margin-left:auto"></span></button>
-      </div>
-    </aside>
-    <main class="main">
-      <div class="topbar" id="topbar"></div>
-      <div class="conv" id="conv"><div class="col" id="col"></div></div>
-      <div class="composer-wrap">
-        <div class="sugg" id="sugg" hidden></div>
-        <div class="composer" id="composer">
-          <div class="attach-row" id="attachRow"></div>
-          <label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Ask Meshpool anything. / for commands, $ for skills"></textarea>
-          <div class="cbar" id="cbar"></div>
-          <input type="file" id="fileIn" multiple hidden>
-        </div>
-        <div class="hintline" id="hintline"></div>
-      </div>
-    </main>
-    <aside class="panel" id="panel" hidden><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
-  </div>`;
-  $("#newThread").onclick = () => newThread();   // not the click event as the folder
-  $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
-  $("#openSettings").onclick = () => openSettings();
-  $("#updBar").onclick = () => openSettings("about");
-  $("#hideSide").onclick = toggleSide;
-  $("#betaBtn").onclick = () => reportProblem();
-  const clearQ = () => { $("#q").value = ""; $("#qx").hidden = true; renderSide(); };
-  $("#q").oninput = () => { $("#qx").hidden = !$("#q").value; clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
-  $("#q").onkeydown = e => { if (e.key === "Escape" && $("#q").value) { e.stopPropagation(); e.preventDefault(); clearQ(); } };
-  $("#qx").onclick = () => { clearQ(); $("#q").focus(); };
-  setupComposer();
-  setupPanelResize();
-  document.addEventListener("keydown", globalKeys);
-  if (store("sidehidden")) $("#app").classList.add("noside");
-  $("#app").classList.toggle("steps", !!S.steps);
-  $("#app").dataset.mode = S.appMode;
-  let wasNarrow = narrow();
-  addEventListener("resize", () => { if (narrow() !== wasNarrow) { wasNarrow = narrow(); $("#app").classList.remove("sideopen"); renderTop(); } });
-  document.addEventListener("mousedown", e => { if ($("#app").classList.contains("sideopen") && !e.target.closest(".side") && !e.target.closest("#showSide")) $("#app").classList.remove("sideopen"); });
+/* ---------- tooltips: a name and its shortcut, after a short pause; never while the pointer is moving through ---------- */
+function initTips() {
+  let tip = null, timer = null, on = null;
+  const hide = () => { clearTimeout(timer); timer = null; on = null; if (tip) { tip.remove(); tip = null; } };
+  const show = el => {
+    const text = el.dataset.tip; if (!text) return;
+    hide(); on = el;
+    tip = document.createElement("div"); tip.className = "tip"; tip.setAttribute("role", "tooltip");
+    tip.innerHTML = esc(text) + (el.dataset.kbd ? `<kbd>${esc(el.dataset.kbd)}</kbd>` : "");
+    document.body.appendChild(tip);
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const below = r.top < h + 16 || el.dataset.tipPos === "below";
+    tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + "px";
+    tip.style.top = (below ? Math.min(innerHeight - h - 8, r.bottom + 6) : r.top - h - 6) + "px";
+    requestAnimationFrame(() => tip && tip.classList.add("on"));
+  };
+  document.addEventListener("mouseover", e => { const el = e.target.closest?.("[data-tip]"); if (el === on) return; hide(); if (el) timer = setTimeout(() => show(el), 450); });
+  document.addEventListener("focusin", e => { const el = e.target.closest?.("[data-tip]"); if (el && el.matches(":focus-visible")) show(el); });
+  for (const t of ["focusout", "mousedown", "keydown", "scroll", "wheel"]) document.addEventListener(t, hide, true);
 }
-const narrow = () => innerWidth <= 760;
-function modeHarness(m = S.appMode) {
-  const want = store("harness_" + m) || S.defaults?.[m];
-  const ok = id => S.harnesses.some(h => h.id === id && h.available !== false && h.ready !== false);
-  return ok(want) ? want : (ok(S.defaults?.[m]) ? S.defaults[m] : (m === "code" ? "meshpool-code" : "meshpool-work"));
-}
-function modeBadges() {
-  for (const b of $$(".modesw [data-mode]")) b.classList.toggle("busy", b.dataset.mode !== S.appMode && (S.threads || []).some(t => (t.kind || "code") === b.dataset.mode && ["working", "waiting"].includes(t.state)));
-}
-function setAppMode(m) {
-  if (m === S.appMode && !S.cur) return;
-  if (S.cur?.id) store("last_" + S.appMode, S.cur.id);
-  S.appMode = m; store("appmode", m); setTimeout(modeBadges, 0);
-  $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === m));
-  $("#app").dataset.mode = m;
-  S.draft.harness = modeHarness(m);
-  if (S.panel && !PANELS[m].includes(S.panel)) { S.panel = null; store("panel", null); }
-  const last = store("last_" + m);
-  if (last && S.threads.some(t => t.id === last && !t.archived && (t.kind || "code") === m)) { renderSide(); renderBar(); openThread(last); return; }
-  newThread();
-}
-const GIT_WORD = {"??": "New", "A": "Added", "M": "Changed", "D": "Removed", "R": "Renamed", "AM": "Added", "MM": "Changed", "U": "Conflict", "UU": "Conflict"};
-function toggleSteps() {
-  S.steps = !S.steps; store("steps", S.steps);
-  $("#app").classList.toggle("steps", S.steps);
-  $$("#col .work").forEach(d => d.open = S.steps || !d.dataset.done || !!$(".appr:not(.done)", d));   // never fold away a pending approval
-  $$("#col .think details").forEach(d => d.open = S.steps);
-  renderTop(); toast(S.steps ? "Showing every step" : "Steps are folded; click one to open it");
-}
-function toggleSide() {
-  const a = $("#app");
-  if (a.classList.contains("autoside")) { S.keepSide = true; a.classList.remove("autoside"); renderTop(); return; }
-  if (narrow()) { a.classList.toggle("sideopen"); return; }
-  a.classList.toggle("noside"); store("sidehidden", a.classList.contains("noside")); renderTop();
-}
-function globalKeys(e) {
-  const m = isMac ? e.metaKey : e.ctrlKey;
-  if (e.key === "Escape") {
-    // Esc closes the top-most thing that is open; with nothing open it stops the running task, wherever focus is.
-    const open = $("#pop") || $("#ctx") || $(".scrim") || $("#onb");
-    closePop(); closeCtx(); const sc = $(".scrim:not(.dlg-scrim)"); if (sc && !$("#onb") && !$(".dlg-scrim")) sc.remove();
-    const typing = e.target?.closest?.("input, textarea, select, [contenteditable=true]") && e.target.id !== "input";
-    if (!open && !typing && e.target?.id !== "input" && cfg().busy) { e.preventDefault(); stopNow(); }
-  }
-  if (!m) return;
-  const k = e.key.toLowerCase();
-  if (k === "n" && !e.shiftKey) { e.preventDefault(); newThread(); }
-  else if (k === "k") { e.preventDefault(); if ($("#app").classList.contains("noside")) toggleSide(); $("#q").focus(); }
-  else if (k === ",") { e.preventDefault(); openSettings(); }
-  else if (k === "b") { e.preventDefault(); toggleSide(); }
-  else if (k === "d" && e.shiftKey) { e.preventDefault(); togglePanel("diff"); }
-  else if (k === "j") { e.preventDefault(); togglePanel("term"); }
-  else if (k === "e") { e.preventDefault(); toggleSteps(); }
-}
+initTips();
 
-/* ================================== data loads ================================== */
-async function loadSettings() { S.settings = await api("/api/settings"); $("#kdot").className = "kdot" + (S.settings.ready ? " ok" : ""); }
-async function loadModels(refresh) {
-  try { S.models = await api("/api/models" + (refresh ? "?refresh=1" : "")); } catch (e) { S.models = {models: [], favorites: [], default: "", error: e.message}; }
-  if (!S.draft.model) S.draft.model = S.models.default;
-}
-async function loadProjects() { const r = await api("/api/projects"); S.projects = r.projects; S.defaultProject = r.default; }
-async function loadThreads() {
-  const was = new Map((S.threads || []).map(t => [t.id, t.state]));
-  S.threads = (await api("/api/agent")).sessions;
-  S.unseen = S.unseen || new Set(store("unseen") || []);
-  for (const t of S.threads) if (["working", "waiting"].includes(was.get(t.id)) && !["working", "waiting"].includes(t.state) && S.cur?.id !== t.id) S.unseen.add(t.id);
-  store("unseen", [...S.unseen]);
-  renderSide();
-  modeBadges();
-  const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
-  if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
-}
-async function loadHarnesses() { const r = await api("/api/harnesses"); S.harnesses = r.harnesses; S.defaults = r.defaults; S.hInfo = r; }
-async function loadSkills() { try { S.skills = (await api("/api/skills")).skills; } catch (e) { S.skills = []; } }
-const harness = id => S.harnesses.find(h => h.id === id) || S.harnesses[0] || {id: "meshpool-code", name: "Meshpool Code", models: "meshpool"};
-const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "").split(/[\\/]/).filter(Boolean).pop() || p;
-
-/* ================================== sidebar ================================== */
-function renderSide() {
-  const q = ($("#q")?.value || "").trim().toLowerCase();
-  const el = $("#sideList"); if (!el) return;
-  if (q) { return renderSearch(q); }
-  const inMode = t => (t.kind || "code") === S.appMode;
-  const threads = S.threads.filter(t => !t.archived && inMode(t) && !S.pendingDelete?.has(t.id));
-  const pinned = threads.filter(t => t.pinned);
-  const byProj = new Map();
-  for (const p of S.projects) byProj.set(p.path, []);
-  for (const t of threads) { if (t.pinned) continue; if (!byProj.has(t.workdir)) byProj.set(t.workdir, []); byProj.get(t.workdir).push(t); }
-  let html = "";
-  if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(t => thHTML(t, true)).join("")}</ul>`;
-  html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
-  if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
-  // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
-  const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
-  const keepEmpty = p => p === (S.cur?.view?.workdir || S.draft.project) || S.threads.every(t => t.workdir !== p);
-  const order = [...byProj].filter(([p, l]) => l.length || keepEmpty(p)).sort((a, z) => last(z[1]) - last(a[1]));
-  for (const [path, list] of order) {
-    const closed = S.closedProjects.has(path);
-    html += `<div class="proj ${closed ? "closed" : ""}" data-p="${esc(path)}">
-      <div class="proj-h" title="${esc(path)}"><span class="chev">${ICON.chev}</span>${ICON.dir}<span class="nm">${esc(projName(path))}</span>
-        <span class="acts"><button class="iconbtn" data-newin="${esc(path)}" title="New chat in this folder" aria-label="New chat in ${esc(projName(path))}">${ICON.plus}</button><button class="iconbtn" data-pmenu="${esc(path)}" aria-label="Folder options">${ICON.more}</button></span></div>
-      ${list.length ? `<ul class="threads">${list.map(t => thHTML(t)).join("")}</ul>` : ""}</div>`;
-  }
-  const arch = S.threads.filter(t => t.archived && (t.kind || "code") === S.appMode);
-  if (arch.length) {
-    html += `<div class="sec"><button class="iconbtn" id="togArch" style="padding:0 4px;font-size:12px;font-weight:600;color:var(--ink-3)">${S.showArchived ? "Hide" : "Show"} archived (${arch.length})</button></div>`;
-    if (S.showArchived) html += `<ul class="threads" style="padding-left:0">${arch.map(t => thHTML(t, true)).join("")}</ul>`;
-  }
-  // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it.
-  if (el.dataset.mode === "list" && el._html === html) return;
-  const shape = html.replace(/<span class="tm">[^<]*<\/span>/g, "").replace(/class="dot[^"]*"/g, "").replace(/class="th[^"]*"/g, "");
-  if (el.dataset.mode === "list" && el._shape === shape) {
-    el._html = html;
-    for (const li of $$(".th", el)) {
-      const t = S.threads.find(x => x.id === li.dataset.id); if (!t) continue;
-      const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : S.unseen?.has(t.id) && S.cur?.id !== t.id ? "done" : "";
-      li.classList.toggle("on", S.cur?.id === t.id);
-      const d = $(".dot", li); if (d) d.className = "dot " + st;
-      const tm = $(".tm", li); if (tm && tm.textContent !== ago(t.updated)) tm.textContent = ago(t.updated);
-    }
-    return;
-  }
-  el._html = html; el._shape = shape; el.dataset.mode = "list";
-  el.innerHTML = html;
-  $("#addProj")?.addEventListener("click", pickProject);
-  $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
-  $$(".proj-h", el).forEach(h => h.addEventListener("click", e => {
-    if (e.target.closest("button")) return;
-    const p = h.parentElement.dataset.p;
-    if (e.target.closest(".chev")) { S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p); store("closed", [...S.closedProjects]); renderSide(); return; }
-    S.closedProjects.delete(p); store("closed", [...S.closedProjects]);
-    newThread(p);
-  }));
-  $$("[data-newin]", el).forEach(b => b.onclick = () => newThread(b.dataset.newin));
-  $$("[data-pmenu]", el).forEach(b => b.onclick = e => projMenu(e, b.dataset.pmenu));
-  bindThreads(el);
-}
-function thHTML(t, withFolder) {
-  const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : S.unseen?.has(t.id) && S.cur?.id !== t.id ? "done" : "";
-  return `<li class="th ${S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" title="${esc(t.title)}"><span class="dot ${st}"></span><span class="tt">${esc(t.title)}${withFolder ? `<small class="tf">${esc(projName(t.workdir))}</small>` : ""}</span><span class="tm">${ago(t.updated)}</span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Chat options">${ICON.more}</button></li>`;
-}
-function bindThreads(el) {
-  $$(".th", el).forEach(li => li.addEventListener("click", e => { if (e.target.closest("[data-tmenu]")) return; openThread(li.dataset.id); }));
-  $$("[data-tmenu]", el).forEach(b => b.onclick = e => { e.stopPropagation(); threadMenu(e, b.dataset.tmenu); });
-}
-async function renderSearch(q) {
-  const el = $("#sideList");
-  const local = S.threads.filter(t => t.title.toLowerCase().includes(q));
-  let hits = [];
-  try { hits = (await api("/api/search?q=" + encodeURIComponent(q))).hits; } catch (e) { /* ignore */ }
-  if (($("#q").value || "").trim().toLowerCase() !== q) return;
-  const ids = new Set(local.map(t => t.id));
-  const more = hits.filter(h => !ids.has(h.id));
-  el.dataset.mode = "search";
-  el.innerHTML = `<div class="sec">Results</div><ul class="threads" style="padding-left:0">${local.map(t => thHTML(t, true)).join("")}${more.map(h => `<li class="th" data-id="${esc(h.id)}"><span class="dot"></span><span class="tt">${esc(h.title)}<span class="od" style="display:block;font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.snippet)}</span></span></li>`).join("")}</ul>${!local.length && !more.length ? `<div class="empty-side">Nothing matches.</div>` : ""}`;
-  bindThreads(el);
-}
-function ctxMenu(e, items) {
+/* ---------- menus: one component for every "more options" button and right-click ---------- */
+// items: {label, icon, kbd, danger, checked, sub: [items], fn} or {sep: true}. Arrow keys move, Enter picks, Right opens a
+// submenu, Left or Esc goes back, and focus returns to what opened the menu.
+function ctxMenu(e, items, opts = {}) {
   closeCtx();
-  const m = document.createElement("div"); m.className = "ctx"; m.id = "ctx";
-  m.innerHTML = items.map((it, i) => `<button data-i="${i}" class="${it.danger ? "danger" : ""}">${esc(it.label)}</button>`).join("");
+  const opener = document.activeElement;
+  const m = document.createElement("div"); m.className = "ctx" + (opts.cls ? " " + opts.cls : ""); m.id = "ctx"; m.setAttribute("role", "menu");
   document.body.appendChild(m);
-  const r = (e.currentTarget || e.target).getBoundingClientRect();
-  m.style.left = Math.min(innerWidth - m.offsetWidth - 8, r.left) + "px"; m.style.top = Math.min(innerHeight - m.offsetHeight - 8, r.bottom + 4) + "px";
-  $$("button", m).forEach(b => b.onclick = () => { closeCtx(); items[+b.dataset.i].fn(); });
-  setTimeout(() => document.addEventListener("mousedown", ctxAway, {once: true}), 0);
+  const point = e.type === "contextmenu" ? {x: e.clientX, y: e.clientY} : null;
+  const anchor = (e.currentTarget && e.currentTarget.getBoundingClientRect) ? e.currentTarget : e.target;
+  const place = () => {
+    const r = anchor?.getBoundingClientRect?.() || {left: e.clientX || 0, bottom: e.clientY || 0, right: e.clientX || 0, top: e.clientY || 0};
+    const x = point ? point.x : r.left, y = point ? point.y : r.bottom + 4;
+    m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, x)) + "px";
+    m.style.top = Math.max(8, Math.min(innerHeight - m.offsetHeight - 8, (y + m.offsetHeight > innerHeight - 8 && !point) ? r.top - m.offsetHeight - 4 : y)) + "px";
+  };
+  const stack = []; let curList = items;
+  const draw = (list, title) => {
+    curList = list;
+    m.innerHTML = (title ? `<button class="mi" role="menuitem" tabindex="-1" data-back="1"><span class="mi-i">${ICON.chev}</span><span class="ml">${esc(title)}</span></button><div class="msep" role="separator"></div>` : "")
+      + list.map((it, i) => it.sep ? `<div class="msep" role="separator"></div>` : it.head ? `<div class="mhead">${it.html ? it.head : esc(it.head)}</div>` : `<button class="mi ${it.danger ? "danger" : ""} ${it.checked ? "sel" : ""}" role="${it.checked !== undefined ? "menuitemcheckbox" : "menuitem"}" ${it.checked !== undefined ? `aria-checked="${!!it.checked}"` : ""} tabindex="-1" data-i="${i}"><span class="mi-i">${it.icon || ""}</span><span class="ml">${esc(it.label)}${it.desc ? `<small>${esc(it.desc)}</small>` : ""}</span>${it.note ? `<span class="mnote">${esc(it.note)}</span>` : ""}${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.checked ? `<span class="mi-c">${ICON.check}</span>` : ""}${it.sub || it.more ? `<span class="mi-s">${ICON.chevR}</span>` : ""}</button>`).join("");
+    place();
+    $$(".mi", m).forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.back) { const prev = stack.pop(); draw(prev.list, prev.title); $(".mi", m)?.focus(); return; }
+        const it = list[+b.dataset.i];
+        if (it.sub) { stack.push({list, title}); draw(it.sub, it.label); $(".mi:not([data-back])", m)?.focus(); return; }
+        closeCtx(true); it.fn?.();
+      };
+      b.onmousemove = () => { if (document.activeElement !== b) b.focus({preventScroll: true}); };
+    });
+  };
+  draw(items);
+  m.addEventListener("keydown", ev => {
+    const bs = $$(".mi", m), i = bs.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown") { ev.preventDefault(); bs[(i + 1) % bs.length].focus(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); bs[(i - 1 + bs.length) % bs.length].focus(); }
+    else if (ev.key === "Home") { ev.preventDefault(); bs[0].focus(); }
+    else if (ev.key === "End") { ev.preventDefault(); bs[bs.length - 1].focus(); }
+    else if (ev.key === "ArrowRight") { const b = bs[i]; if (b && b.querySelector(".mi-s")) { ev.preventDefault(); b.click(); } }
+    else if (ev.key === "ArrowLeft" || ev.key === "Backspace") { if (stack.length) { ev.preventDefault(); $("[data-back]", m)?.click(); } else if (ev.key === "ArrowLeft") { closeCtx(); opener?.focus?.(); } }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closeCtx(); opener?.focus?.({preventScroll: true}); }
+    else if (ev.key === "Tab") { closeCtx(); }
+    else if (!ev.metaKey && !ev.ctrlKey && !ev.altKey && ev.key.length === 1) {          // a single letter picks the item that names it (P, R, A, D; 1 to 4)
+      const hit = $$(".mi", m).find(b => { const it = curList[+b.dataset.i]; return it && it.key === ev.key.toLowerCase(); });
+      if (hit) { ev.preventDefault(); hit.click(); }
+    }
+  });
+  m.querySelector(".mi")?.focus({preventScroll: true});
+  setTimeout(() => document.addEventListener("mousedown", ctxAway), 0);
+  window.addEventListener("blur", closeCtx, {once: true});
 }
 function ctxAway(e) { if (!e.target.closest("#ctx")) closeCtx(); }
-function closeCtx() { $("#ctx")?.remove(); }
+function closeCtx() { $("#ctx")?.remove(); document.removeEventListener("mousedown", ctxAway); }
 function threadMenu(e, id) {
-  const t = S.threads.find(x => x.id === id) || {};
+  const t = S.threads.find(x => x.id === id) || (S.cur?.id === id ? {id, ...S.cur.view} : {});
+  const inPj = t.project_id && S.pj.find(p => p.id === t.project_id);
+  const projects = [
+    ...S.pj.map(p => ({label: p.name, icon: ICON.folder, checked: p.id === t.project_id ? true : undefined, fn: () => p.id === t.project_id || moveChat(id, p.id)})),
+    ...(S.pj.length ? [{sep: true}] : []),
+    {label: "New project…", icon: ICON.plus, fn: async () => { const pid = await newProjectFlow({stay: true}); if (pid) moveChat(id, pid); }},
+    ...(inPj ? [{label: "Remove from project", icon: ICON.x, fn: () => moveChat(id, "")}] : []),
+  ];
   ctxMenu(e, [
-    {label: "Rename", fn: () => renameThread(id)},
-    {label: S.steps ? "Hide step details" : "Show step details", fn: () => toggleSteps()},
-    {label: t.pinned ? "Unpin" : "Pin", fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
-    {label: t.archived ? "Unarchive" : "Archive", fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
-    {label: "Delete", danger: true, fn: async () => { if (await ask({title: "Delete this chat?", text: "The conversation is removed. Files in your project stay as they are.", ok: "Delete chat", danger: true})) threadAct(id, "delete"); }},
+    {label: "Rename", icon: ICON.pencil, kbd: "F2", fn: () => startRename(id)},
+    {label: t.pinned ? "Unpin" : "Pin", icon: ICON.pin, fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
+    {label: inPj ? "Move to project" : "Add to project", icon: ICON.folder, sub: projects},
+    {label: t.archived ? "Restore" : "Archive", icon: ICON.archive, fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
+    {sep: true},
+    {label: "Delete", icon: ICON.trash, danger: true, fn: () => confirmDelete(id)},
   ]);
 }
-function projMenu(e, path) {
+async function confirmDelete(id) {
+  const t = S.threads.find(x => x.id === id) || {};
+  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from Meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
+}
+async function moveChat(id, pid) {
+  const t = S.threads.find(x => x.id === id), prev = t?.project_id || "";
+  try { await post(`/api/threads/${id}`, {action: "move", project_id: pid}); } catch (e) { return toast(e.message); }
+  if (t) t.project_id = pid;
+  if (S.cur?.id === id && S.cur.view) S.cur.view.project_id = pid;
+  await loadThreads(); await loadPj(); renderTop();
+  const name = S.pj.find(p => p.id === pid)?.name;
+  toast(pid ? `Moved to ${name || "the project"}` : "Removed from the project", 6000, {label: "Undo", fn: () => moveChat(id, prev)});
+}
+function projMenu(e, pid) {
+  const p = S.pj.find(x => x.id === pid); if (!p) return;
   ctxMenu(e, [
-    {label: "New chat here", fn: () => newThread(path)},
-    {label: isMac ? "Open in Finder" : "Open in File Explorer", fn: () => post("/api/open-path", {path}).catch(err => toast(err.message))},
-    {label: "Open in code editor", fn: () => post("/api/open-editor", {path}).then(r => toast(r.message)).catch(err => toast(err.message))},
-    {label: "Rename", fn: async () => { const n = await ask({title: "Rename folder", text: "The name shown in Meshpool. The folder on disk keeps its name.", value: projName(path), ok: "Rename"}); if (n) { await post("/api/projects", {action: "rename", path, name: n}); await loadProjects(); renderSide(); } }},
-    {label: "Remove from Meshpool", danger: true, fn: async () => {
-      const ts = S.threads.filter(t => t.workdir === path && !t.archived);
-      if (!await ask({title: `Remove ${projName(path)} from Meshpool?`, text: `The folder and its files stay on your computer.${ts.length ? ` Its ${ts.length} chat${ts.length === 1 ? " is" : "s are"} archived; you can find ${ts.length === 1 ? "it" : "them"} under Show archived.` : ""}`, ok: "Remove folder", danger: true})) return;
-      await post("/api/projects", {action: "remove", path});
-      for (const t of ts) await post(`/api/threads/${t.id}`, {action: "archive"}).catch(() => {});
-      if (S.cur?.view?.workdir === path) newThread();
-      await loadProjects(); await loadThreads(); renderSide();
-      toast(`${projName(path)} removed`, 6000, {label: "Undo", fn: async () => {
-        await post("/api/projects", {action: "add", path}).catch(e => toast(e.message));
-        for (const t of ts) await post(`/api/threads/${t.id}`, {action: "unarchive"}).catch(() => {});
-        await loadProjects(); await loadThreads(); renderSide(); }});
-    }},
+    {label: "New chat in project", icon: ICON.plus, fn: () => openProject(pid, {focus: true})},
+    {label: "Open project", icon: ICON.stack, fn: () => openProject(pid)},
+    {label: p.pinned ? "Unpin from the sidebar" : "Pin to the sidebar", icon: ICON.pin, fn: async () => { try { await post(`/api/pj/${pid}`, {action: "update", pinned: !p.pinned}); await loadPj(); renderSide(); if (S.view === "page" && S.page === "projects") pageProjects(); } catch (e) { toast(e.message); } }},
+    {label: "Rename", icon: ICON.pencil, fn: () => renameProject(pid)},
+    {sep: true},
+    {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
 async function threadAct(id, action) {
@@ -438,18 +370,36 @@ async function threadAct(id, action) {
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
-  if (action === "delete" && S.cur?.id === id) newThread();
   await loadThreads(); renderTop();
   if (action === "archive") toast("Chat archived", 6000, {label: "Undo", fn: () => threadAct(id, "unarchive")});
-  else if (action === "delete") toast("Chat deleted");
   else if (action === "unarchive") toast("Chat restored");
+  else if (action === "pin") toast("Pinned to the top of the sidebar");
 }
-async function renameThread(id) {
-  const t = S.threads.find(x => x.id === id); const n = await ask({title: "Rename chat", value: t?.title || "", ok: "Rename"});
-  if (!n) return;
-  await post(`/api/threads/${id}`, {action: "rename", title: n}); await loadThreads(); if (S.cur?.id === id && S.cur.view) { S.cur.view.title = n; renderTop(); }
+// Rename in place: the row's title becomes a text box. Enter saves, Esc cancels, clicking away saves.
+function startRename(id) {
+  const t = S.threads.find(x => x.id === id);
+  const li = $(`#sideList .th[data-id="${CSS.escape(id)}"]`);
+  if (!li || !t) { if (S.cur?.id === id) renameTop(); return; }
+  if ($("#app").classList.contains("noside") || (narrow() && !$("#app").classList.contains("sideopen"))) return renameTop();
+  closeCtx();
+  const tt = $(".tt", li); S.renaming = id;
+  tt.innerHTML = `<input class="rn" value="${esc(t.title)}" maxlength="120" aria-label="Chat name" spellcheck="false" autocomplete="off">`;
+  const inp = $(".rn", tt); inp.focus(); inp.select();
+  let done = false;
+  const finish = async save => {
+    if (done) return; done = true;
+    const v = inp.value.trim(); S.renaming = null;
+    const el = $("#sideList"); if (el) el._html = el._shape = "";
+    if (save && v && v !== t.title) {
+      try { await post(`/api/threads/${id}`, {action: "rename", title: v}); t.title = v; if (S.cur?.id === id && S.cur.view) { S.cur.view.title = v; renderTop(); } } catch (err) { toast(err.message); }
+    }
+    renderSide(); $(`#sideList .th[data-id="${CSS.escape(id)}"]`)?.focus({preventScroll: true}); loadThreads();
+  };
+  inp.onkeydown = ev => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); finish(true); } else if (ev.key === "Escape") { ev.preventDefault(); finish(false); } };
+  inp.onblur = () => finish(true);
 }
-// Choose a folder by clicking through folders (used where the computer has no folder dialog).
+async function renameThread(id) { startRename(id); }
+
 function browseFolder(start) {
   return new Promise(resolve => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
@@ -500,81 +450,6 @@ function browseFolder(start) {
     go(start || store("fb_last") || "");
   });
 }
-async function pickProject() {
-  try {
-    let r = await post("/api/projects", {action: "pick"});
-    if (r.no_picker) {                 // no folder dialog on this computer: Meshpool's own folder browser
-      const path = await browseFolder();
-      if (!path) return;
-      r = await post("/api/projects", {action: "add", path});
-    }
-    S.projects = r.projects;
-    if (r.picked) { S.closedProjects.delete(r.picked); newThread(r.picked); }
-    renderSide();
-  } catch (e) { toast(e.message); }
-}
-
-/* ================================== topbar ================================== */
-function renderTop() {
-  const v = S.cur?.view; const hidden = $("#app").classList.contains("noside") || $("#app").classList.contains("autoside") || narrow();
-  const root = curRoot();
-  const ALL = {progress: [ICON.list, "Progress", ""], outputs: [ICON.files, "Files", ""], diff: [ICON.diff, "Diff", `${MOD}⇧D`],
-    files: [ICON.files, "Files", ""], term: [ICON.term, "Terminal", `${MOD}J`], git: [ICON.pr, "Git and CI", ""], preview: [ICON.globe, "Preview", ""]};
-  const tabs = PANELS[curMode()].map(k => [k, ...ALL[k]]);
-  const u = v?.usage; const cx = v?.context;
-  const usage = u && u.in ? `${fmt(u.in)} in · ${u.in ? Math.round(100 * u.cached / u.in) : 0}% cached` : cx && cx.size ? `Context ${Math.round(100 * cx.used / cx.size)}%` : "";
-  $("#topbar").classList.toggle("newt", !v);
-  $("#topbar").innerHTML = `
-    ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
-    <span class="title" id="ttl" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
-    ${root ? `<button class="chip" id="projChip" title="${esc(root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
-    <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
-    <span class="sp"></span>
-    ${usage ? `<span class="chip use" title="Tokens in this chat">${esc(usage)}</span>` : ""}
-
-    ${tabs.map(([k, ic, lb, kb]) => `<button class="tbtn" data-panel="${k}" aria-pressed="${S.panel === k && !$("#panel")?.hidden}" title="${lb}${kb ? " (" + kb + ")" : ""}">${ic}<span>${lb}</span></button>`).join("")}
-    ${v ? `<button class="tbtn" id="tmore" aria-label="Chat options">${ICON.more}</button>` : ""}`;
-  $("#showSide")?.addEventListener("click", toggleSide);
-  $("#stepsBtn")?.addEventListener("click", toggleSteps);
-  $$("[data-panel]").forEach(b => b.onclick = () => togglePanel(b.dataset.panel));
-  $("#tmore")?.addEventListener("click", e => threadMenu(e, v.id));
-  $("#projChip")?.addEventListener("click", e => { if (!v) projectPop(e.currentTarget); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
-  const ttl = $("#ttl");
-  if (v) ttl.ondblclick = () => {
-    ttl.contentEditable = "true"; ttl.focus(); document.getSelection().selectAllChildren(ttl);
-    const done = async save => { ttl.contentEditable = "false"; if (save) { await post(`/api/threads/${v.id}`, {action: "rename", title: ttl.textContent.trim()}); v.title = ttl.textContent.trim(); loadThreads(); } else ttl.textContent = v.title; };
-    ttl.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); done(true); } if (e.key === "Escape") done(false); };
-    ttl.onblur = () => done(true);
-  };
-  renderBranch();
-}
-async function renderBranch() {
-  const root = curRoot(); const el = $("#branchChip"); if (!el || !root) return;
-  if (curMode() === "cowork") { el.innerHTML = ""; return; }
-  try {
-    const g = await api("/api/git?root=" + encodeURIComponent(root));
-    S.git = g;
-    const html = g.repo ? `<button class="chip" id="brChip" title="Branch">${ICON.branch}${esc(g.branch)}${g.dirty ? ` · ${g.dirty} changed` : ""}</button>` : "";
-    S.branchHTML = {...(S.branchHTML || {}), [root]: html};
-    if (curRoot() === root && el.innerHTML !== html) el.innerHTML = html;
-    $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
-    if (g.repo && g.github) ciChip(root);
-  } catch (e) { el.innerHTML = ""; }
-}
-const CI_TEXT = {passing: "Checks passing", failing: "Checks failing", running: "Checks running"};
-async function ciChip(root, fresh) {
-  const c = S.ciCache?.[root];
-  let ci = c && !fresh && Date.now() - c.t < 60000 ? c.ci : null;
-  if (!ci) { try { ci = await api("/api/git/ci?root=" + encodeURIComponent(root)); } catch (e) { return; } S.ciCache = {...(S.ciCache || {}), [root]: {t: Date.now(), ci}}; }
-  const el = $("#branchChip"); if (!el || curRoot() !== root || !CI_TEXT[ci.summary]) return;
-  $("#ciChip")?.remove();
-  el.insertAdjacentHTML("beforeend", `<button class="chip ci ${ci.summary}" id="ciChip" title="${esc(ci.pr ? "#" + ci.pr.number + " " + ci.pr.title : ci.branch)}"><span class="cidot"></span>${CI_TEXT[ci.summary]}</button>`);
-  $("#ciChip").onclick = () => togglePanel("git", true);
-}
-const PANELS = {cowork: ["progress", "outputs"], code: ["diff", "files", "term", "git", "preview"]};
-function curMode() { return S.cur?.view?.kind || S.appMode; }
-function curRoot() { return S.cur?.view?.workdir || S.draft.project || S.defaultProject || ""; }
-
 /* ================================== composer ================================== */
 function setupComposer() {
   const inp = $("#input");
@@ -602,37 +477,10 @@ function cfg() { // the settings that apply to the next message: the open thread
   if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
   return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, busy: false};
 }
-function renderBar() {
-  const c = cfg(); const h = harness(c.harness);
-  $("#app").classList.toggle("planning", !!c.plan);
-  const fits = c.model && (!h.providers || h.providers.includes(provOf(c.model)));
-  const modelLabel = fits ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : (h.runs_on ? "Default · " + h.runs_on : "Agent's own model");
-  $("#cbar").innerHTML = `
-    <button class="pill" id="hPill" title="Agent: who does the work in this chat">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
-    <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
-    <button class="pill" id="aPill" title="${esc(MODES[c.mode]?.[1] || "")}">${ICON.shield}<span class="lbl">${esc(MODES[c.mode]?.[0] || "Supervised")}</span>${ICON.chev}</button>
-    <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
-    <button class="pill" id="attBtn" title="Attach images or files" aria-label="Attach images or files">${ICON.clip}</button>
-    <span class="sp"></span>
-    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spin"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
-    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
-  $("#hPill").onclick = e => harnessPop(e.currentTarget);
-  $("#mPill").onclick = e => modelPop(e.currentTarget);
-  $("#aPill").onclick = e => accessPop(e.currentTarget);
-  $("#pPill").onclick = () => setPlan(!cfg().plan);
-  $("#attBtn").onclick = () => $("#fileIn").click();
-  $("#sendBtn")?.addEventListener("click", () => sendNow(false));
-  $("#stopBtn")?.addEventListener("click", stopNow);
-  $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
-  const root = curRoot();
-  const goal = S.cur?.view?.goal;
-  const touch = matchMedia("(pointer: coarse)").matches;
-  $("#hintline").innerHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
-    + (c.busy && !touch ? `Enter adds to the task · Esc stops` : "");
-  $("#goalClr")?.addEventListener("click", () => setGoal(""));
-  $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget));
-  const inp = $("#input");
-  inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
+async function chooseDraftFolder() {
+  const path = await browseFolder(S.draft.project || "");
+  if (!path) return;
+  S.draft.project = path; renderTop(); renderBar(); if (!S.cur && S.view === "chat") renderHero();
 }
 async function setPlan(on) {
   if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/plan`, {on, since: 1e9})); } catch (e) { return toast(e.message); } }
@@ -678,26 +526,25 @@ async function sendNow(interrupt) {
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
+  if (!S.cur && S.mode === "code" && !S.draft.project) { toast("Choose a folder or a repository first."); $("#envSel")?.click(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
   clearTimeout(S.suggT); if ($("#sugg")) $("#sugg").hidden = true;
   inp.value = ""; inp.style.height = "auto";
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
-  if (S.cur && !$("#working")) { const wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt">Sending</span><span class="el"></span>`; $("#col").appendChild(wk); scrollConv(true); }
+  S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
-      const root = S.draft.project || S.defaultProject;
-      const v = await post("/api/agent", {workdir: root, harness: S.draft.harness || modeHarness(), kind: S.appMode, model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
-      S.draft.plan = false;
+      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
+      S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
-      if (S.appMode === "cowork" && !S.panel && !store("cw_panel_closed") && innerWidth >= 1400) togglePanel("progress", true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
     const files = atts.filter(a => !a.image);
     if (files.length) {
       const saved = [];
       for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in the project folder): ${saved.join(", ")}`;
+      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
     }
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
@@ -722,10 +569,10 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new chat", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/agent", "Choose the agent", () => harnessPop($("#hPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
-  ["/usage", "Tokens used, by model and by chat", () => openSettings("usage")],
+  ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
@@ -735,7 +582,7 @@ const SLASH = [
   ["/prs", "Pull requests: what each changes, its checks (CI) and deployments (CD)", () => openPRView()],
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
-  ["/schedule", "Scheduled tasks", () => openSettings("scheduled")],
+  ["/schedule", "Scheduled tasks", () => goPage("scheduled")],
   ["/memory", "Instructions and memory", () => openSettings("personal")],
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
@@ -755,7 +602,7 @@ async function suggestNow() {
   const box = $("#sugg"); if (!box) return;
   const text = $("#input").value.trim();
   if (text.length < 12 || /^[\/$]/.test(text)) { box.hidden = true; return; }
-  let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: S.appMode, new: !S.cur}); } catch (e) { return; }
+  let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: curMode(), new: !S.cur}); } catch (e) { return; }
   if ($("#input").value.trim() !== text) return;                 // typed on meanwhile: the next pause asks again
   S.suggOff = S.suggOff || new Set();
   const items = (r.suggestions || []).filter(x => !S.suggOff.has(x.type + ":" + x.id));
@@ -801,7 +648,8 @@ function menuFromInput() {
   if (slash) {
     const q = slash[1].toLowerCase();
     const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); if (ARG_CMDS.has(s[0])) { inp.value = s[0] + " "; inp.focus(); inp.dispatchEvent(new Event("input")); return; } inp.value = ""; s[2](); }})));
-    return items.length ? inlinePop(items) : closePop();
+    const sk = byUse(S.skills.filter(s => s.enabled && s.name.toLowerCase().startsWith(q)).map(s => ({label: "$" + s.name, desc: s.description, fn: () => { used("$" + s.name); inp.value = "$" + s.name + " "; inp.focus(); inp.dispatchEvent(new Event("input")); }}))).slice(0, 5);
+    return items.length || sk.length ? inlinePop([...items, ...sk]) : closePop();
   }
   if (skill) {
     const q = skill[2].toLowerCase();
@@ -843,8 +691,7 @@ function popKey(k) {
 }
 function harnessPop(anchor) {
   const cur = cfg().harness;
-  const other = S.appMode === "code" ? "cowork" : "code";
-  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], [other, "Other agents"]];
+  const groups = [["any", "Automatic"], ["cowork", "For documents and research"], ["code", "For code"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && h.available !== false && h.mode === m); if (!hs.length) return "";
     return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.ready === false ? "style='opacity:.6'" : ""}><span class="ol">${esc(h.name)}${h.ready === false ? " · needs setup" : ""}<span class="od">${esc(h.ready === false ? (h.setup || "") : (h.tagline || h.description || ""))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
@@ -853,13 +700,13 @@ function harnessPop(anchor) {
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
     if (harness(id).ready === false) { openSettings(harness(id).login ? "harnesses" : "general"); return; }
-    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("Each chat keeps its agent. Started a new chat with " + harness(id).name + "."); store("harness_" + S.appMode, id); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
-    S.draft.harness = id; store("harness_" + S.appMode, id); renderBar(); renderHero();
+    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("An agent can’t change mid-chat, so this started a new chat with " + harness(id).name + "."); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
+    S.draft.harness = id; renderBar(); renderHero();
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
 }
 function agentFor(prov) {   // the agent to switch to for a model the current agent cannot run
-  const mine = S.appMode === "code" ? "meshpool-code" : "meshpool-work";
+  const mine = curMode() === "code" ? "meshpool-code" : "meshpool-work";
   return harness(mine).providers?.includes(prov) ? mine : (S.harnesses.find(h => h.providers?.includes(prov) && h.available !== false) || {}).id;
 }
 async function connectProvider(g) {   // a provider that is not set up yet: sign in, or add its key in Settings
@@ -873,15 +720,16 @@ async function connectProvider(g) {   // a provider that is not set up yet: sign
 }
 async function pickModel(id) {
   const c = cfg(); const h = harness(c.harness); const prov = provOf(id);
-  if (h.providers && !h.providers.includes(prov)) {
-    const to = agentFor(prov); if (!to) return toast("No agent here can run these models.");
-    const why = `${h.name} cannot run ${(S.models.groups || []).find(g => g.id === prov)?.name || "these"} models`;
-    if (S.cur) { toast(`${why}. Started a new chat with ${harness(to).name}.`); store("harness_" + S.appMode, to); newThread(); }
-    else toast(`${why}, so this chat uses ${harness(to).name}.`);
+  const auto = h.type === "auto" || !S.cur;
+  if (h.providers && !h.providers.includes(prov) && !auto) {
+    const to = agentFor(prov); if (!to) return toast("None of your agents can run that model.");
+    const why = `${h.name} can’t run ${(S.models.groups || []).find(g => g.id === prov)?.name || "these"} models`;
+    toast(`${why}, so this opened a new chat with ${harness(to).name}.`); newThread();
     S.draft.harness = to; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
   }
+  if (!S.cur) { S.draft.model = id; store("model", id); renderBar(); return; }
   if (S.cur && h.type === "acp" && S.cur.view?.harness?.provider && prov !== S.cur.view.harness.provider) {
-    toast(`This chat runs ${h.name} on ${S.cur.view.harness.runs_on}. Started a new chat for this model.`);
+    toast(`This chat runs ${h.name} on ${S.cur.view.harness.runs_on}, so this opened a new chat for that model.`);
     newThread(); S.draft.harness = h.id; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
   }
   setModel(id);
@@ -912,7 +760,7 @@ function modelPop(anchor) {
       const can = !h.providers || h.providers.includes(g.id);
       const note = can ? "" : `Runs in ${harness(agentFor(g.id) || "").name || "another agent"}`;
       html += `<div class="grp">${esc(g.name)}</div>`;
-      if (!g.ready) { if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${g.id === "chatgpt" ? "Sign in with ChatGPT" : "Add a key"}<span class="od">${esc(g.id === "chatgpt" ? "Opens the official sign-in. If you already use Codex on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
+      if (!g.ready) { if (g.id === "chatgpt" && chatgptSignInGone()) continue; if (!q) html += `<button class="opt" data-connect="${esc(g.id)}"><span class="ol">${g.id === "chatgpt" ? "Sign in with ChatGPT" : "Add a key"}<span class="od">${esc(g.id === "chatgpt" ? "Opens the official sign-in. If you already use Codex on this computer, it is picked up by itself." : g.setup)}</span></span></button>`; continue; }
       const rows = g.models.filter(hit);
       if (g.error && !q) html += `<div class="pe">${esc(g.error)}</div>`;
       html += rows.map(m => row(m, note)).join("");
@@ -932,127 +780,250 @@ function modelPop(anchor) {
   $("#mRefresh").onclick = async () => { await loadModels(true); Object.assign(M, S.models); draw(); };
   $("#mManage").onclick = () => { closePop(); openSettings("general"); };
 }
-function accessPop(anchor) {
-  const cur = cfg().mode;
-  const p = openPop(anchor, `<div class="pl">${Object.entries(MODES).map(([k, [lb, d]]) => `<button class="opt" data-m="${k}"><span class="ol">${lb}<span class="od">${d}</span></span>${k === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}</div>`, {width: 300});
-  $$(".opt", p).forEach(b => b.onclick = () => { closePop(); setMode(b.dataset.m); });
-}
-function projectPop(anchor) {
-  const cur = curRoot();
-  const list = S.projects.length ? S.projects : [];
-  const p = openPop(anchor, `<div class="pl">${list.map(x => `<button class="opt" data-p="${esc(x.path)}"><span class="ol">${esc(x.name)}<span class="od">${esc(x.path)}</span></span>${x.path === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}
-    <button class="opt" data-p="${esc(S.defaultProject)}"><span class="ol">Meshpool Projects<span class="od">${esc(S.defaultProject)}</span></span></button></div>
-    <div class="pf"><button class="opt" id="pickNew">${ICON.folder}<span class="ol">Choose a folder on this computer</span></button><button class="opt" id="pickHome">${ICON.dir}<span class="ol">Use my whole home folder<span class="od">Every folder and file you can open yourself</span></span></button></div>`, {width: 380});
-  $$(".opt[data-p]", p).forEach(b => b.onclick = () => { closePop(); S.draft.project = b.dataset.p; store("project", S.draft.project); renderBar(); renderTop(); if (S.panel) renderPanel(); });
-  $("#pickNew").onclick = () => { closePop(); pickProject(); };
-  $("#pickHome").onclick = () => { closePop(); useHome(); };
-}
-async function useHome() {
-  if (!await ask({title: "Give Meshpool your whole home folder?", text: "Agents can then read and, with your approval, change any of your files. You can still pick one folder per chat. On a Mac, also allow Full Disk Access in Settings, Permissions to reach Desktop, Documents and Downloads without a prompt each time.", ok: "Use my home folder"})) return;
-  try {
-    const r = await post("/api/projects", {action: "home"});
-    S.projects = r.projects; renderSide(); newThread(r.picked);
-  } catch (e) { toast(e.message); }
-}
-
 /* ================================== threads ================================== */
 function restoreDraft() {
-  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || "new")) || ""; } catch (e) {}
+  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || (S.view === "project" ? "pj_" + S.pjId : "new"))) || ""; } catch (e) {}
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
-function newThread(project) {     // project: the folder for the new chat; without one, the open chat's folder
-  if (S.cur) clearTimeout(S.cur.pollT);
-  const p = folderOrNone(project) || S.cur?.view?.workdir;
-  if (p) { S.draft.project = p; store("project", p); }
-  S.cur = null; S.attachments = []; renderAttach();
+// A new chat. Without an argument: a plain chat that needs no folder. With a folder path (old scripts): a chat in that
+// folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
+function newThread(opt) {
+  if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
+  leaveChat(S.cur);
+  S.view = "chat"; S.pjId = "";
+  S.draft.project = typeof opt === "string" ? opt : "";
+  S.draft.pid = "";
+  S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
   S.draft.harness = modeHarness();
-  if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
 }
-function renderHero() {
-  const h = harness(S.draft.harness); const cw = S.appMode === "cowork";
-  const starters = cw ? [
-    ["Summarize this folder into a Word document", "Read the files in this folder and write a one-page summary as a Word document."],
-    ["Build a revenue model in Excel", "Build a 3-year revenue model for a SaaS company with 3 pricing tiers, as an Excel file with formulas."],
-    ["Make a short PowerPoint deck", "Make a 6-slide PowerPoint deck on why engineering teams should track AI spend per team."],
-    ["Read a scanned PDF", "Read the scanned PDF in this folder and turn it into a clean Word document with the same headings and tables."],
-    ["Research a question", "Research this and give me a short answer with sources: "],
-    ["Analyse a spreadsheet", "Analyse the spreadsheet in this folder: the main trends, anything unusual, and a short summary."],
-  ] : [
-    ["Explain this codebase", "Give me a tour of this codebase: what it does, how it is structured, and where to start."],
-    ["Find and fix a bug", "Run the tests, find what fails, and fix it."],
-    ["Review my changes", "$code-review Review my current changes."],
-    ["Add a feature", "Plan, then build: "],
-    ["Fix the failing CI", "Check why CI is failing on this branch, fix it, and push."],
-    ["Open a pull request", "$pull-request"],
-  ];
-  $("#col").innerHTML = `<div class="hero">
-    <h1>${cw ? "What should we get done?" : "What are we building?"}</h1>
-    <p class="sub">${cw ? "Research, documents, spreadsheets, decks and data, done for you in" : "Reads, edits and runs your code in"} <button class="linkbtn" id="heroProj" title="Change folder">${esc(projName(curRoot()))}</button></p>
-    <div class="starters">${starters.map(([a, b]) => `<button data-s="${esc(b)}">${esc(a)}</button>`).join("")}</div></div>`;
-  $("#heroProj").onclick = e => projectPop(e.currentTarget);
-  $$(".starters button").forEach(b => b.onclick = () => { const inp = $("#input"); inp.value = b.dataset.s; inp.focus(); inp.dispatchEvent(new Event("input")); });
+const STARTERS = [
+  ["Summarize a document", "Read the document I attach and write a one-page summary as a Word file."],
+  ["Research a question", "Research this and give me a short answer with sources: "],
+  ["Build a spreadsheet", "Build a 3-year revenue model for a SaaS company with 3 pricing tiers, as an Excel file with formulas."],
+  ["Make a presentation", "Make a 6-slide deck on why engineering teams should track AI spend per team."],
+  ["Analyse some data", "Analyse the spreadsheet I attach: the main trends, anything unusual, and a short summary."],
+  ["Write or fix code", "Help me with some code. Here is what I need: "],
+];
+/* ---------- opening a chat, live delivery, scrolling ----------
+   A chat is built off-screen (cur.stage) and swapped in whole, so switching never shows a blank or half-built list.
+   Live events arrive over a Server-Sent Events stream (polling stays as the fallback and as a slow safety net) and are
+   queued; one requestAnimationFrame loop applies them, a few characters per frame, so text flows instead of arriving
+   in lumps. The reply is rendered as Markdown while it streams, into the same node it ends in. */
+const CACHE = new Map();                         // chat id -> {log, total, next, epoch, view}: reopening replays it, then fetches only what is new
+const colEl = () => S.cur?.stage || $("#col");
+function stashChat(cur) {
+  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 4000) return;
+  try { flushQ(cur); } catch (e) { return; }
+  const view = Object.assign({}, cur.view); delete view.events; delete view.prefill;
+  CACHE.delete(cur.id); CACHE.set(cur.id, {log: cur.log.slice(), total: cur.total, next: cur.next || 0, epoch: cur.epoch, view, turn: cur.turn});
+  while (CACHE.size > 6) CACHE.delete(CACHE.keys().next().value);
+}
+function leaveChat(cur) {
+  if (!cur) return;
+  clearTimeout(cur.pollT); stopStream(cur); clearTimeout(cur.sseT);
+  stashChat(cur); EASE.clear();
+}
+function beginStage(cur) {                       // the next events build a detached list; commitStage swaps it in
+  cur.stage = document.createElement("div"); cur.group = null; cur.live = null; cur.liveText = ""; cur.thought = null; cur.plan = null; cur.planEv = null; cur.mcpNote = null; cur.route = null; cur.subs = null; cur.tools = {}; cur.q = []; cur.ready = false;
+  $("#col")?.classList.add("loading");
+}
+function commitStage(cur) {
+  const st = cur.stage; if (!st) return;
+  cur.stage = null; EASE.clear();
+  const col = $("#col"); col.replaceChildren(...st.childNodes); col.classList.remove("loading");
+  for (const n of col.children) n.classList.remove("enter");
+  S.pinned = true; scrollConv(true);
+  if (cur.live) easeStart(cur.live);
 }
 function openThread(id, fresh) {
-  if (S.unseen?.delete(id)) store("unseen", [...S.unseen]);
-  store("last_" + S.appMode, id);
+  const seen = S.threads.find(t => t.id === id);
+  if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
+  store("last_chat", id);
+  S.view = "chat"; S.pjId = ""; S.draft.pid = "";
   $("#app").classList.remove("sideopen");
-  if (S.cur) clearTimeout(S.cur.pollT);
+  leaveChat(S.cur);
   const known = S.threads.find(t => t.id === id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0};
-  if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
-  $("#col").innerHTML = "";
-  closePop(); renderSide(); if (S.cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
+  if (known) { const m = isCodeThread(known) ? "code" : "chat"; if (S.mode !== m) { S.mode = m; store("appmode", m); syncMode(); } }
+  const hit = !fresh && CACHE.get(id);
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
+  if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
+  const cur = S.cur;
+  S.pinned = true; setWorking(null);
+  closePop();
+  beginStage(cur);
+  if (hit) {                                     // replay what we already had, off-screen, then ask only for the rest
+    cur.view = Object.assign(cur.view || {}, hit.view, {events: []}); cur.total = hit.total; cur.next = hit.next; cur.epoch = hit.epoch; cur.turn = 0;
+    for (const ev of hit.log) { cur.log.push(ev); applyEv(ev); }
+    cur.turn = hit.turn || cur.turn; flushLive(cur); commitStage(cur); cur.cached = true;
+  }
+  renderSide(); if (cur.view) { renderTop(); renderBar(); } $("#input").value = ""; restoreDraft(); poll();
+}
+function resetChat(cur) {                        // the history changed under us (undo, rewind): rebuild from the start
+  stopStream(cur); cur.total = 0; cur.next = 0; cur.log = []; cur.epoch = -2; cur.turn = 0; beginStage(cur);
 }
 async function poll() {
   const cur = S.cur; if (!cur) return;
+  clearTimeout(cur.pollT);
   let v;
   try { v = await api(`/api/agent/${cur.id}?since=${cur.total}`); }
   catch (e) {
     if (S.cur !== cur) return;
-    if (/not found/i.test(e.message)) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); return; }
+    if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
-    let n = $("#pollErr"); if (!n && cur.fails > 1) { $("#col").insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
+    let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
     if (n) n.textContent = `${e.message} Retrying…`;
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
     return;
   }
   if (S.cur !== cur) return;
   if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
-  if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { cur.total = 0; cur.epoch = v.epoch; $("#col").innerHTML = ""; cur.live = null; cur.group = null; cur.tools = {}; cur.log = []; cur.next = 0; return poll(); }
+  const again = ingest(cur, v);
+  if (again) return poll();
+  const busy = ["starting", "working", "waiting"].includes(v.state);
+  if (busy) startStream(cur);
+  cur.pollT = setTimeout(poll, cur.es && cur.es.readyState === 1 ? 4000 : busy ? 400 : document.hidden ? 15000 : 3000);
+}
+// Take one view of the chat (from a poll or the stream): queue its new events and update the chrome around them.
+function ingest(cur, v) {
+  if (S.cur !== cur) return;
+  if (v.epoch !== cur.epoch && cur.epoch !== -1 && cur.total) { resetChat(cur); cur.epoch = v.epoch; return true; }
   const first = !cur.view || cur.view.prefill || cur.view.state === "starting" && !cur.total;
-  cur.epoch = v.epoch; cur.total = v.total;
+  cur.epoch = v.epoch; cur.total = Math.max(cur.total || 0, v.total || 0);
   const prevState = cur.view?.state, prevGoal = cur.view?.goal;
+  const evs = v.events || []; v = Object.assign({}, v); delete v.events;
   cur.view = Object.assign(cur.view || {}, v); delete cur.view.prefill;
   const inpEl = $("#input"); if (inpEl) { inpEl.disabled = !!v.readonly; if (v.readonly) inpEl.placeholder = "This chat's folder is gone, so it can't continue. Start a new chat."; }
-  cur.log = cur.log || [];
-  const cv = $("#conv"); const stick = !!cv && cv.scrollHeight - cv.scrollTop - cv.clientHeight < 200;
-  for (const ev of v.events) {
-    if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // two polls in flight
+  let got = 0;
+  for (const ev of evs) {
+    if (typeof ev.i === "number") { if (ev.i < (cur.next || 0)) continue; cur.next = ev.i + 1; }   // the stream and a poll can overlap
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
-    cur.log.push(ev); applyEv(ev);
+    cur.q.push(ev); got++;
   }
-  if (v.kind && v.kind !== S.appMode) { S.appMode = v.kind; store("appmode", v.kind); $("#app").dataset.mode = v.kind; $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === v.kind)); renderSide(); renderTop(); }
-  if (S.panel === "progress" && (v.events.length || prevState !== v.state)) renderPanel();
+  if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
+  if (cur.stage) commitStage(cur);
+  if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
-  let wk = $("#working");
-  if (v.state === "working" && !cur.live && !$(".appr:not(.done)")) {
-    if (!wk) { wk = document.createElement("div"); wk.id = "working"; wk.className = "working"; wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); }
-    $(".wt", wk).textContent = String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, "");
-    $(".el", wk).textContent = Math.round((Date.now() - (cur.since || Date.now())) / 1000) + "s";
-    $("#col").appendChild(wk);
-  } else { wk?.remove(); if (v.state !== "working") cur.since = null; }
+  cur.busy = busy; cur.working = v.state === "working";
+  if (v.state === "working") { if (!cur.since) cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); } else cur.since = null;
   if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   if (first && S.panel) renderPanel();
-  scrollConv(first || stick);
-  if (!cur.ready) setTimeout(() => { if (S.cur === cur) cur.ready = true; }, 50);
-  cur.pollT = setTimeout(poll, busy ? 400 : document.hidden ? 15000 : 3000);
+  if (first) scrollConv(true);
+  if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
+  return false;
 }
-function scrollConv(force) { const c = $("#conv"); if (force || c.scrollHeight - c.scrollTop - c.clientHeight < 200) c.scrollTop = c.scrollHeight; }
+// ---- Server-Sent Events: the open chat's events pushed as they happen
+function startStream(cur) {
+  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  cur.es = es;
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onerror = () => {                           // fall back to polling; try the stream again a few times
+    stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
+    if (cur.esFails >= 4) { cur.sseOff = true; return; }
+    cur.sseT = setTimeout(() => { if (S.cur === cur && cur.busy) startStream(cur); }, 600 * cur.esFails);
+    if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
+  };
+}
+function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+// ---- the paced drain: events leave the queue in order; text goes a few characters per frame
+function drainQ(cur, all) {
+  const q = cur.q; if (!q || !q.length) return;
+  let backlog = 0; if (!all) for (const e of q) if (e.type === "text_delta") backlog += e.text.length;
+  let budget = all ? Infinity : Math.max(8, Math.ceil(backlog / 8)), evs = 0;
+  while (q.length && (all || evs < 3)) {
+    const ev = q[0];
+    if (ev.type === "text_delta") {
+      if (budget <= 0) break;
+      if (ev.text.length > budget) { const head = ev.text.slice(0, budget); ev.text = ev.text.slice(budget); const part = {type: "text_delta", text: head}; cur.log.push(part); applyEv(part); break; }
+      q.shift(); budget -= ev.text.length;
+    } else { q.shift(); evs++; }
+    cur.log.push(ev); applyEv(ev);
+  }
+}
+function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
+function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+function frame() {
+  requestAnimationFrame(frame);
+  const cur = S.cur;
+  if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
+  easeAll(); workTick(cur);
+}
+// The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
+// scrolls with it smoothly instead of stepping a whole line at a time.
+const EASE = new Set();
+function easeStart(node) { if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+function easeEnd(node) { if (node) node.dataset.done = "1"; }
+function easeAll() {
+  for (const n of EASE) {
+    if (!n.isConnected) { EASE.delete(n); n.style.height = ""; n.classList.remove("rv"); continue; }
+    const inner = n.firstElementChild, target = inner ? inner.offsetHeight : 0, h = parseFloat(n.style.height) || 0, done = n.dataset.done === "1";
+    if (target > h + 0.5) n.style.height = Math.min(target, h + Math.max(1, (target - h) * (target - h > 70 ? 0.25 : 0.11))).toFixed(1) + "px";
+    else if (done) { n.style.height = ""; n.classList.remove("rv"); EASE.delete(n); }
+  }
+}
+// ---- the "working" status: one slot under the composer, always the same size, updated in place
+function setWorking(text, secs) {
+  const slot = $("#statusSlot"); if (!slot) return;
+  let wk = $("#working", slot);
+  if (text == null) { wk?.remove(); return; }
+  if (!wk) { wk = document.createElement("span"); wk.id = "working"; wk.className = "working"; wk.setAttribute("role", "status"); wk.innerHTML = `<span class="dot run"></span><span class="wt"></span><span class="el"></span>`; slot.appendChild(wk); }
+  const wt = $(".wt", wk), el = $(".el", wk);
+  if (wt.textContent !== text) wt.textContent = text;
+  const e = secs == null ? "" : secs + "s"; if (el.textContent !== e) el.textContent = e;
+}
+function workTick(cur) {
+  if (!cur) return;
+  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
+  const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
+  const pd = cur.working ? planData() : null;
+  if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
+  else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
+}
+// ---- scrolling: follow the end while the reader is at the end; never pull them back once they scroll up
+function scrollConv(force) { const c = $("#conv"); if (!c) return; if (force) S.pinned = true; if (S.pinned) { c.scrollTop = c.scrollHeight; $(".jumpdown")?.setAttribute("hidden", ""); } }
+function setupScroll() {
+  const conv = $("#conv"), col = $("#col");
+  const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "Jump to latest", type: "button"});
+  conv.parentElement.appendChild(jd);
+  jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
+  conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
+  if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
+  requestAnimationFrame(frame);
+}
 
 /* ---------- markdown ---------- */
+// One renderer for the live reply and for history. The text is cut into blocks at blank lines (a code fence is one block);
+// each block becomes its own elements. When the text grows only the last, still-open block is re-rendered, so finished
+// blocks are never touched and the finished reply is exactly what was on screen while it streamed.
+function mdBlocks(text) {
+  const out = []; let cur = [], fence = false;
+  for (const ln of String(text || "").split("\n")) {
+    if ((ln.split("```").length - 1) % 2) fence = !fence;
+    if (!fence && !ln.trim()) { if (cur.length) { out.push(cur.join("\n")); cur = []; } continue; }
+    cur.push(ln);
+  }
+  if (cur.length) out.push(cur.join("\n"));
+  return out;
+}
+function mdRoot(node) { let r = node.firstElementChild; if (!r || !r.classList.contains("mdh")) { r = document.createElement("div"); r.className = "mdh"; node.textContent = ""; node.appendChild(r); node._blocks = []; } return r; }
+function mdRender(node, text) {
+  const root = mdRoot(node), prev = node._blocks || (node._blocks = []), srcs = mdBlocks(text);
+  for (let i = 0; i < srcs.length; i++) {
+    if (prev[i] && prev[i].src === srcs[i]) continue;
+    const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
+    const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
+    const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
+    for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
+    for (const n of old) n.remove();
+    prev[i] = {src: srcs[i], nodes};
+  }
+  while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
+  return node;
+}
 function inline(s) {
   return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
@@ -1064,14 +1035,14 @@ function md(src) {
     if (i % 2) return `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
-    const flushL = () => { if (list) { out += `<${list.t}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
+    const flushL = () => { if (list) { out += `<${list.t}${list.t === "ol" && list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
     const flushT = () => { if (table.length) { const rows = table.filter(r => !/^\s*\|?\s*:?-{2,}/.test(r)).map(r => r.replace(/^\s*\||\|\s*$/g, "").split("|").map(c => c.trim())); out += `<table>${rows.map((r, ri) => `<tr>${r.map(c => ri ? `<td>${inline(c)}</td>` : `<th>${inline(c)}</th>`).join("")}</tr>`).join("")}</table>`; table = []; } };
     for (const ln of lines) {
       let m;
       if (/^\s*\|.*\|\s*$/.test(ln)) { flushP(); flushL(); table.push(ln); continue; } else flushT();
       if ((m = /^(#{1,6})\s+(.*)$/.exec(ln))) { flushP(); flushL(); out += `<h3>${inline(m[2])}</h3>`; }
       else if ((m = /^\s*[-*]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ul") { flushL(); list = {t: "ul", items: []}; } list.items.push(m[1]); }
-      else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = {t: "ol", items: []}; } list.items.push(m[1]); }
+      else if ((m = /^\s*(\d+)[.)]\s+(.*)$/.exec(ln))) { flushP(); if (!list || list.t !== "ol") { flushL(); list = {t: "ol", items: [], start: +m[1]}; } list.items.push(m[2]); }
       else if ((m = /^&gt;\s?(.*)$/.exec(ln))) { flushP(); flushL(); out += `<blockquote>${inline(m[1])}</blockquote>`; }
       else if (!ln.trim()) { flushP(); flushL(); }
       else { flushL(); para.push(ln); }
@@ -1096,22 +1067,23 @@ function stepSummary(name, ev) {
 const TOOL_LABEL = {bash: "Ran", read_file: "Read", write_file: "Wrote", edit: "Edited", grep: "Searched", glob: "Listed", fetch_url: "Fetched", web_search: "Searched the web", web_research: "Researched", mcp__meshpool_web__web_search: "Searched the web", mcp__meshpool_web__web_fetch: "Read", mcp__meshpool_web__web_research: "Researched", mcp__meshpool_assistant__memory_save: "Saved to memory", mcp__meshpool_assistant__run_subtasks: "Ran sub-agents", run_subtasks: "Ran sub-agents", delegate_task: "Handed off to sub-agents", mcp__meshpool_assistant__schedule_task: "Scheduled", todo_write: "Updated the plan", use_skill: "Loaded skill", office_task: "Office"};
 function workGroup() {
   const cur = S.cur;
-  if (cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild) return cur.group;
-  const d = document.createElement("details"); d.className = "work"; d.open = true; d.dataset.n = "0";
-  d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="wl">Working</span></summary><div class="rows"></div>`;
-  $("#col").appendChild(d); cur.group = d; return d;
+  if (cur.group && cur.group.isConnected && cur.group === colEl().lastElementChild) return cur.group;
+  const d = document.createElement("details"); d.className = "work"; d.open = !!S.steps; d.dataset.n = "0";
+  d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="gdots" aria-hidden="true"><i></i><i></i><i></i></span><span class="wl">Working</span><span class="gel"></span></summary><div class="rows"></div>`;
+  d._t0 = Date.now();
+  colEl().appendChild(d); cur.group = d; return d;
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
-  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); }
+  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
 function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 function applyEv(ev) {
-  const cur = S.cur, col = $("#col");
+  const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
@@ -1124,16 +1096,16 @@ function applyEv(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking";
-      add(`<div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
+      add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }
     case "text_delta":
-      if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.live.style.whiteSpace = "pre-wrap"; cur.liveText = ""; }
-      cur.liveText += ev.text; cur.live.textContent = cur.liveText; cur.activity = "Writing"; break;
-    case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; } break;
+      if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
+      cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
+    case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "assistant":
       { const txt = stripGoal(ev.text);
-      if (cur.live) { if (txt) { cur.live.style.whiteSpace = ""; cur.live.innerHTML = linkFiles(md(txt)); } else cur.live.remove(); cur.live = null; }
-      else if (txt) { closeGroup(); add(linkFiles(md(txt)), "msg-ai"); } }
+      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
+      else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {
@@ -1158,8 +1130,8 @@ function applyEv(ev) {
       const g = d.closest(".work"); if (g) bumpGroup(g);
       break; }
     case "approval": {
-      const gKeep = cur.group && cur.group.isConnected && cur.group === $("#col").lastElementChild ? cur.group : null;
-      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "waiting for your OK"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
+      const gKeep = cur.group && cur.group.isConnected && cur.group === col.lastElementChild ? cur.group : null;
+      for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st) { st.textContent = "Needs your approval"; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_BASE[nm] || TOOL_LABEL[nm] || nm; } }
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
@@ -1178,14 +1150,11 @@ function applyEv(ev) {
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
-        const g = d.previousElementSibling; if (g?.classList.contains("work") && d === $("#col").lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
+        const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
       const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
-    case "plan": {
-      const html = `<b>Plan</b><ol>${(ev.entries || []).map(e => `<li class="${esc(e.status)}">${esc(e.content)}</li>`).join("")}</ol>`;
-      if (cur.plan && cur.plan.isConnected) cur.plan.innerHTML = html; else { closeGroup(); cur.plan = add(html, "planbox"); }
-      break; }
+    case "plan": { cur.planEv = ev; planSoon(); break; }       // shown in the Session panel and as one line above the composer
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
       let box = cur.subs[ev.delegation];
@@ -1200,7 +1169,15 @@ function applyEv(ev) {
       cur.activity = "Sub-agents working";
       break; }
     case "context": if (cur.view) cur.view.context = {used: ev.used, size: ev.size}; break;
-    case "status": if (!/^Starting MCP|^MCP:/.test(ev.text || "")) add(esc(ev.text), "note"); else cur.mcpNote = ev.text; break;
+    case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
+      add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
+    case "status": {
+      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto; add(`<span>${esc(ev.text)}</span>`, "note using"); sessionSoon(); break; }   // one neutral line; the reason is in the Session panel
+      // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
+      if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
+      if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
+      if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
+      add(esc(ev.text), "note"); break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
@@ -1236,51 +1213,87 @@ function questionEv(ev, add) {
   if (ev.type === "question_done") { questionDone(ev); return true; }
   return false;
 }
+// The card sits in the transcript like any message. Rows are full width; 1-9 pick a row, arrows move, Enter on a chosen row
+// sends. Answered, it folds into one line (its height eases down, so nothing jumps).
+const qId = ev => "q-" + String(ev.id).replace(/[^\w-]/g, "");
+const QCHECK = `<svg class="qck" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>`;
 function questionCard(ev, add) {
-  const qs = ev.questions || [], cid = "q-" + String(ev.id).replace(/[^\w-]/g, "");
-  const many = qs.length > 1;
-  const html = `<div class="qhead" id="${cid}-h">${many ? `${qs.length} questions before I go on` : "A question before I go on"}</div>` +
-    qs.map((q, i) => `<fieldset class="qq" data-i="${i}" data-multi="${q.multi ? 1 : 0}">
-      <legend><span class="qchip">${esc(q.header || `Question ${i + 1}`)}</span><span class="qtext">${esc(q.question)}</span>${q.multi ? `<span class="qhint">Pick any</span>` : ""}</legend>
-      <div class="qopts">${(q.options || []).map(o => `<button type="button" class="qopt" aria-pressed="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="ql">${esc(o.label)}${o.recommended ? ` <span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</button>`).join("")}</div>
-      <label class="qother"><span>Other</span><input type="text" placeholder="Type your own answer" aria-label="Your own answer to: ${esc(q.question)}"></label>
-    </fieldset>`).join("") +
-    `<div class="acts"><button type="button" class="btn primary qsend">Send ${many ? "answers" : "answer"}</button><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span></div>`;
-  const d = add(html, "qcard"); d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-labelledby", cid + "-h");
-  $$(".qq", d).forEach(fs => {
-    const multi = fs.dataset.multi === "1", btns = $$(".qopt", fs), inp = $("input", fs);
-    btns.forEach(b => b.onclick = () => {
-      const on = b.getAttribute("aria-pressed") !== "true";
-      if (!multi) { btns.forEach(x => x.setAttribute("aria-pressed", "false")); if (on) inp.value = ""; }
-      b.setAttribute("aria-pressed", on ? "true" : "false");
-    });
-    inp.oninput = () => { if (!multi && inp.value.trim()) btns.forEach(x => x.setAttribute("aria-pressed", "false")); };
-    inp.onkeydown = e => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $(".qsend", d).click(); } };
-  });
-  $(".qsend", d).onclick = async () => {
-    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[aria-pressed=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
-    $$("button, input", d).forEach(x => x.disabled = true);
-    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); }
-    catch (e) { $$("button, input", d).forEach(x => x.disabled = false); toast(e.message); }
+  const qs = ev.questions || [], cid = qId(ev), many = qs.length > 1;
+  const html = qs.map((q, i) => {
+    const multi = !!q.multi, opts = q.options || [], role = multi ? "checkbox" : "radio";
+    return `<fieldset class="qq" data-i="${i}" data-multi="${multi ? 1 : 0}">
+      <legend>${q.header ? `<span class="qchip">${esc(q.header)}</span>` : ""}<span class="qtext">${esc(q.question)}</span>${multi ? `<span class="qhint">Choose any</span>` : ""}</legend>
+      <div class="qopts" role="${multi ? "group" : "radiogroup"}" aria-label="${esc(q.question)}">${opts.map((o, k) => `<button type="button" class="qopt" role="${role}" aria-checked="${o.recommended ? "true" : "false"}" data-l="${esc(o.label)}"><span class="qk">${k + 1}</span><span class="qbody"><span class="ql">${esc(o.label)}${o.recommended ? `<span class="qrec">Recommended</span>` : ""}</span>${o.description ? `<span class="qd">${esc(o.description)}</span>` : ""}</span>${QCHECK}</button>`).join("")}
+        <label class="qopt qother" data-other="1"><span class="qk">${opts.length + 1}</span><span class="qbody"><input type="text" placeholder="Other: type your own answer" aria-label="Your own answer to: ${esc(q.question)}" autocomplete="off"></span>${QCHECK}</label>
+      </div></fieldset>`;
+  }).join("");
+  const d = add(`<div class="qin">${html}<div class="qfoot"><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span><button type="button" class="btn primary qsend">${many ? "Send answers" : "Continue"}</button></div></div>`, "qcard");
+  d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
+  const sync = () => {
+    $$(".qq", d).forEach(fs => { const inp = $("input", fs), oth = $(".qother", fs); oth.setAttribute("aria-checked", inp.value.trim() ? "true" : "false"); });
+    const ok = $$(".qq", d).every(fs => $$(".qopt[aria-checked=true]", fs).length);
+    $(".qsend", d).disabled = !ok || d.classList.contains("sent");
   };
+  const pick = (fs, row) => {
+    const multi = fs.dataset.multi === "1", inp = $("input", fs), rows = $$(".qopt[data-l]", fs);
+    if (row.dataset.other) { inp.focus(); return; }
+    const on = multi ? row.getAttribute("aria-checked") !== "true" : true;
+    if (!multi) { rows.forEach(x => x.setAttribute("aria-checked", "false")); inp.value = ""; }
+    row.setAttribute("aria-checked", on ? "true" : "false"); sync();
+  };
+  const submit = async () => {
+    if ($(".qsend", d).disabled) return;
+    const answers = $$(".qq", d).map(fs => ({selected: $$(".qopt[data-l][aria-checked=true]", fs).map(b => b.dataset.l), other: $("input", fs).value.trim()}));
+    d.classList.add("sent"); $$("button, input", d).forEach(x => x.disabled = true);
+    try { await post(`/api/agent/${S.cur.id}/reply`, {question_id: ev.id, answers}); clearTimeout(S.cur.pollT); poll(); $("#input")?.focus({preventScroll: true}); }
+    catch (e) { d.classList.remove("sent"); $$("button, input", d).forEach(x => x.disabled = false); sync(); toast(e.message); }
+  };
+  d._submit = submit; d._pick = pick;
+  $$(".qq", d).forEach(fs => {
+    const multi = fs.dataset.multi === "1", inp = $("input", fs);
+    $$(".qopt[data-l]", fs).forEach(b => b.onclick = () => pick(fs, b));
+    $(".qother", fs).onclick = e => { if (e.target !== inp) inp.focus(); };
+    inp.oninput = () => { if (!multi && inp.value.trim()) $$(".qopt[data-l]", fs).forEach(x => x.setAttribute("aria-checked", "false")); sync(); };
+  });
+  $(".qsend", d).onclick = submit;
+  d.addEventListener("keydown", e => qKeys(e, d));
+  sync();
   if (!ev.timeout_s) $$("button, input", d).forEach(x => x.disabled = true);   // answered at once (no one to ask)
   scrollConv(true);
-  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-pressed=true]", d)?.focus({preventScroll: true});
+  if (ev.timeout_s && document.activeElement === document.body) $(".qopt[aria-checked=true], .qopt", d)?.focus({preventScroll: true});
 }
+// Keys for the open question: inside the card, and from an empty message box so the reader never has to reach for the mouse.
+function qKeys(e, d) {
+  if (d.classList.contains("done") || d.classList.contains("sent") || e.isComposing || e.altKey) return;
+  const inInput = e.target.tagName === "INPUT", fs = e.target.closest?.(".qq") || $(".qq", d);
+  const rows = $$(".qopt[data-l], .qother input", fs), k = e.key;
+  if (k === "ArrowDown" || k === "ArrowUp") { e.preventDefault(); const i = rows.indexOf(e.target.closest(".qopt")?.matches(".qother") ? $("input", e.target.closest(".qopt")) : e.target); rows[(i < 0 ? (k === "ArrowDown" ? 0 : rows.length - 1) : (i + (k === "ArrowDown" ? 1 : -1) + rows.length) % rows.length)]?.focus(); return; }
+  if (/^[1-9]$/.test(k) && !inInput && !e.metaKey && !e.ctrlKey) { const r = rows[+k - 1]; if (r) { e.preventDefault(); if (r.tagName === "INPUT") r.focus(); else { d._pick(fs, r); r.focus(); } } return; }
+  if (k === "Enter" && !e.shiftKey) {
+    const onRow = e.target.classList?.contains("qopt");
+    if (onRow && e.target.getAttribute("aria-checked") !== "true" && !(e.metaKey || e.ctrlKey)) return;     // the first Enter chooses (native click)
+    if (e.target.classList?.contains("qsend")) return;
+    e.preventDefault(); d._submit();
+  }
+}
+document.addEventListener("keydown", e => {            // from an empty message box
+  if (e.target !== $("#input") || $("#input").value || e.metaKey || e.ctrlKey) return;
+  const d = [...document.querySelectorAll(".qcard:not(.done):not(.sent)")].pop(); if (!d || d.dataset.n === undefined || $(".qsend", d)?.disabled && !/^[1-9]$|Arrow/.test(e.key)) return;
+  if (!(/^[1-9]$/.test(e.key) || e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter")) return;
+  if (e.key === "Enter") { if ($(".qsend", d).disabled) return; e.preventDefault(); e.stopPropagation(); d._submit(); return; }
+  qKeys(e, d);
+}, true);
 function questionDone(ev) {
-  const d = document.getElementById("q-" + String(ev.id).replace(/[^\w-]/g, "")); if (!d || d.classList.contains("done")) return;
-  d.classList.add("done");
-  const src = ev.source, head = $(".qhead", d);
-  if (head) head.textContent = src === "stopped" ? "Question (stopped)" : src === "user" || src === "replay" ? "You answered" : src === "timeout" ? "No answer in time: went with the recommendations" : "Went with the recommendations";
-  const ans = ev.answers || [];
-  const typed = src === "user" && /^You replied/.test(ev.text || "");
-  const rows = ans.length && !typed ? $$(".qq", d).map((fs, i) => {
-    const a = ans[i] || {}, q = $(".qtext", fs)?.textContent || "", h = $(".qchip", fs)?.textContent || "";
-    const val = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", ");
-    return `<div class="qa"><span class="qchip">${esc(h)}</span><span class="qtext">${esc(q)}</span><b>${esc(val || "-")}</b>${a.default && src === "user" ? `<span class="qhint">recommended</span>` : ""}</div>`;
-  }).join("") : `<div class="qa"><span class="qtext qpre">${esc(ev.text || "")}</span></div>`;
-  $$(".qq, .acts", d).forEach(x => x.parentNode.removeChild(x));
-  d.insertAdjacentHTML("beforeend", rows);
+  const d = document.getElementById(qId(ev)); if (!d || d.classList.contains("done")) return;
+  const src = ev.source, ans = ev.answers || [], typed = src === "user" && /^You replied/.test(ev.text || "");
+  const qs = $$(".qq", d).map(fs => $(".qtext", fs)?.textContent || "");
+  const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
+  const line = (q, val) => `<div class="qa">${QCHECK}<span class="qtext">${esc(q)}</span><b>${esc(val || "No answer")}</b></div>`;
+  const rows = typed ? line("You replied", String(ev.text).replace(/^You replied:?\s*/, "")) : ans.length ? qs.map((q, i) => { const a = ans[i] || {}; const v = [...(a.selected || []), ...(a.other ? [`“${a.other}”`] : [])].join(", "); return line(q, (how ? how + " " : "") + v); }).join("") : line(qs[0] || "Question", (how || "") + (ev.text ? " " + ev.text : ""));
+  const h0 = d.offsetHeight; d.style.height = h0 + "px"; d.style.overflow = "hidden";
+  d.classList.add("done"); d.innerHTML = `<div class="qin">${rows}</div>`;
+  const h1 = $(".qin", d).offsetHeight + parseFloat(getComputedStyle(d).paddingTop) + parseFloat(getComputedStyle(d).paddingBottom);
+  requestAnimationFrame(() => { d.style.height = h1 + "px"; setTimeout(() => { d.style.height = ""; d.style.overflow = ""; }, 220); });
 }
 // A step whose end never arrived (stopped, or a harness that does not report it) must not say "running" forever.
 function settleSteps(label) {
@@ -1298,14 +1311,14 @@ function bindFoot(foot) {
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); S.cur.total = 0; S.cur.next = 0; S.cur.log = []; S.cur.epoch = -2; $("#col").innerHTML = ""; S.cur.turn = 0; S.cur.group = null; S.cur.live = null; S.cur.tools = {}; poll(); if (S.panel === "diff") renderPanel(); }
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
 /* ================================== right panel ================================== */
-const PTABS_ALL = {progress: "Progress", outputs: "Files", diff: "Diff", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
 function togglePanel(name, force) {
-  if (!PANELS[curMode()].includes(name)) name = PANELS[curMode()][0];
+  if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
   if (force) store("cw_panel_closed", false);
   S.panel = (S.panel === name && !force) ? null : name; store("panel", S.panel);
@@ -1324,14 +1337,16 @@ function fitPanel() {
 }
 function renderPanel() {
   const p = $("#panel");
-  if (S.panel && !PANELS[curMode()].includes(S.panel)) { S.panel = PANELS[curMode()][0]; store("panel", S.panel); }
+  clearTimeout(S.spT);
+  if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
   fitPanel(); if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
-  $("#ptabs").innerHTML = PANELS[curMode()].map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
-  ({progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
+  if (!S.cur && S.panel !== "session") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
+  ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
     preview: panelPreview})[S.panel](body);
 }
 
@@ -1342,7 +1357,7 @@ function progressSteps() {
   const lastUser = log.map(e => e.type).lastIndexOf("user");
   const turn = log.slice(Math.max(0, lastUser));
   const plan = [...turn].reverse().find(e => e.type === "plan");
-  if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map(e => ({text: e.content, status: e.status}))};
+  if (plan && (plan.entries || []).length) return {kind: "plan", items: plan.entries.map((e, i) => ({key: "p" + i, text: e.content, status: e.status}))};
   const tools = {};
   let turnIds = [];
   for (const e of turn) {
@@ -1354,7 +1369,7 @@ function progressSteps() {
     if (e.type === "interrupted") for (const id of turnIds) { const t = tools[id]; if (t && (t.status === "in_progress" || t.status === "failed")) { t.status = "stopped"; t.text = `${TOOL_LABEL[t.name] || t.name}${t.sm ? " " + t.sm : ""} (stopped)`; } }
     if (e.type === "turn_end") for (const t of Object.values(tools)) if (t.status === "in_progress") t.status = "completed";
   }
-  return {kind: "steps", items: Object.values(tools)};
+  return {kind: "steps", items: Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t))};
 }
 const OUT_RX = /(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n"'`<>():]+?\.(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])/g;
 function outputFiles() {
@@ -1365,25 +1380,58 @@ function outputFiles() {
   return [...seen.values()];
 }
 function fileIcon(p) { return ICON.files; }
-function panelProgress(body) {
-  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
+// The Progress tab is built once and then patched by key, so a step finishing changes one row, not the whole panel.
+function reconcile(parent, items, keyOf, make, update) {
+  const have = new Map([...parent.children].map(el => [el.dataset.k, el]));
+  let ref = parent.firstElementChild;
+  for (const it of items) {
+    const k = keyOf(it); let el = have.get(k);
+    if (el) { have.delete(k); update(el, it); if (el === ref) ref = ref.nextElementSibling; else parent.insertBefore(el, ref); }
+    else { el = make(it); el.dataset.k = k; parent.insertBefore(el, ref); }
+  }
+  for (const el of have.values()) el.remove();
+}
+const setTxt = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
+const setCls = (el, c) => { if (el && el.className !== c) el.className = c; };
+function progressSoon() { updateStep(); if (S.panel !== "progress" || S.pgT) return; S.pgT = setTimeout(() => { S.pgT = null; if (S.panel === "progress") progressUpdate(); }, 250); }
+function progressUpdate() {
+  const body = $("#pbody .cw"); if (!body || !S.cur) return;
   const v = S.cur.view || {}; const pr = progressSteps(); const outs = outputFiles();
   const busy = ["working", "waiting", "starting"].includes(v.state);
   const icon = st => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : st === "failed" ? `<span class="pi bad">${ICON.x}</span>` : st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
+  const hd = $("#pgState", body);
+  const stateHTML = busy ? `<span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? `<span class="cwstop">Stopped</span>` : `<span class="cwdone">Done</span>`) : "";
+  if (hd._h !== stateHTML) { hd._h = stateHTML; hd.innerHTML = stateHTML; }
+  const box = $("#pgSteps", body); let ol = $("ol", box);
+  if (!pr.items.length) { ol?.remove(); setHTML(box, `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`); }
+  else {
+    if (!ol) { box.innerHTML = ""; box._h = null; ol = document.createElement("ol"); ol.className = "stepl"; box.appendChild(ol); }
+    reconcile(ol, pr.items, it => it.key, it => { const li = document.createElement("li"); li.className = it.status; li.innerHTML = `${icon(it.status)}<span class="stx"></span>`; $(".stx", li).textContent = it.text; li.dataset.st = it.status; return li; },
+      (li, it) => { if (li.dataset.st !== it.status) { li.dataset.st = it.status; li.className = it.status; $(".pi", li).outerHTML = icon(it.status); } setTxt($(".stx", li), it.text); });   // .stx: a running icon has its own inner span
+  }
+  const fbox = $("#pgFiles", body); let ul = $("ul", fbox);
+  if (!outs.length) { ul?.remove(); setHTML(fbox, `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`); }
+  else {
+    if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
+    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => { toast(`Opening ${o.path}…`); post("/api/open-file", {root: curRoot(), path: o.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); }; return li; }, () => {});
+  }
+  setTxt($("#pgHarness", body), v.harness?.name || ""); setTxt($("#pgModel", body), modelName(v.model || ""));
+}
+function panelProgress(body) {
+  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a task and its progress shows here: the plan, each step as it finishes, the files it makes and what it can reach.</div>`; return; }
+  const v = S.cur.view || {};
   const users = threadLog().filter(e => e.type === "user");
   const skills = [...new Set(users.flatMap(u => (String(u.text).match(/\$[\w-]+/g) || [])))].filter(x => S.skills.some(k => "$" + k.name === x));
   body.innerHTML = `<div class="cw">
-    <section><h4>Progress${busy ? ` <span class="cwbusy">${v.state === "waiting" ? "Waiting for you" : "Working"}</span>` : v.state === "idle" && pr.items.length ? (threadLog().slice(-12).some(e => e.type === "interrupted") ? ` <span class="cwstop">Stopped</span>` : ` <span class="cwdone">Done</span>`) : ""}</h4>
-      ${pr.items.length ? `<ol class="stepl">${pr.items.map(it => `<li class="${esc(it.status)}">${icon(it.status)}<span>${esc(it.text)}</span></li>`).join("")}</ol>` : `<div class="pnote" style="padding:4px 0">${busy ? "Getting started..." : "No steps yet for this task."}</div>`}
-    </section>
-    <section><h4>Files made</h4>${outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`}</section>
+    <section><h4>Progress <span id="pgState"></span></h4><div id="pgSteps"></div></section>
+    <section><h4>Files made</h4><div id="pgFiles"></div></section>
     <section><h4>Context</h4><ul class="ctxl">
       <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
-      <li>${ICON.cpu}<span><b>${esc(v.harness?.name || "")}</b><small>${esc(modelName(v.model || ""))}</small></span></li>
+      <li>${ICON.cpu}<span><b id="pgHarness"></b><small id="pgModel"></small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
-  $$("[data-open]", body).forEach(b => b.onclick = () => { toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); });
+  progressUpdate();
   $("#cwOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
   $("#cwConnMgr").onclick = () => openSettings("connectors");
   (S.connCache ? Promise.resolve(S.connCache) : api("/api/connectors").then(r => (S.connCache = r.connectors))).then(cs => {
@@ -1580,20 +1628,174 @@ function panelPreview(body) {
   else { $("#pframe").hidden = true; const msg = $("#pempty"); msg.hidden = false; msg.textContent = "Type the address of your running app (for example localhost:3000) and press Open."; }
 }
 
-/* ================================== settings ================================== */
-const SECTIONS = [["general", "Account and key"], ["appearance", "Appearance and shortcuts"], ["models", "Models"], ["personal", "Instructions and memory"], ["import", "Import chats and context"], ["scheduled", "Scheduled tasks"], ["web", "Web search"], ["connectors", "Connectors"], ["skills", "Skills"], ["harnesses", "Agents"], ["mcp", "Tools"], ["permissions", "Permissions"], ["usage", "Usage"], ["terminal", "Terminal command"], ["advanced", "Advanced"], ["about", "About"]];
-SECTIONS.splice(SECTIONS.findIndex(s => s[0] === "skills") + 1, 0, ["plugins", "Plugins"]);
-function openSettings(sec = "general") {
-  closePop();
-  $(".scrim")?.remove();
-  const sc = document.createElement("div"); sc.className = "scrim";
-  sc.innerHTML = `<div class="modal" role="dialog" aria-label="Settings"><nav class="mnav"><h2>Settings</h2>${SECTIONS.map(([k, lb]) => `<button data-s="${k}" aria-selected="${k === sec}">${lb}</button>`).join("")}<span class="sp"></span>${MP.desktop && !S.settings?.native ? `<button id="quitApp">Quit Meshpool</button>` : ""}</nav><div class="mbody" id="mbody"></div></div>`;
-  document.body.appendChild(sc);
-  sc.addEventListener("mousedown", e => { if (e.target === sc) sc.remove(); });
-  $$(".mnav [data-s]", sc).forEach(b => b.onclick = () => { $$(".mnav [data-s]", sc).forEach(x => x.setAttribute("aria-selected", x === b)); renderSection(b.dataset.s); });
-  $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`));
-  renderSection(sec);
+/* ================================== session panel + GitHub sessions ================================== */
+const isMgd = p => !!S.projects.find(x => x.path === p)?.managed;
+const spDur = s => { s = Math.max(0, Math.round(s)); return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m`; };
+const spOpen = k => { const o = store("sp_open") || {}; return o[k] !== false; };
+const spTok = n => n >= 1e6 ? (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M" : n >= 1e3 ? Math.round(n / 1e3) + "K" : String(n);
+// ---- the plan: the agent's checklist. In the Session panel, patched by row; in the chat only one quiet line (the status slot).
+function planData() {
+  const cur = S.cur; if (!cur) return null;
+  const e = cur.planEv, sp = S.spPlan && S.spPlan.sid === cur.id ? S.spPlan : null, src = e || sp; if (!src) return null;
+  if (cur._pd && cur._pd.src === src) return cur._pd.v;
+  // events: items/entries {content, status}; the panel's data: steps {text, state: done|current|pending}
+  const raw = src.items || src.entries || (src.steps || []).map(x => ({text: x.text, status: x.state === "done" ? "completed" : x.state === "current" ? "in_progress" : "pending"}));
+  const items = raw.map(x => ({text: String(x.content ?? x.text ?? ""), status: x.status === "done" ? "completed" : x.status || "pending"}));
+  // the backend's `current` is 1-based (0 = every step done); here it is an index into items
+  let c = Number.isInteger(src.current) && src.current > 0 ? src.current - 1 : items.findIndex(x => x.status !== "completed");
+  if (c < 0) c = Math.max(0, items.length - 1);
+  const v = items.length ? {items, current: c, total: src.total || items.length} : null;
+  cur._pd = {src, v}; return v;
 }
+const planLine = pd => `Step ${Math.min(pd.current + 1, pd.total)} of ${pd.total} · ${clip(String(pd.items[pd.current]?.text || ""), 60)}`;
+const planIcon = (st, cur) => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : cur || st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
+function planRows(pd) { return pd.items.map((it, i) => ({key: "s" + i, text: it.text, st: it.status === "completed" ? "completed" : i === pd.current || it.status === "in_progress" ? "current" : "pending"})); }
+function planUpdate() {
+  updateStep();
+  const ol = $("#spPlanList"), pd = planData(); if (!ol || !pd) return;
+  reconcile(ol, planRows(pd), r => r.key, r => { const li = document.createElement("li"); li.className = r.st; li.dataset.st = r.st; li.innerHTML = `${planIcon(r.st, r.st === "current")}<span></span>`; li.lastElementChild.textContent = r.text; return li; },
+    (li, r) => { if (li.dataset.st !== r.st) { li.dataset.st = r.st; li.className = r.st; $(".pi", li).outerHTML = planIcon(r.st, r.st === "current"); } setTxt(li.lastElementChild, r.text); });
+  setTxt($("[data-k=plan] .spc"), `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`);
+}
+function planSoon() { if (S.plT) return; S.plT = setTimeout(() => { S.plT = null; if ($("#spPlanList") || S.panel !== "session") planUpdate(); else sessionSoon(); }, 120); }
+function sessionSoon() { if (S.panel !== "session" || S.seT) return; S.seT = setTimeout(() => { S.seT = null; if (S.panel === "session" && S.spLast && S.cur) spDraw(S.cur.id, curRoot(), S.spLast); }, 300); }
+function spSec(k, title, count, inner) {
+  return `<details class="spsec" data-k="${k}" ${spOpen(k) ? "open" : ""}><summary><span class="chev">${ICON.chev}</span><b>${title}</b>${count ? `<span class="spc">${count}</span>` : ""}</summary><div class="spbody">${inner}</div></details>`;
+}
+function spHTML(d, pr) {
+  const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
+  const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [panelSet().includes("files") ? "files" : "outputs", ICON.files, panelSet().includes("files") ? "Files" : "Artifacts"]]
+    .filter(([k]) => panelSet().includes(k));
+  const own = !!S.cur?.view?.scratch;
+  const envHTML = own ? `<div class="sprow">${ICON.folder}<span><b>This chat’s own folder</b><small>Private to this chat. Files it makes show under Artifacts.</small></span></div>` : `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>
+    ${rp ? `<div class="sprow">${ICON.pr}<span><b>${rp.url ? `<a href="${esc(rp.url)}" target="_blank" rel="noopener">${esc(rp.slug)}</a>` : esc(env.name)}</b><small>${rp.slug ? "GitHub repository" : "Git repository without a GitHub remote"}</small></span></div>` : `<div class="sprow">${ICON.dir}<span><b>${esc(env.name)}</b><small>Not a Git repository</small></span></div>`}
+    ${br ? `<div class="sprow">${ICON.branch}<span><b>${esc(br.name)}</b><small>${br.upstream ? `${br.ahead} to push, ${br.behind} to pull` : "Not pushed yet"}</small></span></div>
+      <div class="row spbr"><select id="spBr" aria-label="Switch branch">${br.branches.map(b => `<option ${b === br.name ? "selected" : ""}>${esc(b)}</option>`).join("")}</select></div>
+      <div class="row spbr"><input id="spNew" placeholder="New branch name" aria-label="New branch name"><button class="btn" id="spCreate">Create</button></div>` : ""}`;
+  const cls = cx.percent >= 90 ? "bad" : cx.percent >= 70 ? "warn" : "";
+  const ctxHTML = `<div class="spctx"><div class="spbar ${cls}" role="progressbar" aria-valuenow="${cx.percent}" aria-valuemin="0" aria-valuemax="100" aria-label="Context used"><i style="width:${cx.percent}%"></i></div>
+    <div class="spnum"><b>${cx.percent}%</b><span>${spTok(cx.used)} of ${spTok(cx.size)} tokens${/estimate/.test(cx.source) ? " (window estimated)" : ""}</span></div></div>`;
+  const cRows = cn.servers.map(c => `<li><span class="cidot ${c.status === "connected" ? (c.used ? "ok" : "") : c.error || c.status === "error" ? "bad" : "run"}"></span><span class="cn">${esc(c.name)}</span><span class="cs">${c.used ? `used ${c.used}×` : c.status === "connected" ? `${c.tools} tools` : esc(c.status)}</span></li>`).join("");
+  const outs = d.outputs;
+  const outHTML = outs.length ? `<ul class="outs">${outs.map(o => `<li><button data-open="${esc(o.path)}" title="${esc(o.path)}"><span class="fi">${ICON.file}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span><span class="spc">${esc(o.how)}</span></button></li>`).join("")}</ul>` : `<div class="pnote">Documents, spreadsheets, decks and other files Meshpool makes show up here.</div>`;
+  const num = (v, c, sg) => `<span class="${v ? c : "zero"}">${sg}${v}</span>`;
+  let chg = `<div class="sprow">${ICON.diff}<span><b>${tr.files ? `${tr.files} file${tr.files === 1 ? "" : "s"} changed` : "Working tree is clean"}</b>${tr.files ? `<small class="nw">${num(tr.added, "plus", "+")} ${num(tr.removed, "minus", "−")} not committed</small>` : ""}</span></div>`;
+  if (!pr) chg += `<div class="pnote spmini">Checking GitHub...</div>`;
+  else if (!pr.available) chg += `<div class="pnote spmini">${esc(pr.error || "No GitHub remote.")}${/Connect GitHub/.test(pr.error || "") ? ` <button class="linkbtn" id="spConn">Connect GitHub</button>` : ""}</div>`;
+  else {
+    const p = pr.pr;
+    chg += p ? `<div class="prcard"><a href="${esc(p.url)}" target="_blank" rel="noopener"><b>#${p.number} ${esc(p.title)}</b></a><span class="badge ${p.draft ? "modified" : "added"}">${p.draft ? "Draft" : "Open"}</span>
+        <span class="nw">${num(p.additions, "plus", "+")} ${num(p.deletions, "minus", "−")}</span>
+        ${p.checks !== "none" ? `<span class="chip ci ${p.checks}"><span class="cidot"></span>${esc(CI_TEXT[p.checks] || p.checks)}</span>` : `<span class="stat">No checks</span>`}
+        <small>${esc(p.head)} into ${esc(p.base)}</small>
+        ${p.failing.length ? `<small class="bad">Failing: ${esc(p.failing.join(", "))}</small>` : ""}
+        <div class="row">${p.draft ? `<button class="btn primary" id="spReady" ${p.can_ready ? "" : "disabled title='Connect GitHub first'"}>Mark ready</button>` : ""}<button class="btn" id="spPrView">Open the full view</button></div></div>`
+      : `<div class="pnote spmini">No pull request for ${esc(pr.branch)} yet.</div><div class="row"><button class="btn" id="spDraft">Open a draft PR</button><button class="btn" id="spGit">Commit and push</button></div>`;
+    if (pr.others.length) chg += `<div class="spsub">Other open pull requests</div><ul class="spl">${pr.others.map(o => `<li><a href="${esc(o.url)}" target="_blank" rel="noopener"><span class="cn">#${o.number} ${esc(o.title)}</span></a>${o.draft ? `<span class="spc">draft</span>` : ""}</li>`).join("")}</ul>`;
+  }
+  const bgHTML = (bg.running.length ? `<ul class="spl">${bg.running.map(t => `<li><span class="cidot run"></span><span class="cn" title="${esc(t.title)}">${esc(t.title)}</span><span class="cs">${esc({subagent: "Sub-agent", terminal: "Command", scheduled: "Scheduled"}[t.kind])} · ${spDur(t.elapsed)}</span><button class="linkbtn" data-stop="${esc(t.kind)}:${esc(t.id)}">Stop</button></li>`).join("")}</ul>` : `<div class="pnote spmini">Nothing running in the background.</div>`) + (bg.finished ? `<div class="stat">${bg.finished} finished</div>` : "");
+  const cur = S.cur, pd = planData(), rc = [...(cur?.log || [])].reverse().find(e => e.type === "receipt"), mn = cur?.mcpNote || "";
+  const mcpBad = /Failed|did not start/.test(mn);
+  const planHTML = pd ? spSec("plan", "Plan", `${pd.items.filter(x => x.status === "completed").length}/${pd.items.length}`, `<ol class="stepl plan" id="spPlanList">${planRows(pd).map(r => `<li class="${r.st}" data-st="${r.st}" data-k="${r.key}">${planIcon(r.st, r.st === "current")}<span>${esc(r.text)}</span></li>`).join("")}</ol>`) : "";
+  const au = cur?.auto, agentHTML = cur?.using ? spSec("agent", "Agent", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(String(cur.using).replace(/^Using /, ""))}</b><small>${au ? `Picked by Auto${au.category ? " for " + esc(String(au.category)) : ""}.${au.reason ? " " + esc(au.reason) : ""}` : "Chosen by you."}</small></span></div>`) : "";
+  const routeHTML = agentHTML + (cur?.route ? spSec("route", "Working as", "", `<div class="sprow">${ICON.cpu}<span><b>${esc(cur.route.label)}</b>${cur.route.why ? `<small>${esc(cur.route.why)}</small>` : ""}</span><button class="linkbtn" id="spRoute">Change</button></div>`) : "");
+  const reviewHTML = rc ? spSec("review", "Review", "", `<div class="rcbody md">${md(rc.text || "")}</div>`) : "";
+  const mcpHTML = mn ? `<div class="pnote spmini ${mcpBad ? "bad" : ""}">${esc(mn.replace(/^MCP: ?/, ""))}</div>` : "";
+  return `<div class="spw"><div class="spbtns">${buttons.map(([k, ic, lb]) => `<button class="btn" data-go="${k}">${ic}${lb}</button>`).join("")}</div>
+    ${planHTML}${spSec("env", "Environment", "", envHTML)}${routeHTML}${spSec("ctx", "Context", `${cx.percent}%`, ctxHTML)}
+    ${spSec("conn", `Connectors${mcpBad ? ` <span class="cidot bad" title="A connector did not start"></span>` : ""}`, cn.used.length ? `${cn.used.length} used` : "", (cRows ? `<ul class="spl">${cRows}</ul>` : `<div class="pnote spmini">No connectors are enabled for this session.</div>`) + mcpHTML)}${reviewHTML}
+    ${spSec("out", "Artifacts", outs.length || "", outHTML)}${own ? "" : spSec("chg", "Changes", pr?.pr ? `#${pr.pr.number}` : tr.files || "", chg)}
+    ${spSec("bg", "Background tasks", bg.running.length || "", bgHTML)}
+    <div class="viewer" id="viewer" hidden></div></div>`;
+}
+async function panelSession(body) {
+  if (!S.cur) { body.innerHTML = `<div class="pnote">Start a session and its environment, context, connectors, files and pull request show here.</div>`; return; }
+  const sid = S.cur.id, root = curRoot();
+  S.spPr = S.spPr?.sid === sid ? S.spPr : {sid, t: 0, data: null};
+  body.innerHTML = `<div class="pnote">Loading...</div>`;
+  const tick = async first => {
+    if (S.panel !== "session" || S.cur?.id !== sid) return;
+    try {
+      if (!S.spPr.data || Date.now() - S.spPr.t > 30000) { api(`/api/session/${sid}/pr`).then(r => { S.spPr = {sid, t: Date.now(), data: r}; if (S.panel === "session") spDraw(sid, root, last); }).catch(() => {}); S.spPr.t = Date.now(); }
+      const d = await api(`/api/session/${sid}/panel`); last = d; spDraw(sid, root, d);
+    } catch (e) { if (first) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), 4000);
+  };
+  let last = null; clearTimeout(S.spT); tick(true);
+}
+function spDraw(sid, root, d) {
+  const body = $("#pbody"); if (!body || !d || S.panel !== "session" || S.cur?.id !== sid) return;
+  if (body.contains(document.activeElement) && /INPUT|SELECT/.test(document.activeElement.tagName)) return;   // never rebuild under the user's typing
+  S.spLast = d; if (d.plan) S.spPlan = Object.assign({sid}, d.plan);
+  const keep = $("#viewer", body); const vh = keep && !keep.hidden ? keep.innerHTML : "";
+  const sc = body.scrollTop;
+  body.innerHTML = spHTML(d, S.spPr?.data);
+  body.scrollTop = sc;
+  if (vh) { const v = $("#viewer", body); v.hidden = false; v.innerHTML = vh; }
+  $$("details.spsec", body).forEach(el => el.ontoggle = () => { const o = store("sp_open") || {}; o[el.dataset.k] = el.open; store("sp_open", o); });
+  $$("[data-go]", body).forEach(b => b.onclick = () => togglePanel(b.dataset.go, true));
+  $("#spRoute", body)?.addEventListener("click", e => routeMenu(e.currentTarget.parentElement));
+  $$("[data-open]", body).forEach(b => b.onclick = () => openFile(root, b.dataset.open));
+  $("#spBr", body)?.addEventListener("change", e => gitAct({action: "checkout", branch: e.target.value}));
+  $("#spCreate", body)?.addEventListener("click", () => gitAct({action: "checkout", branch: $("#spNew").value, create: true}));
+  $("#spConn", body)?.addEventListener("click", () => openSettings("connectors"));
+  $("#spGit", body)?.addEventListener("click", () => togglePanel("git", true));
+  $("#spPrView", body)?.addEventListener("click", () => openPRView(root, S.spPr.data.pr.number));
+  $("#spReady", body)?.addEventListener("click", async () => { try { await post("/api/git/pr", {root, action: "ready", pr: S.spPr.data.pr.number}); toast("Marked ready for review"); S.spPr.data = null; S.spPr.t = 0; } catch (e) { toast(e.message, 5000); } });
+  $("#spDraft", body)?.addEventListener("click", async () => { const t = await ask({title: "Open a draft pull request", text: "Pushes this branch and opens a draft on GitHub.", value: S.spPr.data.branch, ok: "Open draft"}); if (t) { try { const r = await post("/api/git", {root, action: "pr", title: t, draft: true}); toast("Draft pull request opened"); S.spPr.data = null; S.spPr.t = 0; if (r.pr) window.open?.(r.pr, "_blank", "noopener"); } catch (e) { toast(e.message, 5000); } } });
+  $$("[data-stop]", body).forEach(b => b.onclick = async () => { const [kind, ...id] = b.dataset.stop.split(":"); try { await post(`/api/session/${sid}/bg/stop`, {kind, id: id.join(":")}); toast("Stopped"); } catch (e) { toast(e.message); } });
+}
+function openGithubPicker(opts = {}) {
+  const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
+  const gtitle = opts.title || "Work on a GitHub repository";
+  sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="${esc(gtitle)}"><h3>${esc(gtitle)}</h3>
+    <p>Pick a repository. Meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
+    <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
+    <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
+    <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>${esc(opts.cta || "Start chat")}</button></div></div>`;
+  document.body.appendChild(sc);
+  let repo = null, qT = null;
+  const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
+  const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(); } };
+  document.addEventListener("keydown", key, true);
+  sc.addEventListener("mousedown", e => { if (e.target === sc) done(); });
+  $("[data-a='0']", sc).onclick = done;
+  const list = $("#ghList", sc), msg = $("#ghMsg", sc);
+  const load = async () => {
+    try {
+      const r = await api("/api/github/repos?q=" + encodeURIComponent($("#ghQ", sc).value.trim()));
+      list.innerHTML = r.repos.length ? r.repos.map((x, i) => `<li><button data-i="${i}" class="${repo?.full_name === x.full_name ? "act" : ""}">${ICON.pr}<span class="ghn"><b>${esc(x.full_name)}</b>${x.private ? `<span class="spc">private</span>` : ""}${x.cloned ? `<span class="spc">ready</span>` : ""}<small>${esc(x.description)}</small></span></button></li>`).join("") : `<li class="pnote">No repositories match.</li>`;
+      $$("[data-i]", list).forEach(b => b.onclick = () => pick(r.repos[+b.dataset.i]));
+    } catch (e) {
+      list.innerHTML = `<li class="pnote">${esc(e.message)} ${/Connect GitHub/.test(e.message) ? `<button class="linkbtn" id="ghConn">Connect GitHub</button>` : ""}</li>`;
+      $("#ghConn", sc)?.addEventListener("click", () => { done(); openSettings("connectors"); });
+    }
+  };
+  const pick = async x => {
+    repo = x; $$("#ghList button", sc).forEach(b => b.classList.toggle("act", b.textContent.includes(x.full_name))); $("#ghGo", sc).disabled = true; msg.textContent = "Loading branches...";
+    try {
+      const b = await api("/api/github/branches?repo=" + encodeURIComponent(x.full_name));
+      $("#ghSel", sc).innerHTML = b.branches.map(n => `<option ${n === b.default ? "selected" : ""}>${esc(n)}</option>`).join(""); $("#ghBr", sc).hidden = false; $("#ghGo", sc).disabled = false; msg.textContent = x.full_name;
+    } catch (e) { msg.textContent = e.message; }
+  };
+  $("#ghQ", sc).oninput = () => { clearTimeout(qT); qT = setTimeout(load, 250); };
+  $("#ghNewOn", sc).onchange = e => { $("#ghNewName", sc).hidden = !e.target.checked; if (e.target.checked) $("#ghNewName", sc).focus(); };
+  $("#ghGo", sc).onclick = async () => {
+    const mk = $("#ghNewOn", sc).checked, nm = $("#ghNewName", sc).value.trim(); if (mk && !nm) { msg.textContent = "Name the new branch."; return; }
+    $("#ghGo", sc).disabled = true; msg.textContent = "Getting the repository ready. A large one can take a minute...";
+    try {
+      const r = await post("/api/github/workspace", {repo: repo.full_name, branch: mk ? nm : $("#ghSel", sc).value, create: mk, base: $("#ghSel", sc).value});
+      done(); await loadProjects();
+      if (opts.onReady) return opts.onReady(r);
+      renderSide(); newThread(r.path); toast(`${r.name} on ${r.branch} is ready`);
+    } catch (e) { msg.textContent = e.message; $("#ghGo", sc).disabled = false; }
+  };
+  load(); $("#ghQ", sc).focus();
+}
+
+/* ================================== settings ================================== */
+/* The settings window (openSettings, the seven pages and their tabs) is in settings2.js. */
 async function renderSection(sec) {
   const b = $("#mbody"); b.classList.add("loading");
   new MutationObserver((_, o) => { b.classList.remove("loading"); b.scrollTop = 0; o.disconnect(); }).observe(b, {childList: true});
@@ -1601,48 +1803,7 @@ async function renderSection(sec) {
   const done = () => $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
   await loadSettings();
   const F = S.settings.fields; const get = k => F.find(x => x.key === k) || {};
-  if (sec === "general") {
-    const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
-    b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends model calls to this endpoint with your key. Any OpenAI-compatible endpoint works. The key is stored only in the settings file on this computer.</p>
-      <label class="field"><span>Runs on</span><select id="sProv">${PROVIDERS.map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">What the models run on. The agent is chosen separately, in the message box.</small></label>
-      <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
-      <label class="field"><span>Base URL</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>The OpenAI-compatible endpoint, ending in /v1. Default: ${esc(base.default)}</small></label>
-      <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model, from any provider below, in the model picker in the message box.</small></label>
-      <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
-      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
-      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].map(([id, name, desc]) =>
-        `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="sProvRes"></div>`;
-    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelLabel(m.id, ms))}</option>`).join(""); };
-    if (!S.models) await loadModels(); fill();
-    $("#sProv").onchange = async () => {
-      const v = $("#sProv").value;
-      if (SIGNIN[v] && !S.settings.signed_in?.[v]) { $("#sProv").value = S.settings.provider || "meshpool"; RES("sRes").className = "res bad"; RES("sRes").textContent = `Sign in to ${SIGNIN[v].name} first under Agents (${harness(SIGNIN[v].harness).name}, Sign in), then choose it here.`; return; }
-      try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New chats use " + harness(modeHarness()).name + " on " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-    $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
-    $$("[data-psign]", b).forEach(x => x.onclick = async () => {
-      const id = x.dataset.psign; try { const r = await post("/api/harness-login", {id}); RES("sProvRes").className = "res" + (r.ok ? "" : " bad"); RES("sProvRes").textContent = r.message; } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; return; }
-      const t0 = Date.now(); const tick = async () => { if (!RES("sProvRes")) return; await loadSettings(); if (S.settings.signed_in?.[id]) { await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
-      setTimeout(tick, 3000);
-    });
-    const save = async () => {
-      const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();
-      await post("/api/settings", {values}); if ($("#sModel").value) await post("/api/models/default", {id: $("#sModel").value});
-      await loadSettings(); await loadModels(true); fill();
-    };
-    $("#sSave").onclick = async () => {
-      try {
-        await save(); RES("sRes").className = "res"; RES("sRes").textContent = "Saved. Checking the connection…"; renderBar();
-        const r = await post("/api/test"); $("#kdot").className = "kdot" + (r.ok ? " ok" : " bad");
-        RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? "Saved. The connection works." : "Saved, but " + connMsg(r.detail).replace(/^./, c => c.toLowerCase());
-      } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-    $("#sTest").onclick = async () => {
-      RES("sRes").className = "res"; RES("sRes").textContent = "Testing...";
-      try { await save(); const r = await post("/api/test"); RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : connMsg(r.detail); renderBar(); }
-      catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-  } else if (sec === "models") {
+  if (sec === "models") {
     if (!S.models) await loadModels();
     const M = S.models;
     b.innerHTML = `${close}<h3>Models</h3><p class="lead">Every model your key can use on ${esc(M.base_url)}. Star the ones you use most; they show first in the picker.</p>
@@ -1657,19 +1818,6 @@ async function renderSection(sec) {
       $$("[data-fav]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); Object.assign(M, S.models); draw(); });
     };
     $("#smq").oninput = draw; $("#smr").onclick = async () => { await loadModels(true); Object.assign(M, S.models); renderSection("models"); }; draw();
-  } else if (sec === "appearance") {
-    const keys = [["Esc", "Stop the running task (or close what is open)"], [`${MOD}N`, "New chat"], [`${MOD}K`, "Search chats"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}E`, "Show or fold steps"],
-      [`${MOD}⇧D`, "Diff panel"], [`${MOD}J`, "Terminal"], [`${MOD},`, "Settings"], ["Enter", "Send"], ["Shift+Enter", "New line"],
-      ["/", "Commands"], ["$", "Skills"], ["Esc", "Close a menu or dialog"], [`${MOD}S`, "Save the open file"]];
-    b.innerHTML = `${close}<h3>Appearance and shortcuts</h3><p class="lead">How Meshpool looks on this computer.</p>
-      <label class="field"><span>Theme</span><select id="apTheme"><option value="system">Match the system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-      <label class="field"><span>Text size</span><select id="apSize"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></label>
-      <label class="field"><span>Steps</span><select id="apSteps"><option value="1">Show every step as the agent works</option><option value="0">Fold steps into a summary</option></select></label>
-      <h3 style="font-size:16px;margin:18px 0 4px">Keyboard shortcuts</h3><div class="keys">${keys.map(([k, d]) => `<kbd>${esc(k)}</kbd><span>${esc(d)}</span>`).join("")}</div>`;
-    $("#apTheme").value = store("theme") || "system"; $("#apSize").value = store("size") || "normal"; $("#apSteps").value = S.steps ? "1" : "0";
-    $("#apTheme").onchange = () => { store("theme", $("#apTheme").value); applyAppearance(); };
-    $("#apSize").onchange = () => { store("size", $("#apSize").value); applyAppearance(); };
-    $("#apSteps").onchange = () => { if (($("#apSteps").value === "1") !== !!S.steps) toggleSteps(); };
   } else if (sec === "personal") {
     const a = await api("/api/assistant");
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
@@ -1678,7 +1826,7 @@ async function renderSection(sec) {
       <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
-      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Claude, Claude Code or Codex? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
+      <p class="lead" style="margin-top:18px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
     $("#paImport").onclick = () => renderSection("import");
     $("#paSave").onclick = async () => {
       try {
@@ -1722,7 +1870,7 @@ async function renderSection(sec) {
   } else if (sec === "about") {
     const a = await api("/api/about");
     b.innerHTML = `${close}<img class="logo" src="${logoSrc()}" alt="Meshpool" style="height:30px;margin-bottom:12px"><h3>Meshpool ${esc(a.version)}${/^0\./.test(a.version) ? " beta" : ""}</h3>
-      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaaziada/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
+      <p class="lead">Made by ${esc(a.author)}. <a href="https://meshpool.ai" target="_blank" rel="noopener">meshpool.ai</a> · <a href="https://github.com/hamzaziada4422/meshpool-harness/releases" target="_blank" rel="noopener">All releases</a> · <button class="linkbtn" id="aboutReport">Report a problem</button></p>
       <div class="updbox" id="updBox"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" id="updCheck">Check for updates</button><span class="res" id="updRes" style="margin:0"></span></div><div id="updMore"></div></div>
       <details style="margin-top:16px"><summary class="linkbtn" style="display:inline">Third-party software</summary><pre class="lic">${esc(a.third_party)}</pre></details>`;
     $("#aboutReport").onclick = () => reportProblem();
@@ -1848,7 +1996,7 @@ async function renderSection(sec) {
         <label class="field"><span>When to use it (one line)</span><input id="skDesc" placeholder="Write release notes from the commits since the last tag."></label>
         <label class="field"><span>Instructions</span><textarea id="skBody" class="code" placeholder="Step-by-step instructions the agent follows."></textarea></label>
         <button class="btn primary" id="skCreate">Create skill</button></div></details>
-      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from Claude, Codex and other apps</button><button class="btn" id="skOpen">Open the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
+      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Open the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
     $("#skImp").onclick = () => importPanel($("#skImpBox"), r => { if (r) renderSection("skills"); });
     const drawSk = () => {
       $("#skl").innerHTML = S.skills.map(s => `<li><label class="switch"><input type="checkbox" data-id="${esc(s.id)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>$${esc(s.name)}</b><small>${esc(s.description)}</small></span><button class="btn" data-edit="${esc(s.id)}">Edit</button><button class="iconbtn" data-rm="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">${ICON.x}</button></li>`).join("") || `<li class="pnote">No skills yet.</li>`;
@@ -1895,7 +2043,7 @@ async function renderSection(sec) {
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Needs macOS 11" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
@@ -1918,7 +2066,7 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Tools (MCP servers)</h3><p class="lead">Tools every agent can use. Browser use and computer use are built in. New chats pick up changes.</p>
       ${m.error ? `<div class="res bad">${esc(m.error)}</div>` : ""}
       <ul class="rows2">${m.servers.map(s => `<li><label class="switch"><input type="checkbox" data-n="${esc(s.name)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>${esc(s.name)}</b><small>${esc(s.description)}</small><details class="tech"><summary>Technical details</summary><code>${esc(s.target)}</code></details></span></li>`).join("")}</ul>
-      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from Claude, Codex, Cursor and others</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="mTest">Check servers</button><button class="btn" id="mEdit">Edit the server list</button><button class="btn" id="mImp">Import from other apps</button></div><div class="res" id="mRes"></div><div id="mImpBox" style="margin-top:10px"></div>
       <div id="mEd" hidden style="margin-top:12px"><textarea class="code" id="mText">${esc(m.text)}</textarea><button class="btn primary" id="mSave" style="margin-top:8px">Save mcp.json</button><p class="lead" style="font-size:13px;margin-top:8px">The common mcpServers format most MCP apps use. Write \${NAME} to use a value from the settings file, such as \${GITHUB_TOKEN}.</p></div>`;
     $$("input[data-n]", b).forEach(i => i.onchange = () => post("/api/mcp", {name: i.dataset.n, enabled: i.checked}).catch(e => toast(e.message)));
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
@@ -1933,7 +2081,7 @@ async function renderSection(sec) {
         ${r.platform === "darwin" ? `<button class="btn primary" id="permAll" style="margin-bottom:10px">Allow all</button>` : ""}
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
-        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
+        <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
         <button class="btn" id="addP">${ICON.folder} Add a folder</button>`;
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
@@ -1980,7 +2128,7 @@ function showOnboarding() {
   o.innerHTML = `<div class="onb-card" id="onbKey">
     <img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
     ${onbSteps(1)}<h1>Welcome to Meshpool</h1><p>Choose what Meshpool runs on. It stays on this computer, and you can change it any time in Settings.</p>
-    <div class="scope prov" role="radiogroup" aria-label="What Meshpool runs on">${PROVIDERS.map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
+    <div class="scope prov" role="radiogroup" aria-label="What Meshpool runs on">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name, desc], i) => `<button class="scopeopt" data-prov="${id}" role="radio" aria-checked="${i === 0}"><b>${name}</b><small>${desc}</small></button>`).join("")}</div>
     <div id="oKeyBox">
       <p class="credit" id="oCredit">No key yet? <a href="https://meshpool.ai" target="_blank" rel="noopener">Get one at meshpool.ai</a> and run every model 20% cheaper.</p>
       <label class="field" id="oBaseF" style="max-width:none" hidden><span>Provider address (base URL)</span><input id="oBase" spellcheck="false" placeholder="https://api.openai.com/v1"></label>
@@ -1999,7 +2147,7 @@ function showOnboarding() {
     const h = sub(); const name = SIGNIN[prov]?.name || "";
     const what = " Meshpool Code, Meshpool Work, Pi, Hermes and Codex all run on it.";
     $("#oSign").hidden = !h || h.signed_in || h.available === false;
-    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in to ${name} needs macOS 11 or later. On this Mac, use a Meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
+    $("#oSubTxt").textContent = !h ? "Loading…" : h.available === false ? (h.unsupported ? `Signing in with ${name} needs Codex, which is not part of the Meshpool app. Use a Meshpool API key or another API key.` : `Signing in to ${name} needs Node.js. The desktop app includes it; otherwise install it from nodejs.org.`)
       : (h.signed_in ? `You are signed in to ${name} on this computer. Usage comes out of your plan.` : `Sign in with your ${name} account. Usage comes out of your plan, not an API key.`) + what;
     $("#oGo").disabled = !(h && h.signed_in);
   };
@@ -2024,7 +2172,7 @@ function showOnboarding() {
     const tick = async () => { if (!$("#oSubBox") || SIGNIN[prov]?.harness !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
   };
-  const finish = async () => { await loadSettings(); await loadHarnesses(); S.draft.harness = modeHarness(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
+  const finish = async () => { await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
   $("#oGo").onclick = async () => {
     if (SIGNIN[prov]) {
       if (!sub()?.signed_in) { res.className = "res bad"; res.textContent = "Sign in first."; return; }
@@ -2063,20 +2211,20 @@ async function contextPanel(box) {
   box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
     <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Your files stay on this computer; to write those, the titles and first messages of up to 80 chats are sent once to your model.</p>
     <ol class="ctx-steps">
-      <li><b>Your ChatGPT or Claude chats</b>
+      <li><b>Your ChatGPT chats and other assistants</b>
         <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
-        <small class="muted">ChatGPT: Settings, Data controls, Export data. Claude: Settings, Privacy, Export data. Both email you a link, usually within minutes.</small>
+        <small class="muted">ChatGPT: Settings, Data controls, Export data. Other assistants: look for Export data in their settings. Both email you a link, usually within minutes.</small>
         <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
-        <small class="muted">Every conversation comes over with its original date. Claude projects become skills, and lasting facts about you become memory.</small></li>
+        <small class="muted">Every conversation comes over with its original date. Projects from other apps become skills, and lasting facts about you become memory.</small></li>
       ${srcs.length ? `<li><b>Sessions on this computer</b>
         <p>Each session opens in its project folder, so you can carry on with any agent.</p>
         ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
       <li><b>What your assistant knows about you</b>
-        <p>Copy the prompt into ChatGPT, Claude or Gemini, then paste its whole answer here. It becomes your instructions and memory.</p>
+        <p>Copy the prompt into ChatGPT or another assistant, then paste its whole answer here. It becomes your instructions and memory.</p>
         <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
         <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
         <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
-      <li><b>A custom GPT or Claude project you rely on</b>
+      <li><b>A custom GPT or assistant project you rely on</b>
         <p>Paste its instructions to keep them as a skill every agent can use.</p>
         <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
         <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
@@ -2091,12 +2239,12 @@ async function contextPanel(box) {
   };
   const upload = async f => {
     if (!f) return;
-    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or Claude, without unzipping it.", true);
+    if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or another assistant, without unzipping it.", true);
     res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Claude" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2131,7 +2279,7 @@ async function drawPlugins(b, close) {
   const plugin = p => `<li><label class="switch"><input type="checkbox" data-pi="${esc(p.name)}" ${p.enabled ? "checked" : ""} aria-label="Use ${esc(p.name)}"><span></span></label><span class="tg"><b>${esc(p.name)}</b>${p.version ? ` <span class="badge modified">${esc(p.version)}</span>` : ""}<small>${esc(p.description)}</small>${p.skills.length ? `<small>Skills: ${p.skills.map(s => "$" + esc(s)).join(", ")}</small>` : ""}${(p.server_status || []).map(server).join("")}<small>From ${esc(p.source)}</small></span><button class="iconbtn" data-pr="${esc(p.name)}" aria-label="Remove ${esc(p.name)}">${ICON.x}</button></li>`;
   const render = v => {
     d = v;
-    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the same format as Claude Code plugins. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
+    b.innerHTML = `${close}<h3>Plugins</h3><p class="lead">A plugin bundles skills, MCP servers and instructions for one kind of work, in the plugin format coding agents share. Nothing in a plugin runs when you install it, and its MCP servers stay off until you turn them on.</p>
       <h3 style="font-size:16px;margin:14px 0 6px">Built in</h3><ul class="rows2">${d.catalog.map(group).join("")}</ul>
       <h3 style="font-size:16px;margin:14px 0 6px">Installed</h3><ul class="rows2">${d.plugins.map(plugin).join("") || `<li class="pnote">No plugins installed yet.</li>`}</ul>
       <div class="keyrow"><input id="plSrc" placeholder="Folder, .zip, git URL or marketplace.json" spellcheck="false"><button class="btn primary" id="plAdd">Install</button></div>
@@ -2188,7 +2336,7 @@ async function drawMcpLibrary(b) {
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
-  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Claude, Codex, Cursor and other apps...</div>`;
+  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Codex, Cursor and other apps...</div>`;
   let f;
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
@@ -2265,7 +2413,7 @@ function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in Claude, ChatGPT, Codex or Cursor. You can also do this later in Settings.</p>
+    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in ChatGPT, Codex, Cursor or other apps. You can also do this later in Settings.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
@@ -2283,27 +2431,63 @@ function setupStep(o, prev) {
 /* ================================== updates ================================== */
 async function checkUpdate(force) {
   try { S.upd = await post("/api/update/check", {force: !!force}); } catch (e) { S.upd = {ok: false, error: e.message}; }
-  const bar = $("#updBar");
-  if (bar) { bar.hidden = !(S.upd.ok && S.upd.newer); bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(S.upd.latest || "")} is available<span class="go">Update</span>`; }
+  await updStatus();
   return S.upd;
+}
+/* The background updater's state: downloading, ready ("Restart to update"), or an error. Polled quickly while it works. */
+async function updStatus() {
+  try { S.ust = await post("/api/update/status", {}); } catch (e) { S.ust = null; }
+  renderUpdBar(); if ($("#updMore")) updatePanel(S.upd);
+  const r = S.ust?.last_result;
+  if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
+  clearTimeout(S.ustT);
+  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking"].includes(S.ust?.state) ? 3000 : 60000);
+  return S.ust;
+}
+function updPct(s) { return s && s.total ? Math.min(99, Math.floor(100 * s.done / s.total)) : 0; }
+function renderUpdBar() {
+  const bar = $("#updBar"); if (!bar) return;
+  const s = S.ust, u = S.upd;
+  if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
+  else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
+  else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
+  else bar.hidden = true;
+}
+async function applyUpdate() {
+  let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
+  if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
+  if (r.mode === "code") { restartApp(); return; }
+  toast("Updating Meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
+  const s = S.ust || {}, st = s.settings || {};
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>`;
+  const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
+  if (s.state === "ready") { res.className = "res ok"; res.textContent = `Meshpool ${s.latest} is ready to install.`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button><a class="btn" href="${esc(s.url || "")}" target="_blank" rel="noopener">What's new</a></div>${opts}`;
+    $("#updGo").onclick = applyUpdate; bindOpts(); return; }
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${s.latest}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${s.latest}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "error" && s.error && u?.newer !== false) { res.className = "res bad"; res.textContent = s.error;
+    more.innerHTML = `<div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}</div>${opts}`;
+    $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
   if (!u) { res.textContent = ""; more.innerHTML = ""; return; }
   if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = ""; return; }
-  if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = ""; return; }
+  if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
-  const how = u.kind === "mac-app" ? "Downloads the new Mac app and opens it." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">Update now</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>`;
+  const how = ["mac-app", "win-app"].includes(u.kind) ? "Downloads in the background; installs when you restart." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">${["mac-app", "win-app"].includes(u.kind) ? "Download update" : "Update now"}</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(u.kind) ? opts : ""}`;
+  bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
     const out = RES("updOut"); btn.disabled = true; btn.textContent = "Updating...";
-    out.className = "res"; out.textContent = "Downloading the release. Keep Meshpool open.";
+    out.className = "res"; out.textContent = "Starting the update.";
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
     btn.disabled = false; btn.textContent = "Update now";
     if (!r.ok) { out.className = "res bad"; out.textContent = r.error; return; }
     out.className = "res ok"; out.textContent = r.message;
-    if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
+    if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
+    else if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
     else if (r.action !== "installer") btn.remove();
   };
 }
@@ -2318,16 +2502,22 @@ async function restartApp() {
 /* ================================== boot ================================== */
 (async () => {
   shell();
+  document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
+    const ma = e.target.closest("[data-ma]"); if (!ma) return;
+    const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+    if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
+  });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
     toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(err => toast(err.message)); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
-  try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills()]); }
+  try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
-  S.draft.harness = modeHarness();
-  if (S.draft.project && !S.projects.some(p => p.path === S.draft.project) && S.draft.project !== S.defaultProject) S.draft.project = "";
+  await loadPj();
+  loadAccount(); loadCaps(); loadConnectors();
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.ready) showOnboarding();
@@ -2335,19 +2525,17 @@ async function restartApp() {
     loadModels().then(renderBar);
     if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
     // 21. a thread waiting for the user's OK opens straight away after a restart
-    const waiting = S.threads.find(t => t.state === "waiting" && (t.kind || "code") === S.appMode);
-    const last = store("last_" + S.appMode);
+    const waiting = S.threads.find(t => t.state === "waiting" && !t.archived);
+    const last = store("last_chat");
     if (waiting) openThread(waiting.id);
     else if (last && S.threads.some(t => t.id === last && !t.archived)) openThread(last);
   }   // set up but onboarding left halfway
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
-  setTimeout(() => checkUpdate(false), 3000);
+  setTimeout(() => checkUpdate(false), 3000); setTimeout(updStatus, 1000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
-  document.addEventListener("contextmenu", e => { const ph = e.target.closest?.("#sideList .proj-h"); if (ph) { e.preventDefault(); projMenu({currentTarget: ph, target: ph}, ph.parentElement.dataset.p); return; } });
-  document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });
-  const conv = $("#conv"); const jd = Object.assign(document.createElement("button"), {className: "jumpdown", hidden: true, textContent: "↓ Latest"});
-  conv.parentElement.appendChild(jd); jd.onclick = () => { conv.scrollTop = conv.scrollHeight; };
-  conv.addEventListener("scroll", () => { jd.hidden = conv.scrollHeight - conv.scrollTop - conv.clientHeight < 300; });
+  window.addEventListener("focus", () => { loadPj().then(renderSide); });
+  setupScroll();
+  { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();
 
@@ -2361,7 +2549,9 @@ function prStateBadge(p) {
   const [cl, w] = p.draft && p.state === "open" ? ["draft", "Draft"] : ({open: ["open", "Open"], merged: ["merged", "Merged"], closed: ["closed", "Closed"]}[p.state] || ["", p.state]);
   return `<span class="prv-state ${cl}">${w}</span>`;
 }
-function ago(t) { if (!t) return ""; const s = (Date.now() - Date.parse(t)) / 1000; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; }
+// Pull requests, comments: ISO dates from GitHub. (Named apart from ago(): two functions of one name meant the
+// later won, and every chat in the sidebar read "NaN d ago".)
+function agoIso(t) { const ms = Date.parse(t); if (!t || isNaN(ms)) return ""; const s = (Date.now() - ms) / 1000; return s < 90 ? "just now" : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 129600 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`; }
 function diffHTML(patch) {
   // a GitHub patch: hunks of "@@ -a,b +c,d @@", then lines starting with space, + or -
   let o = 0, n = 0; const rows = [];
@@ -2410,7 +2600,7 @@ async function prLoad(fresh) {
   if (!PRV.n || !d.prs.some(p => p.number === PRV.n)) PRV.n = d.current || d.prs[0].number;
   const group = (t, rows) => rows.length ? `<div class="prv-grp">${t}</div>` + rows.map(p => `<button class="prv-item${p.number === PRV.n ? " on" : ""}" data-n="${p.number}">
       <span class="prv-it-top">${prStateBadge(p)}<span class="stat">#${p.number}</span>${p.checks ? `<span class="cidot ${({passing: "ok", failing: "bad", running: "run"})[p.checks] || ""}" title="${esc(p.checks)}"></span>` : ""}</span>
-      <span class="prv-it-t">${esc(p.title)}</span><span class="stat">${esc(p.head)} · ${ago(p.updated)}</span></button>`).join("") : "";
+      <span class="prv-it-t">${esc(p.title)}</span><span class="stat">${esc(p.head)} · ${agoIso(p.updated)}</span></button>`).join("") : "";
   L.innerHTML = (d.connected ? "" : `<div class="pnote">Connect GitHub to see private repositories and to merge. <button class="linkbtn" id="prvConn">Connect</button></div>`)
     + group("Open", d.prs.filter(p => p.state === "open")) + group("Recently closed", d.prs.filter(p => p.state !== "open"));
   $("#prvConn")?.addEventListener("click", () => { closePRView(); openSettings("connectors"); });
@@ -2430,7 +2620,7 @@ async function prDetail() {
   const tot = Math.max(1, p.additions + p.deletions);
   M.innerHTML = `<header class="prv-head">
       <div class="prv-title">${prStateBadge(p)}<h2>${esc(p.title)} <span class="stat">#${p.number}</span></h2></div>
-      <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${ago(p.updated)}</div>
+      <div class="stat">${esc(p.author)} wants to merge <code>${esc(p.head)}</code> into <code>${esc(p.base)}</code> · ${p.commits} commit${p.commits === 1 ? "" : "s"} · updated ${agoIso(p.updated)}</div>
       <div class="prv-acts"><a class="btn" href="${esc(p.url)}" target="_blank" rel="noopener">Open on GitHub</a>
         ${p.preview_url ? `<button class="btn" id="prvPrev" title="${esc(p.preview_url)}">Preview</button>` : ""}
         <button class="btn" id="prvRev">Review with the agent</button>
@@ -2449,7 +2639,7 @@ async function prDetail() {
       ${fails.length ? `<div class="row" style="margin-top:10px"><button class="btn" id="prvFix">Ask the agent to fix the failing checks</button></div>` : ""}</section>
     <section class="prv-sec"><h4>Conversation <span class="stat">${p.comments.length}</span></h4>
       ${p.body ? `<div class="prv-cm"><div class="stat"><b>${esc(p.author)}</b> opened it</div><div class="prv-cmb">${esc(p.body).slice(0, 4000)}</div></div>` : ""}
-      ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${ago(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
+      ${p.comments.map(c => `<div class="prv-cm"><div class="stat"><b>${esc(c.user)}</b> · ${agoIso(c.created)}</div><div class="prv-cmb">${esc(c.body)}</div></div>`).join("")}
       ${p.connected ? `<div class="prv-cmnew"><textarea id="prvCm" rows="3" placeholder="Comment on GitHub"></textarea><button class="btn" id="prvCmGo">Comment</button></div>` : `<div class="stat">Connect GitHub to comment.</div>`}</section>
     <section class="prv-sec"><h4>Files changed <span class="stat">${p.files.length}${p.files.length < p.changed_files ? ` of ${p.changed_files}` : ""}</span><span class="sp"></span><button class="linkbtn" id="prvAll">Expand all</button></h4>
       ${p.files.map((f, i) => { const [cl, w] = CH_BADGE[f.status === "removed" ? "deleted" : f.status === "modified" ? "changed" : f.status] || CH_BADGE.changed;

@@ -165,17 +165,22 @@ class SimpleLedger:
         base_url, api_key = self.base_url, self.api_key
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
-        stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat"
+        anthropic = PV.key_wire() == "anthropic"           # an Anthropic-style key endpoint: Messages API, not streamed
+        stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat" and not anthropic
         if stream:
             body["stream"] = True
             body["stream_options"] = {"include_usage": True}
             idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
-        if wire == "responses":
+        if anthropic:
+            from meshpool_harness.core import anthropic_wire as AW
+            body = AW.to_request(body)
+        elif wire == "responses":
             body = to_responses(body)
-        req = urllib.request.Request(f"{base_url}/{'responses' if wire == 'responses' else 'chat/completions'}",
-                                     data=json.dumps(body).encode(), method="POST",
-                                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json",
+        url = f"{base_url}/{'messages' if anthropic else 'responses' if wire == 'responses' else 'chat/completions'}"
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                     headers={**(AW.headers(api_key) if anthropic else
+                                                 {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}),
                                               "X-Harness-Task-Id": task_id,
                                               **({"session_id": task_id.split("-esc")[0]}
                                                  if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
@@ -196,4 +201,6 @@ class SimpleLedger:
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
             raise RuntimeError(f"meshpool HTTP {status}: {payload}")
+        if anthropic:
+            return AW.from_response(payload)
         return from_responses(payload) if wire == "responses" else payload

@@ -1,0 +1,110 @@
+[
+ {
+  "id": "hard-config-bool",
+  "mode": "code",
+  "prompt": "Beta features turn on for everyone even though config.ini says beta = false. test_flags.py shows it. Fix the real cause.",
+  "files": {
+   "config.ini": "[features]\nbeta = false\nsearch = true\n",
+   "settings.py": "import configparser\n\ndef load(path='config.ini'):\n    c = configparser.ConfigParser()\n    c.read(path)\n    return {k: _coerce(v) for k, v in c['features'].items()}\n\ndef _coerce(v):\n    if v.isdigit():\n        return int(v)\n    return bool(v)\n",
+   "flags.py": "from settings import load\n\ndef enabled(name):\n    return bool(load().get(name))\n",
+   "test_flags.py": "from flags import enabled\nassert enabled('search') is True\nassert enabled('beta') is False, 'beta should be off'\nassert enabled('missing') is False\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_flags.py && git diff --quiet -- test_flags.py config.ini"
+  }
+ },
+ {
+  "id": "hard-regression-history",
+  "mode": "code",
+  "prompt": "parse_date('2024-03-05') worked last week and now returns the wrong month. Find what changed and fix it. test_dates.py must pass.",
+  "files": {
+   "dates.py": "from datetime import datetime\n\ndef parse_date(s):\n    return datetime.strptime(s, '%Y-%m-%d').date()\n",
+   "test_dates.py": "from datetime import date\nfrom dates import parse_date\nassert parse_date('2024-03-05') == date(2024, 3, 5)\nassert parse_date('2024-12-31') == date(2024, 12, 31)\nprint('ok')\n"
+  },
+  "history": [
+   {
+    "msg": "speed up date parsing",
+    "files": {
+     "dates.py": "from datetime import date\n\ndef parse_date(s):\n    y, m, d = s.split('-')\n    return date(int(y), int(d), int(m)) if int(d) <= 12 else date(int(y), int(m), int(d))\n"
+    }
+   },
+   {
+    "msg": "docs",
+    "files": {
+     "README.md": "# dates\n"
+    }
+   }
+  ],
+  "grade": {
+   "check": "python3 test_dates.py && git diff --quiet HEAD -- test_dates.py"
+  }
+ },
+ {
+  "id": "hard-money-float",
+  "mode": "code",
+  "prompt": "Invoice totals are off by a cent sometimes. test_invoice.py fails. Fix invoice.py so totals are exact to the cent.",
+  "files": {
+   "invoice.py": "def total(lines):\n    t = 0.0\n    for qty, price in lines:\n        t += qty * price\n    return round(t, 2)\n\ndef fmt(x):\n    return f'${x:.2f}'\n",
+   "test_invoice.py": "from invoice import total, fmt\nassert fmt(total([(1, '0.10'), (2, '0.10')])) == '$0.30'\nassert fmt(total([(3, '1.005')])) == '$3.02'\nassert fmt(total([(1, '19.99'), (1, '0.01')])) == '$20.00'\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_invoice.py && git diff --quiet -- test_invoice.py"
+  }
+ },
+ {
+  "id": "hard-two-bugs",
+  "mode": "code",
+  "prompt": "test_report.py fails. There may be more than one problem; fix them all without touching the test.",
+  "files": {
+   "text.py": "def words(s):\n    return s.split(' ')\n",
+   "report.py": "from text import words\n\ndef top_words(s, n=2):\n    counts = {}\n    for w in words(s.lower()):\n        counts[w] = counts.get(w, 0) + 1\n    ranked = sorted(counts.items(), key=lambda kv: kv[1])\n    return [w for w, _ in ranked[:n]]\n",
+   "test_report.py": "from report import top_words\nassert top_words('b a b  c b a') == ['b', 'a'], top_words('b a b  c b a')\nassert top_words('x\\ny x') == ['x', 'y']\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_report.py && git diff --quiet -- test_report.py"
+  }
+ },
+ {
+  "id": "hard-js-closure",
+  "mode": "code",
+  "prompt": "node tasks.js should print 0, 1, 2 (one per line) but prints 3 three times. Fix it.",
+  "files": {
+   "tasks.js": "var jobs = []\nfor (var i = 0; i < 3; i++) {\n  jobs.push(function () { return i })\n}\nfor (const j of jobs) console.log(j())\n"
+  },
+  "grade": {
+   "check": "test \"$(node tasks.js | tr '\\n' ',')\" = '0,1,2,'"
+  }
+ },
+ {
+  "id": "hard-recursion",
+  "mode": "code",
+  "prompt": "flatten(['ab', ['c', ['d']]]) crashes with RecursionError. test_flat.py shows the expected result. Fix flat.py.",
+  "files": {
+   "flat.py": "def flatten(xs):\n    out = []\n    for x in xs:\n        if hasattr(x, '__iter__'):\n            out.extend(flatten(x))\n        else:\n            out.append(x)\n    return out\n",
+   "test_flat.py": "from flat import flatten\nassert flatten(['ab', ['c', ['d']]]) == ['ab', 'c', 'd']\nassert flatten([1, (2, 3), [[4]]]) == [1, 2, 3, 4]\nassert flatten([b'x', {'k'}]) == [b'x', 'k']\nprint('ok')\n"
+  },
+  "grade": {
+   "check": "python3 test_flat.py && git diff --quiet -- test_flat.py"
+  }
+ },
+ {
+  "id": "hard-build-lru",
+  "mode": "code",
+  "prompt": "Create lru.py with class LRU(capacity): get(key) returns the value or None and marks it recently used; put(key, value) inserts or updates, evicting the least recently used key when over capacity. Both O(1).",
+  "files": {},
+  "grade": {
+   "check": "python3 -c \"from lru import LRU\nc=LRU(2); c.put('a',1); c.put('b',2); assert c.get('a')==1; c.put('c',3); assert c.get('b') is None; assert c.get('a')==1 and c.get('c')==3; c.put('a',9); c.put('d',4); assert c.get('c') is None and c.get('a')==9\nc1=LRU(1); c1.put('x',1); c1.put('x',2); assert c1.get('x')==2\""
+  }
+ },
+ {
+  "id": "hard-build-duration",
+  "mode": "code",
+  "prompt": "Add parse_duration(s) to durations.py: accepts strings like '1h30m', '45s', '2h', '1h5m10s' and returns total seconds as an int; raises ValueError for empty strings, unknown units, or repeated units like '1h2h'.",
+  "files": {
+   "durations.py": "\"\"\"Time helpers.\"\"\"\n"
+  },
+  "grade": {
+   "check": "python3 -c \"from durations import parse_duration as p\nassert p('1h30m')==5400 and p('45s')==45 and p('2h')==7200 and p('1h5m10s')==3910\nfor bad in ['', '5x', '1h2h', 'h', '10']:\n  try:\n    p(bad); raise SystemExit('accepted '+repr(bad))\n  except ValueError: pass\""
+  }
+ }
+]

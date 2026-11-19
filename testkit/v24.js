@@ -17,7 +17,7 @@ const {chromium} = require("playwright");
   await p.waitForTimeout(800); await p.screenshot({path: out + "/c3-stopped.png"});
   for (const s of ["personal", "scheduled", "web", "connectors", "permissions"]) {
     if (!(await p.$(".scrim"))) await p.click("#openSettings");
-    await p.click(`.mnav [data-s=${s}]`); await p.waitForTimeout(900); await p.screenshot({path: out + `/s-${s}.png`});
+    await p.evaluate(s => renderSection(s), s); await p.waitForTimeout(900); await p.screenshot({path: out + `/s-${s}.png`});
   }
   await p.evaluate(() => { document.querySelector(".scrim")?.remove(); permStep(); }); await p.waitForTimeout(800); await p.screenshot({path: out + "/p-onboard.png"});
   console.log(errs.length ? errs.join("\n") : "no page errors"); await b.close();

@@ -99,17 +99,19 @@ def _state(pg):
         stored: localStorage.getItem('mp_project')})""")
 
 
-def test_new_chat_from_the_home_screen_keeps_a_real_folder(page):
+def test_new_chat_from_the_home_screen_starts_a_chat_without_a_folder(page):
+    """UX v2/v3: New chat starts a plain chat (it gets its own private folder when sent); a project's chats start from
+    the project page."""
     page.click("#newThread")
     page.wait_for_timeout(300)
     st = _state(page)
     assert page.errors == [], page.errors
-    assert st["projectType"] == "string" and st["project"], st
+    assert st["projectType"] == "string" and st["project"] == "", st
     assert st["hero"] and st["cur"] is None, st
     assert page.evaluate("document.activeElement && document.activeElement.id") == "input"
 
 
-def test_new_chat_from_an_open_chat_starts_a_new_one_in_the_same_folder(page, app):
+def test_new_chat_from_an_open_chat_starts_a_fresh_chat_with_its_own_folder(page, app):
     page.evaluate("p => { S.draft.project = p; S.draft.mode = 'auto'; renderHero(); }", app["proj"])
     page.fill("#input", "Say hello")
     page.press("#input", "Enter")
@@ -127,15 +129,15 @@ def test_new_chat_from_an_open_chat_starts_a_new_one_in_the_same_folder(page, ap
     st = _state(page)
     assert page.errors == [], page.errors
     assert st["cur"] is None and st["hero"], st
-    assert st["project"] == workdir, st
-    assert page.text_content("#heroProj").strip() == Path(workdir).name
+    assert st["project"] == "", st                         # not the previous chat's folder
 
     page.fill("#input", "Say hello again")
     page.press("#input", "Enter")
     # the new chat's view starts as a placeholder; its folder arrives with the first poll of the server
     page.wait_for_function("id => S.cur && S.cur.id && S.cur.id !== id && S.cur.view && S.cur.view.workdir", arg=first,
                            timeout=60000)
-    assert page.evaluate("S.cur.view.workdir") == workdir
+    second = page.evaluate("S.cur.view.workdir")
+    assert second != workdir and Path(second).parent.name == "chats", second   # its own private folder
     assert page.errors == [], page.errors
 
 
@@ -160,6 +162,6 @@ def test_a_folder_saved_as_a_click_event_by_an_earlier_version_is_ignored(app):
         pg.click("#newThread")
         pg.wait_for_timeout(300)
         assert errors == [], errors
-        assert pg.evaluate("typeof S.draft.project") == "string"
-        assert pg.evaluate("S.draft.project") != ""
+        assert pg.evaluate("typeof S.draft.project") == "string"   # the old click event is not used as a folder
+        assert pg.evaluate("S.draft.project") == ""
         b.close()

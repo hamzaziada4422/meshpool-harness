@@ -162,12 +162,11 @@ def _bundled_tools() -> None:
             os.environ.setdefault("HERMES_GIT_BASH_PATH", str(bash))
             extra = [str(git / "cmd"), str(git / "usr" / "bin")]
             os.environ["PATH"] = os.pathsep.join(extra + [os.environ.get("PATH", "")])
-    # Node.js ships with the app (for Pi and for npx-based MCP servers). It goes last on PATH, so a Node the user
-    # installed still wins; without one, node, npm and npx work out of the box.
-    node_dir = root / "node" if os.name == "nt" else root / "node" / "bin"
-    if node_dir.is_dir() and str(node_dir) not in os.environ.get("PATH", ""):
-        os.environ["PATH"] = os.environ.get("PATH", "") + os.pathsep + str(node_dir)
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(C.home() / "browsers"))
+    # Node.js, Git and LibreOffice's folder ship with the app and go FIRST on PATH: the app uses its own copies, never a
+    # Node or Git the customer installed (meshpool_harness/bundled.py).
+    from meshpool_harness import bundled
+    bundled.use_bundled_tools()
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(bundled.browsers_dir() if bundled.packaged() else C.home() / "browsers"))
 
 
 WINDOW: list = [None]

@@ -21,7 +21,7 @@ _MAKE = re.compile(r"\b(make|create|build|write|draft|generate|produce|prepare|d
 _FILES = re.compile(r"\.(docx?|xlsx?|pptx?|pdf|csv|json|py|js|ts|tsx|md|html|css|sql)\b|\b(document|report|deck|"
                     r"slides?|spreadsheet|workbook|presentation|memo|file|folder|script|code|repo|app|website|"
                     r"function|class|bug|tests?)\b", re.I)
-_ASK = re.compile(r"^\s*(what|which|who|whom|whose|when|where|why|how|is|are|was|were|can|could|does|do|did|should|"
+_ASK = re.compile(r"^\s*(whats|hows|whos|what|which|who|whom|whose|when|where|why|how|is|are|was|were|can|could|does|do|did|should|"
                   r"would|will|tell me|explain|compare|define|give me|list|name|suggest|recommend|find out|look up|"
                   r"search|research|quick(ly)?|briefly|any idea|i wonder)\b|\?\s*$|\b(quick|short|brief|briefly|"
                   r"in (one|a few|two|three) (words?|sentences?|lines?))\b", re.I)

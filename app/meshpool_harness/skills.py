@@ -164,14 +164,77 @@ def instructions(name: str) -> str:
     return f"Skill: {s['name']}\nFolder: {Path(s['path']).parent}\n\n{text}{extra}"
 
 
-def catalog_text() -> str:
-    """The skills list for an agent's system prompt."""
+# Above this many enabled skills the system prompt lists names only and the agent searches descriptions with
+# find_skill. With ~100 skills the full list was ~30k characters (~7.5k tokens) on every model call of every chat:
+# slower first tokens and more for the model to wade through. MH_SKILLS=full keeps the full list.
+ON_DEMAND_MIN = 15
+NAMES_MAX = 60
+_WORD = re.compile(r"[a-z0-9]+")
+_STOP = {"a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "with", "my", "me", "i", "is", "it", "this",
+         "that", "be", "use", "when", "from", "by", "as", "at", "your", "you", "can", "do", "how", "what"}
+
+
+def on_demand() -> bool:
+    import os
+    return os.environ.get("MH_SKILLS", "").lower() != "full" and len(enabled()) > ON_DEMAND_MIN
+
+
+def _terms(text: str) -> list[str]:
+    out = []
+    for w in _WORD.findall((text or "").lower()):
+        if w in _STOP or len(w) < 2:
+            continue
+        out.append(w[:-1] if len(w) > 4 and w.endswith("s") else w)   # decks -> deck
+    return out
+
+
+def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
+    """Skills ranked by word overlap with the query; a hit in the name counts three times one in the description."""
+    q = set(_terms(query))
+    if not q:
+        return []
+    rows = enabled() if rows is None else rows
+    scored = []
+    for s in rows:
+        name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(s["description"]))
+        score = 3 * len(q & name) + len(q & desc)
+        if score:
+            scored.append((score, s))
+    scored.sort(key=lambda x: (-x[0], x[1]["name"]))
+    return [s for _, s in scored[:k]]
+
+
+def search_text(query: str) -> str:
+    hits = search(query)
+    if not hits:
+        return "No skill matches. Try other words, or go ahead without a skill."
+    return "Best matching skills (load one with use_skill):\n" + "\n".join(
+        f"- {s['name']}: {s['description'][:300]}" for s in hits)
+
+
+def catalog_text(task: str = "", searchable: bool = True) -> str:
+    """The skills list for an agent's system prompt: in full for a few skills, otherwise names only plus the
+    ones that match the task the chat started with."""
     rows = enabled()
     if not rows:
         return ""
-    lines = [f"- {s['name']}: {s['description']}" for s in rows]
-    return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
-            "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
+    if not on_demand():
+        lines = [f"- {s['name']}: {s['description']}" for s in rows]
+        return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
+                "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
+    if not searchable:                            # a lean harness: only the skills that match its task
+        hits = search(task, k=3, rows=rows) if task else []
+        return ("\n\nSkills that may fit this task (load one with use_skill):\n" + "\n".join(
+            f"- {s['name']}: {s['description'][:200]}" for s in hits)) if hits else ""
+    text = (f"\n\nSkills: {len(rows)} saved instruction sets for specific jobs. Before a task that may match one, "
+            "call find_skill with a few words; load a match with use_skill. A skill the user names with $name is "
+            "attached to their message already.")
+    if len(rows) <= NAMES_MAX:                    # a few dozen names are cheap; hundreds (imported) are not
+        text += " Names: " + ", ".join(s["name"] for s in rows) + "."
+    hits = search(task, k=5, rows=rows) if task else []
+    if hits:
+        text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {s['description'][:240]}" for s in hits)
+    return text
 
 
 # ---------- changes from the app ---------------------------------------------------------------------------------

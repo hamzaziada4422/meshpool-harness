@@ -1,0 +1,19 @@
+{
+ "specs": {
+  "code.build": {
+   "addon_extra": "Work economically: do not re-read a file after editing it (the edit result confirms the change); write a check script once and rerun it instead of retyping it; batch independent reads in one turn; when your check passes, stop and reply."
+  },
+  "code.debug": {
+   "addon_extra": "Work economically: do not re-read a file after editing it (the edit result confirms the change); write a check script once and rerun it instead of retyping it; batch independent reads in one turn; when your check passes, stop and reply."
+  },
+  "code.refactor": {
+   "addon_extra": "Work economically: do not re-read a file after editing it (the edit result confirms the change); write a check script once and rerun it instead of retyping it; batch independent reads in one turn; when your check passes, stop and reply."
+  },
+  "code.test": {
+   "addon_extra": "Work economically: do not re-read a file after editing it (the edit result confirms the change); write a check script once and rerun it instead of retyping it; batch independent reads in one turn; when your check passes, stop and reply."
+  },
+  "data": {
+   "addon_extra": "Answer as soon as the number is computed from the cleaned data and cross-checked once; do not recompute it again."
+  }
+ }
+}

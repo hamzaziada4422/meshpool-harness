@@ -1,0 +1,118 @@
+[
+ {
+  "id": "chat-capital",
+  "mode": "work",
+  "prompt": "What's the capital of Australia?",
+  "grade": {
+   "must": [
+    "Canberra"
+   ],
+   "max_words": 40
+  }
+ },
+ {
+  "id": "chat-percent",
+  "mode": "work",
+  "prompt": "What's 15% of 2,340?",
+  "grade": {
+   "must": [
+    "351"
+   ],
+   "max_words": 40
+  }
+ },
+ {
+  "id": "chat-rewrite",
+  "mode": "work",
+  "prompt": "Rewrite this to sound friendlier, one sentence only: 'Send me the files now.'",
+  "grade": {
+   "must": [
+    "files"
+   ],
+   "max_words": 45,
+   "must_not": [
+    "Here's|Here is|Sure"
+   ]
+  }
+ },
+ {
+  "id": "chat-translate",
+  "mode": "work",
+  "prompt": "Translate to French: 'The meeting is moved to Thursday.'",
+  "grade": {
+   "must": [
+    "jeudi",
+    "r[\u00e9e]union"
+   ],
+   "max_words": 40
+  }
+ },
+ {
+  "id": "chat-explain",
+  "mode": "work",
+  "prompt": "In two sentences, what is the difference between a process and a thread?",
+  "grade": {
+   "must": [
+    "memory|address space"
+   ],
+   "max_words": 90
+  }
+ },
+ {
+  "id": "chat-convert",
+  "mode": "work",
+  "prompt": "How many seconds are in 3.5 hours?",
+  "grade": {
+   "must": [
+    "12,?600"
+   ],
+   "max_words": 40
+  }
+ },
+ {
+  "id": "chat-subject",
+  "mode": "work",
+  "prompt": "Give me one subject line for an email asking my team to submit timesheets by Friday.",
+  "grade": {
+   "must": [
+    "timesheet"
+   ],
+   "max_words": 30
+  }
+ },
+ {
+  "id": "chat-json",
+  "mode": "work",
+  "prompt": "Is this valid JSON? {\"a\": 1, \"b\": [1,2,],}  Answer yes or no and say why in one sentence.",
+  "grade": {
+   "must": [
+    "\\bno\\b",
+    "comma"
+   ],
+   "max_words": 50
+  }
+ },
+ {
+  "id": "chat-regex",
+  "mode": "work",
+  "prompt": "Give a regex that matches a 5-digit US ZIP code, only the regex.",
+  "grade": {
+   "must": [
+    "\\\\d\\{5\\}|\\[0-9\\]\\{5\\}"
+   ],
+   "max_words": 25
+  }
+ },
+ {
+  "id": "chat-sql",
+  "mode": "work",
+  "prompt": "Write a SQL query that counts orders per customer_id in table orders. Only the query.",
+  "grade": {
+   "must": [
+    "count",
+    "group by\\s+customer_id"
+   ],
+   "max_words": 40
+  }
+ }
+]
