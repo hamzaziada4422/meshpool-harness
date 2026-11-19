@@ -11,8 +11,8 @@ repo.
   green run and release (see "Release").
 - **Frozen V1 MeshPool** (the "before"): commit `b52c31c`, checked out as a git worktree at `~/.cache/meshpool-v1`.
   Benchmark arm `v1` runs it.
-- **Latest results: `docs/results/v2/V2_REPORT.md`, `docs/BENCHMARKS_V2.md` (verdict: promising but unproven).
-- **Benchmark code:**** `testkit/loop/`
+- **Latest results:** `docs/results/v2/V2_REPORT.md`, `docs/BENCHMARKS_V2.md` (verdict: promising but unproven).
+- **Benchmark code:** `testkit/loop/`
   - `bench.py`: runner, arms, metering, statistics, cap guard.
   - `meter.py`: a metering proxy every harness's model calls go through.
   - `swe_local.py`: SWE-bench Verified SymPy tasks without Docker.
