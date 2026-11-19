@@ -232,6 +232,26 @@ def test_git_network_commands_sign_in_only_in_managed_workspaces(env, monkeypatc
     assert not any(TOKEN in a for a in calls[0][0])
 
 
+def test_a_planted_git_hook_never_sees_the_token(env):
+    """The agent can write .git/hooks with bash; push/pull/fetch in a managed workspace run with the token in their
+    environment, so hooks are switched off for them."""
+    ws = W.workspaces_dir() / "o__r"
+    ws.mkdir(parents=True)
+    git(ws, "init", "-q", "-b", "main")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "--allow-empty", "-qm", "init")
+    bare = env / "remote.git"
+    git(env, "init", "-q", "--bare", str(bare))
+    git(ws, "remote", "add", "origin", str(bare))
+    leak = env / "leaked.txt"
+    hook = ws / ".git" / "hooks" / "pre-push"
+    hook.write_text('#!/bin/sh\necho "$MESHPOOL_GH_TOKEN" > "' + str(leak).replace("\\", "/") + '"\n')
+    hook.chmod(0o755)
+    W._git(ws, "push", "origin", "main")
+    assert not leak.exists(), "a hook ran with the token in its environment"
+    assert (bare / "refs" / "heads" / "main").exists()                    # the push itself still worked
+    assert "core.hooksPath" in " ".join(W.clone_argv("o/r", Path("/dest")))
+
+
 def test_branch_create_and_missing(env, monkeypatch):
     real = subprocess.run
 

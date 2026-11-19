@@ -971,14 +971,15 @@ def create(body: dict) -> dict:
             model = None                            # a model this agent cannot run: it uses its own default
     except (KeyError, ValueError):
         pass
-    plan_first = False
-    try:                                            # Settings, "Plan first": every new chat starts with a plan
-        from meshpool_harness.ui import settings_v2 as SV2
-        plan_first = SV2.profile()["plan_first"]
-    except Exception:  # noqa: BLE001
-        pass
+    plan = body.get("plan")
+    if plan is None:                                # no say in the request: Settings, "Plan first", decides
+        try:
+            from meshpool_harness.ui import settings_v2 as SV2
+            plan = SV2.profile()["plan_first"]
+        except Exception:  # noqa: BLE001
+            plan = False
     s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                kind=kind, model=model, plan=bool(body.get("plan")) or plan_first)
+                kind=kind, model=model, plan=bool(plan))
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -1326,7 +1327,7 @@ def run_scheduled(t: dict) -> str:
     if not folder or not Path(folder).expanduser().is_dir():
         folder = ""
     v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                "task": t.get("prompt", "")})
+                "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])

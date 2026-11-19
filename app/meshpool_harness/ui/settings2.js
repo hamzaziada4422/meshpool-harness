@@ -242,7 +242,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         <ul class="rows2">${feat.features.filter(f => f.advanced).map(row).join("")}</ul>
         <p class="lead" style="margin-top:12px">Which agent does the work, and how each one is set up: <button class="linkbtn" data-go="harnesses">Agents</button></p><div class="res" id="capRes"></div>`;
       $$("[data-t]", b).forEach(x => x.onchange = async () => {
-        try { const r = await post("/api/capabilities", {id: x.dataset.t, on: x.checked}); if (x.dataset.t === "plan_first") S.draft.plan = x.checked; res("capRes", "ok", "Saved. New chats use it."); void r; renderBar(); }
+        try { const r = await post("/api/capabilities", {id: x.dataset.t, on: x.checked}); if (r?.features) S.caps = r.features; if (x.dataset.t === "plan_first") S.draft.plan = x.checked; res("capRes", "ok", "Saved. New chats use it."); void r; renderBar(); }
         catch (e) { x.checked = !x.checked; res("capRes", "bad", e.message); }
       });
       $("#capHarness").onchange = () => { const v = $("#capHarness").value; store("harness_default", v === "meshpool-auto" ? null : v); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } res("capRes", "ok", "Saved. New chats use it."); };

@@ -339,6 +339,17 @@ _CRED_FLAGS = ["-c", "credential.helper=",
                "-c", 'credential.https://github.com.helper=!f() { echo username=x-access-token; echo "password=$MESHPOOL_GH_TOKEN"; }; f']
 
 
+def _no_hooks() -> list[str]:
+    """Git hooks off for the commands that carry the token: a hook the agent wrote into .git/hooks would otherwise run
+    with MESHPOOL_GH_TOKEN in its environment. An empty folder of Meshpool's own stands in for hooks/."""
+    d = C.home() / "no-git-hooks"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return ["-c", f"core.hooksPath={d}"]
+
+
 def _gh_git_env(env: dict) -> dict:
     from meshpool_harness import mcp_apps as CN
     tok = CN.github_token()
@@ -355,7 +366,7 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
             "--no-pager"]
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
-        env, extra = _gh_git_env(env), _CRED_FLAGS
+        env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
     r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
     if check and r.returncode != 0:
@@ -1040,8 +1051,8 @@ def clone_argv(slug: str, dest: Path) -> list[str]:
     """The git command that clones one repository. No token in it: _gh_git_env hands that to the process."""
     if not _SLUG_RX.match(slug or ""):
         raise ValueError("Give the repository as owner/name.")
-    return [git_exe() or "git", *_CRED_FLAGS, "clone", "--origin", "origin", "--", f"https://github.com/{slug}.git",
-            str(dest)]
+    return [git_exe() or "git", *_CRED_FLAGS, *_no_hooks(), "clone", "--origin", "origin", "--",
+            f"https://github.com/{slug}.git", str(dest)]
 
 
 _REPOS: dict = {"t": 0, "tok": "", "rows": []}

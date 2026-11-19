@@ -224,20 +224,29 @@ def test_a_chat_needs_no_folder(home, monkeypatch):
     assert not wd.exists()
 
 
-def test_plan_first_setting_makes_new_chats_start_with_a_plan(home, monkeypatch):
-    """Settings, Plan first: saved in the profile, applied by the server to every new chat (the page's draft flag is
-    reset after each send, so it cannot carry the setting)."""
+def test_plan_first_setting_applies_only_when_the_request_does_not_say(home, monkeypatch):
+    """Settings, Plan first: a request without a plan flag (a new chat from the page seeds it from the setting, a
+    scheduled run says False) follows the setting; an explicit flag always wins."""
     from meshpool_harness.ui import settings_v2 as SV
     seen = []
+
     class Spy(FakeSession):
         def __init__(self, *a, plan=False, **kw):
             seen.append(plan)
             super().__init__(*a, plan=plan, **kw)
     monkeypatch.setattr(A, "Session", Spy)
-    A.create({"harness": "meshpool-auto", "task": "one", "plan": False})
+    A.create({"harness": "meshpool-auto", "task": "off"})
     SV.save_profile(plan_first=True)
-    A.create({"harness": "meshpool-auto", "task": "two", "plan": False})
-    assert seen == [False, True]
+    A.create({"harness": "meshpool-auto", "task": "no flag"})                      # follows the setting
+    A.create({"harness": "meshpool-auto", "task": "user turned it off", "plan": False})
+    A.create({"harness": "meshpool-auto", "task": "user turned it on", "plan": True})
+    assert seen == [False, True, False, True]
+    # a scheduled run has nobody to approve a plan: it never starts in plan mode, whatever the setting says
+    seen.clear()
+    monkeypatch.setattr(A, "get", lambda sid: type("S", (), {"send": lambda self, t: None, "id": sid})())
+    monkeypatch.setattr(AS, "set_thread", lambda *a, **k: None)
+    A.run_scheduled({"id": "t1", "name": "n", "prompt": "do it", "kind": "cowork"})
+    assert seen == [False]
 
 
 def test_a_chat_in_a_linked_project_works_in_the_folder(home, tmp_path, monkeypatch):

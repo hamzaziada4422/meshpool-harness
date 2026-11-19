@@ -33,6 +33,10 @@ Section "Uninstall"
   ; close the app and everything running from this folder (its Python, Node, Git), or their files stay locked
   nsExec::Exec 'taskkill /F /IM Meshpool.exe'
   Pop $0
+  ; also the app's own Python and Node processes (they hold files in runtime and node open): only programs that
+  ; live in the install folder, never this installer or the update helper (taskkill /T could reach those)
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue"`
+  Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
   Delete "$SMPROGRAMS\Meshpool.lnk"
   Delete "$DESKTOP\Meshpool.lnk"
@@ -42,6 +46,14 @@ Section "Uninstall"
   RMDir /r "$INSTDIR\node"
   RMDir /r "$INSTDIR\harness-docs"
   RMDir /r "$INSTDIR\bin"
+  ; what a failed update can leave behind (see the swap in the install section)
+  RMDir /r "$INSTDIR.new"
+  RMDir /r "$INSTDIR\app.old"
+  RMDir /r "$INSTDIR\runtime.old"
+  RMDir /r "$INSTDIR\git.old"
+  RMDir /r "$INSTDIR\node.old"
+  RMDir /r "$INSTDIR\harness-docs.old"
+  RMDir /r "$INSTDIR\bin.old"
   Delete "$INSTDIR\Meshpool.exe"
   Delete "$INSTDIR\meshpool.cmd"
   Delete "$INSTDIR\Meshpool.ico"

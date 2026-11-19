@@ -37,7 +37,7 @@ function listPop({anchor, groups, footer = [], placeholder = "Search", search = 
 }
 
 /* ---------- the plus menu ---------- */
-async function loadCaps() { try { S.caps = (await api("/api/capabilities")).features; } catch (e) { S.caps = S.caps || []; } }
+async function loadCaps() { try { S.caps = (await api("/api/capabilities")).features; } catch (e) { S.caps = S.caps || []; } if (!S.cur) S.draft.plan = !!capOn("plan_first"); }   // Settings, Plan first: the next new chat starts with a plan
 async function loadConnectors() { try { S.connCache = (await api("/api/connectors")).connectors; } catch (e) { S.connCache = S.connCache || []; } }
 const capOn = id => (S.caps || []).find(f => f.id === id)?.on;
 function plusMenu(anchor) {
