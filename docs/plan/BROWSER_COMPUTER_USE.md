@@ -23,13 +23,13 @@ On Linux, computer use is not supported and says so plainly (`computer_check`, t
 ## Bugs found and fixed
 
 1. A launch failure of any kind (including "the profile folder is in use") triggered a Chromium download. Now the download happens only when Chromium is really missing ("Executable doesn't exist"), and never in the packaged app.
-2. The download went to `<data folder>/browsers` while the Playwright driver looks at `PLAYWRIGHT_BROWSERS_PATH` (read once, when the driver starts), so the "download once" fallback downloaded on every start and still failed. The download now goes where the driver looks.
-3. In the packaged app `PLAYWRIGHT_BROWSERS_PATH` was set after the driver had started in the command-line and terminal paths (the desktop shell sets it earlier). It is now set before the driver starts.
+2. When `PLAYWRIGHT_BROWSERS_PATH` was not set (the source-checkout terminal agent; the desktop shell sets it), the download went to `<data folder>/browsers` while the Playwright driver looks in its default cache, so the "download once" fallback would download on every start and still fail. The download now goes where the driver looks. (`meshpool install-browser` already installs into the process's environment, i.e. the default cache, so the two now agree.)
+3. In the packaged app `PLAYWRIGHT_BROWSERS_PATH` was set after the driver had started, and the driver reads it once, so outside the desktop shell (which sets it earlier) the bundled Chromium would not be found. Set before the driver starts now; `test_packaged_build_finds_its_bundled_chromium` fails with the old order (checked) and passes now.
 4. The browser server was killed while Chromium was still running (stdin closed, then terminate), so Chromium never got a clean close. The server now closes the browser when stdin ends and on SIGTERM, and `agent/mcp.py` gives it up to 6 s to do so before terminating it. A sign-in made seconds before did survive a plain kill in the one try made here (Chromium also flushes on its own signal handler), so this is protection, not a measured fix.
-5. macOS: without the Screen Recording permission `screencapture` still succeeds and returns only the wallpaper, so the old return-code check never fired and the agent got a useless picture. `Mac.grab` now asks `CGPreflightScreenCaptureAccess` first and answers with the exact System Settings path.
+5. macOS: without the Screen Recording permission `screencapture` still succeeds and returns only the wallpaper, so the old return-code check never fired and the agent got a useless picture. `Mac.grab` now asks `CGPreflightScreenCaptureAccess` and, when it says no, adds a warning with the exact System Settings path to the screenshot text. It only warns (the picture is still returned) because the probe's answer inside the app's helper process has not been seen on a real Mac: see the manual list.
 6. macOS: `open_app` used `open -a` for everything, so a web address or a file (which the tool advertises) failed. Web addresses and existing files now use plain `open --`; names still use `open -a`; a name that starts with a dash is refused.
 7. `press_key` could not press the minus key (`cmd+-` is zoom out): `-` was treated as a separator. Fixed.
-8. Windows: screenshots needed the `mss` package, which the app does not ship (release `RUNTIME_EXTRAS` is `pywebview playwright`), so every Windows screenshot would have failed. It falls back to Pillow's `ImageGrab`. (Adding `mss` to `RUNTIME_EXTRAS` would also work; the fallback means the release does not depend on it.)
+8. Windows: screenshots needed the `mss` package, which is not in the app's requirements or in `RUNTIME_EXTRAS` (`pywebview playwright`); unless a build dependency such as Hermes' generated requirements pulls it in, every Windows screenshot would have failed. It falls back to Pillow's `ImageGrab`. (Adding `mss` to `RUNTIME_EXTRAS` would also work; the fallback means the release does not depend on it.)
 9. macOS: when the accessibility probe itself failed, control was reported as allowed. The self-check now reports "could not be checked" instead of "ok", while the tools still try (the click reports the refusal).
 10. The "allow Accessibility" and "allow Screen Recording" messages pointed to a "Meshpool Settings > Permissions" page that does not exist. They now give the System Settings path.
 
@@ -38,7 +38,7 @@ On Linux, computer use is not supported and says so plainly (`computer_check`, t
 | Value | What it launches | Profile | Falls back? |
 |---|---|---|---|
 | `meshpool` (default) | packaged app: the Chromium inside the app; source checkout: Chrome or Edge when installed, else a Chromium fetched once | Meshpool's folder `browser-profile/` in the data folder | n/a |
-| `installed` | the program of Google Chrome, Microsoft Edge or Brave on this computer (`MH_BROWSER_APP` picks one; empty: the first found; `MH_BROWSER_EXE` overrides the path), launched by Playwright with `executable_path` | Meshpool's folder `browser-profile/installed-<name>/` | never, in any build: when it is not found the error names what was looked for and says to switch Settings > Browser use back to Meshpool's browser |
+| `installed` | the program of Google Chrome, Microsoft Edge or Brave on this computer (`MH_BROWSER_APP` picks one; empty: the first found; `MH_BROWSER_EXE` overrides the path), launched by Playwright with `executable_path` | Meshpool's folder `browser-profile/installed-<name>/` | never, in any build: when it is not found the error names what was looked for and says to choose Meshpool's browser under Settings > Capabilities > Browser for browser use |
 | `attach` | nothing is launched; connects over CDP to the browser listening at `MH_BROWSER_CDP_URL` (default `http://127.0.0.1:9222`) | the browser's own | never; nothing listening gives the command to start it, and the same offer |
 
 Search paths for `installed`: macOS `/Applications` and `~/Applications` (`Google Chrome.app`, `Microsoft Edge.app`, `Brave Browser.app`); Windows `%ProgramFiles%`, `%ProgramFiles(x86)%` and `%LOCALAPPDATA%` under `Google\Chrome\Application\chrome.exe`, `Microsoft\Edge\Application\msedge.exe`, `BraveSoftware\Brave-Browser\Application\brave.exe`; Linux `google-chrome(-stable)`, `microsoft-edge(-stable)`, `brave-browser(-stable)` on `PATH`.
@@ -58,23 +58,23 @@ The setting is read when the browser starts (environment first, then the setting
 * `GET /api/capabilities` now adds `browser_use` to the `browser` row and `computer_status` to the `computer` row.
 * `GET /api/computer-status` returns the self-check.
 
-UI snippet for `settings2.js` (not applied; add under the Browser use switch in Settings > Features, after the `/api/capabilities` result `feat` is loaded):
+UI (applied, small): `app/meshpool_harness/ui/settings2.js`, Settings > Capabilities (section `caps`), a select "Browser for browser use" and, for the attach choice, a "Debugging address" field, written in the same style as the neighbouring "Editing files and running commands" select. The whole change is these three pieces:
 
 ```js
-// feat: the /api/capabilities features; browser row carries browser_use
-const bu = (feat.find(f => f.id === "browser") || {}).browser_use;
+// 1. after `const mode = ...`, in the "caps" section
+const bu = (feat.features.find(f => f.id === "browser") || {}).browser_use;
+// 2. in the template, before the "Advanced" heading
+${bu ? `<label class="field"><span>Browser for browser use</span><select id="capBrowser">${bu.modes.map(m => `<option value="${m.id}" ${m.id === bu.mode ? "selected" : ""} ${m.available ? "" : "disabled"}>${esc(m.name)}${m.available ? "" : " (not found)"}</option>`).join("")}</select><small id="capBrowserD"></small></label>
+<label class="field" id="capCdpW"><span>Debugging address</span><input id="capCdp" value="${esc(bu.cdp_url)}" placeholder="${esc(bu.default_cdp_url)}"><small>...</small></label>` : ""}
+// 3. after the capMode handler
 if (bu) {
-  html += `<div class="row"><label>Which browser</label><select id="buMode">` +
-    bu.modes.map(m => `<option value="${m.id}" ${m.id === bu.mode ? "selected" : ""} ${m.available ? "" : "disabled"}>${esc(m.name)}${m.available ? "" : " (not found)"}</option>`).join("") +
-    `</select><div class="hint" id="buDesc"></div>` +
-    `<input id="buUrl" value="${esc(bu.cdp_url)}" placeholder="${esc(bu.default_cdp_url)}"></div>`;
+  const showBu = () => { const m = bu.modes.find(x => x.id === $("#capBrowser").value) || {}; $("#capBrowserD").textContent = `${m.desc || ""} (${m.detail || ""})`; $("#capCdpW").hidden = m.id !== "attach"; };
+  $("#capBrowser").onchange = $("#capCdp").onchange = async () => { showBu(); try { await post("/api/browser-use", {mode: $("#capBrowser").value, cdp_url: $("#capCdp").value}); res("capRes", "ok", "Saved. New chats use it."); } catch (e) { res("capRes", "bad", e.message); } };
+  showBu();
 }
-// after render:
-const sync = () => { const m = bu.modes.find(x => x.id === $("#buMode").value); $("#buDesc").textContent = m.desc + " (" + m.detail + ")"; $("#buUrl").hidden = m.id !== "attach"; };
-$("#buMode").onchange = async () => { sync(); try { await post("/api/browser-use", {mode: $("#buMode").value, cdp_url: $("#buUrl").value}); res("capRes", "ok", "Saved. New chats use it."); } catch (e) { res("capRes", "err", e.message); } };
-$("#buUrl").onchange = $("#buMode").onchange;
-sync();
 ```
+
+It uses only helpers that file already uses (`$`, `esc`, `post`, `res`) and `node --check` accepts the file; it has NOT been seen in a rendered window here, so look at Settings > Capabilities once on a real build.
 
 For Computer use the row can show `f.computer_status.summary` and, when `ready` is false, the `fix` of each item whose `ok` is not true.
 
@@ -86,7 +86,7 @@ For Computer use the row can show `f.computer_status.summary` and, when `ready` 
 * Windows: no permission to ask for. It checks that the desktop that receives input can be opened (`OpenInputDesktop`): a locked screen, the sign-in screen and UAC's secure desktop fail it. It notes that programs running as administrator ignore input from a normal program.
 * Linux: "not supported on Linux yet", with what to use instead (browser tools, the shell).
 
-Exposed as the MCP tool `computer_check`, `GET /api/computer-status`, the doctor row "Computer use" (optional, shown in Settings > System), and `capabilities[computer].computer_status`.
+Exposed as the MCP tool `computer_check`, `GET /api/computer-status`, the doctor row "Computer use" (optional; part of `GET /api/settings` as `system`, and `meshpool check`), and `capabilities[computer].computer_status`.
 
 ## Proposal for 0.0.8: use the everyday browser profile (extension)
 
@@ -118,7 +118,7 @@ Computer use (turn the Computer use switch on; start a new chat)
 - [ ] Type text: ASCII, accented characters, an emoji, a 200-character sentence; into Notes and into a browser field.
 - [ ] Keys: enter, tab, escape, `cmd+c` / `cmd+v`, `cmd+shift+4`, `cmd+-` and `cmd+=` (zoom), arrows, F5; several separated by spaces.
 - [ ] `open_app`: `Safari`, `Notes`, `https://example.com`, a file path, a name that does not exist (clean error).
-- [ ] Revoke Screen Recording while Meshpool runs: the next screenshot fails with the message and path (not a wallpaper-only picture).
+- [ ] Revoke Screen Recording while Meshpool runs: the next screenshot text carries the warning and the path. Also confirm the opposite: with the permission granted there is NO warning (the probe runs in the helper process, not in the app, and was never seen on a real Mac; if it wrongly says no, drop the warning).
 - [ ] Stop in the middle of a long action: the mouse is not left held down.
 - [ ] With the model text-only: `open_app`, keys and typing still work and the agent does not loop on screenshots.
 

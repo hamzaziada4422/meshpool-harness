@@ -189,13 +189,14 @@ def test_mac_screenshot_scales_retina_to_screen_units(mac, monkeypatch):
     assert kinds(mac)[0][1] == pytest.approx((1440, 900), abs=1)       # within the screenshot's own rounding
 
 
-def test_mac_screenshot_without_permission_says_where_to_fix_it(mac, monkeypatch):
+def test_mac_screenshot_without_permission_warns_and_says_where_to_fix_it(mac, monkeypatch):
     calls = _fake_screencapture(monkeypatch)
     mac.Q.screen_ok = False
-    with pytest.raises(CU.ToolFailed, match=r"Screen Recording") as e:
-        CU.screenshot()
-    assert "System Settings > Privacy & Security" in str(e.value) and not calls      # nothing was captured
+    res = CU.screenshot()                      # the picture is still returned (the probe only warns), with the way to fix it
+    assert calls and res[1]["type"] == "image"
+    assert "may show only the wallpaper" in res[0]["text"] and "System Settings > Privacy & Security" in res[0]["text"]
     mac.Q.screen_ok = True
+    assert "Warning" not in CU.screenshot()[0]["text"]
     _fake_screencapture(monkeypatch, rc=1)
     with pytest.raises(CU.ToolFailed, match="blocked the screenshot"):
         CU.screenshot()
@@ -210,6 +211,11 @@ def test_mac_open_app(mac, monkeypatch, tmp_path):
     f.write_text("x")
     CU.open_app(str(f))                                                             # a file: plain open
     assert calls == [["open", "-a", "Notes"], ["open", "--", "https://example.com/a?b=1&c=2"], ["open", "--", str(f)]]
+    (tmp_path / "Notes").mkdir()
+    monkeypatch.chdir(tmp_path)
+    calls.clear()
+    CU.open_app("Notes")                                                            # an app, not the folder named Notes here
+    assert calls == [["open", "-a", "Notes"]]
     with pytest.raises(CU.ToolFailed):
         CU.open_app("-W")                                                           # never read as an option
     with pytest.raises(CU.ToolFailed):

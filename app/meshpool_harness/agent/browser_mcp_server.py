@@ -109,7 +109,7 @@ class Browser:
             if self.cdp is not None and not self.cdp.is_connected():
                 raise RuntimeError("detached")
             if self.page is None or self.page.is_closed():
-                self.page = self.ctx.pages[-1] if self.ctx.pages else self.ctx.new_page()
+                self.page = (self.ctx.pages[-1] if self.ctx.pages and self.cdp is None else self.ctx.new_page())
             return True
         except Exception:  # noqa: BLE001  the window was closed by the user: start again
             self.ctx = self.page = self.cdp = None
@@ -181,7 +181,7 @@ class Browser:
                                     executable_path=found["path"])
         except Exception as e:  # noqa: BLE001
             raise ToolFailed(f"Could not start {found['name']} ({found['path']}): {e}. Close any window that is "
-                             "using Meshpool's profile folder, or switch Settings > Browser use to Meshpool's browser.")
+                             "using Meshpool's profile folder, or choose Meshpool's browser under Settings > Capabilities > Browser for browser use.")
         self.channel = "installed:" + found["key"]
 
     def _attach(self):
@@ -194,6 +194,7 @@ class Browser:
         except Exception as e:  # noqa: BLE001
             raise ToolFailed(f"Could not connect to the browser at {url}: {e}. " + BU.attach_hint(url))
         self.ctx = self.cdp.contexts[0] if self.cdp.contexts else self.cdp.new_context()
+        self.page = self.ctx.new_page()             # a tab of our own: the user's open tab is never navigated away
         self.channel = "attached"
 
     def shutdown(self):

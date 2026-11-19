@@ -93,8 +93,8 @@ def find_chromium() -> tuple[str, str]:
     why = ""
     for ch in ("", "chrome"):
         try:
-            with sync_playwright() as p:
-                ctx = p.chromium.launch_persistent_context(tempfile.mkdtemp(), headless=True, channel=ch or None)
+            with sync_playwright() as p, tempfile.TemporaryDirectory() as d:
+                ctx = p.chromium.launch_persistent_context(d, headless=True, channel=ch or None)
                 ctx.close()
             return ch, ""
         except Exception as e:  # noqa: BLE001

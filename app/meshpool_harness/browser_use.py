@@ -117,10 +117,10 @@ def installed_missing_message() -> str:
     exe, want = setting("MH_BROWSER_EXE"), setting("MH_BROWSER_APP").lower()
     if exe:
         return (f"Browser use is set to your installed browser, but {exe} does not exist. Fix the path, or switch "
-                "Settings > Browser use back to Meshpool's browser.")
+                "Settings > Capabilities > Browser for browser use back to Meshpool's browser.")
     what = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "brave": "Brave"}.get(want, "Google Chrome, Microsoft Edge or Brave")
     return (f"Browser use is set to your installed browser, but {what} was not found on this computer. Install it, or "
-            "switch Settings > Browser use to Meshpool's browser (nothing is opened in the meantime).")
+            "choose Meshpool's browser under Settings > Capabilities > Browser for browser use (nothing is opened in the meantime).")
 
 
 # ---------- attach ----------------------------------------------------------------------------------------------------
@@ -129,8 +129,8 @@ def attach_hint(url: str) -> str:
     port = url.rsplit(":", 1)[-1].split("/")[0] if url.count(":") >= 2 else "9222"
     return (f"Start your browser with --remote-debugging-port={port} and a profile folder of its own, for example "
             f"chrome --remote-debugging-port={port} --user-data-dir=<a folder for Meshpool>. Chrome 136 and later "
-            "ignore the debugging port on the everyday profile, so --user-data-dir is required. Or switch Settings > "
-            "Browser use to Meshpool's browser.")
+            "ignore the debugging port on the everyday profile, so --user-data-dir is required. Or choose Meshpool's "
+            "browser under Settings > Capabilities > Browser for browser use.")
 
 
 def probe_cdp(url: str, timeout: float = 2.0) -> str:

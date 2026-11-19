@@ -69,8 +69,10 @@ class Mac:
 
     def grab(self) -> "Image":
         from PIL import Image
-        if _mac_screen_access() is False:      # without it screencapture still "works": it returns only the wallpaper
-            raise ToolFailed("macOS has not allowed Meshpool to record the screen. " + _MAC_SCREEN_FIX)
+        # Without Screen Recording, screencapture still "works" but shows only the wallpaper. The probe runs in this
+        # helper process, so it only warns (the picture is still returned); a hard stop could block a working setup.
+        self.note = ("Warning: macOS says Meshpool is not allowed to record the screen, so this picture may show only "
+                     "the wallpaper. " + _MAC_SCREEN_FIX) if _mac_screen_access() is False else ""
         fd, path = tempfile.mkstemp(suffix=".png")
         os.close(fd)
         try:
@@ -155,7 +157,8 @@ class Mac:
         # look for an app of that name). No shell is involved; "--" keeps a name from being read as an option.
         is_url = bool(re.match(r"[A-Za-z][A-Za-z0-9+.-]*://", name))
         target = name if is_url else os.path.expanduser(name)
-        if is_url or os.path.exists(target):
+        absolute = name.startswith(("/", "~"))          # a bare name is an app, even when a folder of that name is here
+        if is_url or (absolute and os.path.exists(target)):
             args = ["open", "--", target]
         elif name.startswith("-"):
             raise ToolFailed(f"Refused to open {name!r}: an app name cannot start with a dash.")
@@ -480,7 +483,8 @@ def screenshot() -> list:
     img.save(buf, "PNG", optimize=True)
     front = o.frontmost()
     return [text(f"Screenshot {w}x{h}. Use pixel coordinates in this image for clicks."
-                 + (f" Front app: {front}." if front else "")), image_png(buf.getvalue())]
+                 + (f" Front app: {front}." if front else "") + (" " + o.note if getattr(o, "note", "") else "")),
+            image_png(buf.getvalue())]
 
 
 def click(x: float, y: float, button: str = "left", double: bool = False) -> str:

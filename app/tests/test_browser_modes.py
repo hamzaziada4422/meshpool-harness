@@ -151,7 +151,7 @@ def test_probe_says_what_to_do_when_nothing_listens():
     url = f"http://127.0.0.1:{_free_port()}"
     msg = BU.probe_cdp(url)
     assert url in msg and "--remote-debugging-port=" in msg and "--user-data-dir" in msg
-    assert "Settings > Browser use" in msg and "Meshpool's browser" in msg
+    assert "Settings > Capabilities > Browser for browser use" in msg and "Meshpool's browser" in msg
 
 
 def test_probe_rejects_a_server_that_is_not_a_browser():
@@ -254,6 +254,8 @@ def test_attach_to_a_browser_the_user_started(tmp_path, site, debug_browser):
         snap = s.call("browser_open", {"url": site + "/controls"})[0]
         snap = s.call("browser_click", {"ref": H.ref(snap, r'button "Add one"')})[0]
         assert "Count: 1" in snap
+        tabs = s.call("browser_tabs", {})[0]
+        assert "about:blank" in tabs and "/controls" in tabs        # the user's tab is untouched; ours is a new one
         text, failed = s.call("browser_close", {})
         assert not failed and "stays open" in text
         assert proc.poll() is None and BU.probe_cdp(url) == ""            # closing only disconnects: the browser lives
