@@ -73,7 +73,20 @@ def test_falls_back_to_the_next_mirror(tmp_path):
         return _Resp(data)
     BT.download_verified(["https://first/x", "https://second/x"], tmp_path / "x", hashlib.sha256(data).hexdigest(), 3,
                          None, op)
-    assert len(seen) == 2
+    assert seen == ["https://first/x"] * 3 + ["https://second/x"]   # each mirror is retried before the next one
+
+
+def test_a_mirror_that_fails_once_is_retried(tmp_path):
+    """A single network error (the Mac release once died on one kernel.org timeout) is retried on the same mirror."""
+    data, seen = b"abc", []
+
+    def op(url, timeout=0):
+        seen.append(url)
+        if len(seen) == 1:
+            raise OSError("timed out")
+        return _Resp(data)
+    BT.download_verified(["https://only/x"], tmp_path / "x", hashlib.sha256(data).hexdigest(), 3, None, op)
+    assert seen == ["https://only/x"] * 2 and (tmp_path / "x").read_bytes() == data
 
 
 def test_mingit_refuses_until_pinned(tmp_path, monkeypatch):

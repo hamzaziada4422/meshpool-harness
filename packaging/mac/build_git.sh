@@ -22,7 +22,14 @@ case "$PLAT" in
   *) echo "unknown platform $PLAT"; exit 1 ;;
 esac
 W="$(mktemp -d)"; trap 'rm -rf "$W"' EXIT
-curl -fsSL "$URL" -o "$W/git.tar.xz"
+# kernel.org's mirrors serve the same file (the hash below proves it); one of them timing out must not stop a release
+F="${URL##*/}"; ok=
+for u in "$URL" "https://cdn.kernel.org/pub/software/scm/git/$F" "https://www.kernel.org/pub/software/scm/git/$F"; do
+  if curl -fsSL --retry 4 --retry-all-errors --retry-delay 5 --connect-timeout 30 --max-time 600 "$u" -o "$W/git.tar.xz" \
+     && echo "$SHA  $W/git.tar.xz" | shasum -a 256 -c - >/dev/null; then ok=1; break; fi
+  echo "build_git.sh: $u failed, trying the next mirror"
+done
+[ -n "$ok" ] || { echo "build_git.sh: could not download $F with SHA-256 $SHA from any mirror"; exit 1; }
 echo "$SHA  $W/git.tar.xz" | shasum -a 256 -c -        # a tarball that does not match the pin is never built
 tar -xJf "$W/git.tar.xz" -C "$W"
 cd "$W/git-$VER"

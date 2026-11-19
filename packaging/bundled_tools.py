@@ -9,6 +9,7 @@ command printed next to it (or run `python packaging/build_all.py --check-pins`)
 from __future__ import annotations
 
 import hashlib
+import time
 import json
 import os
 import re
@@ -88,10 +89,14 @@ def verify_sha256(path: Path, expected: str) -> None:
 def download_verified(urls: list[str], dest: Path, sha256: str, size: int = 0,
                       progress: Callable[[str], None] | None = None, opener=None, label: str = "LibreOffice") -> Path:
     """Download the first URL that works to dest, check the SHA-256, and delete the file if it does not match."""
+    pause = time.sleep if opener is None else (lambda s: None)   # tests pass their own opener: no waiting
     opener = opener or urllib.request.urlopen
     dest.parent.mkdir(parents=True, exist_ok=True)
     errors: list[str] = []
-    for url in urls:
+    tries = [u for u in urls for _ in range(3)]            # each mirror three times before the next one
+    for n, url in enumerate(tries):
+        if n and tries[n - 1] == url:
+            pause(5 * (n % 3))                              # a moment before trying the same mirror again
         try:
             with opener(url, timeout=60) as r:
                 hdr = getattr(r, "headers", None)
