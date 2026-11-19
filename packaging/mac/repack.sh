@@ -43,7 +43,9 @@ for a in arm64 x64; do
   if [ -z "${MAC_SIGN_IDENTITY:-}" ] || [ -z "${MAC_CERT_P12_BASE64:-}" ]; then
     codesign --force --deep --sign - "$APP" 2>&1 | grep -v "replacing existing" | tail -2
   fi
-  codesign --verify --deep --strict "$APP" && echo "signature ok ($a) $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
+  # A broken signature must stop the release: the auto-updater refuses an app that fails this exact check.
+  codesign --verify --deep --strict "$APP" || { echo "repack.sh: $APP fails codesign --verify --deep --strict"; exit 1; }
+  echo "signature ok ($a) $(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$APP/Contents/Info.plist")"
   ST="$W/stage-$a"; rm -rf "$ST"; mkdir -p "$ST"; ditto "$APP" "$ST/Meshpool.app"; ln -s /Applications "$ST/Applications"
   NAME=Meshpool; [ $a = x64 ] && NAME=Meshpool-Intel
   rm -f "$W/$NAME-udzo.dmg"

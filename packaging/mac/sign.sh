@@ -97,6 +97,13 @@ sign_apps() {
       if is_macho "$f"; then sign_one "$f"; n=$((n + 1)); fi
     done < <(find "$APP" -type f -print0)
     echo "sign.sh: signed $n file(s) inside the bundle"
+    # Nested bundles (LibreOffice.app, Chromium's helper apps and frameworks) need their own signature over their
+    # contents, deepest first: pruning LibreOffice removed its _CodeSignature, and --deep --strict checks every one.
+    m=0
+    while IFS= read -r b; do sign_one "$b"; m=$((m + 1)); done < <(
+      find "$APP/Contents" -mindepth 1 -type d \( -name '*.app' -o -name '*.framework' -o -name '*.appex' \) |
+        awk -F/ '{ print NF "\t" $0 }' | sort -rn | cut -f2-)
+    echo "sign.sh: signed $m nested bundle(s)"
     sign_one "$APP/Contents/MacOS/Meshpool"
     sign_one "$APP"
     codesign --verify --deep --strict --verbose=2 "$APP"
