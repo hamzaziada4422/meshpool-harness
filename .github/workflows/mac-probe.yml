@@ -1,0 +1,19 @@
+# Which GitHub-hosted macOS runners will this repository actually get? Each job only prints the machine. Manual only.
+name: mac-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-26, macos-latest, macos-14, macos-15-intel, macos-13]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - run: uname -m; sw_vers; sysctl -n hw.ncpu; df -h / | tail -1
