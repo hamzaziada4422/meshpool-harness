@@ -673,6 +673,8 @@ class Session:
                             with self.lock:
                                 self.state = "idle"
                             break
+                    if not getattr(self, "deleted", False):
+                        write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
                     took = time.time() - self.t_turn
                     if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
                         last = next((e.get("text") for e in reversed(self.events)
@@ -986,8 +988,15 @@ def create(body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     if routed:
-        s.emit({"type": "status", "text": f"Meshpool Auto picked {routed['name']} for this task."})
+        # The chat shows a short neutral label; why Auto picked it travels with the event for the Session panel.
+        s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
+                "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}})
         write_meta(s.id, routed=routed["harness"])
+    else:
+        try:
+            s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(HR.get(harness or HR.default_for(kind))['name'])}"})
+        except (KeyError, ValueError):
+            pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
     if pid:
         PS.touch(pid)
@@ -1001,6 +1010,11 @@ def create(body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     return s.view(0)
+
+
+def _short_harness(name: str) -> str:
+    """'Meshpool Work' and 'Meshpool Code' read as MeshPool; Codex, Pi, OpenCode and Hermes keep their names."""
+    return "MeshPool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []
@@ -1135,6 +1149,9 @@ def listing() -> list:
             continue
         r["title"] = m.get("title") or r["title"]
         r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
+        r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
+        r["scheduled"] = bool(m.get("scheduled"))
+        r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
         r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
         if r["project_id"] and r["project_id"] not in live_pids:
             r["project_id"] = ""
@@ -1152,6 +1169,8 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
+        write_meta(sid, unread=act == "unseen")
     elif act == "move":                               # into a project, or out of it (project_id empty)
         pid = (body.get("project_id") or "").strip()
         if pid:

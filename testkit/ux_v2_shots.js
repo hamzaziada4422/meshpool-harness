@@ -1,3 +1,4 @@
+// SUPERSEDED by ux_v3_shots.js: this script drives the v2 shell and is kept as history.
 // Screenshots of every main screen and menu of the chat UX v2, light and dark, desktop and narrow.
 // Usage: node testkit/ux_v2_shots.js OUT_DIR PORT PROJECT_DIR HOME_DIR     (app on PORT against testkit/mock_llm_long.py)
 // Writes OUT_DIR/ux-v2-<theme>-<desktop|narrow>-<name>.png

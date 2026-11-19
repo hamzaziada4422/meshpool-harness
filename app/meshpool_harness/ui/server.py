@@ -280,7 +280,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|company\.js|projects\.js|settings2\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -467,11 +467,27 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.github_branches(parse_qs(u.query).get("repo", [""])[0]))
             m = re.fullmatch(r"/api/session/([\w-]+)/(panel|pr)", u.path)
             if m:                                           # the session side panel: local facts, then GitHub's
-                return self._send(200, (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1)))
+                out = (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1))
+                if m.group(2) == "pr" and isinstance(out, dict) and isinstance(out.get("pr"), dict):
+                    p_ = out["pr"]                         # remembered, so the session row can show it without asking GitHub
+                    A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
+                return self._send(200, out)
             if u.path == "/api/usage":
                 return self._send(200, W.usage())
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
+            if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
+                from meshpool_harness.ui import hub as HUB
+                what = u.path[len("/api/hub/"):]
+                if what == "artifacts":
+                    return self._send(200, HUB.artifacts())
+                if what == "scheduled":
+                    return self._send(200, HUB.scheduled())
+                if what == "search":
+                    return self._send(200, HUB.search(q.get("q", ""), q.get("tab", "all")))
+                if what == "account":
+                    return self._send(200, HUB.account())
+                raise KeyError(what)
             m = re.fullmatch(r"/api/term/(\w+)", u.path)
             if m:
                 return self._send(200, W.term_view(m.group(1), int(q.get("since", "0"))))
@@ -720,7 +736,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, b = m.group(1), self._json()
                 act = b.get("action", "update")
                 if act == "update":
-                    kw = {k: b[k] for k in ("name", "description", "instructions", "link") if k in b}
+                    kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
                     return self._send(200, PS.update(pid, **kw))
                 if act == "delete":
                     PS.delete(pid)

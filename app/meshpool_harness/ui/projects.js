@@ -27,7 +27,8 @@
     if (!name) return "";
     try {
       const p = await post("/api/pj", {name});
-      await loadPj(); renderSide();
+      await post(`/api/pj/${p.id}`, {action: "update", pinned: true});          // a new project shows in the sidebar's Pinned list
+      await loadPj(); renderSide(); if (S.view === "page" && S.page === "projects") pageProjects();
       if (!stay) openProject(p.id);
       return p.id;
     } catch (e) { toast(e.message); return ""; }
