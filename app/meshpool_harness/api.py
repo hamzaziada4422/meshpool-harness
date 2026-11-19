@@ -97,7 +97,8 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
              **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
            "usage": usage, "route": route.spec if route else None, "model": a.current_model(),
-           "receipt": getattr(a, "last_receipt", ""), "trace": getattr(a, "trace", [])[-120:]}
+           "receipt": getattr(a, "last_receipt", ""), "trace": getattr(a, "trace", [])[-120:],
+           "plan": a.plan_state()}
     if errors and not capped:
         out["error"] = errors[-1][:500]
     return out
