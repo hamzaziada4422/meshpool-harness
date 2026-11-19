@@ -29,6 +29,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_API_KEY", "test-key-1234")
     monkeypatch.delenv("MH_PLAN", raising=False)
     monkeypatch.delenv("MH_PLAN_EVERY", raising=False)
+    monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")   # plan mode itself, not the shipped assignment (plan off)
     monkeypatch.delenv("MH_LEAN_TOOLS", raising=False)
 
 
