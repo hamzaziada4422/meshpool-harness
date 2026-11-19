@@ -5,15 +5,16 @@ install() -> brings this copy up to that release, the safest way this kind of in
   - command-line install (~/.meshpool-cli) and Windows app: the release's app code replaces this copy's code in place
     (the bundled runtimes, Pi and Hermes are kept); new Python packages, if the release lists any, are installed for
     the command-line copy, while the Windows app gets the full installer instead;
-  - Mac app: downloads the release's disk image and opens it (changing files inside a signed Mac app breaks its
-    signature, so the Mac app is always replaced whole);
+  - Mac app (and a Windows release that changed its runtime): handled by autoupdate.py, which downloads the installer
+    in the background, checks it, and installs it after the app quits. Nothing inside a signed Mac app is changed
+    (that would break its signature): the whole app is swapped by a helper;
   - a developer checkout (a git clone): nothing is changed; it says to run git pull.
   Installers are checked against the release's SHA256SUMS.txt when it has one. A code update swaps each code folder by
   renaming, keeping the old folders until every new one is in place, and puts the old ones back if any step fails.
 restart() -> starts a fresh copy of the app and closes this one, so the new code runs.
 
-Nothing here runs on its own: the page calls check() at start (at most once every 6 hours) and install() only when
-the user presses Update.
+check() only looks; autoupdate.start_background() calls it at start and every 6 hours and downloads in the background,
+and install() is what the Update button runs for the command-line and in-place code updates.
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ from pathlib import Path
 import meshpool_harness as MH
 from meshpool_harness import config as C
 
-REPO = os.environ.get("MESHPOOL_REPO", "hamzaaziada/meshpool-harness")
+REPO = os.environ.get("MESHPOOL_REPO", "hamzaziada4422/meshpool-harness")
 API = os.environ.get("MESHPOOL_UPDATE_API") or f"https://api.github.com/repos/{REPO}/releases?per_page=30"
 SRC = os.environ.get("MESHPOOL_UPDATE_SRC") or ""   # tests only: a local archive, not checked
 SRC_ASSET = "Meshpool-src.tar.gz"     # the code update, published with each release and listed in SHA256SUMS.txt
@@ -99,7 +100,7 @@ def check(force: bool = False) -> dict:
         return v
     tag = rel.get("tag_name") or ""
     v = {"ok": True, "current": cur, "latest": tag.lstrip("v"), "tag": tag, "newer": _key(tag) > _key(cur),
-         "notes": (rel.get("body") or "")[:4000], "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
+         "prerelease": bool(rel.get("prerelease")), "notes": (rel.get("body") or "")[:4000], "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
          "published": rel.get("published_at"), "kind": kind(),
          "assets": [{"name": a.get("name"), "url": a.get("browser_download_url"), "size": a.get("size")}
                     for a in rel.get("assets") or []]}
@@ -277,7 +278,9 @@ def _requirements(src: Path, new: Path) -> tuple:
     return new / "requirements.txt", APP / "requirements.txt"   # a release from before the record existed
 
 
-def install() -> dict:
+def install(auto: bool = False) -> dict:
+    """Bring this copy up to date. auto=True is the background caller: it never opens an installer, and says
+    need_installer when only the full installer will do."""
     v = check(force=True)
     if not v.get("ok"):
         return v
@@ -286,14 +289,18 @@ def install() -> dict:
     k = v["kind"]
     if k == "dev":
         return {"ok": False, "error": "This copy runs from a git checkout. Run git pull in it to update."}
-    if k == "mac-app":
-        return _installer(v, "")
+    if k in ("mac-app", "win-app"):
+        from meshpool_harness import autoupdate as AU
+        r = AU.manual_install(v) if not auto else None
+        if r is not None:
+            return r
+    inst = (lambda v, why: {"ok": False, "need_installer": True, "error": why}) if auto else _installer
     if k == "win-app" and not (APP.parent / "bin" / "meshpool.cmd").exists():
         # An install from before the terminal command moved to its own bin folder: a code update cannot fix the
         # launcher or the PATH entry (with Meshpool.exe beside it, `meshpool` would open the app), the installer does.
-        return _installer(v, "This update also changes how Meshpool is installed.")
+        return inst(v, "This update also changes how Meshpool is installed.")
     if not os.access(APP, os.W_OK):
-        return _installer(v, "This copy's folder is read-only.") if k == "win-app" else \
+        return inst(v, "This copy's folder is read-only.") if k == "win-app" else \
             {"ok": False, "error": f"Meshpool cannot write to {APP}. Run the installer again to update."}
     src_url, want = SRC.replace("{tag}", v["tag"]) if SRC else "", None
     if not SRC:
@@ -306,7 +313,7 @@ def install() -> dict:
             return {"ok": False, "error": f"Could not read the release's checksums ({type(e).__name__}). Nothing was "
                                           "changed. Try again."}
         if not a or SRC_ASSET not in sums:
-            return _installer(v, "This release cannot be checked for a code update.") if k == "win-app" else \
+            return inst(v, "This release cannot be checked for a code update.") if k == "win-app" else \
                 {"ok": False, "error": "This release cannot be checked, so it was not installed. Download it from the "
                                        "release page.", "url": v.get("url", "")}
         src_url, want = a["url"], sums[SRC_ASSET]
@@ -337,7 +344,7 @@ def install() -> dict:
         req_old = req_old_p.read_text(encoding="utf-8") if req_old_p.exists() else None
         if req_new.strip() and (req_old is None or req_new.strip() != req_old.strip()):
             if k == "win-app":
-                return _installer(v, "This release needs new bundled packages.")
+                return inst(v, "This release needs new bundled packages.")
             r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_new_p)],
                                capture_output=True, text=True, timeout=900)
             if r.returncode:
@@ -356,7 +363,7 @@ def install() -> dict:
             for staged, _ in pairs:
                 shutil.rmtree(staged, ignore_errors=True)
             if k == "win-app":
-                return _installer(v, "Meshpool could not replace its files while it runs.")
+                return inst(v, "Meshpool could not replace its files while it runs.")
             return {"ok": False, "error": f"Could not replace Meshpool's files ({type(e).__name__}: {e}). Nothing was "
                                           "changed. Close other Meshpool windows and try again."}
         for f in ("requirements.txt",):

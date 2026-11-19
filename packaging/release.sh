@@ -6,7 +6,7 @@
 # then publishes it. SHA256SUMS.txt is uploaded on every run.
 set -u
 VER="$1"; NOTES="$2"; shift 2
-REPO="${MESHPOOL_REPO:-hamzaaziada/meshpool-harness}"
+REPO="${MESHPOOL_REPO:-hamzaziada4422/meshpool-harness}"
 TAG="v$VER"
 DIR="$(mktemp -d)"
 shasum -a 256 "$@" | sed 's#  .*/#  #' > "$DIR/SHA256SUMS.txt"
