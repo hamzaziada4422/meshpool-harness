@@ -2,6 +2,8 @@
 
 52 tasks run by every harness (MeshPool 0.0.7, Meshpool V2, Meshpool V1, Codex, OpenCode, Pi, Hermes), DeepSeek V4.1 Flash, one run each, graded by hidden tests or official answers. Tokens are from the shared metering proxy. Runs left out of timing (over 3600s, e.g. across a sleep): 0.
 
+**Caveats.** The competitor arms ran in one batch earlier the same day; MeshPool 0.0.7 ran afterwards, alone, while other work (UI and CLI test runs) shared the 4-core machine, so its timings are pessimistic. Dollar figures are token estimates at list prices; billed spend ran about 2x those numbers, so compare ratios, not absolute dollars. One run per task: run-to-run noise on these suites is about +/-3 solved tasks, so differences of 1-4 tasks are not meaningful (see the McNemar p-values).
+
 | Harness | Solved | Rate (95% CI) | Errors | $ / attempted | $ / solved | Median s | Mean s | P90 s | Input tok / task | Output tok / task | Calls / task |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | MeshPool 0.0.7 | 46/52 | 88% (77%–95%) | 0 | $0.0069 | $0.0078 | 23.3 | 83.1 | 214.6 | 174,499 | 7,473 | 13.5 |

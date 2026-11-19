@@ -1,6 +1,6 @@
 # Status: where the harness router stands against the goal
 
-**Latest (V2 sprint, 19 Nov 2026):** see `docs/results/v2/V2_REPORT.md`, `docs/BENCHMARKS_V2.md` and `docs/HANDOFF.md`. Verdict: promising but unproven. Cheapest everywhere (significant), fastest on data analysis; not better on hard coding tasks (19/24 vs Codex 24/24).
+**Latest (V2 sprint, 19 Nov 2026):** see `docs/results/v2/V2_REPORT.md`, `docs/BENCHMARKS_V2.md` and `docs/HANDOFF.md`. Verdict then: promising but unproven. **Superseded** by the full 52-task evaluation (`docs/results/v3/EVAL52_FINAL.md`): every MeshPool version ties the other harnesses on quality (46-47/52, within noise) and Codex is cheaper and faster.
 
 
 Goal: on the same model, be at least as good as every frontier harness (Pi, Codex, OpenCode, Hermes, Claude Code) on
