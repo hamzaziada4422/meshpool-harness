@@ -7,6 +7,7 @@ Arms (each task runs in its own process, so settings never leak between arms):
   base     the app agent as it shipped: no harness router, full skills list in every prompt (MH_HROUTER=0, MH_SKILLS=full)
   routed   the harness router: specialised harness, language pack + diagnostics, skills on demand, concise answers
   routed-fast  routed, plus MH_MODEL_FAST for chat-lane messages (set --fast-model)
+  meta     the harness router picks the harness per task from the scorecard and runs it (row: meta_harness, meta_category)
   pi / codex   the frontier harnesses, when installed and configured for the same endpoint (--arms pi,codex)
 
 Suites are small, deterministic and graded by code (no judge model): an answer must contain the right fact and stay
@@ -43,6 +44,7 @@ ARMS = {
     "v1": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-v1" / "app")},
     "v2": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-v2" / "app")},
     "v3": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_BENCH_APP": str(Path.home() / ".cache" / "meshpool-eval" / "app")},
+    "meta": {"MH_HROUTER": "1", "MH_SKILLS": ""},      # the harness router picks the harness per task (hrouter/harness_select.py)
     "routed-full": {"MH_HROUTER": "1", "MH_SKILLS": "", "MH_LEAN_TOOLS": "0"},   # every tool: the lean A/B
 }
 
@@ -146,7 +148,10 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     wd = setup_workdir(task)
     t0 = time.time()
     engine = "agent" if task.get("mode", "code") == "code" else "agent-work"
-    if arm.split("@")[0] in ("pi", "pi-routed"):
+    meta = None
+    if arm.split("@")[0] == "meta":
+        meta, res = run_meta(task, wd, engine)
+    elif arm.split("@")[0] in ("pi", "pi-routed"):
         res = run_pi_agent(task, wd, routed=arm.startswith("pi-routed"))
     elif arm.split("@")[0] in ACP_ARMS:
         res = run_acp_agent(arm.split("@")[0], task, wd)
@@ -162,6 +167,9 @@ def child(task_json: str, arm: str, out_path: str) -> None:
            "trace": res.get("trace") or [], **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
+    if meta:                                           # the router's pick and its classifier call (tokens included above)
+        row.update(meta_harness=meta["harness"], meta_category=meta["category"], meta_reason=meta["reason"],
+                   meta_stage=meta["stage"])
     if task.get("repo"):                               # keep the patch, to learn from failures
         row["patch"] = subprocess.run(["git", "diff", "HEAD", "--", ".", ":!.swe_test.patch", ":!.gold.patch"],
                                       cwd=wd, capture_output=True, text=True).stdout[-20000:]
@@ -170,6 +178,35 @@ def child(task_json: str, arm: str, out_path: str) -> None:
         import swe_local
         swe_local.drop_worktree(task, wd)
     shutil.rmtree(wd, ignore_errors=True)
+
+
+def run_meta(task: dict, wd: str, engine: str) -> tuple[dict, dict]:
+    """The "meta" arm: the harness router (hrouter/harness_select.py) picks the harness for this task from the
+    scorecard, then the task runs on it exactly as that harness's own arm would. The classifier's one model call goes
+    through the same endpoint (so the meter counts it) and its tokens are added to the row when there is no meter."""
+    from meshpool_harness import run_task
+    from meshpool_harness.hrouter import harness_select as HS
+    kind = "code" if task.get("mode", "code") == "code" else "cowork"
+    sel = HS.select(task["prompt"], wd, os.environ.get("MH_MODEL") or None, files=list(task.get("files") or {}), kind=kind)
+    hid, base = sel["harness"], HS.base_id(sel["harness"])
+    routed = hid.endswith("-routed")
+    if base == "meshpool":
+        if sel["profile"]:
+            os.environ["MH_HARNESS_PROFILE"] = os.environ["MH_PROFILE"] = sel["profile"]
+        res = run_task(task["prompt"], workdir=wd, engine=engine,
+                       max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
+    elif base == "pi":
+        res = run_pi_agent(task, wd, routed=routed)
+    elif base in ACP_ARMS:
+        res = run_acp_agent(base, task, wd, routed=routed)
+    else:
+        raise ValueError(f"meta: unknown harness {hid!r}")
+    ct = sel.get("classifier_tokens") or {}
+    u = dict(res.get("usage") or {})
+    for k in ("prompt_tokens", "cached_tokens", "completion_tokens", "model_calls"):
+        u[k] = u.get(k, 0) + ct.get(k, 0)
+    res["usage"] = u
+    return sel, res
 
 
 def run_pi_agent(task: dict, wd: str, routed: bool) -> dict:
