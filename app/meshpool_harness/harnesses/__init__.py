@@ -194,6 +194,10 @@ def prepare_hermes(model: str | None = None) -> None:
               "default": bare if p_ == prov and bare else "deepseek-v4.1-flash",
               "api_key": key})
     m.pop("key_env", None)
+    if prov == "key" and PV.key_wire() == "anthropic":
+        m["api_mode"] = "anthropic_messages"    # an Anthropic Messages endpoint (Hermes strips the /v1 itself)
+    else:
+        m.pop("api_mode", None)                 # chat completions; never a mode left from an earlier endpoint
     cfg["model"] = m
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     ts = tools.get("tool_search") if isinstance(tools.get("tool_search"), dict) else {}

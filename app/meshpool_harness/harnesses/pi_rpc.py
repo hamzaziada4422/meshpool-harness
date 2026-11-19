@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 import os
 import shutil
 import subprocess
@@ -116,9 +117,13 @@ def prepare(root: Path) -> Path:
     (h / "sessions").mkdir(parents=True, exist_ok=True)
     from meshpool_harness import providers as PV
     base = PV.key_base()
-    models = {"providers": {"meshpool": {
-        "baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
-        "compat": {"supportsDeveloperRole": False}, "models": _models()}}}
+    if PV.key_wire() == "anthropic":           # an Anthropic Messages endpoint: Pi's own Anthropic client, whose SDK
+        key_provider = {"baseUrl": re.sub(r"/v1/?$", "", base),        # adds /v1/messages itself
+                        "api": "anthropic-messages", "apiKey": "$MESHPOOL_API_KEY", "models": _models()}
+    else:
+        key_provider = {"baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
+                        "compat": {"supportsDeveloperRole": False}, "models": _models()}
+    models = {"providers": {"meshpool": key_provider}}
     for prov, env in (("chatgpt", "MESHPOOL_CHATGPT_RELAY_KEY"),):
         if PV.ready(prov):                     # the other providers Pi can use, keys from its environment
             ids, _ = PV.list_models(prov)      # ChatGPT: the local relay, which holds the sign-in

@@ -101,6 +101,8 @@ jobs:
           bash packaging/mac/repack.sh "$PWD/dist-src"
           ls -la dist-src/out
       - name: Smoke test both disk images (what a user downloads) before anything is published
+        # normally about 5 minutes for both; a hang must not burn the job's whole (10x) budget
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
@@ -169,6 +171,7 @@ jobs:
       - name: Build the app tree
         run: python packaging/build_all.py --only=win
       - name: Smoke test the app the installer will carry, before anything is published
+        timeout-minutes: 15      # normally about 2 minutes; a hang must not run until the job's timeout
         shell: bash
         run: |
           set -euo pipefail
