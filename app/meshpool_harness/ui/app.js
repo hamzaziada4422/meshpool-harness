@@ -87,6 +87,12 @@ function store(k, v) { try { if (v === undefined) return JSON.parse(localStorage
 
 const I = (p, w = 16) => `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
 const ICON = {
+  pin: I('<path d="M12 17v5"/><path d="M9 4h6l-1 5.5 3 3.5H7l3-3.5z"/>', 15), trash: I('<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>', 15),
+  archive: I('<rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11h14V8M10 12h4"/>', 15), book: I('<path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"/><path d="M4 19V5"/>', 15),
+  brain: I('<path d="M12 3v3M12 18v3M3 12h3M18 12h3M6 6l2 2M16 16l2 2M18 6l-2 2M8 16l-2 2"/><circle cx="12" cy="12" r="2.5"/>', 15),
+  sliders: I('<path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/>', 15),
+  pencil: I('<path d="M12 20h9M16.5 3.5a2.1 2.1 0 1 1 3 3L7 19l-4 1 1-4z"/>', 15), link: I('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"/>', 15),
+  upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>', 15),
   plus: I('<path d="M12 5v14M5 12h14"/>'), search: I('<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>'),
   folder: I('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   chev: I('<path d="m6 9 6 6 6-6"/>', 14), chevR: I('<path d="m9 6 6 6-6 6"/>', 14),
@@ -144,11 +150,11 @@ function toast(text, ms = 2600, action) {
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
-function ask({title, text = "", value, ok = "OK", danger = false}) {
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
-    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
     const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
@@ -173,13 +179,19 @@ function openExternal(url) { post("/api/open-url", {url}).catch(() => { if (/^ht
 
 /* ================================== state ================================== */
 const S = {
-  settings: null, models: null, projects: [], threads: [], skills: [], harnesses: [], defaults: {},
-  cur: null,                         // the open thread: {id, total, view, epoch, ...}
-  appMode: store("appmode") || "cowork",
-  draft: {project: folderOrNone(store("project")), harness: "", model: store("model") || "", mode: store("mode") || "ask", plan: false},
-  panel: store("panel") || ((store("appmode") || "cowork") === "cowork" && !store("cw_panel_closed") && innerWidth >= 1400 ? "progress" : null), steps: store("steps") ?? false, attachments: [], showArchived: false, closedProjects: new Set(store("closed") || []),
+  settings: null, models: null, projects: [], pj: [], threads: [], skills: [], harnesses: [], defaults: {},
+  cur: null,                         // the open chat: {id, total, view, epoch, ...}
+  view: "chat",                      // "chat" (a chat or the new-chat home) or "project" (a project's page)
+  pjId: "",                          // the project page that is open
+  appMode: "cowork",                 // kept for old test scripts only: there is no Work or Code switch any more
+  // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
+  // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false},
+  panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
+  collapsed: new Set(store("collapsed") || []),
 };
-const MODES = {ask: ["Supervised", "Asks before edits and commands"], edits: ["Auto-accept edits", "Edits go through; commands still ask"], auto: ["Full access", "Edits and commands run without asking"]};
+// What a chat may do without asking. The keys are what the server stores; the words are for people.
+const MODES = {ask: ["Ask first", "Asks before it edits files or runs commands"], edits: ["Edit freely", "Edits go through; commands still ask"], auto: ["Full access", "Edits and commands run without asking"]};
 
 function isDark() { const t = store("theme") || "system"; return t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches); }
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
@@ -192,30 +204,50 @@ function applyAppearance() {
 }
 applyAppearance();
 
+/* ---------- tooltips: a name and its shortcut, after a short pause; never while the pointer is moving through ---------- */
+function initTips() {
+  let tip = null, timer = null, on = null;
+  const hide = () => { clearTimeout(timer); timer = null; on = null; if (tip) { tip.remove(); tip = null; } };
+  const show = el => {
+    const text = el.dataset.tip; if (!text) return;
+    hide(); on = el;
+    tip = document.createElement("div"); tip.className = "tip"; tip.setAttribute("role", "tooltip");
+    tip.innerHTML = esc(text) + (el.dataset.kbd ? `<kbd>${esc(el.dataset.kbd)}</kbd>` : "");
+    document.body.appendChild(tip);
+    const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+    const below = r.top < h + 16 || el.dataset.tipPos === "below";
+    tip.style.left = Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2)) + "px";
+    tip.style.top = (below ? Math.min(innerHeight - h - 8, r.bottom + 6) : r.top - h - 6) + "px";
+    requestAnimationFrame(() => tip && tip.classList.add("on"));
+  };
+  document.addEventListener("mouseover", e => { const el = e.target.closest?.("[data-tip]"); if (el === on) return; hide(); if (el) timer = setTimeout(() => show(el), 450); });
+  document.addEventListener("focusin", e => { const el = e.target.closest?.("[data-tip]"); if (el && el.matches(":focus-visible")) show(el); });
+  for (const t of ["focusout", "mousedown", "keydown", "scroll", "wheel"]) document.addEventListener(t, hide, true);
+}
+initTips();
+
 /* ================================== shell ================================== */
 function shell() {
   $("#root").innerHTML = `
   <div class="app" id="app">
-    <aside class="side" aria-label="Chats">
+    <aside class="side" id="side" aria-label="Sidebar">
+     <div class="side-in">
       <div class="side-top">
         <div class="brandrow">
           <img class="mlogo" src="${logoSrc()}" alt="Meshpool" width="102" height="20">
-          <button class="beta" id="betaBtn" title="Meshpool is in beta: some things may not work yet. Click to report a problem.">Beta</button>
+          <button class="beta" id="betaBtn" data-tip="Meshpool is in beta. Report a problem." data-tip-pos="below">Beta</button>
           <span class="sp"></span>
-          <button class="iconbtn" id="hideSide" title="Hide sidebar (${MOD}B)" aria-label="Hide sidebar">${ICON.side}</button>
+          <button class="iconbtn" id="hideSide" data-tip="Close sidebar" data-kbd="${MOD}B" aria-label="Close sidebar">${ICON.side}</button>
         </div>
-        <div class="modesw" role="tablist" aria-label="Mode">
-          <button role="tab" data-mode="cowork" aria-selected="${S.appMode === "cowork"}">${ICON.chat}<span>Work</span></button>
-          <button role="tab" data-mode="code" aria-selected="${S.appMode === "code"}">${ICON.term}<span>Code</span></button>
-        </div>
-        <button class="newbtn" id="newThread" title="New chat (${MOD}N)">${ICON.plus}<span>New chat</span></button>
-        <label class="search">${ICON.search}<input id="q" placeholder="Search chats" aria-label="Search chats" title="Search chats (${MOD}K)"><button class="qx" id="qx" aria-label="Clear search" hidden>${ICON.x}</button></label>
+        <button class="newbtn" id="newThread" data-tip="Start a new chat" data-kbd="${MOD}N" data-tip-pos="below">${ICON.plus}<span>New chat</span></button>
+        <label class="search">${ICON.search}<input id="q" placeholder="Search chats" aria-label="Search chats" data-tip="Search chats and projects" data-kbd="${MOD}K" data-tip-pos="below" autocomplete="off" spellcheck="false"><button class="qx" id="qx" aria-label="Clear search" hidden>${ICON.x}</button></label>
       </div>
       <div class="side-list" id="sideList"></div>
       <button class="updbar" id="updBar" hidden></button>
       <div class="side-foot">
-        <button id="openSettings" title="Settings (${MOD},)">${ICON.gear}<span>Settings</span><span class="kdot" id="kdot" style="margin-left:auto"></span></button>
+        <button id="openSettings" data-tip="Settings" data-kbd="${MOD}," data-tip-pos="above">${ICON.gear}<span>Settings</span><span class="kdot" id="kdot" style="margin-left:auto"></span></button>
       </div>
+     </div>
     </aside>
     <main class="main">
       <div class="topbar" id="topbar"></div>
@@ -225,56 +257,39 @@ function shell() {
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Ask Meshpool anything. / for commands, $ for skills"></textarea>
+          <textarea id="input" rows="1" placeholder="Message Meshpool"></textarea>
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
         <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs" role="tablist"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#newThread").onclick = () => newThread();   // not the click event as the folder
-  $$(".modesw [data-mode]").forEach(b => b.onclick = () => setAppMode(b.dataset.mode));
   $("#openSettings").onclick = () => openSettings();
   $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
   $("#betaBtn").onclick = () => reportProblem();
   const clearQ = () => { $("#q").value = ""; $("#qx").hidden = true; renderSide(); };
   $("#q").oninput = () => { $("#qx").hidden = !$("#q").value; clearTimeout(S.qT); S.qT = setTimeout(renderSide, 160); };
-  $("#q").onkeydown = e => { if (e.key === "Escape" && $("#q").value) { e.stopPropagation(); e.preventDefault(); clearQ(); } };
+  $("#q").onkeydown = e => {
+    if (e.key === "Escape" && $("#q").value) { e.stopPropagation(); e.preventDefault(); clearQ(); }
+    if (e.key === "ArrowDown") { e.preventDefault(); $("#sideList [data-nav]")?.focus(); }
+  };
   $("#qx").onclick = () => { clearQ(); $("#q").focus(); };
+  bindSide();
   setupComposer();
   setupPanelResize();
   document.addEventListener("keydown", globalKeys);
   if (store("sidehidden")) $("#app").classList.add("noside");
   $("#app").classList.toggle("steps", !!S.steps);
-  $("#app").dataset.mode = S.appMode;
   let wasNarrow = narrow();
   addEventListener("resize", () => { if (narrow() !== wasNarrow) { wasNarrow = narrow(); $("#app").classList.remove("sideopen"); renderTop(); } });
   document.addEventListener("mousedown", e => { if ($("#app").classList.contains("sideopen") && !e.target.closest(".side") && !e.target.closest("#showSide")) $("#app").classList.remove("sideopen"); });
 }
 const narrow = () => innerWidth <= 760;
-function modeHarness(m = S.appMode) {
-  const want = store("harness_" + m) || S.defaults?.[m];
-  const ok = id => S.harnesses.some(h => h.id === id && h.available !== false && h.ready !== false);
-  return ok(want) ? want : (ok(S.defaults?.[m]) ? S.defaults[m] : (m === "code" ? "meshpool-code" : "meshpool-work"));
-}
-function modeBadges() {
-  for (const b of $$(".modesw [data-mode]")) b.classList.toggle("busy", b.dataset.mode !== S.appMode && (S.threads || []).some(t => (t.kind || "code") === b.dataset.mode && ["working", "waiting"].includes(t.state)));
-}
-function setAppMode(m) {
-  if (m === S.appMode && !S.cur) return;
-  if (S.cur?.id) store("last_" + S.appMode, S.cur.id);
-  S.appMode = m; store("appmode", m); setTimeout(modeBadges, 0);
-  $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === m));
-  $("#app").dataset.mode = m;
-  S.draft.harness = modeHarness(m);
-  if (S.panel && !PANELS[m].includes(S.panel)) { S.panel = null; store("panel", null); }
-  const last = store("last_" + m);
-  if (last && S.threads.some(t => t.id === last && !t.archived && (t.kind || "code") === m)) { renderSide(); renderBar(); openThread(last); return; }
-  newThread();
-}
+function setAppMode() { /* no Work or Code switch any more; old scripts may still call this */ }
 const GIT_WORD = {"??": "New", "A": "Added", "M": "Changed", "D": "Removed", "R": "Renamed", "AM": "Added", "MM": "Changed", "U": "Conflict", "UU": "Conflict"};
 function toggleSteps() {
   S.steps = !S.steps; store("steps", S.steps);
@@ -307,6 +322,7 @@ function globalKeys(e) {
   else if (k === "d" && e.shiftKey) { e.preventDefault(); togglePanel("diff"); }
   else if (k === "j") { e.preventDefault(); togglePanel("term"); }
   else if (k === "e") { e.preventDefault(); toggleSteps(); }
+  else if (k === ".") { e.preventDefault(); if (S.view === "chat") togglePanel(S.panel || panelSet()[0], !S.panel); }
 }
 
 /* ================================== data loads ================================== */
@@ -316,6 +332,15 @@ async function loadModels(refresh) {
   if (!S.draft.model) S.draft.model = S.models.default;
 }
 async function loadProjects() { const r = await api("/api/projects"); S.projects = r.projects; S.defaultProject = r.default; }
+async function loadPj() { try { S.pj = (await api("/api/pj")).projects; } catch (e) { S.pj = S.pj || []; } }
+// Settings > Permissions: add a folder to the list Meshpool may open (a project's linked folder does not need this).
+async function pickProject() {
+  try {
+    let r = await post("/api/projects", {action: "pick"});
+    if (r.no_picker) { const path = await browseFolder(); if (!path) return; r = await post("/api/projects", {action: "add", path}); }
+    S.projects = r.projects; renderSide();
+  } catch (e) { toast(e.message); }
+}
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
   S.threads = (await api("/api/agent")).sessions;
@@ -323,7 +348,6 @@ async function loadThreads() {
   for (const t of S.threads) if (["working", "waiting"].includes(was.get(t.id)) && !["working", "waiting"].includes(t.state) && S.cur?.id !== t.id) S.unseen.add(t.id);
   store("unseen", [...S.unseen]);
   renderSide();
-  modeBadges();
   const t = S.cur?.view && S.threads.find(x => x.id === S.cur.id);
   if (t && t.title && t.title !== S.cur.view.title && !$("#ttl[contenteditable=true]")) { S.cur.view.title = t.title; renderTop(); }
 }
@@ -338,123 +362,204 @@ const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "
 function renderSide() {
   const q = ($("#q")?.value || "").trim().toLowerCase();
   const el = $("#sideList"); if (!el) return;
+  if (S.renaming) return;                              // never rebuild the list under a name being typed
   if (q) { return renderSearch(q); }
-  const inMode = t => (t.kind || "code") === S.appMode;
-  const threads = S.threads.filter(t => !t.archived && inMode(t) && !S.pendingDelete?.has(t.id));
-  const pinned = threads.filter(t => t.pinned);
-  const byProj = new Map();
-  for (const p of S.projects) byProj.set(p.path, []);
-  for (const t of threads) { if (t.pinned) continue; if (!byProj.has(t.workdir)) byProj.set(t.workdir, []); byProj.get(t.workdir).push(t); }
+  const threads = S.threads.filter(t => !t.archived && !S.pendingDelete?.has(t.id)).sort((a, z) => (Number(z.updated) || 0) - (Number(a.updated) || 0));
+  const pinned = threads.filter(t => t.pinned), rest = threads.filter(t => !t.pinned);
+  const open = k => !S.collapsed.has(k);
+  const head = (k, label, n, extra = "") => `<div class="sec"><button class="sechd" data-sec="${k}" aria-expanded="${open(k)}"><span class="chev">${ICON.chev}</span><span>${label}</span>${n ? `<span class="cnt">${n}</span>` : ""}</button><span class="sp"></span>${extra}</div>`;
   let html = "";
-  if (pinned.length) html += `<div class="sec">Pinned</div><ul class="threads" style="padding-left:0">${pinned.map(t => thHTML(t, true)).join("")}</ul>`;
-  html += `<div class="sec">Projects<span class="sp"></span><button class="iconbtn" id="addGh" title="New session from GitHub" aria-label="New session from GitHub">${ICON.pr}</button><button class="iconbtn" id="addProj" title="Add a folder from this computer" aria-label="Add project folder">${ICON.plus}</button></div>`;
-  if (!byProj.size) html += `<div class="empty-side">Meshpool works in your Meshpool Projects folder until you add your own with +.</div>`;
-  // Folders with recent work first; empty folders last. Inside a folder, newest thread first.
-  const last = l => l.reduce((m, t) => Math.max(m, Number(t.updated) || 0), 0);
-  const keepEmpty = p => p === (S.cur?.view?.workdir || S.draft.project) || S.threads.every(t => t.workdir !== p);
-  const order = [...byProj].filter(([p, l]) => l.length || keepEmpty(p)).sort((a, z) => last(z[1]) - last(a[1]));
-  for (const [path, list] of order) {
-    const closed = S.closedProjects.has(path);
-    html += `<div class="proj ${closed ? "closed" : ""}" data-p="${esc(path)}">
-      <div class="proj-h" title="${esc(isMgd(path) ? projName(path) : path)}"><span class="chev">${ICON.chev}</span>${ICON.dir}<span class="nm">${esc(projName(path))}</span>
-        <span class="acts"><button class="iconbtn" data-newin="${esc(path)}" title="New chat in this folder" aria-label="New chat in ${esc(projName(path))}">${ICON.plus}</button><button class="iconbtn" data-pmenu="${esc(path)}" aria-label="Folder options">${ICON.more}</button></span></div>
-      ${list.length ? `<ul class="threads">${list.map(t => thHTML(t)).join("")}</ul>` : ""}</div>`;
+  if (pinned.length) html += head("pinned", "Pinned", pinned.length) + (open("pinned") ? `<ul class="threads">${pinned.map(t => thHTML(t, true)).join("")}</ul>` : "");
+  // Projects: newest first; the first few, then "Show all"
+  const pjs = [...S.pj].sort((a, z) => (z.updated || 0) - (a.updated || 0));
+  const shown = S.allProj ? pjs : pjs.slice(0, 6);
+  html += head("projects", "Projects", pjs.length || "", `<button class="iconbtn" id="addProj" data-tip="New project" aria-label="New project">${ICON.plus}</button>`);
+  if (open("projects")) {
+    if (!pjs.length) html += `<div class="empty-side">Keep related chats, files and instructions together. <button class="linkbtn" id="addProj2">Create a project</button></div>`;
+    else html += `<ul class="threads prj">${shown.map(p => {
+      const n = threads.filter(t => t.project_id === p.id).length;
+      return `<li class="th pr ${S.view === "project" && S.pjId === p.id ? "on" : ""}" data-pid="${esc(p.id)}" data-nav tabindex="0" title="${esc(p.name)}"><span class="pi">${p.link ? ICON.branch : ICON.folder}</span><span class="tt">${esc(p.name)}</span><span class="end"><span class="tm">${n || ""}</span><button class="iconbtn more" data-pmenu="${esc(p.id)}" aria-label="Options for ${esc(p.name)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
+    }).join("")}</ul>${pjs.length > 6 ? `<button class="linkbtn moreproj" id="moreProj">${S.allProj ? "Show fewer" : `Show all ${pjs.length}`}</button>` : ""}`;
   }
-  const arch = S.threads.filter(t => t.archived && (t.kind || "code") === S.appMode);
+  // Recent chats, grouped by when they were last used
+  if (!rest.length && !pinned.length) html += `<div class="sec"><span class="sechd static">Chats</span></div><div class="empty-side">Your chats show up here. Start one with New chat.</div>`;
+  const groups = []; const idx = new Map();
+  for (const t of rest) { const [k, label] = groupOf(t.updated); if (!idx.has(k)) { idx.set(k, groups.length); groups.push({k, label, list: []}); } groups[idx.get(k)].list.push(t); }
+  for (const g of groups) html += head("g" + g.k, g.label, "") + (open("g" + g.k) ? `<ul class="threads">${g.list.map(t => thHTML(t)).join("")}</ul>` : "");
+  const arch = S.threads.filter(t => t.archived);
   if (arch.length) {
-    html += `<div class="sec"><button class="iconbtn" id="togArch" style="padding:0 4px;font-size:12px;font-weight:600;color:var(--ink-3)">${S.showArchived ? "Hide" : "Show"} archived (${arch.length})</button></div>`;
-    if (S.showArchived) html += `<ul class="threads" style="padding-left:0">${arch.map(t => thHTML(t, true)).join("")}</ul>`;
+    html += `<div class="sec"><button class="sechd" id="togArch" aria-expanded="${!!S.showArchived}"><span class="chev">${ICON.chev}</span><span>Archived</span><span class="cnt">${arch.length}</span></button></div>`;
+    if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, true)).join("")}</ul>`;
   }
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it.
   if (el.dataset.mode === "list" && el._html === html) return;
   const shape = html.replace(/<span class="tm">[^<]*<\/span>/g, "").replace(/class="dot[^"]*"/g, "").replace(/class="th[^"]*"/g, "");
   if (el.dataset.mode === "list" && el._shape === shape) {
     el._html = html;
-    for (const li of $$(".th", el)) {
+    for (const li of $$(".th[data-id]", el)) {
       const t = S.threads.find(x => x.id === li.dataset.id); if (!t) continue;
       const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : S.unseen?.has(t.id) && S.cur?.id !== t.id ? "done" : "";
-      li.classList.toggle("on", S.cur?.id === t.id);
+      li.classList.toggle("on", S.view === "chat" && S.cur?.id === t.id);
       const d = $(".dot", li); if (d) d.className = "dot " + st;
       const tm = $(".tm", li); if (tm && tm.textContent !== ago(t.updated)) tm.textContent = ago(t.updated);
     }
+    for (const li of $$(".th[data-pid]", el)) li.classList.toggle("on", S.view === "project" && S.pjId === li.dataset.pid);
     return;
   }
+  const had = document.activeElement?.closest?.("#sideList") ? (document.activeElement.dataset.id || document.activeElement.dataset.pid) : "";
   el._html = html; el._shape = shape; el.dataset.mode = "list";
   el.innerHTML = html;
-  $("#addProj")?.addEventListener("click", pickProject);
-  $("#addGh")?.addEventListener("click", openGithubPicker);
-  $("#togArch")?.addEventListener("click", () => { S.showArchived = !S.showArchived; renderSide(); });
-  $$(".proj-h", el).forEach(h => h.addEventListener("click", e => {
-    if (e.target.closest("button")) return;
-    const p = h.parentElement.dataset.p;
-    if (e.target.closest(".chev")) { S.closedProjects.has(p) ? S.closedProjects.delete(p) : S.closedProjects.add(p); store("closed", [...S.closedProjects]); renderSide(); return; }
-    S.closedProjects.delete(p); store("closed", [...S.closedProjects]);
-    newThread(p);
-  }));
-  $$("[data-newin]", el).forEach(b => b.onclick = () => newThread(b.dataset.newin));
-  $$("[data-pmenu]", el).forEach(b => b.onclick = e => projMenu(e, b.dataset.pmenu));
-  bindThreads(el);
+  if (had) { const back = $(`[data-id="${CSS.escape(had)}"], [data-pid="${CSS.escape(had)}"]`, el); back?.focus({preventScroll: true}); }
 }
-function thHTML(t, withFolder) {
+// Which group a chat belongs to: Today, Yesterday, the last week, the last month, then one group per month.
+function groupOf(updated, now = new Date()) {
+  const t = new Date((Number(updated) || 0) * 1000);
+  const days = Math.floor((new Date(now.getFullYear(), now.getMonth(), now.getDate()) - new Date(t.getFullYear(), t.getMonth(), t.getDate())) / 864e5);
+  if (days <= 0) return ["0", "Today"];
+  if (days === 1) return ["1", "Yesterday"];
+  if (days <= 7) return ["2", "Previous 7 days"];
+  if (days <= 30) return ["3", "Previous 30 days"];
+  return ["m" + t.getFullYear() + "-" + String(t.getMonth()).padStart(2, "0"), t.toLocaleString("en", t.getFullYear() === now.getFullYear() ? {month: "long"} : {month: "long", year: "numeric"})];
+}
+function thHTML(t, withProject) {
   const st = t.state === "working" ? "run" : t.state === "waiting" ? "wait" : S.unseen?.has(t.id) && S.cur?.id !== t.id ? "done" : "";
-  return `<li class="th ${S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" title="${esc(t.title)}"><span class="dot ${st}"></span><span class="tt">${esc(t.title)}${withFolder ? `<small class="tf">${esc(projName(t.workdir))}</small>` : ""}</span><span class="tm">${ago(t.updated)}</span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Chat options">${ICON.more}</button></li>`;
+  const pj = t.project_id && S.pj.find(p => p.id === t.project_id);
+  return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}"><span class="dot ${st}"></span><span class="tt">${esc(t.title)}${withProject && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end"><span class="tm">${ago(t.updated)}</span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
 }
-function bindThreads(el) {
-  $$(".th", el).forEach(li => li.addEventListener("click", e => { if (e.target.closest("[data-tmenu]")) return; openThread(li.dataset.id); }));
-  $$("[data-tmenu]", el).forEach(b => b.onclick = e => { e.stopPropagation(); threadMenu(e, b.dataset.tmenu); });
+// One set of listeners for the whole list (it is rebuilt often): click, right-click, keyboard.
+function bindSide() {
+  const el = $("#sideList");
+  el.addEventListener("click", e => {
+    const more = e.target.closest("[data-tmenu]"); if (more) { e.stopPropagation(); return threadMenu({type: "click", currentTarget: more}, more.dataset.tmenu); }
+    const pm = e.target.closest("[data-pmenu]"); if (pm) { e.stopPropagation(); return projMenu({type: "click", currentTarget: pm}, pm.dataset.pmenu); }
+    const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
+    if (e.target.closest("#addProj, #addProj2")) return newProjectFlow();
+    if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#moreProj")) { S.allProj = !S.allProj; return renderSide(); }
+    if (e.target.closest(".rn")) return;
+    const pr = e.target.closest(".th[data-pid]"); if (pr) return openProject(pr.dataset.pid);
+    const th = e.target.closest(".th[data-id]"); if (th) return openThread(th.dataset.id);
+  });
+  el.addEventListener("dblclick", e => { const th = e.target.closest(".th[data-id]"); if (th && !e.target.closest("button") && !e.target.closest(".rn")) startRename(th.dataset.id); });
+  el.addEventListener("contextmenu", e => {
+    const th = e.target.closest(".th[data-id]"), pr = e.target.closest(".th[data-pid]");
+    if (th) { e.preventDefault(); threadMenu(e, th.dataset.id); } else if (pr) { e.preventDefault(); projMenu(e, pr.dataset.pid); }
+  });
+  el.addEventListener("keydown", e => {
+    if (e.target.classList?.contains("rn")) return;
+    const row = e.target.closest?.("[data-nav]"); if (!row || e.target !== row) return;
+    const id = row.dataset.id, pid = row.dataset.pid;
+    const rows = $$("#sideList [data-nav]"), i = rows.indexOf(row);
+    if (e.key === "ArrowDown") { e.preventDefault(); rows[i + 1]?.focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (i > 0) rows[i - 1].focus(); else $("#q").focus(); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); id ? openThread(id) : openProject(pid); }
+    else if (e.key === "F2" && id) { e.preventDefault(); startRename(id); }
+    else if ((e.key === "Delete" || e.key === "Backspace") && id) { e.preventDefault(); confirmDelete(id); }
+    else if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) { e.preventDefault(); const r = row.getBoundingClientRect(); const ev = {type: "key", currentTarget: $(".more", row) || row, clientX: r.left + 24, clientY: r.bottom}; id ? threadMenu(ev, id) : projMenu(ev, pid); }
+  });
 }
 async function renderSearch(q) {
   const el = $("#sideList");
-  const local = S.threads.filter(t => t.title.toLowerCase().includes(q));
+  const local = S.threads.filter(t => t.title.toLowerCase().includes(q) && !S.pendingDelete?.has(t.id));
+  const pjs = S.pj.filter(p => p.name.toLowerCase().includes(q));
   let hits = [];
   try { hits = (await api("/api/search?q=" + encodeURIComponent(q))).hits; } catch (e) { /* ignore */ }
   if (($("#q").value || "").trim().toLowerCase() !== q) return;
   const ids = new Set(local.map(t => t.id));
   const more = hits.filter(h => !ids.has(h.id));
-  el.dataset.mode = "search";
-  el.innerHTML = `<div class="sec">Results</div><ul class="threads" style="padding-left:0">${local.map(t => thHTML(t, true)).join("")}${more.map(h => `<li class="th" data-id="${esc(h.id)}"><span class="dot"></span><span class="tt">${esc(h.title)}<span class="od" style="display:block;font-size:12px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(h.snippet)}</span></span></li>`).join("")}</ul>${!local.length && !more.length ? `<div class="empty-side">Nothing matches.</div>` : ""}`;
-  bindThreads(el);
+  el.dataset.mode = "search"; el._html = "";
+  el.innerHTML = (pjs.length ? `<div class="sec"><span class="sechd static">Projects</span></div><ul class="threads prj">${pjs.map(p => `<li class="th pr" data-pid="${esc(p.id)}" data-nav tabindex="0"><span class="pi">${ICON.folder}</span><span class="tt">${esc(p.name)}</span></li>`).join("")}</ul>` : "")
+    + `<div class="sec"><span class="sechd static">Chats</span></div><ul class="threads">${local.map(t => thHTML(t, true)).join("")}${more.map(h => `<li class="th" data-id="${esc(h.id)}" data-nav tabindex="0"><span class="dot"></span><span class="tt">${esc(h.title)}<small class="tf">${esc(h.snippet)}</small></span></li>`).join("")}</ul>${!local.length && !more.length && !pjs.length ? `<div class="empty-side">No chats or projects match “${esc(q)}”. Try fewer words.</div>` : ""}`;
 }
+
+/* ---------- menus: one component for every "more options" button and right-click ---------- */
+// items: {label, icon, kbd, danger, checked, sub: [items], fn} or {sep: true}. Arrow keys move, Enter picks, Right opens a
+// submenu, Left or Esc goes back, and focus returns to what opened the menu.
 function ctxMenu(e, items) {
   closeCtx();
-  const m = document.createElement("div"); m.className = "ctx"; m.id = "ctx";
-  m.innerHTML = items.map((it, i) => `<button data-i="${i}" class="${it.danger ? "danger" : ""}">${esc(it.label)}</button>`).join("");
+  const opener = document.activeElement;
+  const m = document.createElement("div"); m.className = "ctx"; m.id = "ctx"; m.setAttribute("role", "menu");
   document.body.appendChild(m);
-  const r = (e.currentTarget || e.target).getBoundingClientRect();
-  m.style.left = Math.min(innerWidth - m.offsetWidth - 8, r.left) + "px"; m.style.top = Math.min(innerHeight - m.offsetHeight - 8, r.bottom + 4) + "px";
-  $$("button", m).forEach(b => b.onclick = () => { closeCtx(); items[+b.dataset.i].fn(); });
-  setTimeout(() => document.addEventListener("mousedown", ctxAway, {once: true}), 0);
+  const point = e.type === "contextmenu" ? {x: e.clientX, y: e.clientY} : null;
+  const anchor = (e.currentTarget && e.currentTarget.getBoundingClientRect) ? e.currentTarget : e.target;
+  const place = () => {
+    const r = anchor?.getBoundingClientRect?.() || {left: e.clientX || 0, bottom: e.clientY || 0, right: e.clientX || 0, top: e.clientY || 0};
+    const x = point ? point.x : r.left, y = point ? point.y : r.bottom + 4;
+    m.style.left = Math.max(8, Math.min(innerWidth - m.offsetWidth - 8, x)) + "px";
+    m.style.top = Math.max(8, Math.min(innerHeight - m.offsetHeight - 8, (y + m.offsetHeight > innerHeight - 8 && !point) ? r.top - m.offsetHeight - 4 : y)) + "px";
+  };
+  const stack = [];
+  const draw = (list, title) => {
+    m.innerHTML = (title ? `<button class="mi" role="menuitem" tabindex="-1" data-back="1"><span class="mi-i">${ICON.chev}</span><span class="ml">${esc(title)}</span></button><div class="msep" role="separator"></div>` : "")
+      + list.map((it, i) => it.sep ? `<div class="msep" role="separator"></div>` : `<button class="mi ${it.danger ? "danger" : ""}" role="${it.checked !== undefined ? "menuitemcheckbox" : "menuitem"}" ${it.checked !== undefined ? `aria-checked="${!!it.checked}"` : ""} tabindex="-1" data-i="${i}"><span class="mi-i">${it.icon || ""}</span><span class="ml">${esc(it.label)}</span>${it.kbd ? `<kbd>${esc(it.kbd)}</kbd>` : ""}${it.checked ? `<span class="mi-c">${ICON.check}</span>` : ""}${it.sub ? `<span class="mi-s">${ICON.chevR}</span>` : ""}</button>`).join("");
+    place();
+    $$(".mi", m).forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.back) { const prev = stack.pop(); draw(prev.list, prev.title); $(".mi", m)?.focus(); return; }
+        const it = list[+b.dataset.i];
+        if (it.sub) { stack.push({list, title}); draw(it.sub, it.label); $(".mi:not([data-back])", m)?.focus(); return; }
+        closeCtx(true); it.fn?.();
+      };
+      b.onmousemove = () => { if (document.activeElement !== b) b.focus({preventScroll: true}); };
+    });
+  };
+  draw(items);
+  m.addEventListener("keydown", ev => {
+    const bs = $$(".mi", m), i = bs.indexOf(document.activeElement);
+    if (ev.key === "ArrowDown") { ev.preventDefault(); bs[(i + 1) % bs.length].focus(); }
+    else if (ev.key === "ArrowUp") { ev.preventDefault(); bs[(i - 1 + bs.length) % bs.length].focus(); }
+    else if (ev.key === "Home") { ev.preventDefault(); bs[0].focus(); }
+    else if (ev.key === "End") { ev.preventDefault(); bs[bs.length - 1].focus(); }
+    else if (ev.key === "ArrowRight") { const b = bs[i]; if (b && b.querySelector(".mi-s")) { ev.preventDefault(); b.click(); } }
+    else if (ev.key === "ArrowLeft" || ev.key === "Backspace") { if (stack.length) { ev.preventDefault(); $("[data-back]", m)?.click(); } else if (ev.key === "ArrowLeft") { closeCtx(); opener?.focus?.(); } }
+    else if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); closeCtx(); opener?.focus?.({preventScroll: true}); }
+    else if (ev.key === "Tab") { closeCtx(); }
+  });
+  m.querySelector(".mi")?.focus({preventScroll: true});
+  setTimeout(() => document.addEventListener("mousedown", ctxAway), 0);
+  window.addEventListener("blur", closeCtx, {once: true});
 }
 function ctxAway(e) { if (!e.target.closest("#ctx")) closeCtx(); }
-function closeCtx() { $("#ctx")?.remove(); }
+function closeCtx() { $("#ctx")?.remove(); document.removeEventListener("mousedown", ctxAway); }
 function threadMenu(e, id) {
-  const t = S.threads.find(x => x.id === id) || {};
+  const t = S.threads.find(x => x.id === id) || (S.cur?.id === id ? {id, ...S.cur.view} : {});
+  const inPj = t.project_id && S.pj.find(p => p.id === t.project_id);
+  const projects = [
+    ...S.pj.map(p => ({label: p.name, icon: ICON.folder, checked: p.id === t.project_id ? true : undefined, fn: () => p.id === t.project_id || moveChat(id, p.id)})),
+    ...(S.pj.length ? [{sep: true}] : []),
+    {label: "New project…", icon: ICON.plus, fn: async () => { const pid = await newProjectFlow({stay: true}); if (pid) moveChat(id, pid); }},
+    ...(inPj ? [{label: "Remove from project", icon: ICON.x, fn: () => moveChat(id, "")}] : []),
+  ];
   ctxMenu(e, [
-    {label: "Rename", fn: () => renameThread(id)},
-    {label: S.steps ? "Hide step details" : "Show step details", fn: () => toggleSteps()},
-    {label: t.pinned ? "Unpin" : "Pin", fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
-    {label: t.archived ? "Unarchive" : "Archive", fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
-    {label: "Delete", danger: true, fn: async () => { if (await ask({title: "Delete this chat?", text: "The conversation is removed. Files in your project stay as they are.", ok: "Delete chat", danger: true})) threadAct(id, "delete"); }},
+    {label: "Rename", icon: ICON.pencil, kbd: "F2", fn: () => startRename(id)},
+    {label: t.pinned ? "Unpin" : "Pin", icon: ICON.pin, fn: () => threadAct(id, t.pinned ? "unpin" : "pin")},
+    {label: inPj ? "Move to project" : "Add to project", icon: ICON.folder, sub: projects},
+    {label: t.archived ? "Restore" : "Archive", icon: ICON.archive, fn: () => threadAct(id, t.archived ? "unarchive" : "archive")},
+    {sep: true},
+    {label: "Delete", icon: ICON.trash, danger: true, fn: () => confirmDelete(id)},
   ]);
 }
-function projMenu(e, path) {
+async function confirmDelete(id) {
+  const t = S.threads.find(x => x.id === id) || {};
+  if (await ask({title: "Delete this chat?", text: `“${clip(t.title || "This chat", 60)}” is removed from Meshpool. Files it made in a project folder stay where they are.`, ok: "Delete chat", cancel: "Keep chat", danger: true})) threadAct(id, "delete");
+}
+async function moveChat(id, pid) {
+  const t = S.threads.find(x => x.id === id), prev = t?.project_id || "";
+  try { await post(`/api/threads/${id}`, {action: "move", project_id: pid}); } catch (e) { return toast(e.message); }
+  if (t) t.project_id = pid;
+  if (S.cur?.id === id && S.cur.view) S.cur.view.project_id = pid;
+  await loadThreads(); await loadPj(); renderTop();
+  const name = S.pj.find(p => p.id === pid)?.name;
+  toast(pid ? `Moved to ${name || "the project"}` : "Removed from the project", 6000, {label: "Undo", fn: () => moveChat(id, prev)});
+}
+function projMenu(e, pid) {
+  const p = S.pj.find(x => x.id === pid); if (!p) return;
   ctxMenu(e, [
-    {label: "New chat here", fn: () => newThread(path)},
-    {label: isMac ? "Open in Finder" : "Open in File Explorer", fn: () => post("/api/open-path", {path}).catch(err => toast(err.message))},
-    {label: "Open in code editor", fn: () => post("/api/open-editor", {path}).then(r => toast(r.message)).catch(err => toast(err.message))},
-    {label: "Rename", fn: async () => { const n = await ask({title: "Rename folder", text: "The name shown in Meshpool. The folder on disk keeps its name.", value: projName(path), ok: "Rename"}); if (n) { await post("/api/projects", {action: "rename", path, name: n}); await loadProjects(); renderSide(); } }},
-    {label: "Remove from Meshpool", danger: true, fn: async () => {
-      const ts = S.threads.filter(t => t.workdir === path && !t.archived);
-      if (!await ask({title: `Remove ${projName(path)} from Meshpool?`, text: `The folder and its files stay on your computer.${ts.length ? ` Its ${ts.length} chat${ts.length === 1 ? " is" : "s are"} archived; you can find ${ts.length === 1 ? "it" : "them"} under Show archived.` : ""}`, ok: "Remove folder", danger: true})) return;
-      await post("/api/projects", {action: "remove", path});
-      for (const t of ts) await post(`/api/threads/${t.id}`, {action: "archive"}).catch(() => {});
-      if (S.cur?.view?.workdir === path) newThread();
-      await loadProjects(); await loadThreads(); renderSide();
-      toast(`${projName(path)} removed`, 6000, {label: "Undo", fn: async () => {
-        await post("/api/projects", {action: "add", path}).catch(e => toast(e.message));
-        for (const t of ts) await post(`/api/threads/${t.id}`, {action: "unarchive"}).catch(() => {});
-        await loadProjects(); await loadThreads(); renderSide(); }});
-    }},
+    {label: "New chat in project", icon: ICON.plus, fn: () => openProject(pid, {focus: true})},
+    {label: "Open project", icon: ICON.folder, fn: () => openProject(pid)},
+    {label: "Rename", icon: ICON.pencil, fn: () => renameProject(pid)},
+    {sep: true},
+    {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
 async function threadAct(id, action) {
@@ -468,18 +573,36 @@ async function threadAct(id, action) {
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
-  if (action === "delete" && S.cur?.id === id) newThread();
   await loadThreads(); renderTop();
   if (action === "archive") toast("Chat archived", 6000, {label: "Undo", fn: () => threadAct(id, "unarchive")});
-  else if (action === "delete") toast("Chat deleted");
   else if (action === "unarchive") toast("Chat restored");
+  else if (action === "pin") toast("Pinned to the top of the sidebar");
 }
-async function renameThread(id) {
-  const t = S.threads.find(x => x.id === id); const n = await ask({title: "Rename chat", value: t?.title || "", ok: "Rename"});
-  if (!n) return;
-  await post(`/api/threads/${id}`, {action: "rename", title: n}); await loadThreads(); if (S.cur?.id === id && S.cur.view) { S.cur.view.title = n; renderTop(); }
+// Rename in place: the row's title becomes a text box. Enter saves, Esc cancels, clicking away saves.
+function startRename(id) {
+  const t = S.threads.find(x => x.id === id);
+  const li = $(`#sideList .th[data-id="${CSS.escape(id)}"]`);
+  if (!li || !t) { if (S.cur?.id === id) renameTop(); return; }
+  if ($("#app").classList.contains("noside") || (narrow() && !$("#app").classList.contains("sideopen"))) return renameTop();
+  closeCtx();
+  const tt = $(".tt", li); S.renaming = id;
+  tt.innerHTML = `<input class="rn" value="${esc(t.title)}" maxlength="120" aria-label="Chat name" spellcheck="false" autocomplete="off">`;
+  const inp = $(".rn", tt); inp.focus(); inp.select();
+  let done = false;
+  const finish = async save => {
+    if (done) return; done = true;
+    const v = inp.value.trim(); S.renaming = null;
+    const el = $("#sideList"); if (el) el._html = "";
+    if (save && v && v !== t.title) {
+      try { await post(`/api/threads/${id}`, {action: "rename", title: v}); t.title = v; if (S.cur?.id === id && S.cur.view) { S.cur.view.title = v; renderTop(); } } catch (err) { toast(err.message); }
+    }
+    renderSide(); $(`#sideList .th[data-id="${CSS.escape(id)}"]`)?.focus({preventScroll: true}); loadThreads();
+  };
+  inp.onkeydown = ev => { ev.stopPropagation(); if (ev.key === "Enter") { ev.preventDefault(); finish(true); } else if (ev.key === "Escape") { ev.preventDefault(); finish(false); } };
+  inp.onblur = () => finish(true);
 }
-// Choose a folder by clicking through folders (used where the computer has no folder dialog).
+async function renameThread(id) { startRename(id); }
+
 function browseFolder(start) {
   return new Promise(resolve => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
@@ -530,62 +653,84 @@ function browseFolder(start) {
     go(start || store("fb_last") || "");
   });
 }
-async function pickProject() {
-  try {
-    let r = await post("/api/projects", {action: "pick"});
-    if (r.no_picker) {                 // no folder dialog on this computer: Meshpool's own folder browser
-      const path = await browseFolder();
-      if (!path) return;
-      r = await post("/api/projects", {action: "add", path});
-    }
-    S.projects = r.projects;
-    if (r.picked) { S.closedProjects.delete(r.picked); newThread(r.picked); }
-    renderSide();
-  } catch (e) { toast(e.message); }
-}
-
 /* ================================== topbar ================================== */
 // Set an element's HTML only when it differs from what is there: a header or bar that did not change is not rebuilt,
 // so nothing flashes, loses hover or focus, or does layout work during a run.
 function setHTML(el, html, tight) { if (tight) html = html.replace(/>\s+</g, "><").trim(); if (!el || el._h === html) return false; el._h = html; el.innerHTML = html; return true; }
 function renderTop() {
-  const v = S.cur?.view; const hidden = $("#app").classList.contains("noside") || $("#app").classList.contains("autoside") || narrow();
+  const v = S.cur?.view, onProject = S.view === "project";
+  const hidden = $("#app").classList.contains("noside") || $("#app").classList.contains("autoside") || narrow();
   const root = curRoot();
-  const ALL = {session: [ICON.side, "Session", ""], progress: [ICON.list, "Progress", ""], outputs: [ICON.files, "Files", ""], diff: [ICON.diff, "Diff", `${MOD}⇧D`],
-    files: [ICON.files, "Files", ""], term: [ICON.term, "Terminal", `${MOD}J`], git: [ICON.pr, "Git and CI", ""], preview: [ICON.globe, "Preview", ""]};
-  const tabs = PANELS[curMode()].map(k => [k, ...ALL[k]]);
+  const pid = onProject ? S.pjId : v ? (v.project_id || S.threads.find(t => t.id === v.id)?.project_id || "") : (S.draft.pid || "");
+  const pj = pid && S.pj.find(p => p.id === pid);
+  const folderChat = !onProject && !!root && (v ? !v.scratch && !pj : !!S.draft.project);
+  const title = onProject ? (pj?.name || "Project") : v ? (v.title || "New chat") : "New chat";
+  const open = !!S.panel && !$("#panel")?.hidden;
   $("#topbar").classList.toggle("newt", !v);
   const topHTML = `
-    ${hidden ? `<button class="tbtn" id="showSide" title="Show sidebar (${MOD}B)" aria-label="Show sidebar">${ICON.side}</button>` : ""}
-    <span class="title" id="ttl" data-id="${esc(v?.id || "")}" title="Double-click to rename">${esc(v ? (v.title || "New chat") : "New chat")}</span>
-    ${root ? `<button class="chip" id="projChip" title="${esc(isMgd(root) ? projName(root) : root)}">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
-    <span id="branchChip">${curMode() === "cowork" ? "" : (S.branchHTML || {})[root] || ""}</span>
+    ${hidden ? `<button class="tbtn" id="showSide" data-tip="Open sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Open sidebar">${ICON.side}</button>` : ""}
+    ${pj && !onProject ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.folder}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
+    <span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options. Double-click to rename." data-tip-pos="below"` : ""}>${esc(title)}</span>
+    ${folderChat ? `<button class="chip" id="projChip" data-tip="${esc(isMgd(root) ? projName(root) : root)}" data-tip-pos="below">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
+    <span id="branchChip">${v && curMode() !== "cowork" && !v.scratch ? (S.branchHTML || {})[root] || "" : ""}</span>
     <span class="sp"></span>
-
-    ${tabs.map(([k, ic, lb, kb]) => `<button class="tbtn" data-panel="${k}" aria-pressed="${S.panel === k && !$("#panel")?.hidden}" title="${lb}${kb ? " (" + kb + ")" : ""}">${ic}<span>${lb}</span></button>`).join("")}
-    ${v ? `<button class="tbtn" id="tmore" aria-label="Chat options">${ICON.more}</button>` : ""}`;
+    ${v || onProject ? "" : ""}
+    ${!onProject ? `<button class="tbtn" id="panelBtn" aria-pressed="${open}" aria-label="Side panel" data-tip="${open ? "Hide" : "Show"} side panel" data-kbd="${MOD}." data-tip-pos="below">${ICON.side}</button>` : ""}
+    ${v ? `<button class="tbtn" id="tmore" aria-label="Chat options" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below">${ICON.more}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
-  $("#stepsBtn")?.addEventListener("click", toggleSteps);
-  $$("[data-panel]").forEach(b => b.onclick = () => togglePanel(b.dataset.panel));
-  $("#tmore")?.addEventListener("click", e => threadMenu(e, v.id));
-  $("#projChip")?.addEventListener("click", e => { if (!v) projectPop(e.currentTarget); else if (isMgd(root)) togglePanel("session", true); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
+  $("#panelBtn")?.addEventListener("click", () => togglePanel(S.panel || panelSet()[0], !S.panel));
+  $("#tmore")?.addEventListener("click", e => chatMenu(e));
+  $("#pjChip")?.addEventListener("click", () => openProject(pid));
+  $("#projChip")?.addEventListener("click", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
   const ttl = $("#ttl");
-  if (v) ttl.ondblclick = () => {
-    ttl.contentEditable = "true"; ttl.focus(); document.getSelection().selectAllChildren(ttl);
-    const done = async save => { ttl.contentEditable = "false"; if (save) { await post(`/api/threads/${v.id}`, {action: "rename", title: ttl.textContent.trim()}); v.title = ttl.textContent.trim(); loadThreads(); } else ttl.textContent = v.title; };
-    ttl.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); done(true); } if (e.key === "Escape") done(false); };
-    ttl.onblur = () => done(true);
-  };
+  if (v) { ttl.ondblclick = renameTop; ttl.onclick = e => { if (ttl.contentEditable !== "true") chatMenu(e); }; ttl.onkeydown = e => { if (e.key === "Enter" || e.key === "ArrowDown") { e.preventDefault(); chatMenu({type: "key", currentTarget: ttl}); } }; }
   renderBranch();
+}
+// The menu behind the chat's name and its "..." button: what you can do with this chat.
+function chatMenu(e) {
+  const v = S.cur?.view; if (!v) return;
+  const t = S.threads.find(x => x.id === v.id) || {id: v.id, title: v.title, pinned: v.pinned};
+  const inPj = (v.project_id || t.project_id) && S.pj.find(p => p.id === (v.project_id || t.project_id));
+  const projects = [
+    ...S.pj.map(p => ({label: p.name, icon: ICON.folder, checked: inPj && p.id === inPj.id ? true : undefined, fn: () => inPj && p.id === inPj.id || moveChat(v.id, p.id)})),
+    ...(S.pj.length ? [{sep: true}] : []),
+    {label: "New project…", icon: ICON.plus, fn: async () => { const pid = await newProjectFlow({stay: true}); if (pid) moveChat(v.id, pid); }},
+    ...(inPj ? [{label: "Remove from project", icon: ICON.x, fn: () => moveChat(v.id, "")}] : []),
+  ];
+  ctxMenu(e, [
+    {label: "Rename", icon: ICON.pencil, fn: renameTop},
+    {label: t.pinned ? "Unpin" : "Pin", icon: ICON.pin, fn: () => threadAct(v.id, t.pinned ? "unpin" : "pin")},
+    {label: inPj ? "Move to project" : "Add to project", icon: ICON.folder, sub: projects},
+    {label: "Show every step", icon: ICON.list, checked: !!S.steps, kbd: `${MOD}E`, fn: toggleSteps},
+    {label: "Archive", icon: ICON.archive, fn: () => threadAct(v.id, "archive")},
+    {sep: true},
+    {label: "Delete", icon: ICON.trash, danger: true, fn: () => confirmDelete(v.id)},
+  ]);
+}
+function renameTop() {
+  const v = S.cur?.view, ttl = $("#ttl"); if (!v || !ttl) return;
+  closeCtx();
+  const old = v.title || "New chat";
+  ttl.contentEditable = "true"; ttl.focus(); document.getSelection().selectAllChildren(ttl);
+  let finished = false;
+  const done = async save => {
+    if (finished) return; finished = true;
+    ttl.contentEditable = "false"; const n = ttl.textContent.trim();
+    if (save && n && n !== old) { try { await post(`/api/threads/${v.id}`, {action: "rename", title: n}); v.title = n; loadThreads(); } catch (e) { toast(e.message); ttl.textContent = old; } }
+    else ttl.textContent = old;
+    ttl.onkeydown = null; renderTop();
+  };
+  ttl.onkeydown = e => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); done(true); } if (e.key === "Escape") { e.preventDefault(); done(false); } };
+  ttl.onblur = () => done(true);
 }
 async function renderBranch() {
   const root = curRoot(); const el = $("#branchChip"); if (!el || !root) return;
-  if (curMode() === "cowork") { el.innerHTML = ""; return; }
+  if (curMode() === "cowork" || S.cur?.view?.scratch) { el.innerHTML = ""; return; }
   try {
     const g = await api("/api/git?root=" + encodeURIComponent(root));
     S.git = g;
-    const html = g.repo ? `<button class="chip" id="brChip" title="Branch">${ICON.branch}${esc(g.branch)}${g.dirty ? ` · ${g.dirty} changed` : ""}</button>` : "";
+    const html = g.repo ? `<button class="chip" id="brChip" data-tip="Branch. Open the Git panel." data-tip-pos="below">${ICON.branch}${esc(g.branch)}${g.dirty ? ` · ${g.dirty} changed` : ""}</button>` : "";
     S.branchHTML = {...(S.branchHTML || {}), [root]: html};
     if (curRoot() === root && el.innerHTML !== html) el.innerHTML = html;
     $("#brChip")?.addEventListener("click", () => togglePanel("git", true));
@@ -603,8 +748,12 @@ async function ciChip(root, fresh) {
   $("#ciChip").onclick = () => togglePanel("git", true);
 }
 const PANELS = {cowork: ["session", "progress", "outputs"], code: ["session", "diff", "files", "term", "git", "preview"]};
-function curMode() { return S.cur?.view?.kind || S.appMode; }
-function curRoot() { return S.cur?.view?.workdir || S.draft.project || S.defaultProject || ""; }
+function curMode() { return S.cur?.view?.kind || "cowork"; }
+// A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
+// the developer tabs when it is a code chat.
+function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : PANELS[curMode()]; }
+function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
+function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 
 /* ================================== composer ================================== */
 function setupComposer() {
@@ -637,34 +786,52 @@ function renderBar() {
   const c = cfg(); const h = harness(c.harness);
   $("#app").classList.toggle("planning", !!c.plan);
   const fits = c.model && (!h.providers || h.providers.includes(provOf(c.model)));
-  const modelLabel = fits ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : (h.runs_on ? "Default · " + h.runs_on : "Agent's own model");
+  const modelLabel = fits ? modelName(c.model) + (provOf(c.model) === "chatgpt" ? " · ChatGPT" : "") : (c.model ? modelName(c.model) : "Auto");
+  const custom = c.mode !== "ask" || c.plan || (!S.cur && !!S.draft.project);      // anything changed from the defaults
   const barHTML = `
-    <button class="pill" id="hPill" title="Agent: who does the work in this chat">${ICON.cpu}<span class="lbl">${esc(h.name)}</span>${ICON.chev}</button>
-    <button class="pill" id="mPill" title="Model">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
-    <button class="pill" id="aPill" title="${esc(MODES[c.mode]?.[1] || "")}">${ICON.shield}<span class="lbl">${esc(MODES[c.mode]?.[0] || "Supervised")}</span>${ICON.chev}</button>
-    <button class="pill ${c.plan ? "on" : ""}" id="pPill" aria-pressed="${!!c.plan}" title="Plan mode: the agent looks around and writes a plan without changing anything">${ICON.list}<span class="lbl">Plan</span></button>
-    <button class="pill" id="attBtn" title="Attach images or files" aria-label="Attach images or files">${ICON.clip}</button>
+    <button class="pill icon" id="attBtn" data-tip="Add files or photos" aria-label="Add files or photos">${ICON.plus}</button>
+    <button class="pill icon ${custom ? "on" : ""}" id="oPill" aria-haspopup="menu" data-tip="Chat settings" aria-label="Chat settings">${ICON.sliders}${custom ? `<i class="mark"></i>` : ""}</button>
     <span class="sp"></span>
-    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" title="Stop (Esc)" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" title="Stop the current step and do this instead (${MOD}Enter)" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
-    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" title="${c.busy ? "Add to this task (Enter). Stop and send now: " + MOD + "Enter" : "Send (Enter)"}" aria-label="${c.busy ? "Add to this task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
+    <button class="pill" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above">${ICON.bolt}<span class="lbl">${esc(modelLabel)}</span>${ICON.chev}</button>
+    ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" data-tip="Stop" data-kbd="Esc" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" data-tip="Stop what it is doing and send this instead" data-kbd="${MOD}Enter" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
+    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
-    $("#hPill").onclick = e => harnessPop(e.currentTarget);
+    $("#oPill").onclick = e => optsPop(e.currentTarget);
     $("#mPill").onclick = e => modelPop(e.currentTarget);
-    $("#aPill").onclick = e => accessPop(e.currentTarget);
-    $("#pPill").onclick = () => setPlan(!cfg().plan);
     $("#attBtn").onclick = () => $("#fileIn").click();
     $("#sendBtn")?.addEventListener("click", () => sendNow(false));
     $("#stopBtn")?.addEventListener("click", stopNow);
-    $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead first."); } });
+    $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });
   }
-  const root = curRoot();
   const goal = S.cur?.view?.goal;
   const touch = matchMedia("(pointer: coarse)").matches;
   const hintHTML = (goal ? `<span class="goalh" title="${esc(goal)}">Goal: <b>${esc(clip(goal, 70))}</b> <button class="linkbtn" id="goalClr">Clear</button></span>${c.busy && !touch ? " · " : ""}` : "")
     + (c.busy && !touch ? `Enter adds to the task · Esc stops` : "");
-  if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); $("#chgProj")?.addEventListener("click", e => projectPop(e.currentTarget)); }
-  const inp = $("#input");
-  inp.placeholder = c.busy ? "Add to this task…" : S.appMode === "cowork" ? "Ask for research, a document, a spreadsheet, a deck or an analysis" : "Ask Meshpool to build, fix or explain something";
+  if (setHTML($("#hintTxt"), hintHTML)) { $("#goalClr")?.addEventListener("click", () => setGoal("")); }
+  const inp = $("#input"), pj = S.view === "project" ? S.pj.find(p => p.id === S.pjId) : null;
+  const ph = c.busy ? "Add to the task…" : pj ? `Start a chat in ${pj.name}` : S.cur ? "Reply to Meshpool" : "Message Meshpool";
+  if (inp.placeholder !== ph && !inp.disabled) inp.placeholder = ph;
+}
+// Chat settings: everything that used to be a row of pills. Quiet by default; the dot on the button says something is set.
+function optsPop(anchor) {
+  const c = cfg(), h = harness(c.harness);
+  const modes = Object.entries(MODES).map(([k, [lb, d]]) => `<button class="opt" role="menuitemradio" aria-checked="${k === c.mode}" data-m="${k}"><span class="ol">${lb}<span class="od">${d}</span></span>${k === c.mode ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
+  const folder = !S.cur && S.view !== "project" ? `<button class="opt" id="oFolder"><span class="ol">Work in a folder<span class="od">${S.draft.project ? esc(projName(S.draft.project)) + ". Click to change it." : "Let this chat read and change files in a folder you choose."}</span></span>${ICON.chevR}</button>${S.draft.project ? `<button class="opt" id="oNoFolder"><span class="ol">Don’t use a folder</span></button>` : ""}` : "";
+  const p = openPop(anchor, `<div class="pl" role="menu"><div class="grp">Permissions</div>${modes}
+    <div class="grp">Planning</div><button class="opt" id="oPlan" role="menuitemcheckbox" aria-checked="${!!c.plan}"><span class="ol">Plan first<span class="od">Meshpool writes a plan and waits for your OK before it starts.</span></span><span class="sw ${c.plan ? "on" : ""}" aria-hidden="true"></span></button>
+    <div class="grp">Advanced</div>
+    <button class="opt" id="oAgent"><span class="ol">Agent<span class="od">${S.cur ? esc(h.name) + " is working in this chat." : "Meshpool picks the best one for each task."}</span></span>${ICON.chevR}</button>${folder}</div>`, {width: 340});
+  $$(".opt[data-m]", p).forEach(b => b.onclick = () => { closePop(); setMode(b.dataset.m); });
+  $("#oPlan", p).onclick = () => { closePop(); setPlan(!cfg().plan); };
+  $("#oAgent", p).onclick = () => { closePop(); harnessPop(anchor); };
+  $("#oFolder", p)?.addEventListener("click", () => { closePop(); chooseDraftFolder(); });
+  $("#oNoFolder", p)?.addEventListener("click", () => { closePop(); S.draft.project = ""; renderTop(); renderBar(); renderHero(); });
+  p.querySelector(".opt")?.focus();
+}
+async function chooseDraftFolder() {
+  const path = await browseFolder(S.draft.project || "");
+  if (!path) return;
+  S.draft.project = path; renderTop(); renderBar(); if (!S.cur && S.view === "chat") renderHero();
 }
 async function setPlan(on) {
   if (S.cur) { try { S.cur.view = Object.assign(S.cur.view, await post(`/api/agent/${S.cur.id}/plan`, {on, since: 1e9})); } catch (e) { return toast(e.message); } }
@@ -718,9 +885,8 @@ async function sendNow(interrupt) {
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
-      const root = S.draft.project || S.defaultProject;
-      const v = await post("/api/agent", {workdir: root, harness: S.draft.harness || modeHarness(), kind: S.appMode, model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
-      S.draft.plan = false;
+      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
+      S.draft.plan = false; S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
@@ -728,7 +894,7 @@ async function sendNow(interrupt) {
     if (files.length) {
       const saved = [];
       for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in the project folder): ${saved.join(", ")}`;
+      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
     }
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
@@ -753,7 +919,7 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new chat", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/agent", "Choose the agent", () => harnessPop($("#hPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Tokens used, by model and by chat", () => openSettings("usage")],
@@ -786,7 +952,7 @@ async function suggestNow() {
   const box = $("#sugg"); if (!box) return;
   const text = $("#input").value.trim();
   if (text.length < 12 || /^[\/$]/.test(text)) { box.hidden = true; return; }
-  let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: S.appMode, new: !S.cur}); } catch (e) { return; }
+  let r; try { r = await post("/api/suggest", {text, harness: cfg().harness, kind: curMode(), new: !S.cur}); } catch (e) { return; }
   if ($("#input").value.trim() !== text) return;                 // typed on meanwhile: the next pause asks again
   S.suggOff = S.suggOff || new Set();
   const items = (r.suggestions || []).filter(x => !S.suggOff.has(x.type + ":" + x.id));
@@ -874,8 +1040,7 @@ function popKey(k) {
 }
 function harnessPop(anchor) {
   const cur = cfg().harness;
-  const other = S.appMode === "code" ? "cowork" : "code";
-  const groups = [["any", "Automatic"], [S.appMode, S.appMode === "code" ? "For code" : "For work"], [other, "Other agents"]];
+  const groups = [["any", "Automatic"], ["cowork", "For documents and research"], ["code", "For code"]];
   const html = `<div class="pl">${groups.map(([m, lb]) => {
     const hs = S.harnesses.filter(h => !h.error && h.available !== false && h.mode === m); if (!hs.length) return "";
     return `<div class="grp">${lb}</div>` + hs.map(h => `<button class="opt" data-id="${esc(h.id)}" title="${esc(h.description || "")}" ${h.ready === false ? "style='opacity:.6'" : ""}><span class="ol">${esc(h.name)}${h.ready === false ? " · needs setup" : ""}<span class="od">${esc(h.ready === false ? (h.setup || "") : (h.tagline || h.description || ""))}</span></span>${h.id === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("");
@@ -884,13 +1049,13 @@ function harnessPop(anchor) {
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
     if (harness(id).ready === false) { openSettings(harness(id).login ? "harnesses" : "general"); return; }
-    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("Each chat keeps its agent. Started a new chat with " + harness(id).name + "."); store("harness_" + S.appMode, id); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
-    S.draft.harness = id; store("harness_" + S.appMode, id); renderBar(); renderHero();
+    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("An agent can’t change mid-chat, so this started a new chat with " + harness(id).name + "."); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
+    S.draft.harness = id; renderBar(); renderHero();
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
 }
 function agentFor(prov) {   // the agent to switch to for a model the current agent cannot run
-  const mine = S.appMode === "code" ? "meshpool-code" : "meshpool-work";
+  const mine = curMode() === "code" ? "meshpool-code" : "meshpool-work";
   return harness(mine).providers?.includes(prov) ? mine : (S.harnesses.find(h => h.providers?.includes(prov) && h.available !== false) || {}).id;
 }
 async function connectProvider(g) {   // a provider that is not set up yet: sign in, or add its key in Settings
@@ -904,15 +1069,16 @@ async function connectProvider(g) {   // a provider that is not set up yet: sign
 }
 async function pickModel(id) {
   const c = cfg(); const h = harness(c.harness); const prov = provOf(id);
-  if (h.providers && !h.providers.includes(prov)) {
-    const to = agentFor(prov); if (!to) return toast("No agent here can run these models.");
-    const why = `${h.name} cannot run ${(S.models.groups || []).find(g => g.id === prov)?.name || "these"} models`;
-    if (S.cur) { toast(`${why}. Started a new chat with ${harness(to).name}.`); store("harness_" + S.appMode, to); newThread(); }
-    else toast(`${why}, so this chat uses ${harness(to).name}.`);
+  const auto = h.type === "auto" || !S.cur;
+  if (h.providers && !h.providers.includes(prov) && !auto) {
+    const to = agentFor(prov); if (!to) return toast("None of your agents can run that model.");
+    const why = `${h.name} can’t run ${(S.models.groups || []).find(g => g.id === prov)?.name || "these"} models`;
+    toast(`${why}, so this opened a new chat with ${harness(to).name}.`); newThread();
     S.draft.harness = to; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
   }
+  if (!S.cur) { S.draft.model = id; store("model", id); renderBar(); return; }
   if (S.cur && h.type === "acp" && S.cur.view?.harness?.provider && prov !== S.cur.view.harness.provider) {
-    toast(`This chat runs ${h.name} on ${S.cur.view.harness.runs_on}. Started a new chat for this model.`);
+    toast(`This chat runs ${h.name} on ${S.cur.view.harness.runs_on}, so this opened a new chat for that model.`);
     newThread(); S.draft.harness = h.id; S.draft.model = id; store("model", id); renderBar(); renderHero(); return;
   }
   setModel(id);
@@ -963,67 +1129,40 @@ function modelPop(anchor) {
   $("#mRefresh").onclick = async () => { await loadModels(true); Object.assign(M, S.models); draw(); };
   $("#mManage").onclick = () => { closePop(); openSettings("general"); };
 }
-function accessPop(anchor) {
-  const cur = cfg().mode;
-  const p = openPop(anchor, `<div class="pl">${Object.entries(MODES).map(([k, [lb, d]]) => `<button class="opt" data-m="${k}"><span class="ol">${lb}<span class="od">${d}</span></span>${k === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}</div>`, {width: 300});
-  $$(".opt", p).forEach(b => b.onclick = () => { closePop(); setMode(b.dataset.m); });
-}
-function projectPop(anchor) {
-  const cur = curRoot();
-  const list = S.projects.length ? S.projects : [];
-  const p = openPop(anchor, `<div class="pl">${list.map(x => `<button class="opt" data-p="${esc(x.path)}"><span class="ol">${esc(x.name)}<span class="od">${esc(x.managed ? "GitHub" : x.path)}</span></span>${x.path === cur ? `<span class="on">${ICON.check}</span>` : ""}</button>`).join("")}
-    <button class="opt" data-p="${esc(S.defaultProject)}"><span class="ol">Meshpool Projects<span class="od">${esc(S.defaultProject)}</span></span></button></div>
-    <div class="pf"><button class="opt" id="pickGh">${ICON.pr}<span class="ol">New session from GitHub<span class="od">Pick a repository and branch; Meshpool keeps its own copy</span></span></button><button class="opt" id="pickNew">${ICON.folder}<span class="ol">Choose a folder on this computer</span></button><button class="opt" id="pickHome">${ICON.dir}<span class="ol">Use my whole home folder<span class="od">Every folder and file you can open yourself</span></span></button></div>`, {width: 380});
-  $$(".opt[data-p]", p).forEach(b => b.onclick = () => { closePop(); S.draft.project = b.dataset.p; store("project", S.draft.project); renderBar(); renderTop(); if (S.panel) renderPanel(); });
-  $("#pickGh").onclick = () => { closePop(); openGithubPicker(); };
-  $("#pickNew").onclick = () => { closePop(); pickProject(); };
-  $("#pickHome").onclick = () => { closePop(); useHome(); };
-}
-async function useHome() {
-  if (!await ask({title: "Give Meshpool your whole home folder?", text: "Agents can then read and, with your approval, change any of your files. You can still pick one folder per chat. On a Mac, also allow Full Disk Access in Settings, Permissions to reach Desktop, Documents and Downloads without a prompt each time.", ok: "Use my home folder"})) return;
-  try {
-    const r = await post("/api/projects", {action: "home"});
-    S.projects = r.projects; renderSide(); newThread(r.picked);
-  } catch (e) { toast(e.message); }
-}
-
 /* ================================== threads ================================== */
 function restoreDraft() {
-  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || "new")) || ""; } catch (e) {}
+  let v = ""; try { v = sessionStorage.getItem("mp_draft_" + (S.cur?.id || (S.view === "project" ? "pj_" + S.pjId : "new"))) || ""; } catch (e) {}
   const inp = $("#input"); if (inp && v && !inp.value) { inp.value = v; inp.dispatchEvent(new Event("input")); }
 }
-function newThread(project) {     // project: the folder for the new chat; without one, the open chat's folder
+// A new chat. Without an argument: a plain chat that needs no folder. With a folder path (old scripts): a chat in that
+// folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
+function newThread(opt) {
+  if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
   leaveChat(S.cur);
-  const p = folderOrNone(project) || S.cur?.view?.workdir;
-  if (p) { S.draft.project = p; store("project", p); }
+  S.view = "chat"; S.pjId = "";
+  S.draft.project = typeof opt === "string" ? opt : "";
+  S.draft.pid = "";
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
-  S.draft.harness = modeHarness();
-  if (!S.draft.project) S.draft.project = S.projects[0]?.path || S.defaultProject;
+  S.draft.harness = "meshpool-auto";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
 }
+const STARTERS = [
+  ["Summarize a document", "Read the document I attach and write a one-page summary as a Word file."],
+  ["Research a question", "Research this and give me a short answer with sources: "],
+  ["Build a spreadsheet", "Build a 3-year revenue model for a SaaS company with 3 pricing tiers, as an Excel file with formulas."],
+  ["Make a presentation", "Make a 6-slide deck on why engineering teams should track AI spend per team."],
+  ["Analyse some data", "Analyse the spreadsheet I attach: the main trends, anything unusual, and a short summary."],
+  ["Write or fix code", "Help me with some code. Here is what I need: "],
+];
 function renderHero() {
-  const h = harness(S.draft.harness); const cw = S.appMode === "cowork";
-  const starters = cw ? [
-    ["Summarize this folder into a Word document", "Read the files in this folder and write a one-page summary as a Word document."],
-    ["Build a revenue model in Excel", "Build a 3-year revenue model for a SaaS company with 3 pricing tiers, as an Excel file with formulas."],
-    ["Make a short PowerPoint deck", "Make a 6-slide PowerPoint deck on why engineering teams should track AI spend per team."],
-    ["Read a scanned PDF", "Read the scanned PDF in this folder and turn it into a clean Word document with the same headings and tables."],
-    ["Research a question", "Research this and give me a short answer with sources: "],
-    ["Analyse a spreadsheet", "Analyse the spreadsheet in this folder: the main trends, anything unusual, and a short summary."],
-  ] : [
-    ["Explain this codebase", "Give me a tour of this codebase: what it does, how it is structured, and where to start."],
-    ["Find and fix a bug", "Run the tests, find what fails, and fix it."],
-    ["Review my changes", "$code-review Review my current changes."],
-    ["Add a feature", "Plan, then build: "],
-    ["Fix the failing CI", "Check why CI is failing on this branch, fix it, and push."],
-    ["Open a pull request", "$pull-request"],
-  ];
+  const f = S.draft.project;
   $("#col").innerHTML = `<div class="hero">
-    <h1>${cw ? "What should we get done?" : "What are we building?"}</h1>
-    <p class="sub">${cw ? "Research, documents, spreadsheets, decks and data, done for you in" : "Reads, edits and runs your code in"} <button class="linkbtn" id="heroProj" title="Change folder">${esc(projName(curRoot()))}</button></p>
-    <div class="starters">${starters.map(([a, b]) => `<button data-s="${esc(b)}">${esc(a)}</button>`).join("")}</div></div>`;
-  $("#heroProj").onclick = e => projectPop(e.currentTarget);
+    <h1>What can I help with?</h1>
+    <p class="sub">${f ? `Working in <button class="linkbtn" id="heroProj" data-tip="Change folder">${esc(projName(f))}</button>. <button class="linkbtn" id="heroNoProj">Don’t use a folder</button>` : "Ask a question or describe a task. Meshpool works out what it needs."}</p>
+    <div class="starters">${STARTERS.map(([a, b]) => `<button data-s="${esc(b)}">${esc(a)}</button>`).join("")}</div></div>`;
+  $("#heroProj")?.addEventListener("click", chooseDraftFolder);
+  $("#heroNoProj")?.addEventListener("click", () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); });
   $$(".starters button").forEach(b => b.onclick = () => { const inp = $("#input"); inp.value = b.dataset.s; inp.focus(); inp.dispatchEvent(new Event("input")); });
 }
 /* ---------- opening a chat, live delivery, scrolling ----------
@@ -1059,13 +1198,14 @@ function commitStage(cur) {
 }
 function openThread(id, fresh) {
   if (S.unseen?.delete(id)) store("unseen", [...S.unseen]);
-  store("last_" + S.appMode, id);
+  store("last_chat", id);
+  S.view = "chat"; S.pjId = ""; S.draft.pid = "";
   $("#app").classList.remove("sideopen");
   leaveChat(S.cur);
   const known = S.threads.find(t => t.id === id);
   const hit = !fresh && CACHE.get(id);
   S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
-  if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, harness: harness(known.harness), events: [], prefill: true};
+  if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
   closePop();
@@ -1120,7 +1260,6 @@ function ingest(cur, v) {
   }
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
-  if (v.kind && v.kind !== S.appMode) { S.appMode = v.kind; store("appmode", v.kind); $("#app").dataset.mode = v.kind; $$(".modesw [data-mode]").forEach(b => b.setAttribute("aria-selected", b.dataset.mode === v.kind)); renderSide(); renderTop(); }
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
@@ -1531,9 +1670,9 @@ async function undoTurn(n) {
 }
 
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Files", diff: "Diff", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
+const PTABS_ALL = {session: "Session", progress: "Steps", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
 function togglePanel(name, force) {
-  if (!PANELS[curMode()].includes(name)) name = PANELS[curMode()][0];
+  if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
   if (force) store("cw_panel_closed", false);
   S.panel = (S.panel === name && !force) ? null : name; store("panel", S.panel);
@@ -1553,10 +1692,10 @@ function fitPanel() {
 function renderPanel() {
   const p = $("#panel");
   clearTimeout(S.spT);
-  if (S.panel && !PANELS[curMode()].includes(S.panel)) { S.panel = PANELS[curMode()][0]; store("panel", S.panel); }
+  if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
   fitPanel(); if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
-  $("#ptabs").innerHTML = PANELS[curMode()].map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
@@ -1877,8 +2016,8 @@ function spSec(k, title, count, inner) {
 }
 function spHTML(d, pr) {
   const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
-  const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [PANELS[curMode()].includes("files") ? "files" : "outputs", ICON.files, "Files"]]
-    .filter(([k]) => PANELS[curMode()].includes(k));
+  const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [panelSet().includes("files") ? "files" : "outputs", ICON.files, panelSet().includes("files") ? "Files" : "Artifacts"]]
+    .filter(([k]) => panelSet().includes(k));
   const envHTML = `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>
     ${rp ? `<div class="sprow">${ICON.pr}<span><b>${rp.url ? `<a href="${esc(rp.url)}" target="_blank" rel="noopener">${esc(rp.slug)}</a>` : esc(env.name)}</b><small>${rp.slug ? "GitHub repository" : "Git repository without a GitHub remote"}</small></span></div>` : `<div class="sprow">${ICON.dir}<span><b>${esc(env.name)}</b><small>Not a Git repository</small></span></div>`}
     ${br ? `<div class="sprow">${ICON.branch}<span><b>${esc(br.name)}</b><small>${br.upstream ? `${br.ahead} to push, ${br.behind} to pull` : "Not pushed yet"}</small></span></div>
@@ -1956,14 +2095,15 @@ function spDraw(sid, root, d) {
   $("#spDraft", body)?.addEventListener("click", async () => { const t = await ask({title: "Open a draft pull request", text: "Pushes this branch and opens a draft on GitHub.", value: S.spPr.data.branch, ok: "Open draft"}); if (t) { try { const r = await post("/api/git", {root, action: "pr", title: t, draft: true}); toast("Draft pull request opened"); S.spPr.data = null; S.spPr.t = 0; if (r.pr) window.open?.(r.pr, "_blank", "noopener"); } catch (e) { toast(e.message, 5000); } } });
   $$("[data-stop]", body).forEach(b => b.onclick = async () => { const [kind, ...id] = b.dataset.stop.split(":"); try { await post(`/api/session/${sid}/bg/stop`, {kind, id: id.join(":")}); toast("Stopped"); } catch (e) { toast(e.message); } });
 }
-function openGithubPicker() {
+function openGithubPicker(opts = {}) {
   const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
-  sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="New session from GitHub"><h3>New session from GitHub</h3>
-    <p>Pick a repository. Meshpool keeps its own copy and works there, so you do not need it on this computer first.</p>
+  const gtitle = opts.title || "Work on a GitHub repository";
+  sc.innerHTML = `<div class="dlg fb ghp" role="dialog" aria-modal="true" aria-label="${esc(gtitle)}"><h3>${esc(gtitle)}</h3>
+    <p>Pick a repository. Meshpool keeps its own copy and works there, so it doesn’t need to be on this computer first.</p>
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
-    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>Start session</button></div></div>`;
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>${esc(opts.cta || "Start chat")}</button></div></div>`;
   document.body.appendChild(sc);
   let repo = null, qT = null;
   const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
@@ -1996,7 +2136,9 @@ function openGithubPicker() {
     $("#ghGo", sc).disabled = true; msg.textContent = "Getting the repository ready. A large one can take a minute...";
     try {
       const r = await post("/api/github/workspace", {repo: repo.full_name, branch: mk ? nm : $("#ghSel", sc).value, create: mk, base: $("#ghSel", sc).value});
-      done(); await loadProjects(); renderSide(); newThread(r.path); toast(`${r.name} on ${r.branch} is ready`);
+      done(); await loadProjects();
+      if (opts.onReady) return opts.onReady(r);
+      renderSide(); newThread(r.path); toast(`${r.name} on ${r.branch} is ready`);
     } catch (e) { msg.textContent = e.message; $("#ghGo", sc).disabled = false; }
   };
   load(); $("#ghQ", sc).focus();
@@ -2446,7 +2588,7 @@ function showOnboarding() {
     const tick = async () => { if (!$("#oSubBox") || SIGNIN[prov]?.harness !== id) return; await loadHarnesses(); drawSub(); if (sub()?.signed_in) { res.className = "res ok"; res.textContent = "Signed in."; return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
     setTimeout(tick, 3000);
   };
-  const finish = async () => { await loadSettings(); await loadHarnesses(); S.draft.harness = modeHarness(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
+  const finish = async () => { await loadSettings(); await loadHarnesses(); await loadModels(true); renderBar(); renderHero?.(); $("#onbKey").remove(); permStep(o); };
   $("#oGo").onclick = async () => {
     if (SIGNIN[prov]) {
       if (!sub()?.signed_in) { res.className = "res bad"; res.textContent = "Sign in first."; return; }
@@ -2781,11 +2923,10 @@ async function restartApp() {
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
-  try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills()]); }
+  try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
-  S.draft.harness = modeHarness();
-  if (S.draft.project && !S.projects.some(p => p.path === S.draft.project) && S.draft.project !== S.defaultProject) S.draft.project = "";
+  await loadPj();
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.ready) showOnboarding();
@@ -2793,16 +2934,15 @@ async function restartApp() {
     loadModels().then(renderBar);
     if (!store("onbDone") && get0("MH_ONBOARDED") !== "1" && !S.threads.length) { if (store("onbStep") === 3 || store("onbStep") === 2) { if (store("onbStep") === 2) { permStep(); } else { const o = Object.assign(document.createElement("div"), {className: "onb", id: "onb"}); document.body.appendChild(o); setupStep(o); } } else if (!store("permsAsked")) permStep(); }
     // 21. a thread waiting for the user's OK opens straight away after a restart
-    const waiting = S.threads.find(t => t.state === "waiting" && (t.kind || "code") === S.appMode);
-    const last = store("last_" + S.appMode);
+    const waiting = S.threads.find(t => t.state === "waiting" && !t.archived);
+    const last = store("last_chat");
     if (waiting) openThread(waiting.id);
     else if (last && S.threads.some(t => t.id === last && !t.archived)) openThread(last);
   }   // set up but onboarding left halfway
   if (MP.desktop) { const ping = () => post("/api/ping").catch(() => {}); ping(); setInterval(ping, 30000); }
   setTimeout(() => checkUpdate(false), 3000); setTimeout(updStatus, 1000);
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
-  document.addEventListener("contextmenu", e => { const ph = e.target.closest?.("#sideList .proj-h"); if (ph) { e.preventDefault(); projMenu({currentTarget: ph, target: ph}, ph.parentElement.dataset.p); return; } });
-  document.addEventListener("contextmenu", e => { const li = e.target.closest?.("#sideList .th"); if (!li || !li.dataset.id) return; e.preventDefault(); threadMenu({currentTarget: li, target: li}, li.dataset.id); });
+  window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();
