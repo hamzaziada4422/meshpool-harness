@@ -121,6 +121,11 @@ const ICON = {
   pr: I('<circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><path d="M6 8v8M18 16V9a3 3 0 0 0-3-3h-4m0 0 2-2m-2 2 2 2"/>'),
   eye: I('<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>'),
   plug: I('<path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-10 0zM12 17v5"/>'),
+  card: I('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18M7 15h3"/>'),
+  palette: I('<path d="M12 3a9 9 0 1 0 0 18c1.1 0 1.7-.8 1.7-1.7 0-1.3-1-1.5-1-2.6 0-.9.7-1.7 1.7-1.7H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/>'),
+  bell: I('<path d="M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 20a2 2 0 0 0 4 0"/>'),
+  sun: I('<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/>'),
+  moon: I('<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>'),
   stack: I('<rect x="4" y="3" width="16" height="6" rx="2"/><path d="M6 9v3a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V9M8 14v5a2 2 0 0 0 2 2h4a2 2 0 0 0 2-2v-5"/>'),
   cube: I('<path d="M12 3 4 7.5v9L12 21l8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>'),
   clock: I('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
@@ -160,12 +165,14 @@ const post = (path, body) => api(path, {method: "POST", body: JSON.stringify(bod
 // Shorten at a word boundary with an ellipsis (the full text stays in the tooltip).
 function clip(s, n) { if (s.length <= n) return s; const c = s.slice(0, n); const i = c.lastIndexOf(" "); return (i > n * 0.6 ? c.slice(0, i) : c).replace(/[,;:.]$/, "") + "…"; }
 
-function toast(text, ms = 2600, action) {
+function toast(text, ms = 5000, action) {
   let box = $("#toasts"); if (!box) { box = document.createElement("div"); box.id = "toasts"; box.className = "toasts"; box.setAttribute("role", "status"); document.body.appendChild(box); }
   if ([...box.children].some(x => x.firstChild?.nodeValue === text && !x.classList.contains("out"))) return;
   const t = document.createElement("div"); t.className = "toast"; t.textContent = text; box.appendChild(t);
   if (action) { const b = document.createElement("button"); b.className = "tact"; b.textContent = action.label; b.onclick = () => { t.remove(); action.fn(); }; t.appendChild(b); ms = Math.max(ms, 6000); }
-  setTimeout(() => { t.classList.add("out"); setTimeout(() => t.remove(), 160); }, ms);
+  const gone = () => { t.classList.add("out"); setTimeout(() => t.remove(), 160); };
+  if (store("popups") === "keep") { const x = document.createElement("button"); x.className = "tact tx"; x.setAttribute("aria-label", "Dismiss"); x.innerHTML = ICON.x; x.onclick = gone; t.appendChild(x); }
+  else setTimeout(gone, ms);
 }
 
 
@@ -222,6 +229,12 @@ function applyAppearance() {
   document.documentElement.style.setProperty("--colw", {narrow: "656px", normal: "760px", wide: "960px"}[w] || "656px");
   if (d === "compact") document.documentElement.dataset.density = "compact"; else document.documentElement.removeAttribute("data-density");
   document.querySelectorAll(".mlogo").forEach(i => i.src = logoSrc());
+  const R = document.documentElement, ff = store("font") || "plex", rf = store("rfont") || "match";
+  R.style.setProperty("--body", ff === "system" ? 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif' : '"IBM Plex Sans","Segoe UI",system-ui,sans-serif');
+  R.style.setProperty("--resp", rf === "serif" ? 'Georgia,"Times New Roman",serif' : rf === "system" ? 'system-ui,-apple-system,"Segoe UI",sans-serif' : "inherit");
+  R.style.setProperty("--mono", store("codefont") ? `${store("codefont")},"IBM Plex Mono",ui-monospace,Consolas,monospace` : '"IBM Plex Mono",ui-monospace,Consolas,"SFMono-Regular",monospace');
+  R.style.setProperty("--code-fs", (store("codesize") || 13) + "px");
+  for (const [k, a, d] of [["motion", "motion", "system"], ["contrast", "contrast", "system"]]) { const v = store(k) || d; if (v === "system") R.removeAttribute("data-" + a); else R.dataset[a] = v; }
   const t = store("theme") || "system", z = store("size") || "normal";
   if (t === "system") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = t;
   if (z === "normal") document.documentElement.removeAttribute("data-size"); else document.documentElement.dataset.size = z;
@@ -339,7 +352,8 @@ function projMenu(e, pid) {
   const p = S.pj.find(x => x.id === pid); if (!p) return;
   ctxMenu(e, [
     {label: "New chat in project", icon: ICON.plus, fn: () => openProject(pid, {focus: true})},
-    {label: "Open project", icon: ICON.folder, fn: () => openProject(pid)},
+    {label: "Open project", icon: ICON.stack, fn: () => openProject(pid)},
+    {label: p.pinned ? "Unpin from the sidebar" : "Pin to the sidebar", icon: ICON.pin, fn: async () => { try { await post(`/api/pj/${pid}`, {action: "update", pinned: !p.pinned}); await loadPj(); renderSide(); if (S.view === "page" && S.page === "projects") pageProjects(); } catch (e) { toast(e.message); } }},
     {label: "Rename", icon: ICON.pencil, fn: () => renameProject(pid)},
     {sep: true},
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
@@ -568,7 +582,7 @@ const SLASH = [
   ["/prs", "Pull requests: what each changes, its checks (CI) and deployments (CD)", () => openPRView()],
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
-  ["/schedule", "Scheduled tasks", () => openSettings("scheduled")],
+  ["/schedule", "Scheduled tasks", () => goPage("scheduled")],
   ["/memory", "Instructions and memory", () => openSettings("personal")],
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
@@ -963,6 +977,7 @@ function setWorking(text, secs) {
 }
 function workTick(cur) {
   if (!cur) return;
+  const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
   const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
@@ -1054,13 +1069,14 @@ function workGroup() {
   const cur = S.cur;
   if (cur.group && cur.group.isConnected && cur.group === colEl().lastElementChild) return cur.group;
   const d = document.createElement("details"); d.className = "work"; d.open = !!S.steps; d.dataset.n = "0";
-  d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="wl">Working</span></summary><div class="rows"></div>`;
+  d.innerHTML = `<summary><span class="chev">${ICON.chevR}</span><span class="gdots" aria-hidden="true"><i></i><i></i><i></i></span><span class="wl">Working</span><span class="gel"></span></summary><div class="rows"></div>`;
+  d._t0 = Date.now();
   colEl().appendChild(d); cur.group = d; return d;
 }
 function bumpGroup(g, done) {
   const n = $$(".tool", g).length; const fails = $$(".tool .st.bad", g).length;
   $(".wl", g).textContent = `${n} step${n === 1 ? "" : "s"}${fails ? `, ${fails} failed` : ""}`;
-  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); }
+  if (done) { g.dataset.done = "1"; g.open = !!S.steps || !!$(".appr:not(.done)", g); const el = $(".gel", g); if (el) el.textContent = ""; $(".gdots", g)?.remove(); }
 }
 function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup(g, true); S.cur.group = null; }
 const GOAL_NEXT = "Continue working toward the goal.";
@@ -1080,7 +1096,7 @@ function applyEv(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking";
-      add(`<div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
+      add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1299,7 +1315,7 @@ async function undoTurn(n) {
 }
 
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Steps", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1376,7 +1392,7 @@ function reconcile(parent, items, keyOf, make, update) {
 }
 const setTxt = (el, t) => { if (el && el.textContent !== t) el.textContent = t; };
 const setCls = (el, c) => { if (el && el.className !== c) el.className = c; };
-function progressSoon() { if (S.panel !== "progress" || S.pgT) return; S.pgT = setTimeout(() => { S.pgT = null; if (S.panel === "progress") progressUpdate(); }, 250); }
+function progressSoon() { updateStep(); if (S.panel !== "progress" || S.pgT) return; S.pgT = setTimeout(() => { S.pgT = null; if (S.panel === "progress") progressUpdate(); }, 250); }
 function progressUpdate() {
   const body = $("#pbody .cw"); if (!body || !S.cur) return;
   const v = S.cur.view || {}; const pr = progressSteps(); const outs = outputFiles();
@@ -1634,6 +1650,7 @@ const planLine = pd => `Step ${Math.min(pd.current + 1, pd.total)} of ${pd.total
 const planIcon = (st, cur) => st === "completed" ? `<span class="pi ok">${ICON.check2}</span>` : cur || st === "in_progress" ? `<span class="pi run"><span class="dot run"></span></span>` : `<span class="pi">${ICON.ring}</span>`;
 function planRows(pd) { return pd.items.map((it, i) => ({key: "s" + i, text: it.text, st: it.status === "completed" ? "completed" : i === pd.current || it.status === "in_progress" ? "current" : "pending"})); }
 function planUpdate() {
+  updateStep();
   const ol = $("#spPlanList"), pd = planData(); if (!ol || !pd) return;
   reconcile(ol, planRows(pd), r => r.key, r => { const li = document.createElement("li"); li.className = r.st; li.dataset.st = r.st; li.innerHTML = `${planIcon(r.st, r.st === "current")}<span></span>`; li.lastElementChild.textContent = r.text; return li; },
     (li, r) => { if (li.dataset.st !== r.st) { li.dataset.st = r.st; li.className = r.st; $(".pi", li).outerHTML = planIcon(r.st, r.st === "current"); } setTxt(li.lastElementChild, r.text); });
@@ -1784,48 +1801,7 @@ async function renderSection(sec) {
   const done = () => $(".mclose", b)?.addEventListener("click", () => $(".scrim").remove());
   await loadSettings();
   const F = S.settings.fields; const get = k => F.find(x => x.key === k) || {};
-  if (sec === "general") {
-    const key = get("MESHPOOL_API_KEY"), base = get("MESHPOOL_BASE_URL");
-    b.innerHTML = `${close}<h3>Account and key</h3><p class="lead">Meshpool sends your messages to the model service below, using your key. The key is stored only on this computer.</p>
-      <label class="field"><span>Models come from</span><select id="sProv">${PROVIDERS.filter(p => p[0] !== "chatgpt" || !chatgptSignInGone()).map(([id, name]) => `<option value="${id}" ${id === (S.settings.provider || "meshpool") ? "selected" : ""}>${name}</option>`).join("")}</select><small id="sProvNote">Where the models run. Meshpool picks the agent for each chat.</small></label>
-      <label class="field"><span>API key</span><span class="keyrow"><input id="sKey" type="password" autocomplete="off" spellcheck="false" placeholder="${key.set ? "Saved, " + esc(key.hint) + ". Paste a new key to replace it." : "Paste your Meshpool key"}"><button class="btn" id="sShow" type="button">Show</button></span></label>
-      <label class="field"><span>Service address</span><input id="sBase" spellcheck="false" value="${esc(base.value || "")}" placeholder="${esc(base.default)}"><small>Change this only if you use your own model service. It ends in /v1. Default: ${esc(base.default)}</small></label>
-      <label class="field"><span>Default model for new chats</span><select id="sModel"></select><small>Each chat can use its own model. Pick one with the model button next to the message box.</small></label>
-      <div style="display:flex;gap:8px"><button class="btn primary" id="sSave">Save</button><button class="btn" id="sTest">Test connection</button></div><div class="res" id="sRes"></div>
-      <h3 style="font-size:16px;margin:22px 0 4px">Providers</h3><p class="lead">Where models run, besides the key above. Each one's models show in the model picker.</p>
-      <ul class="rows2" id="sProvs">${[["chatgpt", "ChatGPT subscription", "Your ChatGPT plan, for Meshpool's agents, Pi, Hermes and Codex."]].filter(() => !chatgptSignInGone()).map(([id, name, desc]) =>
-        `<li><span class="tg"><b>${name}</b><small>${desc}</small></span>${S.settings.signed_in?.[id] ? `<span class="badge added">Signed in</span><button class="btn" data-psign="${id}">Sign in again</button>` : `<button class="btn primary" data-psign="${id}">Sign in</button>`}</li>`).join("")}</ul><div class="res" id="sProvRes"></div>`;
-    const fill = () => { const ms = (S.models?.models || []); $("#sModel").innerHTML = ms.map(m => `<option value="${esc(m.id)}" ${m.id === S.models.default ? "selected" : ""}>${esc(modelLabel(m.id, ms))}</option>`).join(""); };
-    if (!S.models) await loadModels(); fill();
-    $("#sProv").onchange = async () => {
-      const v = $("#sProv").value;
-      if (SIGNIN[v] && !S.settings.signed_in?.[v]) { $("#sProv").value = S.settings.provider || "meshpool"; RES("sRes").className = "res bad"; RES("sRes").textContent = `Sign in to ${SIGNIN[v].name} first under Agents (${harness(SIGNIN[v].harness).name}, Sign in), then choose it here.`; return; }
-      try { S.settings = await post("/api/provider", {provider: v}); store("harness_code", null); store("harness_cowork", null); await loadHarnesses(); if (!S.cur) { S.draft.harness = modeHarness(); renderHero(); } renderBar(); RES("sRes").className = "res ok"; RES("sRes").textContent = "Saved. New chats use " + harness(modeHarness()).name + " on " + PROVIDERS.find(x => x[0] === v)[1] + "."; } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-    $("#sShow").onclick = () => { const i = $("#sKey"); i.type = i.type === "password" ? "text" : "password"; $("#sShow").textContent = i.type === "password" ? "Show" : "Hide"; };
-    $$("[data-psign]", b).forEach(x => x.onclick = async () => {
-      const id = x.dataset.psign; try { const r = await post("/api/harness-login", {id}); RES("sProvRes").className = "res" + (r.ok ? "" : " bad"); RES("sProvRes").textContent = r.message; } catch (e) { RES("sProvRes").className = "res bad"; RES("sProvRes").textContent = e.message; return; }
-      const t0 = Date.now(); const tick = async () => { if (!RES("sProvRes")) return; await loadSettings(); if (S.settings.signed_in?.[id]) { await loadHarnesses(); await loadModels(true); renderBar(); renderSection("general"); toast("Signed in."); return; } if (Date.now() - t0 < 600000) setTimeout(tick, 3000); };
-      setTimeout(tick, 3000);
-    });
-    const save = async () => {
-      const values = {MESHPOOL_BASE_URL: $("#sBase").value.trim()}; if ($("#sKey").value.trim()) values.MESHPOOL_API_KEY = $("#sKey").value.trim();
-      await post("/api/settings", {values}); if ($("#sModel").value) await post("/api/models/default", {id: $("#sModel").value});
-      await loadSettings(); await loadModels(true); fill();
-    };
-    $("#sSave").onclick = async () => {
-      try {
-        await save(); RES("sRes").className = "res"; RES("sRes").textContent = "Saved. Checking the connection…"; renderBar();
-        const r = await post("/api/test"); const kd = $("#kdot"); if (kd) kd.className = "kdot" + (r.ok ? " ok" : " bad");
-        RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? "Saved. The connection works." : "Saved, but " + connMsg(r.detail).replace(/^./, c => c.toLowerCase());
-      } catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-    $("#sTest").onclick = async () => {
-      RES("sRes").className = "res"; RES("sRes").textContent = "Testing...";
-      try { await save(); const r = await post("/api/test"); RES("sRes").className = "res " + (r.ok ? "ok" : "bad"); RES("sRes").textContent = r.ok ? `Connected. ${r.model} answered in ${r.seconds} s. ${S.models.models.length} models available.` : connMsg(r.detail); renderBar(); }
-      catch (e) { RES("sRes").className = "res bad"; RES("sRes").textContent = e.message; }
-    };
-  } else if (sec === "models") {
+  if (sec === "models") {
     if (!S.models) await loadModels();
     const M = S.models;
     b.innerHTML = `${close}<h3>Models</h3><p class="lead">Every model your key can use on ${esc(M.base_url)}. Star the ones you use most; they show first in the picker.</p>
@@ -1840,24 +1816,6 @@ async function renderSection(sec) {
       $$("[data-fav]", b).forEach(x => x.onclick = async () => { S.models = await post("/api/models/favorite", {id: x.dataset.fav, on: !M.favorites.includes(x.dataset.fav)}); Object.assign(M, S.models); draw(); });
     };
     $("#smq").oninput = draw; $("#smr").onclick = async () => { await loadModels(true); Object.assign(M, S.models); renderSection("models"); }; draw();
-  } else if (sec === "appearance") {
-    const keys = [["Esc", "Stop the running task (or close what is open)"], [`${MOD}N`, "New chat"], [`${MOD}K`, "Search chats"], [`${MOD}B`, "Show or hide the sidebar"], [`${MOD}E`, "Show or fold steps"],
-      [`${MOD}⇧D`, "Diff panel"], [`${MOD}J`, "Terminal"], [`${MOD},`, "Settings"], ["Enter", "Send"], ["Shift+Enter", "New line"],
-      ["/", "Commands"], ["$", "Skills"], ["Esc", "Close a menu or dialog"], [`${MOD}S`, "Save the open file"]];
-    b.innerHTML = `${close}<h3>Appearance</h3><p class="lead">How Meshpool looks on this computer.</p>
-      <label class="field"><span>Theme</span><select id="apTheme"><option value="system">Match the system</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
-      <label class="field"><span>Text size</span><select id="apSize"><option value="small">Small</option><option value="normal">Normal</option><option value="large">Large</option></select></label>
-      <label class="field"><span>Chat width</span><select id="apWidth"><option value="narrow">Narrow</option><option value="normal">Normal</option><option value="wide">Wide</option></select></label>
-      <label class="field"><span>Density</span><select id="apDensity"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select><small>Compact fits more chats in the sidebar and tightens the spacing.</small></label>
-      <label class="field"><span>Steps</span><select id="apSteps"><option value="1">Show every step as Meshpool works</option><option value="0">Fold steps into a summary</option></select></label>
-      <h3 style="font-size:16px;margin:18px 0 4px">Keyboard shortcuts</h3><div class="keys">${keys.map(([k, d]) => `<kbd>${esc(k)}</kbd><span>${esc(d)}</span>`).join("")}</div>`;
-    $("#apTheme").value = store("theme") || "system"; $("#apSize").value = store("size") || "normal"; $("#apSteps").value = S.steps ? "1" : "0";
-    $("#apTheme").onchange = () => { store("theme", $("#apTheme").value); applyAppearance(); };
-    $("#apSize").onchange = () => { store("size", $("#apSize").value); applyAppearance(); };
-    $("#apWidth").value = store("width") || "narrow"; $("#apDensity").value = store("density") || "comfortable";
-    $("#apWidth").onchange = () => { store("width", $("#apWidth").value); applyAppearance(); };
-    $("#apDensity").onchange = () => { store("density", $("#apDensity").value); applyAppearance(); };
-    $("#apSteps").onchange = () => { if (($("#apSteps").value === "1") !== !!S.steps) toggleSteps(); };
   } else if (sec === "personal") {
     const a = await api("/api/assistant");
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
@@ -2542,6 +2500,12 @@ async function restartApp() {
 /* ================================== boot ================================== */
 (async () => {
   shell();
+  document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
+    const ma = e.target.closest("[data-ma]"); if (!ma) return;
+    const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+    if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
+  });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
     toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(err => toast(err.message)); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).

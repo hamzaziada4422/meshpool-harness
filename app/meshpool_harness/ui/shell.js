@@ -198,7 +198,7 @@ function thHTML(t, o = {}) {
   const st = stateOf(t), code = isCodeThread(t);
   const pj = t.project_id && S.pj.find(p => p.id === t.project_id);
   const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}${t.state === "waiting" ? `<span class="si warn" title="Waiting for you">${ICON.warn}</span>` : ""}` : "";
-  return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}">${t.scheduled ? `<span class="pi bolt" title="Started by a scheduled task">${ICON.bolt}</span>` : ""}<span class="tt">${esc(t.title)}${o.withProject && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end">${icons}<span class="dot ${st}"></span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
+  return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}">${t.scheduled ? `<span class="pi bolt" title="Started by a scheduled task">${ICON.bolt}</span>` : ""}<span class="tt">${esc(t.title)}${false && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end">${icons}<span class="dot ${st}"></span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
 }
 function renderSide() {
   const el = $("#sideList"); if (!el) return;
@@ -218,15 +218,15 @@ function renderSide() {
     const pjs = pinnedPj(), pinnedChats = mine.filter(t => t.pinned), rest = mine.filter(t => !t.pinned);
     if (pjs.length || pinnedChats.length) {
       html += secHead("pinned", "Pinned");
-      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all.filter(t => !isCodeThread(t)))).join("")}${pinnedChats.map(t => thHTML(t, {withProject: true})).join("")}</ul>`;
+      if (open("pinned")) html += `<ul class="threads prj">${pjs.map(p => pjRowHTML(p, all.filter(t => !isCodeThread(t)))).join("")}${pinnedChats.map(t => thHTML(t, {})).join("")}</ul>`;
     }
     html += secHead("recents", "Recents");
-    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {withProject: true})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;
+    if (open("recents")) html += rest.length ? `<ul class="threads">${(S.allRecents ? rest : rest.slice(0, 40)).map(t => thHTML(t, {})).join("")}</ul>${rest.length > 40 ? `<button class="linkbtn moreproj" id="moreRecents">${S.allRecents ? "Show fewer" : `Show all ${rest.length}`}</button>` : ""}` : `<div class="empty-side">Your chats show up here. Start one with New.</div>`;
   }
   const arch = S.threads.filter(t => t.archived && (code ? isCodeThread(t) : !isCodeThread(t)));
   if (arch.length) {
     html += `<div class="sec"><button class="sechd" id="togArch" aria-expanded="${!!S.showArchived}"><span>Archived</span><span class="cnt">${arch.length}</span><span class="chev">${ICON.chev}</span></button></div>`;
-    if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, {withProject: true})).join("")}</ul>`;
+    if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, {})).join("")}</ul>`;
   }
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it. When only the status
   // dots changed, patch them in place.
@@ -360,14 +360,14 @@ function openSearch(tab = "all", q0 = "") {
   document.body.appendChild(sc);
   const inp = $("#srchIn", sc), list = $("#srchList", sc);
   let items = [], act = 0, seq = 0, timer = null;
-  const mark = n => { const rows = $$(".srow", list); if (!rows.length) return; act = (n + rows.length) % rows.length; rows.forEach((r, i) => r.classList.toggle("act", i === act)); rows[act].scrollIntoView({block: "nearest"}); };
+  const mark = n => { const rows = $$(".sres", list); if (!rows.length) return; act = (n + rows.length) % rows.length; rows.forEach((r, i) => r.classList.toggle("act", i === act)); rows[act].scrollIntoView({block: "nearest"}); };
   const draw = r => {
     items = [];
-    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="srow ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span><button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
+    list.innerHTML = (r.groups || []).map(g => `<div class="sgrp">${esc(g.label)}</div>` + g.items.map(it => { const i = items.push(it) - 1; return `<div class="sres ${i === 0 ? "act" : ""}" role="option" data-i="${i}">${srchIcon(it)}<span class="stt">${esc(it.title)}</span><span class="ssub">${esc(it.sub || "")}</span><button class="iconbtn smore" aria-label="Actions" tabindex="-1">${ICON.more}</button><span class="sret">↵</span></div>`; }).join("")).join("")
       || `<div class="sempty">${inp.value.trim() ? `Nothing matches “${esc(inp.value.trim())}”. Try fewer words, or another type.` : "Nothing here yet."}</div>`;
     act = 0;
   };
-  const skeleton = () => { list.innerHTML = `<div class="sk-wrap" aria-hidden="true">${[62, 48, 71, 40, 55].map(w => `<div class="srow sk"><span class="sic"><i class="sk-dot"></i></span><span class="sk-bar" style="width:${w}%"></span></div>`).join("")}</div>`; };
+  const skeleton = () => { list.innerHTML = `<div class="sk-wrap" aria-hidden="true">${[62, 48, 71, 40, 55].map(w => `<div class="sres sk"><span class="sic"><i class="sk-dot"></i></span><span class="sk-bar" style="width:${w}%"></span></div>`).join("")}</div>`; };
   const load = async () => {
     const mine = ++seq, tb = $('[aria-selected="true"]', $(".srch-tabs", sc)).dataset.tab;
     $("#srchSpin", sc).hidden = false; skeleton();
@@ -377,7 +377,7 @@ function openSearch(tab = "all", q0 = "") {
   };
   const choose = async (it, alt) => {
     if (!it) return;
-    if (alt && (it.kind === "chat" || it.kind === "code")) { const row = $(`.srow[data-i="${items.indexOf(it)}"] .smore`, sc); return threadMenu({type: "click", currentTarget: row}, it.id); }
+    if (alt && (it.kind === "chat" || it.kind === "code")) { const row = $(`.sres[data-i="${items.indexOf(it)}"] .smore`, sc); return threadMenu({type: "click", currentTarget: row}, it.id); }
     closeSearch();
     if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id); }
     else if (it.kind === "project") { S.mode = "chat"; syncMode(); openProject(it.id); }
@@ -402,8 +402,8 @@ function openSearch(tab = "all", q0 = "") {
   sc.addEventListener("mousedown", e => { if (e.target === sc) closeSearch(); });
   $("#srchX", sc).onclick = closeSearch;
   $$("[data-tab]", sc).forEach(b => b.onclick = () => { $$(".srch-tabs [data-tab]", sc).forEach(x => x.setAttribute("aria-selected", String(x === b))); inp.focus(); load(); });
-  list.addEventListener("mousemove", e => { const r = e.target.closest(".srow[data-i]"); if (r && +r.dataset.i !== act) mark(+r.dataset.i); });
-  list.addEventListener("click", e => { const r = e.target.closest(".srow[data-i]"); if (!r) return; if (e.target.closest(".smore")) return choose(items[+r.dataset.i], true); choose(items[+r.dataset.i]); });
+  list.addEventListener("mousemove", e => { const r = e.target.closest(".sres[data-i]"); if (r && +r.dataset.i !== act) mark(+r.dataset.i); });
+  list.addEventListener("click", e => { const r = e.target.closest(".sres[data-i]"); if (!r) return; if (e.target.closest(".smore")) return choose(items[+r.dataset.i], true); choose(items[+r.dataset.i]); });
   inp.oninput = () => { clearTimeout(timer); timer = setTimeout(load, 180); };
   inp.focus(); load();
 }
@@ -460,6 +460,7 @@ function renderTop() {
   const topHTML = `
     ${hidden ? `<button class="tbtn showside" id="showSide" data-tip="Show sidebar" data-kbd="${MOD}B" data-tip-pos="below" aria-label="Show sidebar">${ICON.side}<i class="ndot" ${attention() ? "" : "hidden"}></i></button>` : ""}
     ${pj && !onProject && v ? `<button class="chip" id="pjChip" data-tip="Open project" data-tip-pos="below">${ICON.stack}<span class="cl">${esc(pj.name)}</span></button><span class="crumb" aria-hidden="true">/</span>` : ""}
+    ${!v && !onProject && !onPage && S.mode === "code" ? `<span class="toplabel">New session</span>` : ""}
     ${v || onProject ? `<span class="title" id="ttl" data-id="${esc(v?.id || "")}" ${v ? `role="button" tabindex="0" aria-haspopup="menu" data-tip="Chat options" data-tip-pos="below"` : ""}>${esc(title)}</span>${v ? `<button class="tbtn ttlchev" id="ttlChev" aria-label="Chat options" aria-haspopup="menu">${ICON.chev}</button>` : ""}` : ""}
     ${v ? `<button class="tbtn devbtn" id="devBtn" data-tip="This computer" data-tip-pos="below" aria-label="This computer" aria-haspopup="menu">${ICON.monitor}<i class="gdot"></i></button>` : ""}
     ${folderChat ? `<button class="chip" id="projChip" data-tip="${esc(isMgd(root) ? projName(root) : root)}" data-tip-pos="below">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
@@ -469,7 +470,7 @@ function renderTop() {
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
-  $("#panelBtn")?.addEventListener("click", () => togglePanel(S.panel || panelSet()[0], !S.panel));
+  $("#panelBtn")?.addEventListener("click", () => togglePanel(S.panel || (panelSet().includes("progress") ? "progress" : panelSet()[0]), !S.panel));
   $("#shareBtn")?.addEventListener("click", e => exportMenu(e));
   $("#devBtn")?.addEventListener("click", e => devPop(e));
   $("#flagBtn")?.addEventListener("click", () => reportProblem());

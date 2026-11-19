@@ -1139,6 +1139,7 @@ def listing() -> list:
         r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
         r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
         r["scheduled"] = bool(m.get("scheduled"))
+        r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
         r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
         if r["project_id"] and r["project_id"] not in live_pids:
             r["project_id"] = ""

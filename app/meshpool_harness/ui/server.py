@@ -467,7 +467,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.github_branches(parse_qs(u.query).get("repo", [""])[0]))
             m = re.fullmatch(r"/api/session/([\w-]+)/(panel|pr)", u.path)
             if m:                                           # the session side panel: local facts, then GitHub's
-                return self._send(200, (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1)))
+                out = (W.session_panel if m.group(2) == "panel" else W.session_pr)(m.group(1))
+                if m.group(2) == "pr" and isinstance(out, dict) and isinstance(out.get("pr"), dict):
+                    p_ = out["pr"]                         # remembered, so the session row can show it without asking GitHub
+                    A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
+                return self._send(200, out)
             if u.path == "/api/usage":
                 return self._send(200, W.usage())
             if u.path == "/api/search":
