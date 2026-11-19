@@ -1,12 +1,6 @@
 {
- "default": "lean-stop",
- "assign": {
-  "code.build.algorithm": "full-noplan-stop",
-  "code.build.algorithm.python": "full-noplan-stop",
-  "code.test": "full-noplan",
-  "code.test.python": "full-noplan",
-  "data": "full-noplan"
- },
+ "default": "codex",
+ "assign": {},
  "profiles": {
   "full-noplan": {
    "extends": "full",
@@ -30,5 +24,5 @@
    "engine_style": "codex"
   }
  },
- "_source": "testkit/loop/select_profiles.py on runs-v2/round2 (24 dev tasks x 3 profiles, 19 Nov 2026); see docs/results/v3/PROFILE_SELECTION.md"
+ "_source": "Codex-design engine for every route: measured on the 52 eval tasks (runs-v2/codexengine-eval): 47/52, tie with Codex (47/52), $0.0034/task, median 19 s; 2x faster than the previous assignment. See docs/results/v3/CODEX_ENGINE_EVAL.md"
 }
