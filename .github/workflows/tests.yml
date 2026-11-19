@@ -1,10 +1,11 @@
 # Tests on every pull request and on main: the checks the pull request view (and GitHub) show for each change.
 name: tests
+# Actions minutes are limited: tests run only when started by hand (before a release) or when main changes. Not on
+# every pull-request push: agent branches push many times a day. Run docs/plan/ci_local.sh locally first.
 on:
-  pull_request:
-    paths-ignore: ["docs/**", "**/*.md", "testkit/loop/**", ".github/workflows/harness-loop.yml"]   # no app change
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "**/*.md", "testkit/**", ".github/workflows/harness-loop.yml"]
   workflow_dispatch:
 concurrency:
   group: tests-${{ github.ref }}
