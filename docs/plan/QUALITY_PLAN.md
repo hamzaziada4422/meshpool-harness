@@ -90,3 +90,18 @@ are adjusted to what it finds.
 2. Final: full 52-task V2 eval, 6 arms (routed, v1, pi, codex, opencode, hermes), parallel 4 (4-core box), about
    $2.5-3. Then DABench 24. Report with report_v2.py: solves, McNemar, paired cost/time ratios.
 3. Success: more solved than every competitor (or tied at the top) and cost per attempted task at most 0.9x Codex.
+
+## Added after the first measurements (19 Nov)
+
+- WP10. MeshPool Auto -> narrower sub-harnesses. The router is the experiment: misroutes found in the dev smoke run
+  (test-writing and feature requests sent to Debug) are fixed with a routing regression set (dev prompts plus
+  written examples, never eval prompts), and two build sub-harnesses are added (code.build.algorithm: rules list plus
+  brute-force differential check; code.build.feature: list every read/write path the change must reach). Each
+  sub-harness stays only if the dev A/B shows it helps.
+- Found and fixed: headless runs wrote their session files into the project, and the agent spent 3-4 calls reading
+  them. They now go to a temporary folder outside the project.
+- WP11. CI checked locally first. The Linux test job is reproduced in this container (LibreOffice installed), every
+  failure classified, and the minimum safe Actions setup written down (docs/plan/CI_LOCAL.md). Actions stay disabled
+  until the release, then one green run, then disabled again.
+- WP12. 0.0.7 customer readiness (separate track, after the harness results): full local test suite green, app smoke
+  test of the main journeys, version bump, packaging, release notes with honest benchmark claims.
