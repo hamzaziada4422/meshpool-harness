@@ -54,6 +54,9 @@ jobs:
       matrix:
         include:
           - {arch: x64, plat: mac-x64, runner: macos-15-intel, dmg: Meshpool-Intel, pbs: x86_64-apple-darwin, rt: rt-macx64, wheels: x86_64, clang: x86_64}
+          # Apple silicon on two pools at once: whichever gets a runner and passes supplies Meshpool.dmg (on Nov 19
+          # macos-26 answered within minutes while macos-15 never did). The app targets macOS 11 on either.
+          - {arch: arm64, plat: mac-arm64, runner: macos-26, dmg: Meshpool, pbs: aarch64-apple-darwin, rt: rt-mac, wheels: arm64, clang: arm64}
           - {arch: arm64, plat: mac-arm64, runner: macos-15, dmg: Meshpool, pbs: aarch64-apple-darwin, rt: rt-mac, wheels: arm64, clang: arm64}
     runs-on: ${{ matrix.runner }}
     continue-on-error: ${{ matrix.arch == 'arm64' }}
@@ -153,7 +156,7 @@ jobs:
           rm -rf "$T"
       - uses: actions/upload-artifact@v4
         with:
-          name: mac-${{ matrix.arch }}
+          name: mac-${{ matrix.arch }}-${{ matrix.runner }}
           path: dist-src/out/${{ matrix.dmg }}.dmg
 
   windows:
@@ -325,18 +328,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          path: dist
-          merge-multiple: true
+          path: built          # one folder per artifact: windows/, mac-x64-macos-15-intel/, mac-arm64-macos-26/ ...
       - name: Check the builds
         run: |
           set -euo pipefail
-          ls -la dist
+          find built -type f | sort
+          mkdir -p dist
           # Windows and the Intel Mac app are required: each exists only when its job built and smoke-tested it.
-          for f in Meshpool-Setup.exe Meshpool-Intel.dmg; do
-            [ -s "dist/$f" ] || { echo "::error::$f was not built, so nothing is published"; exit 1; }
+          [ -s built/windows/Meshpool-Setup.exe ] || { echo "::error::Meshpool-Setup.exe was not built, so nothing is published"; exit 1; }
+          [ -s built/mac-x64-macos-15-intel/Meshpool-Intel.dmg ] || { echo "::error::Meshpool-Intel.dmg was not built, so nothing is published"; exit 1; }
+          cp built/windows/Meshpool-Setup.exe built/mac-x64-macos-15-intel/Meshpool-Intel.dmg dist/
+          # Apple silicon: the native app from whichever pool gave a runner and passed; else the Intel app, which runs
+          # there under Rosetta (the updater moves those Macs to the native app once a release carries it).
+          for d in built/mac-arm64-macos-26 built/mac-arm64-macos-15; do
+            if [ -s "$d/Meshpool.dmg" ]; then cp "$d/Meshpool.dmg" dist/; echo "Apple silicon build from ${d#built/mac-arm64-}"; break; fi
           done
-          # Apple silicon: the native app when its runner came and it passed; else the Intel app, which runs there
-          # under Rosetta (the updater moves those Macs to the native app once a release carries it).
           if [ ! -s dist/Meshpool.dmg ]; then
             echo "::warning::No Apple silicon build in this run (${{ needs.mac.result }}): Meshpool.dmg is the Intel app, which Apple silicon Macs run under Rosetta."
             cp dist/Meshpool-Intel.dmg dist/Meshpool.dmg
