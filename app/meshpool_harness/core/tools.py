@@ -252,6 +252,40 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
 _PY_VERSIONS: dict = {}
 
 
+_BOM = b"\xef\xbb\xbf"
+
+
+def read_src(p: Path) -> tuple[str, str, bool]:
+    """(text, line ending, has BOM) of a text file, read as bytes so nothing is translated on any platform. When
+    the file is mostly CRLF the text comes back with plain \\n (what the model reads and writes); write_src puts the
+    CRLF back. Undecodable bytes survive the round trip (surrogateescape)."""
+    raw = p.read_bytes()
+    bom = raw.startswith(_BOM)
+    text = raw[3 if bom else 0:].decode("utf-8", "surrogateescape")
+    crlf = text.count("\r\n")
+    if crlf and crlf * 2 > text.count("\n"):
+        return text.replace("\r\n", "\n"), "\r\n", bom
+    return text, "\n", bom
+
+
+def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bool = False) -> None:
+    """Write text with the file's own line ending and BOM, byte for byte (Python's text mode would turn every \\n
+    into CRLF on Windows and drop a CRLF file's endings elsewhere)."""
+    if eol == "\r\n":
+        text = text.replace("\r\n", "\n").replace("\n", "\r\n")
+    data = text.encode("utf-8", "surrogateescape")
+    if append:
+        with p.open("ab") as f:
+            f.write(data)
+    else:
+        p.write_bytes((_BOM if bom else b"") + data)
+
+
+def shown(text: str) -> str:
+    """Text safe to show the model: bytes that are not UTF-8 become U+FFFD."""
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def _newer_pythons(path: Path) -> list:
     """Interpreters newer than this one that could run `path`: its project's virtual environment (the nearest
     .venv / venv above it), then the newest python3.x on PATH. Each is asked its version once."""
@@ -329,7 +363,8 @@ class Workspace:
 
     @staticmethod
     def _hash(text: str) -> str:
-        return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()
+        # line endings and a BOM do not count: read_file/edit see \\n text, apply_patch sees the raw text
+        return hashlib.sha1(text.lstrip("\ufeff").replace("\r\n", "\n").encode("utf-8", "replace")).hexdigest()
 
     def _cap(self, text: str, label: str) -> str:
         text = clean(text)
@@ -388,10 +423,10 @@ class Workspace:
         if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
-        text = p.read_text(errors="replace")
+        text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
-        lines = text.splitlines()
+        lines = shown(text).splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
@@ -488,7 +523,7 @@ class Workspace:
             if not node:
                 return None
             try:
-                with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8") as f:
+                with tempfile.NamedTemporaryFile("w", suffix=suf, delete=False, encoding="utf-8", errors="surrogateescape") as f:
                     f.write(text)
                 r = subprocess.run([node, "--check", f.name], capture_output=True, text=True, timeout=10)
             except (OSError, subprocess.SubprocessError):
@@ -660,13 +695,14 @@ class Workspace:
         return text, notes
 
     def _load(self, path: str):
-        """(key, text|None, path object|None) for a file about to be edited, host or container."""
+        """(key, text, path object|None, (eol, bom)) for a file about to be edited, host or container."""
         if self.container and not self.mounted:
-            return self._cpath(path), self._cread(path), None
+            return self._cpath(path), self._cread(path), None, ("\n", False)
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
-        return str(p), p.read_text(errors="replace"), p
+        text, eol, bom = read_src(p)
+        return str(p), text, p, (eol, bom)
 
     def edit(self, path=None, old=None, new=None, edits=None, changes=None):
         if changes is not None:
@@ -688,7 +724,7 @@ class Workspace:
         # validate everything first
         plans = []     # (path, key, p, before, after, notes, n_items)
         for pth, items in grouped.items():
-            key, text, p = self._load(pth)
+            key, text, p, fmt = self._load(pth)
             unread = key not in self.seen
             if not unread and self.seen[key] != self._hash(text):
                 raise ToolError(f"{pth} changed since you last read it (stale edit). Read it again, then edit.")
@@ -698,30 +734,30 @@ class Workspace:
                 if bad:
                     raise ToolError(f"edit rejected: it would make {pth} stop parsing. Nothing was written; "
                                     f"{pth} is unchanged. Fix `new` at the marked place and retry.\n{bad}")
-            plans.append((pth, key, p, text, after, notes, len(items)))
+            plans.append((pth, key, p, text, after, notes, len(items), fmt))
         # write, restoring what was written if one write fails
         done = []
         try:
-            for pth, key, p, before, after, _n, _c in plans:
-                done.append((pth, p, before))
+            for pth, key, p, before, after, _n, _c, fmt in plans:
+                done.append((pth, p, before, fmt))
                 if p is None:
                     self._cwrite(pth, after)
                 else:
-                    p.write_text(after)
+                    write_src(p, after, *fmt)
         except Exception as e:  # noqa: BLE001
-            for pth, p, before in done:
+            for pth, p, before, fmt in done:
                 try:
-                    self._cwrite(pth, before) if p is None else p.write_text(before)
+                    self._cwrite(pth, before) if p is None else write_src(p, before, *fmt)
                 except Exception:  # noqa: BLE001
                     pass
             raise ToolError(f"edit failed while writing ({e}); files already written were restored") from None
-        for pth, key, p, before, after, _n, _c in plans:
+        for pth, key, p, before, after, _n, _c, _f in plans:
             self.seen[key] = self._hash(after)
             self.edits += 1
             self.written.add(key)
             self.turn_files.add(key)
         if len(plans) == 1:
-            pth, _k, _p, _b, _a, notes, count = plans[0]
+            pth, _k, _p, _b, _a, notes, count, _f = plans[0]
             if count == 1 and edits is None:
                 return f"edited {pth}{notes[0]}"
             fuzzy = sum(1 for x in notes if x)
@@ -744,22 +780,25 @@ class Workspace:
             self.turn_files.add(self._cpath(path))
             return f"wrote {path} ({len(content)} chars{', appended' if append else ''}) in the container"
         p = self._path(path, write=True)
+        fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
         if not p.exists():
             self.created.add(str(p))
-        elif str(p) not in self.original and p.is_file():
-            self.original[str(p)] = self._hash(p.read_text(errors="replace"))
+        elif p.is_file():
+            text, eol, bom = read_src(p)                # an existing file keeps its line endings and BOM
+            fmt = (eol, bom)
+            if str(p) not in self.original:
+                self.original[str(p)] = self._hash(text)
         p.parent.mkdir(parents=True, exist_ok=True)
         if append and p.exists():
-            with p.open("a") as f:
-                f.write(content)
+            write_src(p, content, fmt[0], append=True)
         else:
-            p.write_text(content)
-        after = p.read_text(errors="replace")
+            write_src(p, content.lstrip("\ufeff") if fmt[1] else content, *fmt)
+        after = read_src(p)[0]
         self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
         self.turn_files.add(str(p))
-        bad = self._syntax_error(p, p.read_text(encoding="utf-8", errors="replace")) if p.is_file() else None
+        bad = self._syntax_error(p, after) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
