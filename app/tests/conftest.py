@@ -35,6 +35,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     # through to the live endpoint (12 paid calls). Tests that run a mock server set their own URL after this.
     monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("MH_CLASSIFY_TIMEOUT", "1")      # a routing hint against the dead URL above gives up fast
+    monkeypatch.setenv("MH_ROUTING_LOG", "0")           # tests never write a routing log (the log test turns it on)
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
