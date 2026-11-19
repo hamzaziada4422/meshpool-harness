@@ -31,7 +31,7 @@ def test_agent_engine_runs_and_stays_in_workdir(tmp_path, monkeypatch):
     assert r["ok"] and r["answer"] == "Wrote hello.txt." and r["error"] is None
     assert (tmp_path / "hello.txt").read_text() == "hi\n"
     assert r["usage"]["model_calls"] == 2 and r["turns"] == 2
-    assert (tmp_path / ".run" / "agent").is_dir() and not (tmp_path / "elsewhere").exists()
+    assert not (tmp_path / ".run").exists() and not (tmp_path / "elsewhere").exists()  # sessions stay out of the project
 
 
 def test_agent_engine_error_comes_back_not_raised(tmp_path, monkeypatch):
