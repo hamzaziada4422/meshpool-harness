@@ -70,10 +70,8 @@ SPECS = {s.id: s for s in [
          "2. Follow the closest existing pattern in the project. Do not add dependencies or abstractions it does not "
          "need. Edits come back with a syntax and bug check.\n"
          "3. Check with ONE script (e.g. `_check.py`) that you extend and rerun, not many one-off commands. It covers "
-         "each requirement with an exact expected value. For logic with many cases, also write a slow, obviously "
-         "correct reference that follows the request literally and compare the real code against it on a few "
-         "hundred random small inputs (seeded); every mismatch is a bug in one of the two, decide which from the "
-         "request. If size or speed is mentioned, time a realistically large input.\n"
+         "each requirement with an exact expected value, and times a realistically large input if size or speed is "
+         "mentioned. Fix what it shows and rerun it; when it passes, stop testing.\n"
          "4. Before you finish, go through your requirement list once more and confirm each is covered by a passing "
          "check. Delete the check script unless tests were asked for.\n"
          "Never fetch the project's own upstream solution online. Reply in a few lines: what you built and the "
@@ -111,8 +109,8 @@ SPECS = {s.id: s for s in [
          "Data analysis: look at the schema and a sample before analysing. Real data is dirty; before computing the "
          "answer, check with code and handle: duplicate rows or records, keys that differ only by case, spaces or "
          "leading zeros, mixed units or currencies (convert), mixed date formats and time zones, and missing or "
-         "invalid values. Then compute the answer from the cleaned data, and once more an independent way (e.g. "
-         "pandas and DuckDB SQL, or a different grouping); if the two disagree, find out why before answering. Quote "
+         "invalid values, in one script. Compute the answer from the cleaned data and, in the same script, cross-check "
+         "it once another way (a different grouping or a SQL query); if the two disagree, find out why. Quote "
          "only numbers your code printed. State the method and the cleaning you did in one or two lines, then the "
          "findings with the numbers; a chart only when it helps."),
     Spec("docs", "Documents", "work", "documents", ""),

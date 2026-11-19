@@ -17,8 +17,8 @@ SYSTEM = ("You check a code change against the request that asked for it. You ca
           "most 5 numbered findings, one or two lines each.")
 
 INJECT = ("[Meshpool] A second reviewer read your change against the request and raised these points. They may be "
-          "wrong. For each one, test it with code (run the case it gives); fix only those the test shows are real, "
-          "then rerun your checks. If none are real, say so in one line.\n")
+          "wrong. Test all of them together in ONE script (the case each gives); fix only those the script shows "
+          "are real, then rerun your checks once. If none are real, say so in one line.\n")
 
 _TAGS = re.compile(r"\n*<(reproduction|environment_snapshot|repo_map|repo-map)\b.*", re.S)
 

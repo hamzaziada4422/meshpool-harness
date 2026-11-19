@@ -61,6 +61,7 @@ SUB = [  # (sub, pattern, weight). Checked in order; the heaviest total wins.
               r"infinite loop|flaky|why (does|is|do) .{0,40}(fail|error|crash|break)|returns? the wrong|wrong (value|"
               r"result|answer|month|date|total|number)s?|worked (before|last (week|month|time)|yesterday)|used to work|"
               r"too slow|far too slow|slow(er)? (on|with|than)|times? out|timed out|performance|speed (it )?up|"
+              r"takes? (minutes|hours|forever|ages|too long)|make (it|this) (fast|faster|quicker)|"
               r"memory leak)\b", 1.0),
     ("debug", r"github issue|<issue>|\bexpected (output|result|behaviou?r|value)\b|\bshould (return|be|give|raise|"
               r"produce|output|work)\b|\binstead of\b|\bbut (it )?(returns|gives|got|raises|prints|produces)\b|"
@@ -181,6 +182,7 @@ _SYMPTOM = re.compile(r"\b(traceback|stack ?trace|crash\w*|segfault|panic|except
                       r"yesterday|until)|regression|doesn'?t work|not working|(?<!ties )(?<!tie )broken(?! (by|down|into|up|out))|bug|failing|fails (with|when|on|"
                       r"after|for)|assert(ion)?error|(gets?|getting|throws?|shows?|with) (an? )?(error|exception)|"
                       r"too slow|far too slow|slow(er)? (on|with|than)|times? out|timed out|performance|speed (it )?up|"
+                      r"takes? (minutes|hours|forever|ages|too long)|make (it|this) (fast|faster|quicker)|"
                       r"memory leak|hangs?|infinite loop|flaky|incorrect(ly)?|unexpected(ly)?|but (it )?(returns|gives|"
                       r"got|raises|prints|produces))\b", re.I)
 # Behaviour spec: new or changed behaviour stated as a requirement.
@@ -196,6 +198,10 @@ def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
     if not has_error and _TEST_MAIN.search(text or "") and not re.search(
             r"\b(fix|debug)\b.{0,30}\b(failing|broken) tests?\b", text or "", re.I):
         return "test", ["test"]
+    if (not has_error and re.search(r"\b(refactor\w*|restructure)\b", text or "", re.I)
+            and not re.search(r"\b(traceback|crash\w*|raises \w*error|fails (with|when|on)|returns? (the )?wrong|"
+                              r"too slow|times? out)\b", text or "", re.I)):
+        return "refactor", ["refactor"]   # an explicit refactor request: "error messages" in the spec are behaviour to keep
     score: dict[str, float] = {}
     hits: list[str] = []
     for sub, rx, weight in _SUB:
@@ -267,7 +273,7 @@ def env_fast_model() -> str:
 # ---------- sub-subtasks: the kind of debug or build job --------------------------------------------------------------
 VARIANTS = {
     "debug": [
-        ("perf", r"\b(too slow|slow(er|ly)?|takes? (too )?long|timeouts?|timed out|performance|speed (it )?up|faster|"
+        ("perf", r"\b(too slow|slow(er|ly)?|takes? (too )?long|takes? (minutes|hours|forever)|make (it|this) fast|timeouts?|timed out|performance|speed (it )?up|faster|"
                  r"memory (usage|leak)|o\(n\^?2\)|quadratic|hangs?)\b"),
         ("regression", r"\b(worked (before|last (week|month|time)|yesterday|until)|used to work|regression|broke "
                        r"(after|since|when)|since (the |our |my )?(update|upgrade|commit|release|merge|deploy)|"
