@@ -144,6 +144,14 @@ VARIANT_ADDON = {
     "code.debug.perf": "Too slow: time the slow call on realistic input first, find the hot spot (nested loops over the "
                        "data, repeated work, N+1 calls), replace it with a dict/set index, sorting once or batching, "
                        "keep the output identical, then time it again and report both numbers.",
+    "code.build.algorithm": "Algorithm from a spec: before coding, write the rules as a numbered list. Implement, then "
+                            "write a slow brute-force version that follows the rules literally and compare both on a "
+                            "few hundred seeded random small inputs, plus the examples in the request; then time one "
+                            "input at the largest size the request implies.",
+    "code.build.feature": "Behaviour change across existing code: first list every place the change must reach (grep "
+                          "every read and write path of the affected data, every caller, every public function named), "
+                          "and the behaviours that must stay the same. Change them all, then run a script that checks "
+                          "each listed path, including the unchanged behaviours and error cases.",
     "code.build.cli": "A command-line change: follow the existing argument parsing and output style, keep current "
                       "outputs unchanged, and run two or three real invocations (including the default) to check.",
     "code.build.api": "An API change: follow the existing handlers and response shapes, validate inputs at the "

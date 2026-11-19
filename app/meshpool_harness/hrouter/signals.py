@@ -170,8 +170,30 @@ def pasted_error(text: str) -> str | None:
     return None
 
 
+# A request whose main verb is writing tests ("write thorough tests for", "add a few pytest cases") is test work even
+# when it talks about behaviour, bugs or "fails" (those describe what the tests check).
+_TEST_MAIN = re.compile(r"\b(write|add|generate|create|extend|improve|increase|need|build|produce)\b(\W+[\w.\-]+){0,6}?"
+                        r"\W+(unit |integration |e2e |regression |pytest |jest |property[- ]based )?(tests?|test suite|"
+                        r"test cases?|specs)\b|\btest coverage\b", re.I)
+# Concrete failure symptoms: the only things that make a request a bug report rather than a behaviour spec.
+_SYMPTOM = re.compile(r"\b(traceback|stack ?trace|crash\w*|segfault|panic|exceptions?|raises|returns? (the )?wrong|"
+                      r"wrong (output|result|value|answer|month|date|total|number)s?|used to work|worked (before|last|"
+                      r"yesterday|until)|regression|doesn'?t work|not working|(?<!ties )(?<!tie )broken(?! (by|down|into|up|out))|bug|failing|fails (with|when|on|"
+                      r"after|for)|assert(ion)?error|(gets?|getting|throws?|shows?|with) (an? )?(error|exception)|"
+                      r"too slow|far too slow|slow(er)? (on|with|than)|times? out|timed out|performance|speed (it )?up|"
+                      r"memory leak|hangs?|infinite loop|flaky|incorrect(ly)?|unexpected(ly)?|but (it )?(returns|gives|"
+                      r"got|raises|prints|produces))\b", re.I)
+# Behaviour spec: new or changed behaviour stated as a requirement.
+_FEATURE = re.compile(r"\b(must|should|needs? to|add|support|implement|extend|allow|make \w+(\.\w+)? (do|return|accept|"
+                      r"use|treat|behave)|let (users?|me)|introduce|enable)\b", re.I)
+_OTHER = ("refactor", "review", "explain")
+
+
 def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
     """The kind of code work: debug, test, refactor, review, terminal, explain or build."""
+    if not has_error and _TEST_MAIN.search(text or "") and not re.search(
+            r"\b(fix|debug)\b.{0,30}\b(failing|broken) tests?\b", text or "", re.I):
+        return "test", ["test"]
     score: dict[str, float] = {}
     hits: list[str] = []
     for sub, rx, weight in _SUB:
@@ -181,6 +203,12 @@ def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
             hits.append(sub)
     if has_error:
         score["debug"] = score.get("debug", 0) + 3
+    elif (_FEATURE.search(text or "") and not _SYMPTOM.search(text or "")
+          and not any(score.get(o) for o in _OTHER)):
+        score["debug"] = 0           # "must/add/should" without a failing symptom is a feature request
+        score["terminal"] = score.get("terminal", 0) / 2
+        score["build"] = score.get("build", 0) + 3
+        hits.append("build")
     if not score:
         return "build", []
     order = [s for s, _, _ in SUB]
@@ -240,6 +268,9 @@ VARIANTS = {
         ("exception", r"Traceback|Exception|\w+Error\b|panic:|segfault|crash(es|ed)?|stack ?trace|undefined is not"),
     ],
     "build": [
+        ("feature", r"\bevery existing\b|\bkeep all (the )?(current|existing)\b|\ball (the )?existing (reads?|callers?|"
+                    r"call sites?|code paths?)\b|\b(every|each) (read|write|caller|call site|code path)\b|"
+                    r"\bbehave[s]? as if\b|\bacross (the |all )?(modules|services|codebase|files)\b"),
         ("cli", r"\b(flag|--[\w-]+|option|sub-?command|argparse|click|cli|command[- ]line)\b"),
         ("api", r"\b(endpoint|route|api|handler|rest|graphql|webhook|pagination|cursor)\b"),
         ("ui", r"\b(page|component|button|form|css|layout|modal|react|vue|svelte|html)\b"),
@@ -247,11 +278,23 @@ VARIANTS = {
     ],
 }
 _VAR = {k: [(n, re.compile(p, re.I)) for n, p in v] for k, v in VARIANTS.items()}
+# algorithm: a function specified by precise rules. One strong marker, or three weak ones.
+_ALG_STRONG = re.compile(r"\bO\([^)]*\)|\btie[- ]?break\w*|\bties\b|\bhalf-open\b|\brules?:|\bedge cases?\b|"
+                         r"\bcomplexity\b|\bcompetition ranking\b|\bin (linear|logarithmic) time\b|"
+                         r"\bbrute[- ]force\b", re.I)
+_ALG_WEAK = re.compile(r"\b(overlap\w*|touching|sorted|maximal|empty|inclusive|exclusive|stamp|closed|open|dropped|"
+                       r"stable|duplicates?|boundary|descending|ascending)\b", re.I)
+
+
+def _algorithm(text: str) -> bool:
+    return bool(_ALG_STRONG.search(text or "")) or len(set(m.lower() for m in _ALG_WEAK.findall(text or ""))) >= 3
 
 
 def variant(sub: str, text: str) -> str:
     """The most specific kind of job within a sub-task (first match wins; order is by how decisive the signal is)."""
     for name, rx in _VAR.get(sub, []):
+        if name == "cli" and _algorithm(text):     # after "feature", before the surface-area variants
+            return "algorithm"
         if rx.search(text or ""):
             return name
     return ""

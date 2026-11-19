@@ -1509,6 +1509,26 @@ class Agent:
         self.emit({"type": "usage", **d})
         return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
+    def _trace_note(self, tool: str, arg: str) -> None:
+        """A trace line for a harness step that is not a tool call (review gate, mutation feedback)."""
+        try:
+            with self._trace_lock:
+                self.trace.append({"tool": tool, "s": 0, "ok": True, "arg": arg})
+        except Exception:  # noqa: BLE001 - tracing must never break the turn
+            pass
+
+    def _mutant_total(self, MU, floor: int) -> int:
+        """How many mutants the feedback would try (cheap, nothing is run); never below the survivors."""
+        try:
+            _, targets = MU.code_under_test(self.root, set(self.ws.turn_files))
+            n = 0
+            for rel in targets:
+                with open(os.path.join(self.root, rel), encoding="utf-8") as f:
+                    n += len(MU.mutants(f.read()))
+            return max(n, floor)
+        except Exception:  # noqa: BLE001
+            return floor
+
     def _review_change(self, g: dict, turn: dict) -> str:
         """WP3: the independent review. '' (do nothing) unless the reviewer raised concrete points."""
         route = getattr(self, "route", None)
@@ -1527,6 +1547,8 @@ class Agent:
                                                                 cmds[-1] if cmds else None), turn)
             self.emit({"type": "status", "text": "Reviewed the change against the request."})
             f = RV.findings(reply)
+            n = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s", f)) or 1
+            self._trace_note("review", f"{n} findings" if f else "LGTM")
             return RV.INJECT + f if f else ""
         except (Interrupted, KeyboardInterrupt):
             raise
@@ -1540,6 +1562,7 @@ class Agent:
                 return ""
             from meshpool_harness.core import mutate as MU
             alive = MU.survivors(self.root, set(self.ws.turn_files))
+            self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")
             if not alive:
                 return ""
             self.emit({"type": "status", "text": "Checked the tests against deliberately broken code."})
