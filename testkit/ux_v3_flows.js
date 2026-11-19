@@ -261,11 +261,11 @@ const check = (name, ok, detail = "") => { results.push(ok); console.log((ok ? "
   check("Plugins page: search, All/Connectors/Skills, Add, Your plugins", /Your plugins/.test(await p.textContent(".gal")) && (await texts(".gtabs.pills button")).join("|") === "All|Connectors|Skills" && !!(await p.$("#plAdd")));
   check("search and galleries stay free of Claude and Anthropic", !/claude|anthropic/i.test(await p.evaluate(() => document.body.innerText)));
 
-  // ---------------- account menu, apps menu
-  await p.click("#acctBtn");
-  const acct = await menuItems();
-  check("account menu rows", ["Settings", "Usage", "Language", "Get help", "Learn more", "View all plans", "Get apps and tools", "Get API keys"].every(x => acct.includes(x)), acct.join(", "));
-  await p.keyboard.press("Escape");
+  // ---------------- settings button, apps menu
+  check("bottom-left button reads Settings, no account name", (await p.textContent("#acctBtn")).trim().startsWith("Settings"));
+  await p.click("#acctBtn"); await p.waitForSelector(".modal", {timeout: 5000}).catch(() => {});
+  check("bottom-left Settings button opens Settings", !!(await p.$(".modal")));
+  await p.keyboard.press("Escape"); await p.waitForSelector(".modal", {state: "detached", timeout: 5000}).catch(() => {});
   await p.click("#footBtn"); check("device button opens the apps menu", /command line tool/i.test(await p.textContent("#ctx"))); await p.keyboard.press("Escape");
 
   // ---------------- settings modal

@@ -83,7 +83,7 @@ async function seed(b) {
     await nav("scheduled"); await p.waitForSelector(".gcard.task"); await shot("scheduled");
     await p.click('[data-gtab="templates"]'); await shot("scheduled-templates");
     await nav("plugins"); await p.waitForSelector(".plogo", {timeout: 8000}).catch(() => {}); await shot("plugins");
-    await openSide(); await p.click("#acctBtn"); await shot("account-menu"); await esc(); await closeSide();
+    await openSide(); await p.click("#footBtn"); await shot("apps-menu"); await esc(); await closeSide();
     // a chat that is running
     await openSide(); await p.click("#newThread"); await closeSide();
     await p.evaluate(() => { S.draft.mode = "auto"; renderBar(); });

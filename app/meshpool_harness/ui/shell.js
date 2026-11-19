@@ -38,7 +38,7 @@ function shell() {
       <nav class="side-list" id="sideList" aria-label="Chats and pages"></nav>
       <button class="updbar" id="updBar" hidden></button>
       <div class="side-foot">
-        <button class="acct" id="acctBtn" aria-haspopup="menu" aria-label="Account"><span class="av" id="acctAv">M</span><span class="an" id="acctName">Account</span><span class="ap" id="acctPlan"></span>${ICON.chev}</button>
+        <button class="acct" id="acctBtn" aria-label="Settings" data-tip="Settings" data-tip-pos="above">${ICON.gear}<span class="an">Settings</span><span class="ap" id="acctPlan"></span></button>
         <button class="iconbtn" id="footBtn" aria-label="Get apps and command line tool"></button>
         <span class="kdot" id="kdot" hidden></span>
       </div>
@@ -66,8 +66,8 @@ function shell() {
   $("#hideSide").onclick = toggleSide;
   $("#modeChat").onclick = () => setAppMode3("chat");
   $("#modeCode").onclick = () => setAppMode3("code");
-  $("#acctBtn").onclick = e => accountMenu(e);
-  $("#footBtn").onclick = e => S.mode === "code" ? openSettings() : appsMenu(e);
+  $("#acctBtn").onclick = () => openSettings();
+  $("#footBtn").onclick = e => appsMenu(e);
   bindSide();
   setupComposer();
   setupPanelResize();
@@ -87,7 +87,7 @@ function syncMode() {
   a.classList.toggle("mode-code", code);
   $("#modeChat")?.setAttribute("aria-selected", String(!code)); $("#modeCode")?.setAttribute("aria-selected", String(code));
   const wm = $("#wmode"); if (wm) wm.textContent = code ? "Code" : "";
-  const fb = $("#footBtn"); if (fb) { fb.innerHTML = code ? ICON.gear : ICON.monitor; fb.setAttribute("data-tip", code ? "Settings" : "Get apps and tools"); fb.setAttribute("data-kbd", code ? MOD + "," : ""); fb.setAttribute("data-tip-pos", "above"); fb.setAttribute("aria-label", code ? "Settings" : "Get apps and tools"); }
+  const fb = $("#footBtn"); if (fb) { fb.innerHTML = ICON.monitor; fb.setAttribute("data-tip", "Get apps and tools"); fb.setAttribute("data-tip-pos", "above"); fb.setAttribute("aria-label", "Get apps and tools"); }
 }
 // Chat and Code are two views of the same chats: a code session works in a real folder or GitHub workspace.
 function setAppMode3(m) {
@@ -251,7 +251,7 @@ function renderSide() {
 }
 function paintAccount() {
   const a = S.acct; if (!a) return;
-  setTxt($("#acctAv"), a.initial || "M"); setTxt($("#acctName"), a.first_name || "Account"); setTxt($("#acctPlan"), "· " + (a.key_set ? "Key" : "No key"));
+  setTxt($("#acctPlan"), a.key_set ? "" : "· No API key");
   paintDots();
 }
 // One set of listeners for the whole list (it is rebuilt often): click, right-click, keyboard.
@@ -408,28 +408,7 @@ function openSearch(tab = "all", q0 = "") {
   inp.focus(); load();
 }
 
-/* ================================== account and apps menus ================================== */
-function accountMenu(e) {
-  const a = S.acct || {};
-  ctxMenu({type: "click", currentTarget: e.currentTarget}, [
-    {head: a.email || "Meshpool"},
-    {label: "Settings", icon: ICON.gear, kbd: isMac ? "⇧⌘," : "Ctrl+,", fn: () => openSettings()},
-    {label: "Usage", icon: ICON.bolt, fn: () => openSettings("usage")},
-    {label: "Language", icon: ICON.globe2, fn: () => openSettings("profile")},
-    {label: "Get help", icon: ICON.help, fn: () => reportProblem()},
-    {label: "Learn more", icon: ICON.book, sub: [
-      {label: "Meshpool website", icon: ICON.ext, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
-      {label: "Documentation", icon: ICON.ext, fn: () => openExternal("https://github.com/hamzaziada4422/meshpool-harness#readme")},
-      {label: "Report a problem", icon: ICON.flag, fn: () => reportProblem()},
-    ]},
-    {sep: true},
-    {label: "View all plans", icon: ICON.cube, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
-    {label: "Get apps and tools", icon: ICON.monitor, fn: () => appsMenu({currentTarget: $("#acctBtn")})},
-    {sep: true},
-    {label: "Get API keys", icon: ICON.ext, fn: () => openExternal(a.keys_url || "https://meshpool.ai")},
-    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit Meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
-  ], {cls: "acctmenu", up: true});
-}
+/* ======================================== apps menu ======================================== */
 function appsMenu(e) {
   const a = S.acct || {};
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
@@ -437,6 +416,7 @@ function appsMenu(e) {
     {label: "Install the command line tool", icon: ICON.term, fn: async () => { try { const r = await post("/api/install-cli", {}); toast(r.message || "Installed. Open a new terminal and type meshpool.", 5000); } catch (err) { toast(err.message, 5000); } }},
     {label: "Download Meshpool apps", icon: ICON.dl, fn: () => openExternal(a.billing_url || "https://meshpool.ai")},
     {label: "Check for updates", icon: ICON.refresh, fn: () => openSettings("about")},
+    ...(MP.desktop && !S.settings?.native ? [{sep: true}, {label: "Quit Meshpool", icon: ICON.logout, fn: () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`)}] : []),
   ], {cls: "acctmenu", up: true});
 }
 
