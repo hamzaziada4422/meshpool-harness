@@ -386,6 +386,118 @@ class Workspace:
     NOOP_EDIT = ("edit rejected: `new` is identical to `old`, so nothing would change and {path} is unchanged. Put "
                  "the changed text in `new` (keep `old` exactly as it is in the file).")
 
+    _LINENO = re.compile(r"^ *\d+(?: {2}|$)")    # read_file prints f"{i:>5}  {line}"
+
+    @classmethod
+    def _strip_line_numbers(cls, text: str) -> str | None:
+        """`text` without read_file's line-number prefixes when every line has one, else None."""
+        lines = text.split("\n")
+        body = lines[:-1] if len(lines) > 1 and lines[-1] == "" else lines
+        if not body or not all(cls._LINENO.match(ln) for ln in body):
+            return None
+        out = [cls._LINENO.sub("", ln, count=1) for ln in body]
+        return "\n".join(out) + ("\n" if len(body) != len(lines) else "")
+
+    @staticmethod
+    def _numbered(lines: list[str], a: int, b: int) -> str:
+        return "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(a, b + 1))
+
+    @staticmethod
+    def _closest_region(lines: list[str], old: str) -> str:
+        """About 8 lines of the file most like `old`, numbered the way read_file numbers them ('' when nothing is close)."""
+        import difflib
+        k = max(1, len(old.splitlines()))
+        if not lines or len(lines) > 20000:
+            return ""
+        target = "\n".join(ln.rstrip() for ln in old.splitlines())
+        best, best_i = 0.0, 0
+        sm = difflib.SequenceMatcher(autojunk=False)
+        sm.set_seq2(target)
+        for i in range(max(1, len(lines) - k + 1)):
+            sm.set_seq1("\n".join(ln.rstrip() for ln in lines[i:i + k]))
+            if sm.real_quick_ratio() <= best or sm.quick_ratio() <= best:
+                continue
+            r = sm.ratio()
+            if r > best:
+                best, best_i = r, i
+        if best < 0.2:
+            return ""
+        a = best_i + 1
+        b = min(len(lines), a + 7)
+        return f"\nClosest text in the file (lines {a}-{b}):\n{Workspace._numbered(lines, a, b)}"
+
+    @staticmethod
+    def _indent_of(line: str) -> int:
+        e = line.expandtabs(4)
+        return len(e) - len(e.lstrip(" "))
+
+    @classmethod
+    def _fuzzy_matches(cls, lines: list[str], old: str, level: int):
+        """Start indexes (and indentation offset) of regions of `lines` equal to `old` after normalising: level 1 =
+        trailing whitespace; level 2 = also tabs as 4 spaces and a uniform indentation difference."""
+        olines = [ln.rstrip() for ln in old.splitlines()]
+        k = len(olines)
+        if k == 0 or not any(olines):
+            return []
+        if level == 1:
+            return [(i, 0) for i in range(len(lines) - k + 1)
+                    if all(lines[i + j].rstrip() == olines[j] for j in range(k))]
+        o_ind = min((cls._indent_of(x) for x in olines if x.strip()), default=0)
+        o_norm = [x.expandtabs(4)[o_ind:].rstrip() if x.strip() else "" for x in olines]
+        out = []
+        for i in range(len(lines) - k + 1):
+            w = lines[i:i + k]
+            if any(bool(w[j].strip()) != bool(olines[j].strip()) for j in range(k)):
+                continue
+            w_ind = min((cls._indent_of(x) for x in w if x.strip()), default=0)
+            if all((w[j].expandtabs(4)[w_ind:].rstrip() if w[j].strip() else "") == o_norm[j] for j in range(k)):
+                out.append((i, w_ind - o_ind))
+        return out
+
+    @classmethod
+    def _plan_edit(cls, text: str, old: str, new: str, path: str):
+        """The file text after replacing `old` with `new`, and a note ('' for an exact match). Raises ToolError with
+        guidance when `old` is missing or ambiguous."""
+        if text.count(old) == 0:
+            stripped = cls._strip_line_numbers(old)
+            if stripped is not None and stripped:
+                old = stripped
+                n2 = cls._strip_line_numbers(new)
+                if n2 is not None:
+                    new = n2
+        n = text.count(old)
+        if n == 1:
+            return text.replace(old, new, 1), ""
+        if n > 1:
+            starts = [m.start() for m in re.finditer(re.escape(old), text)]
+            at = ", ".join(str(text.count("\n", 0, s) + 1) for s in starts[:10])
+            more = f" (and {len(starts) - 10} more)" if len(starts) > 10 else ""
+            raise ToolError(f"`old` text occurs {n} times in {path}, starting at lines {at}{more}; include more "
+                            f"surrounding lines to make it unique")
+        keep = text.splitlines(keepends=True)
+        lines = [ln.rstrip("\r\n") for ln in keep]
+        for level in (1, 2):
+            hits = cls._fuzzy_matches(lines, old, level)
+            if len(hits) == 1:
+                i, off = hits[0]
+                k = len(old.splitlines())
+                nl = [ln.rstrip() for ln in new.splitlines()]
+                if level == 2:
+                    nl = [" " * max(0, cls._indent_of(x) + off) + x.lstrip() if x.strip() else "" for x in nl]
+                eol = "\n"
+                last = keep[i + k - 1]
+                if last.endswith("\r\n"):
+                    eol = "\r\n"
+                tail = eol if last.endswith(("\n", "\r")) and nl else ""
+                repl = eol.join(nl) + tail
+                return "".join(keep[:i]) + repl + "".join(keep[i + k:]), " (matched after normalising whitespace)"
+            if len(hits) > 1:
+                at = ", ".join(str(i + 1) for i, _ in hits[:10])
+                raise ToolError(f"`old` text matches {len(hits)} places in {path} after normalising whitespace, "
+                                f"starting at lines {at}; include more surrounding lines to make it unique")
+        raise ToolError(f"`old` text not found in {path}. Copy it exactly from read_file output "
+                        f"(without the line-number prefix)." + cls._closest_region(lines, old))
+
     def edit(self, path, old, new):
         if old == new:       # 22% of edits in a 12-run SWE-bench sample: reported as success, the model looped on them
             raise ToolError(self.NOOP_EDIT.format(path=path))
@@ -395,16 +507,13 @@ class Workspace:
                 raise ToolError(f"read {path} before editing it")
             if self.seen[key] != self._hash(text):
                 raise ToolError(f"{path} changed since you last read it (stale edit). Read it again, then edit.")
-            n = text.count(old)
-            if n != 1:
-                raise ToolError(f"`old` text {'not found' if n == 0 else f'occurs {n} times'} in {path}; copy it exactly / add context")
-            text = text.replace(old, new, 1)
+            text, note = self._plan_edit(text, old, new, path)
             self._cwrite(path, text)
             self.seen[key] = self._hash(text)
             self.edits += 1
             self.written.add(key)
             self.turn_files.add(key)
-            return f"edited {path}"
+            return f"edited {path}{note}"
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
@@ -414,13 +523,7 @@ class Workspace:
             raise ToolError(f"read {path} before editing it")
         if self.seen[key] != self._hash(text):
             raise ToolError(f"{path} changed since you last read it (stale edit). Read it again, then edit.")
-        n = text.count(old)
-        if n == 0:
-            raise ToolError(f"`old` text not found in {path}. Copy it exactly from read_file output "
-                            f"(without the line-number prefix).")
-        if n > 1:
-            raise ToolError(f"`old` text occurs {n} times in {path}; include more surrounding lines to make it unique")
-        new_text = text.replace(old, new, 1)
+        new_text, note = self._plan_edit(text, old, new, path)
         bad = self._syntax_error(p, new_text) if not self._syntax_error(p, text) else None
         if bad:
             raise ToolError(f"edit rejected: it would make {path} stop parsing. The file is unchanged. Fix `new` "
@@ -430,7 +533,7 @@ class Workspace:
         self.edits += 1
         self.written.add(key)
         self.turn_files.add(key)
-        return f"edited {path}"
+        return f"edited {path}{note}"
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:
