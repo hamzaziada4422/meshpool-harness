@@ -361,3 +361,15 @@ def test_simple_ledger_speaks_messages_on_an_anthropic_endpoint(home, monkeypatc
     assert seen["path"] == "/v1/messages" and seen["h"].get("x-api-key") == "sk-ant-aaaa-1111"
     assert "authorization" not in seen["h"] and seen["body"]["messages"][0]["role"] == "user"
     assert r["choices"][0]["message"]["content"] == "ok"
+
+
+def test_claude_code_not_offered_in_the_installed_app(monkeypatch, tmp_path):
+    """Its ACP adapter would need npx, which the installed app never runs: hide it there (source checkouts keep it)."""
+    from meshpool_harness import bundled
+    from meshpool_harness import provider_setup as PS
+    exe = tmp_path / "claude"
+    exe.write_text("#!/bin/sh\necho 9.9.9\n")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + ":" + __import__("os").environ.get("PATH", ""))
+    monkeypatch.setattr(bundled, "packaged", lambda: True)
+    assert PS.claude_code()["found"] is False

@@ -282,7 +282,7 @@ def _available(d: dict) -> bool:
 
 # Codex and OpenCode are the benchmark's agents (testkit/loop/bench.py runs them with npx), not part of the product:
 # the installers do not ship them, so a packaged app never offers them (no npx, no copy from the customer's machine).
-NOT_SHIPPED = ("codex", "opencode")
+NOT_SHIPPED = ("codex", "opencode", "claude-agent")   # claude-agent: its ACP adapter is not bundled yet (0.0.8)
 
 
 def unsupported(hid: str) -> str:
@@ -290,7 +290,7 @@ def unsupported(hid: str) -> str:
     app; a source checkout and the benchmark still run them with npx."""
     from meshpool_harness import bundled
     if hid in NOT_SHIPPED and bundled.packaged():
-        name = next((h["name"] for h in (CODEX, OPENCODE) if h["id"] == hid), hid)
+        name = next((h["name"] for h in (CODEX, OPENCODE, CLAUDE_AGENT) if h["id"] == hid), hid)
         return f"{name} is not part of the Meshpool app."
     return ""
 

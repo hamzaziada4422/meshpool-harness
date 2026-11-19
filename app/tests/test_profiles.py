@@ -26,6 +26,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
     monkeypatch.setenv("MESHPOOL_API_KEY", "test-key-1234")
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))         # no data-folder profiles.json
+    monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")                 # unit tests start from no assignment at all
     for v in ("MH_PLAN", "MH_REVIEW", "MH_MUTATION", "MH_COMPACT_CHARS", "MH_LEAN_TOOLS", "MH_SPECS_FILE",
               "MH_PROFILES_FILE", "MH_PROFILE", "MH_HARNESS_PROFILE", "MH_PLAN_EVERY"):
         monkeypatch.delenv(v, raising=False)
@@ -259,3 +260,14 @@ def test_step_methods_off_by_default(tmp_path, monkeypatch):
         spec="code.test", family="code", sub="test", base="code"))
     replies = [{"content": "", "tool_calls": [_todo(1, *STEPS)]}, {"content": "done"}]
     assert _run(tmp_path, PR.settings("full"), replies) == []
+
+
+def test_shipped_assignment(monkeypatch):
+    """app/defaults/profiles.json, chosen by testkit/loop/select_profiles.py on the dev suite: lean-stop by default,
+    the fuller harness where it measured better (writing tests, data questions, algorithms)."""
+    monkeypatch.delenv("MH_PROFILES_DEFAULTS", raising=False)
+    assert R.route("Fix the crash: KeyError total when an order has no lines", kind="code").profile == "lean-stop"
+    assert R.route("Write thorough tests for slug.slugify in test_slug.py", kind="code").profile == "full-noplan"
+    assert R.route("What was the total revenue in orders.csv?", kind="cowork").profile == "full-noplan"
+    for name in ("lean-stop", "full-noplan", "full-noplan-stop"):
+        assert PR.settings(name)["plan"] == "off"

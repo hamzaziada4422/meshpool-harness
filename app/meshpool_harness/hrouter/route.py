@@ -8,6 +8,7 @@ cost, then time.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from pathlib import Path
@@ -41,6 +42,9 @@ class Route:
     ms: float = 0.0
     profile: str = ""                 # the harness profile this route runs under (profiles.py); "" = not resolved
     settings: dict = field(default_factory=dict)   # that profile's complete settings (engine, plan, review, ...)
+    harness: str = ""                 # the agent harness the scorecard picks (harness_select.py); "" = not asked
+    harness_reason: str = ""          # why; set only when MH_HARNESS_ROUTER=1
+    category: str = ""                # the classifier's category for that pick
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -182,6 +186,16 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
                 r.family = sid.split(".")[0]
                 r.sub = sid.split(".", 1)[1] if "." in sid else ""
     r.profile, r.settings = PROF.resolve(r)
+    if os.environ.get("MH_HARNESS_ROUTER") == "1" and not force:
+        try:                                    # which agent harness runs it; never fails a task
+            from . import harness_select as HS
+            h = HS.select(text, workdir, model, files=files, kind=kind, client=client, route=r)
+            r.harness, r.harness_reason, r.category = h["harness"], h["reason"], h["category"]
+            r.used_model_call = r.used_model_call or bool(h["classifier_tokens"])
+            if h["profile"] and h["profile"] != r.profile and not PROF.forced():   # the engine runs under the profile the scorecard chose
+                r.profile, r.settings = h["profile"], PROF.settings(h["profile"]) or r.settings
+        except Exception:  # noqa: BLE001
+            pass
     r.ms = round((time.perf_counter() - t0) * 1000, 2)
     return r
 

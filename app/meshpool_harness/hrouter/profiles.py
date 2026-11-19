@@ -78,7 +78,8 @@ def config() -> dict:
     defaults, the data folder and MH_PROFILES_FILE (later wins, per profile and per key)."""
     from meshpool_harness import config as C
     cfg = {"default": "full", "assign": {}, "profiles": {k: dict(v) for k, v in BUILTIN.items()}}
-    for p in (C.APP / "defaults" / "profiles.json", C.home() / "profiles.json", os.environ.get("MH_PROFILES_FILE") or ""):
+    shipped = os.environ.get("MH_PROFILES_DEFAULTS", str(C.APP / "defaults" / "profiles.json"))   # "none": ignore it
+    for p in ("" if shipped == "none" else shipped, C.home() / "profiles.json", os.environ.get("MH_PROFILES_FILE") or ""):
         d = _read(p)
         if isinstance(d.get("default"), str) and d["default"]:
             cfg["default"] = d["default"]

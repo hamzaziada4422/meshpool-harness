@@ -1,5 +1,8 @@
 # MeshPool benchmarks: every result so far
 
+> **Superseded (19 Nov 2026, later):** the full 52-task evaluation against every harness (`docs/results/v3/EVAL52_FINAL.md`) does not support "cheapest". There, every MeshPool version ties the other harnesses on quality (46-47 of 52, within run-to-run noise), and Codex is cheaper and faster (MeshPool 0.0.7: 1.4x Codex's cost per solved task, 2x its time). The numbers below are from smaller, earlier runs.
+
+
 DeepSeek V4.1 Flash for every harness. Same tasks, same time, one metering proxy, graded by tests or official
 answers (no LLM judge). "Significant" = 95% interval or exact test excludes no difference. Full details:
 `meshpool-v2-results.md` (Desktop) and `docs/results/` in the repo.

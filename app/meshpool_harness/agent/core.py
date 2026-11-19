@@ -2039,6 +2039,7 @@ class Agent:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
+                   "timeout_s": args.get("timeout_s") if isinstance(args, dict) and name in ("bash", "bash_many") else None,
                    "diff": self._diff(name, args) if name in ("edit", "write_file") and not bad else ""})
         ok, denied = True, False
         try:

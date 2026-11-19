@@ -351,6 +351,9 @@ _VERSIONS: dict = {}
 def claude_code() -> dict:
     out = {"kind": "claude_code", "found": False, "version": None, "path": None,
            "active": (C.read().get("MH_HARNESS_CODE") or "") == "claude-agent"}
+    from meshpool_harness import harnesses as HR
+    if HR.unsupported("claude-agent"):            # the installed app does not carry its adapter yet: not offered
+        return out
     exe = shutil.which("claude")
     if not exe:
         return out

@@ -1,0 +1,5 @@
+{
+  "_about": "Per model id ('*' = any model), per task category: one row per harness with solved, tasks, cost_per_task (USD) and median_s. Fitted by testkit/loop/harness_scorecard.py from bench results (fit on the dev suite, measure on eval). Empty until measured: with no evidence MeshPool's own harness runs the task. Used only when MH_HARNESS_ROUTER=1.",
+  "_version": 1,
+  "*": {}
+}
