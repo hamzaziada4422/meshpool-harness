@@ -71,3 +71,10 @@ def test_inspection_is_not_progress(tmp_path, monkeypatch):
     a.ws.commands.append({"cmd": "python3 m.py", "code": 0})
     a._v3_notes(13, [], g)
     assert g["last"] == 13
+
+
+def test_repeats_that_do_work_are_never_refused(tmp_path):
+    """Polling a CI run, rerunning a check or calling a tool whose result can change is not a loop."""
+    steps = [_bash(30 + i, "python3 m.py") for i in range(4)] + [{"content": "done"}]
+    a, tools = _run(tmp_path, steps)
+    assert not any("Not run" in t["content"] for t in tools)

@@ -1241,6 +1241,8 @@ class Agent:
         try:
             f = c.get("function", {})
             name, args = f.get("name", ""), str(f.get("arguments", ""))
+            if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
+                return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
             exact = name + ":" + args[:2000]
             shape = name + ":" + re.sub(r"\d+", "#", args[:2000])
             book = g.setdefault("loop", {})
@@ -1260,6 +1262,23 @@ class Agent:
         except Exception:  # noqa: BLE001 - the guard must never break a turn
             pass
         return self._run_tool(c, cut=cut)
+
+    @staticmethod
+    def _inspection(name: str, args: str) -> bool:
+        """A call that only reads: read_file, grep, glob, or shell commands that core/tools.read_only accepts."""
+        if name in ("read_file", "grep", "glob"):
+            return True
+        if name in ("bash", "bash_many", "shell"):
+            try:
+                a = json.loads(args or "{}")
+            except ValueError:
+                return False
+            cmds = a.get("commands") if name == "bash_many" else [a.get("command")]
+            if name == "shell" and isinstance(a.get("command"), list):
+                cmds = [" ".join(str(x) for x in a["command"])]
+            cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
+            return bool(cmds) and all(T.read_only(x) for x in cmds)
+        return False
 
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
         """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the
