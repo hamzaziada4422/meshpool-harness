@@ -1224,9 +1224,12 @@ class Agent:
             raise Interrupted()
 
     def _maybe_compact(self):
-        limit = int(os.environ.get("MH_COMPACT_CHARS", "280000"))   # well under a 128K-token window
+        # Long runs re-sent their whole history on every call (the 50-60-call runs were most of the dev A/B's cost).
+        # Older tool outputs are elided once the context passes the limit, down to 60% of it, so the next trim is
+        # many steps away and the provider's prompt cache is rebuilt rarely. Recent outputs stay verbatim.
+        limit = int(os.environ.get("MH_COMPACT_CHARS", "160000"))
         if _context_size(self.messages) > limit:
-            _shrink_context(self.messages, limit)
+            _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
 
     def _body(self) -> dict:

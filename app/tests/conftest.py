@@ -31,6 +31,9 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.core import gateway as GW
     GW.reset()
+    # A test that misses its mock must fail, never reach a real model: a module reload once let a patched Agent fall
+    # through to the live endpoint (12 paid calls). Tests that run a mock server set their own URL after this.
+    monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")

@@ -189,7 +189,8 @@ def test_run_task_result_includes_plan(tmp_path, monkeypatch):
 
     def post(self, base, key, body, stream):
         return {"choices": [{"message": seq.pop(0), "finish_reason": "stop"}], "usage": {}}, False
-    monkeypatch.setattr(Agent, "_post", post)
+    import meshpool_harness.agent.core as core_now           # the class run_task will use, even after a reload
+    monkeypatch.setattr(core_now.Agent, "_post", post)
     monkeypatch.setenv("MH_RUN_SESSIONS", str(tmp_path / "s"))
     res = api.run_task(LONG, workdir=str(tmp_path), engine="agent")
     assert res["plan"]["total"] == 2 and res["plan"]["current"] == 2 and res["plan"]["items"][0]["status"] == "completed"
