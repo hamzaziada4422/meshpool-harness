@@ -114,7 +114,7 @@ def _summary(d: Path, m: dict) -> dict:
             "created": m.get("created", 0), "updated": m.get("updated", 0), "link": link,
             "has_instructions": bool(_read(d / "instructions.md").strip()), "knowledge_count": len(idx),
             "memory_count": len([l for l in _read(d / "memory.md").splitlines() if l.strip() and not l.startswith("#")]),
-            "legacy_path": m.get("legacy_path", "")}
+            "legacy_path": m.get("legacy_path", ""), "pinned": bool(m.get("pinned"))}
 
 
 def list_projects() -> list[dict]:
@@ -171,7 +171,10 @@ def update(pid: str, **kw) -> dict:
             m["link"] = _clean_link(kw["link"])
         if kw.get("instructions") is not None:
             _write(d / "instructions.md", str(kw["instructions"]).strip()[:INSTR_MAX] + "\n")
-        m["updated"] = time.time()
+        if kw.get("pinned") is not None:                  # pinning is not activity: the date stays
+            m["pinned"] = bool(kw["pinned"])
+        else:
+            m["updated"] = time.time()
         _save_meta(d, m)
         return detail(pid)
 

@@ -673,6 +673,8 @@ class Session:
                             with self.lock:
                                 self.state = "idle"
                             break
+                    if not getattr(self, "deleted", False):
+                        write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
                     took = time.time() - self.t_turn
                     if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
                         last = next((e.get("text") for e in reversed(self.events)
@@ -1135,6 +1137,8 @@ def listing() -> list:
             continue
         r["title"] = m.get("title") or r["title"]
         r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
+        r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
+        r["scheduled"] = bool(m.get("scheduled"))
         r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
         if r["project_id"] and r["project_id"] not in live_pids:
             r["project_id"] = ""
@@ -1152,6 +1156,8 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
+        write_meta(sid, unread=act == "unseen")
     elif act == "move":                               # into a project, or out of it (project_id empty)
         pid = (body.get("project_id") or "").strip()
         if pid:

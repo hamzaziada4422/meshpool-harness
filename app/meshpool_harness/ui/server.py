@@ -469,6 +469,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, W.usage())
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
+            if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
+                from meshpool_harness.ui import hub as HUB
+                what = u.path[len("/api/hub/"):]
+                if what == "artifacts":
+                    return self._send(200, HUB.artifacts())
+                if what == "scheduled":
+                    return self._send(200, HUB.scheduled())
+                if what == "search":
+                    return self._send(200, HUB.search(q.get("q", ""), q.get("tab", "all")))
+                if what == "account":
+                    return self._send(200, HUB.account())
+                raise KeyError(what)
             m = re.fullmatch(r"/api/term/(\w+)", u.path)
             if m:
                 return self._send(200, W.term_view(m.group(1), int(q.get("since", "0"))))
@@ -702,7 +714,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, b = m.group(1), self._json()
                 act = b.get("action", "update")
                 if act == "update":
-                    kw = {k: b[k] for k in ("name", "description", "instructions", "link") if k in b}
+                    kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
                     return self._send(200, PS.update(pid, **kw))
                 if act == "delete":
                     PS.delete(pid)

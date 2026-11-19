@@ -1198,12 +1198,10 @@ _OUT_RX = re.compile(r"(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-
                      r"(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])")
 
 
-def session_outputs(s, root: Path) -> list[dict]:
-    """Files this session created or changed: edits and writes from its tool calls, files its tools said they saved,
-    and what its checkpoints recorded per reply. Only files that still exist inside the folder."""
+def outputs_from(evs: list, turns: list, root: Path) -> list[dict]:
+    """Files a session created or changed, from its events (edits and writes, files its tools said they saved) and
+    from what its checkpoints recorded per reply. Only files that still exist inside the folder."""
     found: dict[str, dict] = {}
-    with s.lock:
-        evs = list(s.events)
     for e in evs:
         if e.get("type") == "tool_start" and e.get("name") in ("write_file", "edit"):
             rel = _rel(root, e.get("summary") or "")
@@ -1214,13 +1212,10 @@ def session_outputs(s, root: Path) -> list[dict]:
                 rel = _rel(root, m.group(1))
                 if rel:
                     found.setdefault(rel, {"path": rel, "how": "saved"})
-    try:
-        for t in (s.cp.turns() if s.cp else []):
-            for c in t.get("changed") or []:
-                if c.get("status") != "deleted":
-                    found.setdefault(str(c["path"]), {"path": str(c["path"]), "how": c.get("status") or "changed"})
-    except Exception:  # noqa: BLE001
-        pass
+    for t in turns:
+        for c in t.get("changed") or []:
+            if c.get("status") != "deleted":
+                found.setdefault(str(c["path"]), {"path": str(c["path"]), "how": c.get("status") or "changed"})
     out = []
     for rel, row in found.items():
         if any(part in HIDE or part.startswith(".") for part in Path(rel).parts):
@@ -1232,6 +1227,17 @@ def session_outputs(s, root: Path) -> list[dict]:
         except (ValueError, OSError):
             continue
     return out[:200]
+
+
+def session_outputs(s, root: Path) -> list[dict]:
+    """Files this session created or changed (see outputs_from)."""
+    with s.lock:
+        evs = list(s.events)
+    try:
+        turns = s.cp.turns() if s.cp else []
+    except Exception:  # noqa: BLE001
+        turns = []
+    return outputs_from(evs, turns, root)
 
 
 def session_connectors(s) -> dict:
