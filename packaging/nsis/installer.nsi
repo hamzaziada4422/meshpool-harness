@@ -64,8 +64,11 @@ Section "Meshpool" SecMain
   InitPluginsDir
   File "/oname=$PLUGINSDIR\winsetup.ps1" "winsetup.ps1"
   ; close a running copy (the app and everything it started from this folder) so its files can be replaced
-  ; /T: also the app's own Python and Node processes, which hold files in runtime and node open
-  nsExec::Exec 'taskkill /F /T /IM Meshpool.exe'
+  nsExec::Exec 'taskkill /F /IM Meshpool.exe'
+  Pop $0
+  ; also the app's own Python and Node processes (they hold files in runtime and node open): only programs that
+  ; live in the install folder, never this installer or the update helper (taskkill /T could reach those)
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue"`
   Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
   ; Stage the new program files beside the install folder first, then swap folder by folder (the old one is kept as
@@ -143,8 +146,11 @@ Section "Uninstall"
   InitPluginsDir
   File "/oname=$PLUGINSDIR\winsetup.ps1" "winsetup.ps1"
   ; close the app and everything running from this folder (its Python, Node, Git), or their files stay locked
-  ; /T: also the app's own Python and Node processes, which hold files in runtime and node open
-  nsExec::Exec 'taskkill /F /T /IM Meshpool.exe'
+  nsExec::Exec 'taskkill /F /IM Meshpool.exe'
+  Pop $0
+  ; also the app's own Python and Node processes (they hold files in runtime and node open): only programs that
+  ; live in the install folder, never this installer or the update helper (taskkill /T could reach those)
+  nsExec::Exec `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Get-Process | Where-Object { $$_.Path -and $$_.Path.StartsWith('$INSTDIR\', [StringComparison]::OrdinalIgnoreCase) } | Stop-Process -Force -ErrorAction SilentlyContinue"`
   Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
   Delete "$SMPROGRAMS\Meshpool.lnk"
