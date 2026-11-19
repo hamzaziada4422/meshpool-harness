@@ -1,3 +1,4 @@
+// SUPERSEDED by ux_v3_flows.js: this script drives the v2 shell (#q, #oPill, .th groups) and is kept as history.
 // Chat UX v2 flows, driven like a person would (clicks and keys), against the mock model. Prints PASS/FAIL per check.
 // Usage: python3 testkit/mock_llm_long.py 8911 /tmp/mock.jsonl &  then an app on PORT with MESHPOOL_HOME set up as in run_all.sh
 //        node testkit/ux_v2_flows.js PORT PROJECT_DIR [--strict]

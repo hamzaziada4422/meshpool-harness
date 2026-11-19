@@ -151,3 +151,10 @@ def test_pinned_projects(home):
     assert q["pinned"] is True and PS.list_projects()[0]["pinned"] is True
     assert PS.list_projects()[0]["updated"] == before               # pinning is not activity
     assert PS.update(p["id"], pinned=False)["pinned"] is False
+
+
+def test_search_shows_the_stored_pull_request_number(home):
+    (home / "repo").mkdir()
+    make_session(home, "p1", "Fix navigation", home / "repo", kind="code", unread=True, pr={"number": 39, "title": "Fix focus order", "draft": True})
+    item = HUB.search("")["groups"][0]["items"][0]
+    assert item["id"] == "p1" and item["sub"] == "PR #39"

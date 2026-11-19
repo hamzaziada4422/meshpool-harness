@@ -2533,6 +2533,7 @@ async function restartApp() {
   window.addEventListener("resize", () => { clearTimeout(S.rzT); S.rzT = setTimeout(fitPanel, 120); });
   window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
+  { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
   setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
 })();
 

@@ -151,7 +151,8 @@ def _item(kind: str, id_: str, title: str, sub: str = "", **kw) -> dict:
 
 def _thread_item(r: dict, sub: str = "") -> dict:
     code = is_code_session(r)
-    return _item("code" if code else "chat", r["id"], r["title"], sub, unread=bool(r.get("unread")),
+    pr = r.get("pr") or {}
+    return _item("code" if code else "chat", r["id"], r["title"], sub or (f"PR #{pr['number']}" if pr.get("number") else ""), unread=bool(r.get("unread")),
                  waiting=r.get("state") == "waiting", updated=r.get("updated", 0), project_id=r.get("project_id") or "")
 
 
