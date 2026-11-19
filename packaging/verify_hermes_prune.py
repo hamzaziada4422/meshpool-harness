@@ -6,7 +6,7 @@ a prompt that a local mock OpenAI-compatible server answers (no model calls, no 
 Exits 0 and prints OK when the adapter answers initialize, session/new and session/prompt with the mock's reply."""
 import json, os, subprocess, sys, tempfile, time, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-hermes = sys.argv[1]
+hermes = os.path.abspath(sys.argv[1])          # the adapter runs in a temp folder: a relative path would point nowhere
 calls = {"n": 0}
 class H(BaseHTTPRequestHandler):
     def log_message(self,*a): pass
