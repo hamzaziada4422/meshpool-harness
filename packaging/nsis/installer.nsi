@@ -37,12 +37,19 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 Meshpool."
 !include "winsetup.nsh"
 
 ; folder swap helpers for the staged install (see the main section)
+; IfErrors also CLEARS the error flag, so each step records a failure in $R9 (checked once after every swap):
+; relying on the flag alone lost a failed rename and left a mix of old and new folders.
 !macro MP_SWAP N
   RMDir /r "$INSTDIR\${N}.old"
-  IfFileExists "$INSTDIR\${N}\*.*" 0 +3
+  ClearErrors
+  IfFileExists "$INSTDIR\${N}\*.*" 0 +2
     Rename "$INSTDIR\${N}" "$INSTDIR\${N}.old"
-    IfErrors +2
+  IfErrors 0 +3
+    StrCpy $R9 "1"
+    Goto +2
   Rename "$INSTDIR.new\${N}" "$INSTDIR\${N}"
+  IfErrors 0 +2
+    StrCpy $R9 "1"
 !macroend
 !macro MP_DROP_OLD N
   RMDir /r "$INSTDIR\${N}.old"
@@ -57,7 +64,8 @@ Section "Meshpool" SecMain
   InitPluginsDir
   File "/oname=$PLUGINSDIR\winsetup.ps1" "winsetup.ps1"
   ; close a running copy (the app and everything it started from this folder) so its files can be replaced
-  nsExec::Exec 'taskkill /F /IM Meshpool.exe'
+  ; /T: also the app's own Python and Node processes, which hold files in runtime and node open
+  nsExec::Exec 'taskkill /F /T /IM Meshpool.exe'
   Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
   ; Stage the new program files beside the install folder first, then swap folder by folder (the old one is kept as
@@ -67,14 +75,14 @@ Section "Meshpool" SecMain
   SetOutPath "$INSTDIR.new"
   File /r "Meshpool\*.*"
   SetOutPath "$INSTDIR"
-  ClearErrors
+  StrCpy $R9 "0"
   !insertmacro MP_SWAP app
   !insertmacro MP_SWAP runtime
   !insertmacro MP_SWAP git
   !insertmacro MP_SWAP node
   !insertmacro MP_SWAP harness-docs
   !insertmacro MP_SWAP bin
-  IfErrors swap_failed
+  StrCmp $R9 "1" swap_failed
   ; older installs had the terminal command next to Meshpool.exe; it now lives in bin
   Delete "$INSTDIR\meshpool.cmd"
   Delete "$INSTDIR\Meshpool.exe"
@@ -135,7 +143,8 @@ Section "Uninstall"
   InitPluginsDir
   File "/oname=$PLUGINSDIR\winsetup.ps1" "winsetup.ps1"
   ; close the app and everything running from this folder (its Python, Node, Git), or their files stay locked
-  nsExec::Exec 'taskkill /F /IM Meshpool.exe'
+  ; /T: also the app's own Python and Node processes, which hold files in runtime and node open
+  nsExec::Exec 'taskkill /F /T /IM Meshpool.exe'
   Pop $0
   !insertmacro WinSetup "$INSTDIR" "" ""
   Delete "$SMPROGRAMS\Meshpool.lnk"
