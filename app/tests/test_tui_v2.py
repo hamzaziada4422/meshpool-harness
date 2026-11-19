@@ -168,6 +168,18 @@ def test_ask_mode_permission_prompt():
     assert "Run this command?" not in S.screen(out).text() or True
 
 
+def test_a_long_command_is_shown_in_full_before_it_can_be_approved():
+    """A yes must not cover lines the user never saw: a 30-line script is printed whole above the menu."""
+    t, out, clk = S.make_terminal()
+    script = "\n".join(f"echo step{i}" for i in range(30)) + "\nrm -rf ./data_last_line"
+    shots = []
+    t.keys_factory = lambda: FakeKeys(lambda: shots.append(S.screen(out).text()), "n")
+    assert t.approve("bash", "Run this command?", script)[0] == "no"
+    text = shots[0]
+    assert "echo step0" in text and "echo step29" in text and "rm -rf ./data_last_line" in text
+    assert "more lines" not in text
+
+
 def test_no_color_keeps_layout_drops_colours(monkeypatch):
     monkeypatch.setenv("NO_COLOR", "1")
     out = S.FakeTTY()

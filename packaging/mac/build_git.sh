@@ -31,8 +31,10 @@ make -j"$(sysctl -n hw.ncpu)" prefix=/git RUNTIME_PREFIX=1 gitexecdir=libexec/gi
   NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 NO_OPENSSL=1 \
   CFLAGS="-O2 $FLAGS" LDFLAGS="$FLAGS" all
 rm -rf "$OUT"; mkdir -p "$OUT"
+# NO_INSTALL_HARDLINKS: git installs its ~140 built-in commands as hard links to one binary, and the copies made
+# below (cp, build_all.py's copytree) would turn each into a full copy of it; symlinks stay symlinks.
 make prefix=/git RUNTIME_PREFIX=1 gitexecdir=libexec/git-core NO_GETTEXT=1 NO_TCLTK=1 NO_PERL=1 NO_PYTHON=1 NO_EXPAT=1 \
-  NO_OPENSSL=1 CFLAGS="-O2 $FLAGS" LDFLAGS="$FLAGS" DESTDIR="$W/inst" install
+  NO_OPENSSL=1 NO_INSTALL_HARDLINKS=1 CFLAGS="-O2 $FLAGS" LDFLAGS="$FLAGS" DESTDIR="$W/inst" install
 cp -R "$W/inst/git/." "$OUT/"
 rm -rf "$OUT/share/man" "$OUT/share/doc" "$OUT/share/git-gui" "$OUT/share/gitk" "$OUT/share/gitweb"
 cp COPYING "$OUT/COPYING-git-GPL-2.0.txt"
