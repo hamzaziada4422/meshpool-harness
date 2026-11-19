@@ -439,3 +439,16 @@ def test_repo_map_ranks_the_files_the_request_names(tmp_path):
     assert lines[2].startswith("billing.py: class Invoice: total; def refund(order, amount)")
     assert "web.js: function render(page); class Router; const go = (...) =>" in m
     assert packs.repo_map(_ws(tmp_path / "missing" if False else tmp_path), "") .startswith("<repo_map>")
+
+
+def test_a_failing_check_after_a_change_is_not_a_finished_fix(tmp_path, monkeypatch):
+    from meshpool_harness import run_task
+    (tmp_path / "a.py").write_text("x = 1\n")
+    _scripted(monkeypatch, [_call("read_file", {"path": "a.py"}, "c1"),
+                            _call("edit", {"path": "a.py", "old": "x = 1", "new": "x = 2"}, "c2"),
+                            _call("bash", {"command": "false"}, "c3"),
+                            {"role": "assistant", "content": "Fixed."},          # premature: the check failed
+                            _call("bash", {"command": "true"}, "c4"),
+                            {"role": "assistant", "content": "Fixed; check passes."}])
+    r = run_task("test_a.py fails, fix it", workdir=str(tmp_path), engine="agent")
+    assert r["answer"] == "Fixed; check passes." and "`true` passed" in r["receipt"], r

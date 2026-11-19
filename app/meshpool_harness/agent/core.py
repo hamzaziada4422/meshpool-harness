@@ -638,6 +638,8 @@ class Agent:
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
         self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
+        self._trace_lock = threading.Lock()
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
         self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
         self.messages = [{"role": "system", "content": self.system_prompt()}]
@@ -955,6 +957,17 @@ class Agent:
                         if rep:
                             self.messages.append({"role": "user", "content": "[Meshpool] " + rep})
                             continue
+                    route = getattr(self, "route", None)
+                    after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits]
+                    if (route is not None and route.family == "code" and not self.plan and self.ws.edits > g["edits0"]
+                            and after and after[-1]["code"] not in (0, None) and not g.get("verify_nudged")):
+                        g["verify_nudged"] = True      # once per request: a failing check is not a finished fix
+                        last = after[-1]
+                        self.messages.append({"role": "user", "content": (
+                            f"[Meshpool] The last check after your change failed (exit {last['code']}): "
+                            f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
+                            "failure is expected or unrelated, say exactly why in one line.")})
+                        continue
                     left = [t["content"] for t in getattr(self, "_todos", []) if t.get("status") != "completed"]
                     if V3 and left and self._todo_touched and not g["todo_nudged"] and not self.plan:
                         g["todo_nudged"] = True     # once per request: finish the list, or say why not
@@ -1731,6 +1744,7 @@ class Agent:
         return "\n".join(d[:200]) + ("\n..." if len(d) > 200 else "") if d else "(no change)"
 
     def _run_tool(self, c: dict, cut: bool = False) -> str:
+        t0 = time.time()
         f = c.get("function") or {}
         name, raw = f.get("name", ""), f.get("arguments") or "{}"
         cid = c.get("id", "")
@@ -1834,6 +1848,13 @@ class Agent:
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
         out = clean(str(out))
+        m = re.match(r"\[exit (\d+)\]", out)
+        step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
+                "arg": _summary(name, args)[:100] if isinstance(args, dict) else ""}
+        if not step["ok"]:
+            step["err"] = out[:160]
+        with self._trace_lock:                         # one line per tool call: the benchmark's trace
+            self.trace.append(step)
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,
                    "output": out[:6000] + ("\n..." if len(out) > 6000 else "")})
         return out

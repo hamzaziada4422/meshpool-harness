@@ -1,0 +1,163 @@
+[
+ {
+  "id": "v2-alg-intervals",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "intervals.merge(items) must merge overlapping or touching intervals. Each item is (start, end, closed_start, closed_end). Two intervals join when they share at least one point, or when one ends exactly where the next starts and at least one of those two endpoints is closed. The result is sorted, and each merged endpoint is closed if any merged interval includes it. Empty intervals (start > end, or start == end with an open end) are dropped. The current implementation ignores open/closed ends.",
+  "files": {
+   "intervals.py": "def merge(items):\n    out = []\n    for s, e, cs, ce in sorted(items):\n        if out and s <= out[-1][1]:\n            out[-1] = (out[-1][0], max(out[-1][1], e), out[-1][2], ce)\n        else:\n            out.append((s, e, cs, ce))\n    return out\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from intervals import merge\nassert merge([])==[]\nassert merge([(1,3,True,True),(2,5,True,False)])==[(1,5,True,False)]\nassert merge([(1,2,True,False),(2,3,False,True)])==[(1,2,True,False),(2,3,False,True)]\nassert merge([(1,2,True,True),(2,3,False,True)])==[(1,3,True,True)]\nassert merge([(1,2,True,False),(2,3,True,True)])==[(1,3,True,True)]\nassert merge([(5,4,True,True),(3,3,True,False),(3,3,True,True)])==[(3,3,True,True)]\nassert merge([(0,10,False,False),(0,2,True,False),(10,10,True,True)])==[(0,10,True,True)]\nassert merge([(1,5,True,True),(2,3,False,False)])==[(1,5,True,True)]\nassert merge([(4,6,True,True),(1,2,True,True)])==[(1,2,True,True),(4,6,True,True)]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-dupes-fx",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "work",
+  "prompt": "What was our total revenue in USD in orders.csv? Amounts are in the order's currency; rates.csv gives USD per unit of each currency. Give the total to the cent.",
+  "files": {
+   "orders.csv": "order_id,currency,amount\nO1300,EUR,472.61\nO1218,EUR,138.26\nO1166,GBP,252.71\nO1289,USD,408.25\nO1254,USD,52.55\nO1320,GBP,335.87\nO1128,EUR,331.7\nO1095,USD,15.52\nO1394,USD,274.1\nO1116,GBP,348.61\nO1225,USD,22.63\nO1063,USD,315.49\nO1361,EUR,393.23\nO1161,GBP,10.33\nO1176,EUR,234.54\nO1322,USD,196.02\nO1356,EUR,185.19\nO1014,USD,301.81\nO1156,USD,316.83\nO1006,USD,49.88\nO1352,USD,184.83\nO1180,USD,110.58\nO1283,GBP,470.1\nO1253,EUR,315.86\nO1207,GBP,140.12\nO1350,USD,431.26\nO1393,EUR,438.21\nO1287,EUR,143.36\nO1342,EUR,129.21\nO1228,GBP,180.9\nO1242,GBP,315.8\nO1363,EUR,139.4\nO1110,GBP,194.26\nO1349,EUR,230.57\nO1115,GBP,168.42\nO1158,EUR,479.44\nO1062,USD,433.93\nO1108,USD,432.42\nO1050,GBP,322.71\nO1208,EUR,104.48\nO1054,GBP,167.83\nO1044,EUR,323.64\nO1189,USD,113.06\nO1263,GBP,243.23\nO1146,EUR,437.05\nO1291,EUR,440.52\nO1293,EUR,383.79\nO1259,GBP,417.31\nO1007,GBP,319.05\nO1148,EUR,287.44\nO1222,USD,99.77\nO1244,EUR,303.55\nO1295,USD,39.92\nO1371,USD,9.69\nO1376,GBP,84.62\nO1016,GBP,422.0\nO1162,EUR,269.75\nO1353,USD,335.61\nO1223,GBP,19.56\nO1271,EUR,216.09\nO1303,GBP,95.07\nO1326,EUR,213.25\nO1137,USD,357.05\nO1330,EUR,282.52\nO1264,USD,96.35\nO1057,GBP,320.11\nO1015,EUR,166.52\nO1059,EUR,312.96\nO1034,EUR,171.76\nO1253,EUR,315.86\nO1155,GBP,62.08\nO1391,USD,216.69\nO1382,USD,402.12\nO1294,EUR,107.38\nO1338,USD,292.96\nO1061,EUR,417.02\nO1220,EUR,219.67\nO1209,GBP,61.57\nO1010,GBP,326.79\nO1082,EUR,110.14\nO1127,USD,261.61\nO1072,USD,258.62\nO1147,USD,340.74\nO1066,USD,83.45\nO1145,USD,415.22\nO1384,GBP,419.8\nO1319,GBP,42.72\nO1380,EUR,249.73\nO1064,EUR,454.67\nO1131,GBP,129.05\nO1152,USD,17.24\nO1043,GBP,385.91\nO1163,USD,93.65\nO1339,GBP,472.51\nO1284,GBP,301.8\nO1309,USD,370.7\nO1020,GBP,142.69\nO1306,GBP,64.21\nO1124,EUR,131.64\nO1107,EUR,472.4\nO1266,USD,495.2\nO1335,USD,207.36\nO1196,GBP,222.88\nO1370,GBP,24.56\nO1397,EUR,152.94\nO1169,USD,208.19\nO1071,USD,56.4\nO1387,USD,187.63\nO1373,GBP,23.83\nO1358,USD,476.55\nO1039,USD,235.15\nO1371,USD,9.69\nO1154,USD,399.44\nO1255,GBP,342.78\nO1153,EUR,122.52\nO1348,USD,29.95\nO1265,USD,90.38\nO1238,GBP,269.33\nO1239,USD,267.16\nO1141,EUR,194.36\nO1315,EUR,277.28\nO1336,GBP,198.03\nO1372,EUR,215.47\nO1089,USD,446.02\nO1213,EUR,274.28\nO1168,GBP,453.59\nO1093,USD,240.02\nO1195,GBP,420.79\nO1224,EUR,69.08\nO1371,USD,9.69\nO1123,GBP,331.77\nO1098,EUR,72.62\nO1363,EUR,139.4\nO1359,GBP,68.79\nO1205,GBP,108.08\nO1130,USD,166.85\nO1109,GBP,12.19\nO1087,EUR,267.85\nO1318,USD,320.82\nO1258,EUR,253.88\nO1285,GBP,294.38\nO1162,EUR,269.75\nO1221,EUR,264.87\nO1321,USD,196.28\nO1351,EUR,266.41\nO1286,EUR,403.39\nO1355,GBP,293.21\nO1274,GBP,352.01\nO1309,USD,370.7\nO1102,GBP,369.89\nO1233,USD,352.18\nO1046,USD,5.23\nO1354,EUR,302.52\nO1033,USD,390.36\nO1365,GBP,297.88\nO1036,EUR,380.23\nO1026,USD,203.2\nO1231,USD,426.7\nO1097,USD,366.6\nO1305,EUR,322.92\nO1165,GBP,350.17\nO1310,EUR,224.61\nO1185,EUR,254.84\nO1070,GBP,43.86\nO1385,USD,224.95\nO1084,USD,138.25\nO1028,USD,424.42\nO1357,GBP,267.73\nO1051,USD,25.84\nO1373,GBP,23.83\nO1256,EUR,62.13\nO1022,USD,355.37\nO1203,GBP,131.97\nO1214,GBP,65.36\nO1236,GBP,309.82\nO1086,USD,92.25\nO1257,GBP,319.16\nO1138,EUR,411.82\nO1194,GBP,450.78\nO1317,GBP,286.15\nO1375,USD,379.12\nO1038,GBP,55.02\nO1366,GBP,142.93\nO1052,USD,110.56\nO1184,GBP,428.61\nO1002,GBP,99.0\nO1117,EUR,223.06\nO1396,EUR,408.57\nO1183,EUR,134.63\nO1075,EUR,412.74\nO1060,USD,479.77\nO1234,EUR,16.51\nO1181,EUR,490.34\nO1182,EUR,270.79\nO1096,GBP,42.04\nO1003,GBP,240.5\nO1165,GBP,350.17\nO1167,USD,199.79\nO1323,USD,428.56\nO1243,EUR,451.83\nO1118,GBP,46.47\nO1374,USD,273.12\nO1100,GBP,187.05\nO1229,GBP,251.92\nO1262,GBP,308.61\nO1035,EUR,169.63\nO1292,GBP,188.08\nO1272,EUR,217.89\nO1092,USD,296.99\nO1017,GBP,120.65\nO1251,EUR,273.92\nO1369,GBP,458.28\nO1296,EUR,154.34\nO1078,GBP,488.7\nO1142,GBP,249.47\nO1019,GBP,47.07\nO1103,USD,397.67\nO1240,GBP,307.8\nO1269,GBP,233.73\nO1340,USD,399.81\nO1282,GBP,438.44\nO1040,EUR,92.95\nO1273,GBP,189.71\nO1134,EUR,113.69\nO1105,GBP,239.27\nO1291,EUR,440.52\nO1009,EUR,328.69\nO1390,GBP,380.7\nO1391,USD,216.69\nO1211,USD,271.47\nO1200,GBP,148.63\nO1360,EUR,61.36\nO1174,GBP,328.07\nO1383,EUR,405.55\nO1106,USD,436.2\nO1048,USD,109.3\nO1204,GBP,193.7\nO1004,GBP,397.52\nO1261,USD,23.53\nO1129,EUR,251.66\nO1219,EUR,249.05\nO1139,USD,228.07\nO1150,GBP,14.46\nO1191,USD,90.58\nO1021,GBP,497.87\nO1119,GBP,19.75\nO1177,GBP,491.26\nO1122,GBP,60.88\nO1227,GBP,145.62\nO1024,GBP,148.07\nO1135,EUR,108.9\nO1313,USD,53.73\nO1328,EUR,185.96\nO1367,USD,98.96\nO1187,GBP,213.6\nO1042,GBP,99.39\nO1065,GBP,128.5\nO1076,GBP,248.04\nO1336,GBP,198.03\nO1000,EUR,433.54\nO1386,GBP,132.75\nO1077,GBP,91.84\nO1027,EUR,196.32\nO1136,USD,250.75\nO1067,GBP,470.5\nO1399,USD,455.79\nO1132,GBP,218.29\nO1343,USD,27.49\nO1337,EUR,375.44\nO1271,EUR,216.09\nO1212,USD,260.43\nO1080,GBP,328.49\nO1368,USD,253.56\nO1126,USD,340.68\nO1230,EUR,366.79\nO1190,USD,217.32\nO1308,USD,61.81\nO1347,USD,303.79\nO1121,USD,118.96\nO1351,EUR,266.41\nO1331,EUR,333.48\nO1144,GBP,228.98\nO1355,GBP,293.21\nO1197,EUR,291.58\nO1068,USD,345.05\nO1312,USD,325.76\nO1025,USD,283.76\nO1204,GBP,193.7\nO1073,EUR,123.01\nO1247,USD,445.04\nO1047,GBP,155.55\nO1298,EUR,495.34\nO1175,GBP,399.4\nO1311,GBP,29.98\nO1248,USD,364.66\nO1133,USD,440.73\nO1245,USD,112.98\nO1281,USD,401.84\nO1280,USD,165.23\nO1159,GBP,103.03\nO1088,USD,50.64\nO1206,USD,484.38\nO1143,EUR,359.56\nO1314,EUR,141.47\nO1226,USD,117.49\nO1114,EUR,440.5\nO1260,USD,243.63\nO1304,USD,197.85\nO1329,EUR,244.21\nO1307,EUR,490.14\nO1120,GBP,48.43\nO1301,GBP,152.94\nO1111,GBP,11.16\nO1183,EUR,134.63\nO1094,EUR,351.98\nO1101,USD,450.6\nO1055,EUR,196.15\nO1389,GBP,166.07\nO1018,EUR,252.39\nO1246,USD,444.33\nO1113,GBP,62.21\nO1008,GBP,491.19\nO1234,EUR,16.51\nO1031,GBP,201.73\nO1091,GBP,263.36\nO1225,USD,22.63\nO1155,GBP,62.08\nO1058,USD,302.64\nO1157,GBP,321.76\nO1241,USD,120.17\nO1030,USD,237.64\nO1392,EUR,292.39\nO1149,EUR,326.4\nO1270,USD,166.78\nO1217,EUR,209.82\nO1304,USD,197.85\nO1104,EUR,179.16\nO1164,EUR,390.4\nO1085,EUR,128.29\nO1192,EUR,344.86\nO1325,USD,217.64\nO1083,USD,375.75\nO1379,EUR,109.26\nO1074,GBP,198.85\nO1345,GBP,455.19\nO1215,USD,347.04\nO1056,USD,49.61\nO1005,USD,226.06\nO1185,EUR,254.84\nO1268,USD,71.55\nO1127,USD,261.61\nO1327,GBP,202.29\nO1277,EUR,205.62\nO1237,GBP,106.11\nO1167,USD,199.79\nO1193,USD,237.93\nO1001,EUR,228.66\nO1178,USD,362.36\nO1341,USD,217.61\nO1210,USD,304.59\nO1023,EUR,380.21\nO1316,GBP,210.77\nO1362,GBP,424.05\nO1037,USD,71.63\nO1275,USD,94.73\nO1249,EUR,197.01\nO1252,GBP,67.37\nO1069,EUR,441.68\nO1344,USD,468.95\nO1170,GBP,197.05\nO1172,GBP,444.23\nO1179,GBP,462.49\nO1201,GBP,282.96\nO1235,GBP,209.63\nO1173,USD,191.52\nO1267,GBP,52.15\nO1250,EUR,416.92\nO1112,USD,44.7\nO1364,GBP,363.91\nO1125,USD,187.14\nO1041,GBP,98.25\nO1332,GBP,151.54\nO1381,USD,420.08\nO1049,EUR,497.94\nO1073,EUR,123.01\nO1334,GBP,26.17\nO1324,GBP,307.53\nO1013,USD,99.15\nO1395,EUR,284.29\nO1160,EUR,131.74\nO1053,EUR,9.74\nO1377,USD,317.4\nO1140,EUR,463.24\nO1041,GBP,98.25\nO1171,EUR,229.5\nO1043,GBP,385.91\nO1398,USD,42.66\nO1156,USD,316.83\nO1279,USD,258.72\nO1297,USD,10.24\nO1032,USD,285.29\nO1216,USD,465.76\nO1333,USD,387.38\nO1112,USD,44.7\nO1151,USD,205.57\nO1290,EUR,70.94\nO1081,GBP,309.08\nO1278,USD,304.41\nO1029,USD,110.68\nO1264,USD,96.35\nO1113,GBP,62.21\nO1011,GBP,12.43\nO1144,GBP,228.98\nO1232,GBP,129.02\nO1388,GBP,418.99\nO1045,USD,200.45\nO1060,USD,479.77\nO1090,EUR,330.18\nO1224,EUR,69.08\nO1302,USD,331.58\nO1079,USD,118.06\nO1276,EUR,182.99\nO1199,USD,222.51\nO1167,USD,199.79\nO1188,EUR,246.29\nO1288,USD,373.5\nO1378,EUR,244.58\nO1099,USD,42.26\nO1355,GBP,293.21\nO1198,GBP,47.58\nO1299,GBP,29.54\nO1202,USD,263.78\nO1346,USD,489.52\nO1186,USD,223.25\nO1012,GBP,36.27\nO1187,GBP,213.6\nO1142,GBP,249.47\n",
+   "rates.csv": "currency,usd_per_unit\nUSD,1.0\nEUR,1.08\nGBP,1.27\n"
+  },
+  "grade": {
+   "must": [
+    "108,?242.63"
+   ],
+   "must_not": [
+    "104,?719.10"
+   ],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-memo-kwargs",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "Customers sometimes get another customer's price. pricing.quote() is wrong after the first call with a different currency or discount. Find the root cause and fix it so every call returns the right price.",
+  "files": {
+   "memo.py": "import functools\n\ndef memoize(fn):\n    cache = {}\n    @functools.wraps(fn)\n    def wrap(*args, **kwargs):\n        if args not in cache:\n            cache[args] = fn(*args, **kwargs)\n        return cache[args]\n    wrap.cache = cache\n    return wrap\n",
+   "pricing.py": "from memo import memoize\n\nRATES = {'USD': 1.0, 'EUR': 0.9, 'GBP': 0.8}\n\n@memoize\ndef quote(product_price, currency='USD', discount=0.0):\n    return round(product_price * RATES[currency] * (1 - discount), 2)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from pricing import quote\nassert quote(100) == 100.0\nassert quote(100, currency='EUR') == 90.0\nassert quote(100, currency='EUR', discount=0.5) == 45.0\nassert quote(100, discount=0.1) == 90.0\nassert quote(100, 'GBP') == 80.0 and quote(100, currency='GBP') == 80.0\nimport memo\n@memo.memoize\ndef f(a, b=1, *, c=2): return (a, b, c)\nassert f(1) == (1, 1, 2) and f(1, c=5) == (1, 1, 5) and f(1, b=3) == (1, 3, 2) and f(1, 3) == (1, 3, 2)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-soft-delete",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "Users must be soft-deleted: users.delete(id) marks a user deleted instead of removing it; every existing read (get, list_users, count, find_by_email) behaves as if deleted users do not exist; add restore(id) (undoes a delete; KeyError for unknown ids) and list_users(include_deleted=True). Creating a user with the email of a deleted user must still fail. Keep all current behaviour otherwise.",
+  "files": {
+   "db.py": "ROWS = {}\nNEXT = [1]\n\ndef insert(row):\n    rid = NEXT[0]; NEXT[0] += 1\n    ROWS[rid] = dict(row, id=rid)\n    return rid\n\ndef remove(rid):\n    del ROWS[rid]\n",
+   "users.py": "import db\n\ndef create(name, email):\n    if find_by_email(email):\n        raise ValueError('email taken')\n    return db.insert({'name': name, 'email': email.lower()})\n\ndef get(uid):\n    return db.ROWS[uid]\n\ndef find_by_email(email):\n    for r in db.ROWS.values():\n        if r['email'] == email.lower():\n            return r\n    return None\n\ndef list_users():\n    return sorted(db.ROWS.values(), key=lambda r: r['id'])\n\ndef count():\n    return len(db.ROWS)\n\ndef delete(uid):\n    db.remove(uid)\n",
+   "api.py": "import users\n\ndef handle(method, path, body=None):\n    parts = path.strip('/').split('/')\n    try:\n        if method == 'GET' and parts == ['users']:\n            return 200, [u['name'] for u in users.list_users()]\n        if method == 'GET' and len(parts) == 2:\n            return 200, users.get(int(parts[1]))['name']\n        if method == 'DELETE' and len(parts) == 2:\n            users.delete(int(parts[1])); return 204, None\n        if method == 'POST' and parts == ['users']:\n            return 201, users.create(body['name'], body['email'])\n    except KeyError:\n        return 404, None\n    except ValueError as e:\n        return 409, str(e)\n    return 400, None\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import users, api, db\na=users.create('A','a@x.io'); b=users.create('B','b@x.io')\nusers.delete(a)\nassert users.count()==1 and [u['name'] for u in users.list_users()]==['B']\nassert [u['name'] for u in users.list_users(include_deleted=True)]==['A','B']\nassert users.find_by_email('A@x.io') is None\ntry:\n    users.get(a); raise SystemExit('deleted user visible')\nexcept KeyError: pass\nassert api.handle('GET','/users/%d'%a)==(404,None) and api.handle('GET','/users')==(200,['B'])\nassert api.handle('POST','/users',{'name':'A2','email':'a@x.io'})[0]==409\nusers.restore(a); assert users.count()==2 and users.get(a)['name']=='A'\ntry:\n    users.restore(999); raise SystemExit('restore unknown')\nexcept KeyError: pass\nassert api.handle('DELETE','/users/%d'%b)==(204,None) and api.handle('GET','/users')==(200,['A'])\nassert len(db.ROWS)==2\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-anagrams",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "group_anagrams(words) is far too slow on our dictionary (200k words). Make it fast; the output must stay exactly the same (groups of words that are anagrams of each other, ignoring case, each group in input order, groups ordered by their first word's position, single words included).",
+  "files": {
+   "anagrams.py": "def group_anagrams(words):\n    groups, used = [], set()\n    for i, w in enumerate(words):\n        if i in used:\n            continue\n        g = [w]\n        for j in range(i + 1, len(words)):\n            if j not in used and sorted(words[j].lower()) == sorted(w.lower()):\n                g.append(words[j]); used.add(j)\n        groups.append(g)\n    return groups\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import random, time, string\nfrom anagrams import group_anagrams as g\nassert g(['Tea','eat','tan','ate','Nat','bat'])==[['Tea','eat','ate'],['tan','Nat'],['bat']]\nassert g([])==[] and g(['a','A','a'])==[['a','A','a']]\nrnd=random.Random(2)\nws=[''.join(rnd.choice('abcdefg') for _ in range(rnd.randint(3,7))) for _ in range(200000)]\nt=time.time(); r=g(ws); dt=time.time()-t\nassert sum(len(x) for x in r)==200000 and dt<4, dt\nassert r[0][0]==ws[0]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 240
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-accounting-export",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "Accounting asked for an export of our invoices. Add export_accounting(invoices) to exports.py returning the file contents as a string.",
+  "files": {
+   "docs/CONVENTIONS.md": "# Data conventions\n\nEvery file we hand to accounting follows these rules:\n\n- semicolon-separated, header row first, column names in snake_case\n- dates in ISO 8601 (YYYY-MM-DD)\n- money as integer cents, never decimals\n- one row per invoice, ordered by invoice date, oldest first\n- lines end with \\n\n",
+   "invoices.py": "from datetime import date\nINVOICES = [\n    {'number': 'INV-2', 'customer': 'Acme; Ltd', 'issued': date(2026, 3, 2), 'total': 1250.5},\n    {'number': 'INV-1', 'customer': 'Bo', 'issued': date(2026, 2, 27), 'total': 99.99},\n]\n",
+   "exports.py": "import csv, io\n\ndef export_customers(customers):\n    buf = io.StringIO()\n    w = csv.writer(buf, delimiter=';', lineterminator='\\n')\n    w.writerow(['customer_name', 'created_on'])\n    for c in customers:\n        w.writerow([c['name'], c['created'].isoformat()])\n    return buf.getvalue()\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import csv, io\nfrom invoices import INVOICES\nfrom exports import export_accounting\nout=export_accounting(INVOICES)\nrows=list(csv.reader(io.StringIO(out), delimiter=';'))\nhdr=rows[0]\nassert all(h==h.lower() and ' ' not in h for h in hdr), hdr\nassert len(rows)==3 and '\\r' not in out\nbody=rows[1:]\nflat=[c for r in body for c in r]\nassert '2026-02-27' in body[0] and '2026-03-02' in body[1], body\nassert '9999' in body[0] and '125050' in body[1], body\nassert not any('.' in c and c.replace('.','').isdigit() for c in flat), 'decimal money'\nassert 'Acme; Ltd' in body[1], body\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-payment-strategies",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "payments.process() is a growing if/elif chain. Refactor it so new payment methods can be added by registering a handler (payments.register(name, fn)) without editing process(). Behaviour for card, paypal and voucher must not change, including the error for unknown methods.",
+  "files": {
+   "payments.py": "def process(method, amount):\n    if amount <= 0:\n        raise ValueError('amount must be positive')\n    if method == 'card':\n        fee = round(amount * 0.029 + 0.30, 2)\n        return {'method': 'card', 'charged': round(amount + fee, 2), 'fee': fee}\n    elif method == 'paypal':\n        fee = round(amount * 0.034, 2)\n        return {'method': 'paypal', 'charged': round(amount + fee, 2), 'fee': fee}\n    elif method == 'voucher':\n        return {'method': 'voucher', 'charged': 0.0, 'fee': 0.0}\n    else:\n        raise ValueError(f'unknown method {method}')\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import inspect, payments\nfrom payments import process, register\nassert process('card',100)=={'method':'card','charged':103.2,'fee':3.2}\nassert process('paypal',50)=={'method':'paypal','charged':51.7,'fee':1.7}\nassert process('voucher',9)=={'method':'voucher','charged':0.0,'fee':0.0}\nfor bad in (('card',0),('crypto',5)):\n    try:\n        process(*bad); raise SystemExit('accepted')\n    except ValueError as e: pass\ntry: process('crypto',5)\nexcept ValueError as e: assert 'unknown method crypto' in str(e)\nsrc=inspect.getsource(process)\nassert \"'paypal'\" not in src and \"'card'\" not in src, 'process still names methods'\nregister('bank', lambda amount: {'method':'bank','charged':amount,'fee':0.0})\nassert process('bank',10)=={'method':'bank','charged':10,'fee':0.0}\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-slugify",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "dev",
+  "mode": "code",
+  "prompt": "Write thorough tests for slug.slugify (see its code for the intended behaviour: accents folded to ASCII, any run of other characters becomes one separator, no leading or trailing separators, truncation only at a separator boundary when possible, 'n-a' for empty results). Put the tests in test_slug.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_slug.py`. Do not change slug.py.",
+  "files": {
+   "slug.py": "import unicodedata, re\n\ndef slugify(s, max_len=50, sep='-'):\n    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower()\n    s = re.sub(r'[^a-z0-9]+', sep, s).strip(sep)\n    if len(s) > max_len:\n        cut = s[:max_len + 1]\n        s = cut[:cut.rfind(sep)] if sep in cut else s[:max_len]\n    return s or 'n-a'\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"slug.py\", \"test\": \"test_slug.py\", \"mutants\": {\"no_fold\": \"import unicodedata, re\\n\\ndef slugify(s, max_len=50, sep='-'):\\n    s = unicodedata.normalize('NFKD', s).lower()\\n    s = re.sub(r'[^a-z0-9]+', sep, s).strip(sep)\\n    if len(s) > max_len:\\n        cut = s[:max_len + 1]\\n        s = cut[:cut.rfind(sep)] if sep in cut else s[:max_len]\\n    return s or 'n-a'\\n\", \"no_collapse\": \"import unicodedata, re\\n\\ndef slugify(s, max_len=50, sep='-'):\\n    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower()\\n    s = re.sub(r'[^a-z0-9]', sep, s).strip(sep)\\n    if len(s) > max_len:\\n        cut = s[:max_len + 1]\\n        s = cut[:cut.rfind(sep)] if sep in cut else s[:max_len]\\n    return s or 'n-a'\\n\", \"no_strip\": \"import unicodedata, re\\n\\ndef slugify(s, max_len=50, sep='-'):\\n    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower()\\n    s = re.sub(r'[^a-z0-9]+', sep, s)\\n    if len(s) > max_len:\\n        cut = s[:max_len + 1]\\n        s = cut[:cut.rfind(sep)] if sep in cut else s[:max_len]\\n    return s or 'n-a'\\n\", \"midword\": \"import unicodedata, re\\n\\ndef slugify(s, max_len=50, sep='-'):\\n    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower()\\n    s = re.sub(r'[^a-z0-9]+', sep, s).strip(sep)\\n    if len(s) > max_len:\\n        cut = s[:max_len + 1]\\n        s = s[:max_len]\\n    return s or 'n-a'\\n\", \"empty\": \"import unicodedata, re\\n\\ndef slugify(s, max_len=50, sep='-'):\\n    s = unicodedata.normalize('NFKD', s).encode('ascii', 'ignore').decode().lower()\\n    s = re.sub(r'[^a-z0-9]+', sep, s).strip(sep)\\n    if len(s) > max_len:\\n        cut = s[:max_len + 1]\\n        s = cut[:cut.rfind(sep)] if sep in cut else s[:max_len]\\n    return s\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ }
+]

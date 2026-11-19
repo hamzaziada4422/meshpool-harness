@@ -139,7 +139,8 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
            "secs": round(time.time() - t0, 1), "route": res.get("route"), "model": res.get("model"),
-           "error": res.get("error"), "answer_words": len((res.get("answer") or "").split()), **{
+           "error": res.get("error"), "answer_words": len((res.get("answer") or "").split()),
+           "trace": res.get("trace") or [], **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
     if task.get("repo"):                               # keep the patch, to learn from failures

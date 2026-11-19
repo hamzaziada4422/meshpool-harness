@@ -1,0 +1,1041 @@
+[
+ {
+  "id": "v2-alg-topo-cycle",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Implement build_order(deps) in topo.py: deps maps each package to the packages it needs. Return an order where every package comes after its dependencies; among packages that are ready at the same time choose the alphabetically smallest. Packages that only appear as dependencies are included. If there is a cycle, raise CycleError whose .cycle is the list of packages in one cycle, starting at its alphabetically smallest member and following dependency edges, e.g. ['a', 'c', 'b'] for a needs c, c needs b, b needs a.",
+  "files": {
+   "topo.py": "class CycleError(Exception):\n    def __init__(self, cycle):\n        super().__init__(' -> '.join(cycle))\n        self.cycle = cycle\n\ndef build_order(deps):\n    raise NotImplementedError\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from topo import build_order, CycleError\nassert build_order({})==[]\nassert build_order({'app':['lib','util'],'lib':['util'],'util':[]})==['util','lib','app']\nassert build_order({'b':[],'a':[],'c':['a']})==['a','b','c']\nassert build_order({'x':['z','y']})==['y','z','x']\nfor deps, cyc in (({'a':['c'],'c':['b'],'b':['a']},['a','c','b']), ({'m':['n'],'n':['m'],'z':[]},['m','n']), ({'q':['q']},['q']), ({'a':['b'],'b':['c'],'c':['d'],'d':['b']},['b','c','d'])):\n    try:\n        build_order(deps); raise SystemExit('no cycle')\n    except CycleError as e:\n        assert e.cycle==cyc, (e.cycle, cyc)\nimport time\nbig={f'p{i:05d}':[f'p{j:05d}' for j in range(max(0,i-3),i)] for i in range(20000)}\nt=time.time(); o=build_order(big); assert len(o)==20000 and o[0]=='p00000' and time.time()-t<3\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-expr",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Implement evaluate(text) in calc.py for arithmetic with + - * / % and ** (power, right-associative, binding tighter than unary minus on its left: -2**2 == -4, 2**-1 == 0.5), parentheses, integers and decimals, and spaces. Division by zero raises ZeroDivisionError; any malformed input raises SyntaxError. Do not use eval, exec, compile or the ast module.",
+  "files": {
+   "calc.py": "def evaluate(text):\n    raise NotImplementedError\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import calc, inspect\nfrom calc import evaluate as e\ncases={'1+2*3':7,'(1+2)*3':9,'2**3**2':512,'-2**2':-4,'(-2)**2':4,'2**-1':0.5,'10/4':2.5,'7%3':1,'-7%3':2,'- (3 - 5)':2,'1.5*2':3.0,'2*-3':-6,'--3':3,' 4 / ( 1 + 1 ) ':2.0,'3-2-1':0,'2*3%4':2}\nfor k,v in cases.items():\n    assert abs(e(k)-v)<1e-9, (k, e(k), v)\nfor bad in ('','1+','(1','1)','2**','1 2','a+1','1..2','*3','()'):\n    try:\n        e(bad); raise SystemExit('accepted %r'%bad)\n    except SyntaxError: pass\ntry:\n    e('1/(2-2)'); raise SystemExit('no zero div')\nexcept ZeroDivisionError: pass\nsrc=inspect.getsource(calc)\nimport re\nassert not re.search(r'(?<![\\w.])(eval|exec|compile)\\(', src) and 'import ast' not in src and 'from ast' not in src\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-k-hop-path",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "cheapest(graph, src, dst, k) must return the minimum total cost from src to dst using at most k edges (graph maps node -> list of (neighbour, cost), costs >= 0), or None if impossible. The current Dijkstra ignores k, so it returns paths with too many hops. It must stay fast on large graphs.",
+  "files": {
+   "route.py": "import heapq\n\ndef cheapest(graph, src, dst, k):\n    dist = {src: 0}\n    pq = [(0, src)]\n    while pq:\n        d, u = heapq.heappop(pq)\n        if u == dst:\n            return d\n        if d > dist.get(u, float('inf')):\n            continue\n        for v, c in graph.get(u, []):\n            if d + c < dist.get(v, float('inf')):\n                dist[v] = d + c\n                heapq.heappush(pq, (d + c, v))\n    return None\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import random, time\nfrom route import cheapest\ng={'a':[('b',1),('c',5)],'b':[('c',1)],'c':[('d',1)],'d':[]}\nassert cheapest(g,'a','d',3)==3 and cheapest(g,'a','d',2)==6 and cheapest(g,'a','d',1) is None and cheapest(g,'a','a',0)==0\nassert cheapest({'a':[('b',0)]},'a','b',1)==0 and cheapest({},'a','b',3) is None\nrnd=random.Random(3); n=3000\nG={i:[(rnd.randrange(n), rnd.randint(1,20)) for _ in range(6)] for i in range(n)}\ndef ref(G,s,t,k):\n    best={s:0}\n    for _ in range(k):\n        nb=dict(best)\n        for u,d in best.items():\n            for v,c in G.get(u,[]):\n                if d+c<nb.get(v,1e18): nb[v]=d+c\n        best=nb\n    return best.get(t)\nfor _ in range(5):\n    s,t,k=rnd.randrange(n),rnd.randrange(n),rnd.randint(1,8)\n    assert cheapest(G,s,t,k)==ref(G,s,t,k), (s,t,k)\nt0=time.time(); cheapest(G,0,n-1,12); assert time.time()-t0<4\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-window-median",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "medians(xs, k) returns the median of every window of k consecutive values (for even k, the mean of the two middle values). The current version sorts every window and times out on our data (hundreds of thousands of values, windows of thousands). Make it fast and keep results identical.",
+  "files": {
+   "stats.py": "def medians(xs, k):\n    out = []\n    for i in range(len(xs) - k + 1):\n        w = sorted(xs[i:i + k])\n        out.append(w[k // 2] if k % 2 else (w[k // 2 - 1] + w[k // 2]) / 2)\n    return out\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import random, time\nfrom stats import medians\ndef ref(xs,k):\n    out=[]\n    for i in range(len(xs)-k+1):\n        w=sorted(xs[i:i+k]); out.append(w[k//2] if k%2 else (w[k//2-1]+w[k//2])/2)\n    return out\nrnd=random.Random(5)\nfor _ in range(30):\n    xs=[rnd.randint(-5,5) for _ in range(rnd.randint(1,40))]; k=rnd.randint(1,len(xs))\n    assert medians(xs,k)==ref(xs,k), (xs,k)\nassert medians([1,2],3)==[] and medians([3],1)==[3]\nxs=[rnd.random() for _ in range(200000)]\nt=time.time(); r=medians(xs,2001); dt=time.time()-t\nassert len(r)==198000 and dt<6, dt\nassert r[:3]==ref(xs[:2003],2001)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 240
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-line-diff",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "diff(a, b) must return a minimal edit script turning list a into list b, as a list of ('=', line), ('-', line) and ('+', line) operations: no other script may have fewer '-' plus '+' operations. Applying the script must reproduce b. When several minimal scripts exist, put deletions before insertions at each point. The current version is not minimal.",
+  "files": {
+   "difflib2.py": "def diff(a, b):\n    ops = []\n    for i in range(max(len(a), len(b))):\n        x = a[i] if i < len(a) else None\n        y = b[i] if i < len(b) else None\n        if x == y:\n            ops.append(('=', x))\n        else:\n            if x is not None:\n                ops.append(('-', x))\n            if y is not None:\n                ops.append(('+', y))\n    return ops\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import random\nfrom difflib2 import diff\ndef apply(a, ops):\n    out=[]; i=0\n    for op,l in ops:\n        if op=='=': assert a[i]==l; out.append(l); i+=1\n        elif op=='-': assert a[i]==l; i+=1\n        else: out.append(l)\n    assert i==len(a); return out\ndef lcs(a,b):\n    m=[[0]*(len(b)+1) for _ in range(len(a)+1)]\n    for i in range(len(a)-1,-1,-1):\n        for j in range(len(b)-1,-1,-1):\n            m[i][j]=m[i+1][j+1]+1 if a[i]==b[j] else max(m[i+1][j],m[i][j+1])\n    return m[0][0]\nrnd=random.Random(9)\nfor _ in range(200):\n    a=[rnd.choice('abcd') for _ in range(rnd.randint(0,12))]; b=[rnd.choice('abcd') for _ in range(rnd.randint(0,12))]\n    ops=diff(a,b); assert apply(a,ops)==b\n    assert sum(op!='=' for op,_ in ops)==len(a)+len(b)-2*lcs(a,b), (a,b,ops)\nassert diff(['x','y'],['y','x'])[0][0] in '-='\nops=diff(['a','b'],['a','c']); assert ops==[('=','a'),('-','b'),('+','c')], ops\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-meeting-slot",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "first_slot(calendars, duration, day_start, day_end, earliest) returns the earliest start time (minutes since midnight) at or after `earliest` when every person is free for `duration` minutes within working hours [day_start, day_end), or None. Each calendar is a list of (start, end) busy intervals, unsorted, possibly overlapping, possibly extending outside working hours. A meeting may start exactly when a busy interval ends.",
+  "files": {
+   "slots.py": "def first_slot(calendars, duration, day_start, day_end, earliest=0):\n    raise NotImplementedError\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from slots import first_slot as f\nassert f([],30,540,1020)==540\nassert f([[(540,600)],[(570,630)]],30,540,1020)==630\nassert f([[(540,600)],[(600,660)]],60,540,1020)==660\nassert f([[(500,1100)]],15,540,1020) is None\nassert f([[(540,560),(565,600)]],5,540,1020)==560\nassert f([[(540,560),(565,600)]],6,540,1020)==600\nassert f([[(600,700),(650,800)],[(900,1000)]],100,540,1020)==800\nassert f([[(600,700)]],30,540,1020,earliest=610)==700\nassert f([[(600,700)]],30,540,1020,earliest=545)==545\nassert f([[(540,1000)]],30,540,1020) is None\nassert f([[(540,990)]],30,540,1020)==990\nassert f([[(700,800)]],30,540,1020,earliest=1000) is None\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-roman-strict",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "roman.py converts integers 1..3999 to Roman numerals and back. parse() currently accepts invalid numerals (IIII, VX, IC, MMMM, empty strings, lower case) and returns wrong values for some valid ones. Make parse() accept exactly the canonical numerals that to_roman() produces (raising ValueError for anything else) and make both functions correct for the whole range.",
+  "files": {
+   "roman.py": "VALS = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000}\n\ndef to_roman(n):\n    out = ''\n    for sym, v in (('M', 1000), ('D', 500), ('C', 100), ('L', 50), ('X', 10), ('V', 5), ('I', 1)):\n        while n >= v:\n            out += sym; n -= v\n    return out\n\ndef parse(s):\n    total = 0\n    for i, ch in enumerate(s):\n        v = VALS[ch.upper()]\n        if i + 1 < len(s) and VALS[s[i + 1].upper()] > v:\n            total -= v\n        else:\n            total += v\n    return total\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from roman import to_roman, parse\nassert to_roman(4)=='IV' and to_roman(9)=='IX' and to_roman(1994)=='MCMXCIV' and to_roman(3999)=='MMMCMXCIX' and to_roman(40)=='XL'\nfor n in range(1,4000):\n    assert parse(to_roman(n))==n, n\nfor bad in ('','IIII','VX','IC','MMMM','iv','IIV','XXL','VV','LL','DD','CCCC','IL','XM','MCMC','CMD','IXI','IVI',' X','X1'):\n    try:\n        parse(bad); raise SystemExit('accepted %r'%bad)\n    except ValueError: pass\nfor bad in (0,4000,-1):\n    try:\n        to_roman(bad); raise SystemExit('accepted %r'%bad)\n    except ValueError: pass\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-alg-merge-accounts",
+  "category": "algorithmic",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "merge(accounts) gets a list of [name, email, email, ...]. Accounts that share any email (transitively) belong to the same person. Return one entry per person: [name, sorted unique emails...], using the name of the earliest account in the input for that person; order people by their earliest account in the input. Names alone never merge accounts. Must handle 100k accounts quickly.",
+  "files": {
+   "accounts.py": "def merge(accounts):\n    out = []\n    for acc in accounts:\n        for o in out:\n            if o[0] == acc[0]:\n                o.extend(e for e in acc[1:] if e not in o)\n                break\n        else:\n            out.append(list(acc))\n    return out\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import time\nfrom accounts import merge\nA=[['Ann','a@x','b@x'],['Bob','c@x'],['Ann2','b@x','d@x'],['Bob','e@x'],['Zed','d@x','f@x'],['Cy']]\nassert merge(A)==[['Ann','a@x','b@x','d@x','f@x'],['Bob','c@x'],['Bob','e@x'],['Cy']], merge(A)\nassert merge([])==[]\nassert merge([['x','q@q','q@q']])==[['x','q@q']]\nbig=[[f'u{i}', f'e{i}@x', f'e{i+1}@x'] for i in range(0,100000,2)]+[[f'v{i}', f'e{i+1}@x', f'e{i+2}@x'] for i in range(0,100000,2)]\nt=time.time(); r=merge(big); assert time.time()-t<5 and len(r)==1 and r[0][0]=='u0' and len(r[0])==100002\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-mixed-timestamps",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "events.csv logs signups from several systems with different timestamp formats (all of them identify an exact instant). How many signups happened on 2 March 2026 in New York local time (UTC-5 that week)? Give the number.",
+  "files": {
+   "events.csv": "event_id,timestamp\n0,1772556420\n1,2026-03-03T01:45:00+02:00\n2,2026-03-03T04:06:00Z\n3,03/03/2026 03:09 UTC\n4,03/02/2026 13:25 UTC\n5,2026-03-02T07:04:00Z\n6,03/01/2026 19:50 UTC\n7,2026-03-03T04:11:00+02:00\n8,2026-03-03T00:22:00+02:00\n9,2026-03-01T10:01:00+02:00\n10,1772359860\n11,2026-03-03T07:14:00Z\n12,2026-03-01T02:32:00Z\n13,2026-03-03T23:29:00+02:00\n14,03/01/2026 12:25 UTC\n15,2026-03-03T12:35:00Z\n16,2026-03-03T11:46:00+02:00\n17,2026-03-02T20:40:00+02:00\n18,2026-03-01T09:00:00+02:00\n19,2026-03-03T21:15:00Z\n20,03/03/2026 06:41 UTC\n21,03/03/2026 16:06 UTC\n22,2026-03-03T04:30:00Z\n23,2026-03-01T13:17:00+02:00\n24,1772451720\n25,03/03/2026 01:34 UTC\n26,2026-03-02T18:18:00Z\n27,2026-03-02T12:27:00+02:00\n28,1772487960\n29,2026-03-03T04:41:00+02:00\n30,03/01/2026 03:50 UTC\n31,2026-03-03T10:43:00Z\n32,2026-03-03T22:51:00Z\n33,03/02/2026 06:19 UTC\n34,03/01/2026 05:56 UTC\n35,2026-03-02T03:54:00Z\n36,2026-03-02T08:07:00+02:00\n37,1772361480\n38,03/01/2026 05:01 UTC\n39,03/02/2026 13:45 UTC\n40,2026-03-02T22:59:00Z\n41,03/03/2026 22:10 UTC\n42,2026-03-03T04:17:00+02:00\n43,1772490120\n44,03/03/2026 14:12 UTC\n45,2026-03-03T19:40:00+02:00\n46,03/01/2026 22:52 UTC\n47,2026-03-03T03:43:00+02:00\n48,2026-03-02T03:50:00+02:00\n49,1772326440\n50,2026-03-03T00:39:00+02:00\n51,2026-03-02T08:59:00Z\n52,2026-03-03T20:27:00Z\n53,2026-03-02T09:47:00Z\n54,2026-03-03T03:16:00+02:00\n55,1772334900\n56,2026-03-02T14:09:00Z\n57,03/02/2026 07:20 UTC\n58,1772563920\n59,03/02/2026 11:51 UTC\n60,03/01/2026 22:08 UTC\n61,2026-03-02T15:46:00Z\n62,1772459940\n63,03/03/2026 22:20 UTC\n64,1772428380\n65,1772579220\n66,2026-03-01T03:53:00Z\n67,2026-03-01T05:43:00+02:00\n68,03/02/2026 12:17 UTC\n69,2026-03-01T20:53:00+02:00\n70,03/02/2026 03:20 UTC\n71,2026-03-03T16:24:00Z\n72,2026-03-02T11:12:00Z\n73,03/03/2026 09:01 UTC\n74,03/01/2026 12:40 UTC\n75,1772421000\n76,03/03/2026 02:18 UTC\n77,2026-03-01T21:58:00Z\n78,2026-03-01T21:13:00Z\n79,2026-03-01T05:10:00Z\n80,2026-03-03T10:43:00+02:00\n81,2026-03-03T03:48:00Z\n82,2026-03-03T02:13:00+02:00\n83,1772476560\n84,2026-03-03T19:08:00Z\n85,03/02/2026 04:56 UTC\n86,2026-03-02T09:33:00Z\n87,1772523180\n88,2026-03-02T20:10:00Z\n89,2026-03-02T23:23:00+02:00\n90,1772367660\n91,2026-03-02T20:24:00+02:00\n92,1772537460\n93,2026-03-02T00:00:00Z\n94,03/02/2026 04:33 UTC\n95,03/03/2026 12:34 UTC\n96,2026-03-02T00:29:00Z\n97,03/02/2026 22:35 UTC\n98,1772440320\n99,2026-03-01T15:13:00+02:00\n100,1772326980\n101,1772503320\n102,03/02/2026 03:29 UTC\n103,2026-03-02T18:25:00+02:00\n104,2026-03-04T00:30:00+02:00\n105,1772569440\n106,03/01/2026 22:09 UTC\n107,2026-03-03T07:05:00+02:00\n108,03/03/2026 14:49 UTC\n109,2026-03-01T08:43:00+02:00\n110,03/03/2026 07:38 UTC\n111,03/03/2026 23:11 UTC\n112,2026-03-01T07:08:00Z\n113,1772476560\n114,1772331540\n115,1772568900\n116,2026-03-02T19:56:00+02:00\n117,03/01/2026 18:33 UTC\n118,2026-03-02T08:48:00+02:00\n119,03/02/2026 10:23 UTC\n120,03/01/2026 06:16 UTC\n121,1772502480\n122,1772523960\n123,1772514420\n124,2026-03-01T22:14:00+02:00\n125,2026-03-02T11:24:00Z\n126,03/03/2026 03:40 UTC\n127,1772531520\n128,03/02/2026 22:23 UTC\n129,03/03/2026 03:50 UTC\n130,03/03/2026 04:31 UTC\n131,2026-03-02T02:56:00+02:00\n132,1772424000\n133,1772377080\n134,2026-03-03T23:22:00Z\n135,1772499540\n136,1772390640\n137,2026-03-02T04:50:00Z\n138,2026-03-02T18:06:00Z\n139,2026-03-01T03:46:00+02:00\n140,2026-03-02T04:40:00+02:00\n141,1772419920\n142,2026-03-02T03:56:00+02:00\n143,2026-03-02T18:35:00Z\n144,1772373480\n145,2026-03-03T22:01:00+02:00\n146,2026-03-03T13:13:00Z\n147,2026-03-01T02:50:00+02:00\n148,03/03/2026 05:37 UTC\n149,03/02/2026 16:03 UTC\n150,03/03/2026 00:35 UTC\n151,2026-03-03T08:38:00Z\n152,2026-03-02T14:01:00Z\n153,03/01/2026 21:10 UTC\n154,2026-03-03T02:01:00Z\n155,03/03/2026 10:16 UTC\n156,2026-03-03T03:11:00Z\n157,1772386740\n158,2026-03-01T10:31:00+02:00\n159,03/01/2026 14:45 UTC\n160,2026-03-01T11:30:00Z\n161,2026-03-01T03:08:00+02:00\n162,2026-03-01T04:13:00Z\n163,2026-03-01T05:49:00+02:00\n164,2026-03-03T18:54:00+02:00\n165,1772549700\n166,1772531340\n167,03/02/2026 09:00 UTC\n168,1772366040\n169,1772352060\n170,1772393040\n171,03/01/2026 16:43 UTC\n172,1772390340\n173,2026-03-01T03:42:00+02:00\n174,2026-03-02T07:12:00Z\n175,03/03/2026 17:52 UTC\n176,03/02/2026 22:26 UTC\n177,1772479320\n178,03/03/2026 04:06 UTC\n179,2026-03-03T00:46:00+02:00\n180,2026-03-03T01:22:00Z\n181,1772436480\n182,1772512560\n183,03/01/2026 17:19 UTC\n184,1772460300\n185,03/02/2026 22:53 UTC\n186,2026-03-01T13:58:00Z\n187,2026-03-03T21:14:00+02:00\n188,2026-03-03T03:31:00+02:00\n189,03/02/2026 13:42 UTC\n190,1772488200\n191,1772507160\n192,03/02/2026 21:06 UTC\n193,2026-03-01T11:43:00+02:00\n194,2026-03-03T08:34:00+02:00\n195,1772481600\n196,2026-03-03T01:46:00+02:00\n197,1772469060\n198,03/02/2026 21:22 UTC\n199,1772344200\n200,2026-03-01T10:03:00Z\n201,2026-03-02T12:09:00+02:00\n202,2026-03-03T18:17:00Z\n203,2026-03-02T20:26:00+02:00\n204,2026-03-03T13:50:00+02:00\n205,2026-03-02T14:35:00Z\n206,2026-03-02T09:50:00+02:00\n207,1772419620\n208,2026-03-01T18:39:00+02:00\n209,03/02/2026 00:59 UTC\n210,03/02/2026 18:20 UTC\n211,03/01/2026 18:05 UTC\n212,03/03/2026 05:29 UTC\n213,03/03/2026 15:32 UTC\n214,1772499840\n215,2026-03-02T04:49:00+02:00\n216,03/03/2026 23:49 UTC\n217,1772569680\n218,03/03/2026 00:30 UTC\n219,2026-03-02T19:51:00+02:00\n220,2026-03-01T03:21:00Z\n221,03/02/2026 15:52 UTC\n222,03/02/2026 15:34 UTC\n223,03/01/2026 20:41 UTC\n224,2026-03-02T20:54:00+02:00\n225,03/02/2026 11:22 UTC\n226,2026-03-03T08:29:00Z\n227,2026-03-01T19:24:00Z\n228,2026-03-03T13:51:00Z\n229,2026-03-02T19:57:00+02:00\n230,2026-03-01T23:38:00+02:00\n231,03/01/2026 16:38 UTC\n232,03/03/2026 21:55 UTC\n233,2026-03-02T17:58:00Z\n234,2026-03-02T04:17:00+02:00\n235,03/02/2026 07:08 UTC\n236,1772449200\n237,2026-03-02T03:45:00+02:00\n238,2026-03-02T04:18:00Z\n239,1772440680\n240,03/01/2026 04:40 UTC\n241,03/01/2026 14:49 UTC\n242,2026-03-04T00:58:00+02:00\n243,03/01/2026 07:53 UTC\n244,2026-03-02T17:07:00Z\n245,03/03/2026 19:27 UTC\n246,03/03/2026 01:02 UTC\n247,2026-03-01T11:36:00Z\n248,03/03/2026 23:16 UTC\n249,2026-03-03T06:33:00Z\n250,1772571060\n251,2026-03-03T10:39:00+02:00\n252,1772335140\n253,1772358900\n254,2026-03-02T20:32:00+02:00\n255,03/02/2026 16:54 UTC\n256,03/02/2026 14:12 UTC\n257,2026-03-03T23:34:00Z\n258,1772345280\n259,1772501760\n260,2026-03-02T23:19:00Z\n261,2026-03-01T16:50:00Z\n262,2026-03-01T17:40:00+02:00\n263,2026-03-01T10:44:00+02:00\n264,2026-03-01T20:18:00+02:00\n265,1772410200\n266,03/02/2026 06:29 UTC\n267,2026-03-01T04:39:00+02:00\n268,03/02/2026 14:34 UTC\n269,1772547180\n270,1772405640\n271,1772328240\n272,03/03/2026 11:02 UTC\n273,2026-03-02T06:08:00+02:00\n274,1772333340\n275,1772499120\n276,03/01/2026 12:50 UTC\n277,03/03/2026 02:46 UTC\n278,1772497980\n279,1772342880\n280,1772327880\n281,2026-03-02T21:01:00+02:00\n282,1772351460\n283,2026-03-02T10:39:00+02:00\n284,2026-03-01T16:36:00Z\n285,2026-03-01T11:00:00+02:00\n286,1772534940\n287,2026-03-02T12:32:00Z\n288,2026-03-03T13:42:00+02:00\n289,1772506920\n290,2026-03-02T22:02:00Z\n291,03/02/2026 19:01 UTC\n292,2026-03-02T05:49:00+02:00\n293,2026-03-01T09:12:00Z\n294,03/03/2026 17:24 UTC\n295,2026-03-02T00:23:00+02:00\n296,03/03/2026 15:53 UTC\n297,2026-03-02T23:54:00+02:00\n298,2026-03-01T20:24:00+02:00\n299,03/03/2026 16:23 UTC\n300,2026-03-01T21:04:00Z\n301,03/02/2026 03:32 UTC\n302,2026-03-02T07:07:00+02:00\n303,2026-03-02T11:00:00Z\n304,03/02/2026 20:47 UTC\n305,2026-03-03T13:32:00Z\n306,03/03/2026 11:14 UTC\n307,2026-03-02T05:21:00+02:00\n308,2026-03-02T02:27:00+02:00\n309,2026-03-01T13:29:00+02:00\n310,2026-03-02T22:16:00+02:00\n311,2026-03-01T07:54:00+02:00\n312,03/03/2026 16:25 UTC\n313,2026-03-01T21:05:00+02:00\n314,03/01/2026 12:05 UTC\n315,2026-03-02T09:20:00+02:00\n316,2026-03-03T21:39:00+02:00\n317,2026-03-02T15:34:00+02:00\n318,1772581020\n319,2026-03-02T10:09:00Z\n320,2026-03-03T07:38:00+02:00\n321,2026-03-02T13:06:00Z\n322,2026-03-03T10:13:00Z\n323,2026-03-03T15:31:00+02:00\n324,03/02/2026 03:18 UTC\n325,2026-03-02T00:58:00Z\n326,2026-03-01T02:31:00Z\n327,2026-03-01T18:41:00+02:00\n328,1772521320\n329,2026-03-02T04:20:00Z\n330,2026-03-03T11:55:00Z\n331,2026-03-03T23:42:00+02:00\n332,2026-03-02T16:19:00Z\n333,03/01/2026 22:18 UTC\n334,1772335680\n335,2026-03-01T03:27:00+02:00\n336,2026-03-01T14:40:00Z\n337,1772328120\n338,1772505540\n339,1772472900\n340,2026-03-01T18:13:00+02:00\n341,2026-03-03T11:53:00Z\n342,03/03/2026 11:32 UTC\n343,1772505840\n344,2026-03-03T01:23:00Z\n345,1772375220\n346,2026-03-02T15:20:00+02:00\n347,1772483280\n348,03/03/2026 17:24 UTC\n349,2026-03-02T22:29:00Z\n350,2026-03-01T16:19:00Z\n351,2026-03-03T06:38:00Z\n352,2026-03-01T23:35:00+02:00\n353,03/03/2026 11:49 UTC\n354,03/03/2026 05:37 UTC\n355,2026-03-01T09:11:00Z\n356,03/01/2026 21:26 UTC\n357,03/01/2026 22:57 UTC\n358,1772476680\n359,2026-03-02T08:14:00Z\n360,2026-03-01T02:19:00+02:00\n361,03/02/2026 19:03 UTC\n362,1772516040\n363,2026-03-02T01:44:00+02:00\n364,03/01/2026 09:02 UTC\n365,2026-03-01T17:52:00Z\n366,03/02/2026 20:55 UTC\n367,1772326080\n368,1772550360\n369,2026-03-03T00:31:00Z\n370,1772475540\n371,2026-03-02T22:55:00Z\n372,1772376240\n373,2026-03-03T11:51:00+02:00\n374,2026-03-02T14:21:00+02:00\n375,03/01/2026 08:08 UTC\n376,2026-03-01T20:24:00+02:00\n377,2026-03-01T03:21:00+02:00\n378,2026-03-02T15:34:00Z\n379,2026-03-01T09:00:00+02:00\n380,1772333820\n381,1772366400\n382,2026-03-02T06:43:00+02:00\n383,2026-03-03T11:19:00Z\n384,2026-03-01T12:24:00Z\n385,03/03/2026 00:05 UTC\n386,2026-03-02T03:15:00+02:00\n387,03/02/2026 00:19 UTC\n388,03/02/2026 22:03 UTC\n389,2026-03-01T15:47:00+02:00\n390,1772397180\n391,2026-03-03T12:43:00Z\n392,2026-03-01T08:27:00Z\n393,2026-03-03T16:39:00Z\n394,2026-03-01T08:59:00+02:00\n395,2026-03-02T19:12:00Z\n396,2026-03-02T20:29:00+02:00\n397,03/03/2026 09:35 UTC\n398,1772358720\n399,2026-03-01T16:59:00Z\n400,2026-03-03T18:25:00Z\n401,03/01/2026 08:11 UTC\n402,1772530680\n403,03/03/2026 17:46 UTC\n404,2026-03-03T12:24:00+02:00\n405,03/03/2026 17:00 UTC\n406,2026-03-01T20:02:00+02:00\n407,03/01/2026 01:01 UTC\n408,2026-03-02T23:02:00+02:00\n409,03/02/2026 07:54 UTC\n410,2026-03-02T14:20:00Z\n411,2026-03-02T06:17:00+02:00\n412,2026-03-02T00:56:00Z\n413,03/01/2026 23:16 UTC\n414,2026-03-03T12:22:00+02:00\n415,03/03/2026 08:09 UTC\n416,2026-03-02T00:21:00+02:00\n417,03/02/2026 23:06 UTC\n418,2026-03-02T21:28:00+02:00\n419,2026-03-03T13:45:00+02:00\n420,2026-03-01T02:54:00Z\n421,1772444520\n422,1772525160\n423,1772545500\n424,03/03/2026 14:20 UTC\n425,2026-03-01T09:02:00Z\n426,2026-03-01T16:39:00Z\n427,2026-03-03T20:16:00Z\n428,2026-03-01T21:47:00+02:00\n429,2026-03-01T08:29:00Z\n430,03/01/2026 16:52 UTC\n431,03/03/2026 04:26 UTC\n432,03/01/2026 04:04 UTC\n433,2026-03-03T04:27:00Z\n434,1772409600\n435,2026-03-01T10:08:00+02:00\n436,2026-03-03T06:29:00Z\n437,1772455620\n438,2026-03-03T05:34:00+02:00\n439,2026-03-03T07:30:00+02:00\n440,2026-03-02T21:41:00+02:00\n441,2026-03-01T16:49:00+02:00\n442,03/02/2026 04:21 UTC\n443,2026-03-03T16:05:00+02:00\n444,2026-03-01T21:42:00Z\n445,2026-03-01T08:05:00Z\n446,03/01/2026 20:03 UTC\n447,1772508000\n448,03/01/2026 16:40 UTC\n449,03/03/2026 19:47 UTC\n450,2026-03-01T09:43:00+02:00\n451,1772394300\n452,03/03/2026 18:07 UTC\n453,1772381640\n454,2026-03-02T15:01:00Z\n455,2026-03-02T05:59:00+02:00\n456,03/03/2026 20:29 UTC\n457,2026-03-01T17:06:00Z\n458,03/01/2026 05:05 UTC\n459,1772336700\n460,2026-03-02T19:52:00+02:00\n461,2026-03-01T20:18:00Z\n462,03/01/2026 01:23 UTC\n463,2026-03-03T17:04:00Z\n464,2026-03-02T23:15:00Z\n465,2026-03-01T03:24:00+02:00\n466,03/02/2026 13:53 UTC\n467,2026-03-02T02:20:00+02:00\n468,1772564100\n469,2026-03-01T04:51:00Z\n470,1772546700\n471,03/02/2026 18:55 UTC\n472,03/02/2026 06:25 UTC\n473,2026-03-02T18:54:00Z\n474,1772432100\n475,2026-03-03T18:31:00+02:00\n476,1772517600\n477,2026-03-01T19:16:00Z\n478,2026-03-02T07:11:00Z\n479,2026-03-02T03:45:00+02:00\n480,2026-03-03T09:11:00Z\n481,2026-03-02T18:34:00Z\n482,1772370600\n483,03/03/2026 11:41 UTC\n484,2026-03-01T21:18:00+02:00\n485,03/02/2026 20:10 UTC\n486,03/02/2026 03:39 UTC\n487,2026-03-02T01:43:00+02:00\n488,1772444280\n489,1772474100\n490,1772548980\n491,2026-03-03T21:32:00+02:00\n492,2026-03-02T14:49:00+02:00\n493,2026-03-04T01:53:00+02:00\n494,2026-03-04T00:46:00+02:00\n495,1772420160\n496,2026-03-01T01:26:00Z\n497,2026-03-03T20:56:00Z\n498,03/03/2026 14:44 UTC\n499,1772408760\n"
+  },
+  "grade": {
+   "must": [
+    "(?<![\\d.])175(?![\\d.])"
+   ],
+   "must_not": [],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-messy-join",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "Which customer segment brought in the most revenue in orders.csv, and how much? Segments are in customers.csv. Give the segment and the amount to the cent.",
+  "files": {
+   "customers.csv": "customer_id,segment\nC0001,Mid-Market\nC0002,Mid-Market\nC0003,Enterprise\nC0004,Enterprise\nC0005,SMB\nC0006,Enterprise\nC0007,SMB\nC0008,Enterprise\nC0009,SMB\nC0010,SMB\nC0011,Enterprise\nC0012,Enterprise\nC0013,SMB\nC0014,SMB\nC0015,SMB\nC0016,Enterprise\nC0017,SMB\nC0018,Enterprise\nC0019,Mid-Market\nC0020,SMB\nC0021,Mid-Market\nC0022,SMB\nC0023,Enterprise\nC0024,Enterprise\nC0025,SMB\nC0026,Mid-Market\nC0027,SMB\nC0028,SMB\nC0029,Mid-Market\nC0030,Mid-Market\nC0031,Enterprise\nC0032,Mid-Market\nC0033,SMB\nC0034,Mid-Market\nC0035,Mid-Market\nC0036,SMB\nC0037,Mid-Market\nC0038,Enterprise\nC0039,Enterprise\nC0040,Mid-Market\nC0041,Enterprise\nC0042,Mid-Market\nC0043,Mid-Market\nC0044,Enterprise\nC0045,Mid-Market\nC0046,Enterprise\nC0047,SMB\nC0048,Mid-Market\nC0049,Enterprise\nC0050,Enterprise\nC0051,Mid-Market\nC0052,Enterprise\nC0053,Mid-Market\nC0054,Enterprise\nC0055,Enterprise\nC0056,Enterprise\nC0057,SMB\nC0058,Mid-Market\nC0059,Enterprise\nC0060,Enterprise\nC0061,Mid-Market\nC0062,Enterprise\nC0063,SMB\nC0064,Mid-Market\nC0065,SMB\nC0066,SMB\nC0067,Enterprise\nC0068,Mid-Market\nC0069,Mid-Market\nC0070,Mid-Market\nC0071,Mid-Market\nC0072,Mid-Market\nC0073,Enterprise\nC0074,Mid-Market\nC0075,Mid-Market\nC0076,SMB\nC0077,Enterprise\nC0078,Mid-Market\nC0079,Enterprise\nC0080,SMB\nC0081,Enterprise\nC0082,SMB\nC0083,SMB\nC0084,Enterprise\nC0085,Mid-Market\nC0086,SMB\nC0087,SMB\nC0088,Mid-Market\nC0089,Enterprise\nC0090,Enterprise\nC0091,Mid-Market\nC0092,Mid-Market\nC0093,SMB\nC0094,Enterprise\nC0095,Mid-Market\nC0096,SMB\nC0097,SMB\nC0098,SMB\nC0099,Mid-Market\nC0100,Enterprise\nC0101,Mid-Market\nC0102,Enterprise\nC0103,Mid-Market\nC0104,SMB\nC0105,Enterprise\nC0106,Mid-Market\nC0107,Enterprise\nC0108,Mid-Market\nC0109,Mid-Market\nC0110,SMB\nC0111,Enterprise\nC0112,Enterprise\nC0113,Mid-Market\nC0114,Enterprise\nC0115,Enterprise\nC0116,Enterprise\nC0117,SMB\nC0118,Enterprise\nC0119,Enterprise\nC0120,SMB\nC0121,Enterprise\nC0122,Mid-Market\nC0123,SMB\nC0124,Enterprise\nC0125,SMB\nC0126,Enterprise\nC0127,Enterprise\nC0128,Enterprise\nC0129,SMB\nC0130,Mid-Market\nC0131,Enterprise\nC0132,Enterprise\nC0133,Enterprise\nC0134,Mid-Market\nC0135,SMB\nC0136,Mid-Market\nC0137,SMB\nC0138,SMB\nC0139,Enterprise\nC0140,Enterprise\nC0141,SMB\nC0142,SMB\nC0143,SMB\nC0144,SMB\nC0145,Mid-Market\nC0146,Enterprise\nC0147,Enterprise\nC0148,Enterprise\nC0149,Enterprise\nC0150,Enterprise\n",
+   "orders.csv": "order_id,customer,amount\n0,C-10,744.57\n1, C0024 ,12.65\n2,C0080,373.16\n3, C0069 ,541.56\n4,C-20,474.6\n5,C0010,294.52\n6,C-40,508.19\n7, C0137 ,743.67\n8,c0058,273.93\n9,C-9,456.23\n10,c0041,239.9\n11,56,388.12\n12,61,697.89\n13,C-74,191.42\n14,C-90,43.92\n15,C-102,87.21\n16, C0012 ,829.96\n17,c0079,410.06\n18,C-142,306.25\n19, C0075 ,397.12\n20,c0036,778.57\n21,29,742.92\n22,56,279.98\n23,100,39.7\n24,C0033,331.31\n25, C0114 ,790.03\n26,C0112,322.43\n27,c0076,871.16\n28,13,158.31\n29,c0140,813.08\n30,c0064,89.82\n31,C0096,317.03\n32,C0055,649.35\n33, C0062 ,709.71\n34,c0113,520.21\n35, C0014 ,808.84\n36, C0030 ,132.07\n37,137,484.9\n38,c0077,866.05\n39,77,87.33\n40,C0014,158.66\n41,C0004,476.46\n42,C0070,899.67\n43,c0109,563.7\n44,C0075,107.38\n45,C-79,896.57\n46,C-121,248.31\n47,C-39,277.82\n48,C0135,483.66\n49,71,211.46\n50,64,380.37\n51,C-124,242.69\n52, C0119 ,812.82\n53,C-138,182.58\n54,C-97,749.94\n55, C0008 ,816.09\n56, C0124 ,169.06\n57,C0027,534.09\n58,C0079,797.81\n59, C0128 ,474.04\n60,c0015,637.81\n61,C0110,863.81\n62,c0006,275.36\n63,C0040,661.46\n64,110,210.89\n65, C0006 ,93.61\n66, C0081 ,458.56\n67,C-147,803.88\n68,c0088,551.23\n69,C-135,219.53\n70,C0131,99.35\n71,C-38,737.12\n72,35,651.55\n73, C0073 ,92.65\n74,c0035,656.32\n75,C0027,496.62\n76, C0037 ,664.45\n77,C-7,789.94\n78, C0098 ,735.1\n79, C0128 ,466.8\n80,C-18,479.26\n81,72,347.81\n82,c0032,618.44\n83, C0097 ,79.18\n84,C-123,277.13\n85,C-7,356.69\n86, C0124 ,806.06\n87,C0016,232.87\n88,c0001,483.82\n89, C0077 ,194.89\n90,144,20.04\n91,C0023,593.91\n92, C0018 ,354.12\n93,55,151.6\n94,c0005,631.43\n95,C0013,215.97\n96,c0145,596.91\n97,C0105,719.46\n98,c0132,109.09\n99, C0090 ,56.11\n100,c0134,91.46\n101,110,385.25\n102,63,260.6\n103, C0149 ,381.75\n104,73,671.46\n105,C0055,757.01\n106,c0022,51.86\n107,31,143.11\n108, C0057 ,281.8\n109,C-27,402.95\n110,C0027,636.9\n111, C0148 ,383.89\n112,c0123,435.55\n113,C0094,11.81\n114,C0126,629.76\n115,C-69,23.62\n116,C0036,572.55\n117,c0036,319.58\n118,C-110,27.15\n119,93,678.89\n120,C0050,141.69\n121, C0041 ,160.71\n122,C0110,720.79\n123,C0111,447.72\n124,c0142,737.51\n125,C0097,364.31\n126,101,821.48\n127,103,81.54\n128,C-63,159.95\n129,C0143,706.88\n130,C0113,487.4\n131,C-132,671.85\n132,C0143,504.1\n133,C0049,224.67\n134,C0112,453.94\n135,C0109,699.57\n136,C-49,366.25\n137,C-41,696.27\n138, C0111 ,360.01\n139,C-101,207.36\n140, C0049 ,792.42\n141,C0053,42.99\n142,C-5,476.98\n143,C-101,825.2\n144,c0130,780.32\n145,C0117,448.17\n146, C0126 ,569.65\n147, C0021 ,465.93\n148,C0131,63.32\n149,c0126,223.25\n150,C0030,383.86\n151,c0144,424.25\n152,C-10,747.76\n153,52,660.53\n154, C0128 ,867.66\n155,c0038,716.38\n156,c0005,513.19\n157,c0076,628.84\n158,C-50,11.74\n159,C0064,426.2\n160,C0030,651.34\n161,C-17,479.02\n162,c0046,511.23\n163,C0015,349.83\n164,C-53,612.78\n165,c0085,408.83\n166,c0045,756.89\n167, C0149 ,844.63\n168,C0147,458.42\n169, C0110 ,732.98\n170, C0103 ,378.18\n171,80,411.64\n172,C0002,690.18\n173,c0118,644.63\n174,48,28.11\n175,c0119,508.49\n176, C0138 ,809.32\n177,c0149,386.07\n178,C-62,26.0\n179,103,99.33\n180,10,403.46\n181,C0019,107.4\n182,C0094,561.0\n183, C0046 ,442.52\n184,C-147,522.03\n185,C-1,465.3\n186, C0005 ,312.44\n187,C0089,799.99\n188,C0105,539.84\n189,c0088,115.57\n190,C0040,355.45\n191,C-75,263.82\n192,c0107,452.22\n193, C0027 ,487.26\n194,C0078,79.17\n195,c0116,430.4\n196,C-13,473.08\n197, C0122 ,282.13\n198, C0032 ,559.17\n199,C0083,278.12\n200,C0121,587.54\n201,135,43.85\n202,C-75,10.79\n203,c0109,618.33\n204,C0109,339.17\n205,43,695.09\n206,c0099,276.36\n207,C-132,193.6\n208,25,890.19\n209,c0015,205.57\n210, C0092 ,749.34\n211,133,20.29\n212,49,873.57\n213, C0017 ,660.81\n214,c0062,102.96\n215,C-101,735.51\n216, C0081 ,237.46\n217,109,588.04\n218,C0112,438.99\n219,C0063,69.34\n220,30,204.29\n221,24,364.91\n222, C0049 ,468.09\n223,C0032,616.36\n224,C-106,622.15\n225,C-100,77.15\n226,C-146,461.99\n227,67,705.75\n228,C-97,496.06\n229,c0137,819.57\n230,17,593.92\n231,4,326.54\n232,C-149,673.79\n233,c0100,105.63\n234,C-55,733.38\n235,C0129,550.09\n236,C0053,604.65\n237,C-102,445.37\n238,c0134,368.78\n239,19,409.46\n240,C0113,336.28\n241,49,453.06\n242,c0071,343.43\n243,74,782.9\n244,c0068,49.01\n245,c0023,870.61\n246,67,777.47\n247,C0094,435.3\n248, C0046 ,348.1\n249,109,883.17\n250,C0026,853.5\n251,c0046,715.7\n252,C0003,105.2\n253,c0061,896.17\n254,c0117,869.24\n255,C0085,492.06\n256, C0111 ,81.24\n257, C0109 ,554.13\n258,C0103,407.2\n259,C0076,806.86\n260,146,237.15\n261,C-29,882.48\n262,C-19,42.76\n263,C-76,160.77\n264,c0128,546.06\n265, C0120 ,825.69\n266,82,343.76\n267, C0083 ,39.25\n268,c0126,742.82\n269,138,317.13\n270,C-53,515.28\n271,C-13,372.21\n272,C0146,679.62\n273,85,786.35\n274,C0079,560.08\n275, C0021 ,57.26\n276,c0062,75.88\n277,C0113,124.01\n278,c0125,13.34\n279,c0028,823.86\n280,c0130,272.56\n281,C0077,662.91\n282,C-149,861.9\n283,C0114,273.78\n284,C0060,821.87\n285,125,706.22\n286, C0123 ,173.9\n287,C0048,37.22\n288, C0088 ,478.56\n289,11,853.35\n290,72,574.47\n291,99,212.03\n292, C0073 ,210.4\n293,C0084,350.03\n294,c0011,809.26\n295, C0052 ,426.4\n296,121,50.12\n297, C0015 ,613.33\n298,19,819.77\n299,C-26,584.36\n300,89,430.97\n301, C0007 ,123.17\n302,133,165.05\n303,99,320.48\n304, C0119 ,370.91\n305,C0056,160.13\n306,c0120,892.31\n307,c0110,758.48\n308,C0038,299.61\n309,C0087,628.5\n310,C-131,853.21\n311, C0132 ,334.1\n312,C0054,527.38\n313, C0108 ,274.39\n314,40,468.36\n315,C0010,530.81\n316,58,760.05\n317,C0029,111.76\n318,c0122,608.93\n319,c0106,391.54\n320,c0067,624.3\n321, C0135 ,703.38\n322,C0002,375.64\n323,c0120,681.5\n324, C0072 ,271.73\n325,C0126,737.92\n326, C0070 ,110.47\n327,92,586.46\n328,c0116,292.04\n329,33,799.46\n330,59,680.23\n331,C-81,167.27\n332,137,426.11\n333,C-10,359.19\n334,C-96,513.87\n335,C0126,116.29\n336, C0025 ,500.89\n337,C0128,217.87\n338,C0012,863.3\n339,C0117,417.86\n340, C0110 ,256.7\n341, C0008 ,896.32\n342,C-88,568.44\n343, C0011 ,284.38\n344,C0086,731.1\n345,c0070,534.36\n346, C0140 ,735.02\n347,c0103,124.52\n348,c0148,235.36\n349, C0150 ,469.82\n350,52,242.39\n351,29,97.54\n352,c0016,751.97\n353,C0064,610.32\n354,30,796.67\n355, C0008 ,726.95\n356,C0137,263.48\n357,c0030,164.25\n358,c0114,307.83\n359, C0017 ,634.84\n360,100,876.39\n361, C0056 ,312.89\n362, C0042 ,53.03\n363,c0091,452.37\n364, C0001 ,53.17\n365,C0115,589.28\n366,20,196.83\n367,C-124,859.13\n368,39,585.49\n369,c0129,690.45\n370, C0089 ,784.6\n371,C0116,835.85\n372,30,486.31\n373, C0120 ,441.12\n374,C0148,227.97\n375,C-14,658.07\n376,119,216.16\n377, C0072 ,662.09\n378,C-73,143.78\n379, C0090 ,819.29\n380,C0059,330.25\n381,c0051,613.64\n382,C0130,119.82\n383,c0140,861.89\n384, C0022 ,444.71\n385, C0071 ,844.63\n386,C-38,348.62\n387,97,749.56\n388,C0036,305.09\n389,C0067,150.05\n390, C0123 ,486.61\n391,c0121,790.99\n392,C-56,140.53\n393,c0064,732.12\n394,C-29,10.87\n395,C-93,255.4\n396,c0137,51.89\n397,c0131,49.72\n398,c0057,355.42\n399,C-85,858.16\n400, C0117 ,677.44\n401,c0136,410.97\n402,c0143,137.98\n403,77,514.76\n404,C0021,165.24\n405, C0037 ,247.35\n406,68,688.96\n407, C0122 ,344.58\n408, C0013 ,698.5\n409,C0093,424.36\n410,C-89,124.49\n411,150,344.46\n412, C0131 ,348.8\n413,C-25,266.13\n414, C0113 ,765.23\n415,C0062,542.85\n416,c0004,552.06\n417,c0071,881.57\n418,c0040,161.65\n419,C0022,195.2\n420, C0102 ,411.85\n421,86,350.56\n422,c0008,362.52\n423,C-44,321.56\n424,c0030,84.68\n425,C-114,543.97\n426, C0136 ,133.28\n427,C-53,302.1\n428,C0023,696.29\n429,C0077,205.69\n430,C0009,197.96\n431,C0066,542.17\n432,C-150,491.89\n433, C0042 ,764.28\n434,C-99,338.53\n435,C0115,627.17\n436,C0113,720.86\n437,C0150,73.77\n438,12,887.84\n439,C-149,769.18\n440,14,362.9\n441,28,416.37\n442, C0132 ,410.51\n443, C0096 ,58.17\n444,c0073,809.66\n445,149,877.35\n446,c0130,447.66\n447, C0006 ,307.67\n448,c0056,844.32\n449,40,435.23\n450,c0120,247.84\n451,C-83,825.21\n452, C0036 ,629.22\n453,55,674.37\n454, C0113 ,566.1\n455, C0136 ,743.64\n456,c0100,247.38\n457, C0125 ,662.66\n458,123,746.44\n459,21,56.71\n460, C0104 ,713.37\n461,C-58,471.09\n462,C-96,662.69\n463,C0143,194.95\n464,C0148,417.94\n465,61,690.11\n466,C0132,606.49\n467, C0076 ,728.15\n468,31,388.26\n469,C-111,645.84\n470, C0049 ,618.33\n471,c0029,867.36\n472,21,676.44\n473,c0142,249.59\n474,C0093,804.61\n475, C0118 ,150.93\n476,C-33,286.55\n477,c0041,565.01\n478,c0035,716.6\n479,c0104,36.95\n480,C-90,770.34\n481,C0072,704.71\n482,C-106,182.37\n483,C0095,532.46\n484,C-41,329.0\n485,c0035,656.18\n486,62,301.45\n487,c0072,577.96\n488, C0001 ,481.18\n489,33,66.34\n490,c0131,499.12\n491,7,104.84\n492,c0054,632.58\n493,c0030,510.61\n494,C-74,660.91\n495,C0072,811.21\n496,C0096,610.77\n497,C-101,598.42\n498,C-67,176.07\n499, C0016 ,330.18\n500,86,854.22\n501,c0103,380.13\n502,C0021,276.11\n503,c0115,112.3\n504,C0088,292.19\n505,C-82,436.16\n506, C0123 ,182.8\n507,C0004,875.06\n508,C0150,14.57\n509,C-107,820.52\n510, C0026 ,225.77\n511,C0033,168.59\n512,39,168.38\n513,138,308.36\n514,C-102,144.79\n515, C0117 ,269.71\n516,c0106,405.33\n517,C0141,688.96\n518, C0091 ,403.71\n519,141,159.5\n520, C0132 ,80.35\n521,61,791.58\n522,77,108.13\n523, C0101 ,531.12\n524,C-50,519.56\n525,C0116,774.54\n526, C0070 ,482.98\n527,C-105,808.62\n528,129,851.66\n529,C0053,196.2\n530,c0126,78.64\n531,C-50,609.48\n532, C0027 ,251.11\n533,C-53,670.09\n534, C0142 ,631.85\n535,c0001,395.94\n536,C0080,237.25\n537,C-1,191.11\n538,c0077,867.65\n539,C0078,381.49\n540,C-89,780.56\n541,C-14,391.27\n542,C0079,325.79\n543,C0076,455.76\n544,C0049,146.72\n545,c0109,62.83\n546,c0053,45.27\n547,c0057,751.22\n548,C-40,272.8\n549,C-143,498.62\n550, C0091 ,596.15\n551,C0014,410.76\n552,57,895.91\n553,c0108,795.38\n554,C-107,240.63\n555,C0049,174.85\n556, C0094 ,557.82\n557,C0018,167.98\n558,C-31,464.31\n559,C0091,801.76\n560,64,68.46\n561,62,704.73\n562,c0125,756.98\n563,C0092,340.83\n564,55,66.19\n565,c0032,827.47\n566,114,238.76\n567,c0067,689.56\n568,C-110,327.91\n569,c0084,627.34\n570,c0041,424.65\n571,C-140,305.26\n572,93,761.38\n573,C-63,185.17\n574, C0126 ,389.18\n575,C-86,377.05\n576, C0025 ,252.61\n577,133,765.92\n578, C0091 ,131.78\n579,c0073,477.13\n580, C0132 ,854.79\n581,c0141,567.62\n582,c0099,860.39\n583,32,574.06\n584,44,575.47\n585,C-40,656.02\n586,c0016,578.12\n587,C-2,729.87\n588,C0103,296.87\n589,c0076,725.25\n590,C-39,80.83\n591,24,643.68\n592,23,314.52\n593,c0087,359.84\n594, C0081 ,148.52\n595,C-52,186.62\n596, C0027 ,288.29\n597,c0071,725.52\n598,C-77,442.21\n599,C0067,485.85\n600,63,899.46\n601,C-39,848.27\n602,c0056,130.69\n603,C0138,820.51\n604, C0146 ,435.38\n605,9,668.92\n606, C0102 ,166.59\n607, C0150 ,384.97\n608,C-126,599.78\n609, C0142 ,517.63\n610, C0101 ,862.96\n611,C0003,813.79\n612, C0115 ,197.55\n613, C0040 ,601.78\n614, C0121 ,695.24\n615,39,205.65\n616,C0133,211.56\n617,c0018,450.73\n618,C-105,104.82\n619, C0034 ,557.99\n620,c0138,381.17\n621, C0101 ,420.97\n622,C0087,814.82\n623,c0123,190.27\n624, C0002 ,249.98\n625, C0118 ,318.53\n626,C0011,435.91\n627,C-128,814.66\n628,c0078,625.16\n629,C-128,150.68\n630,c0133,706.3\n631, C0110 ,590.82\n632,76,141.66\n633,C0142,308.46\n634,c0127,514.55\n635,76,166.33\n636,c0005,799.44\n637,C0070,43.19\n638,C-84,152.37\n639,C0113,315.32\n640,c0058,790.16\n641, C0032 ,395.48\n642,C-144,811.15\n643, C0005 ,647.55\n644,C0022,547.81\n645,c0025,461.02\n646, C0045 ,733.44\n647, C0122 ,293.3\n648, C0090 ,359.6\n649,C-29,302.06\n650,c0096,74.09\n651,c0035,877.95\n652,33,306.08\n653,C-134,502.76\n654,C-49,891.16\n655,c0128,756.48\n656,C0054,673.96\n657,C0013,241.2\n658,C-90,477.5\n659,c0144,417.45\n660,C-35,399.01\n661,c0061,50.9\n662, C0031 ,33.95\n663,C-76,589.65\n664,c0118,210.34\n665,112,602.03\n666, C0082 ,427.92\n667,61,185.23\n668,126,732.7\n669,c0014,38.48\n670,C0147,355.73\n671,C-98,499.9\n672,36,372.47\n673, C0004 ,824.9\n674,C0143,404.85\n675,C0131,873.45\n676,C0142,434.04\n677,C-110,785.37\n678,c0063,694.42\n679,c0062,821.76\n680, C0117 ,176.49\n681,C-54,511.93\n682, C0060 ,59.54\n683,C0025,534.09\n684,C0106,363.95\n685, C0035 ,424.23\n686,C-78,128.56\n687, C0009 ,221.17\n688,117,684.45\n689, C0001 ,323.75\n690, C0086 ,596.82\n691,c0116,397.73\n692,c0101,399.53\n693,C-130,806.91\n694,148,783.78\n695,C0135,129.48\n696,C-96,449.41\n697,25,296.4\n698,c0100,585.04\n699, C0014 ,306.81\n700,C0096,296.19\n701, C0054 ,657.83\n702,C0117,702.08\n703,75,635.46\n704,c0136,302.93\n705,c0032,493.75\n706, C0071 ,842.67\n707,C-107,647.23\n708,C0007,207.42\n709, C0120 ,778.33\n710, C0093 ,799.16\n711,C0012,35.23\n712,C0006,712.68\n713,C-26,839.55\n714,C0058,591.67\n715,c0147,374.64\n716,C-121,275.65\n717,C-32,531.64\n718,C-16,116.6\n719,130,198.28\n720,C-45,217.8\n721,C0140,143.12\n722, C0020 ,824.33\n723, C0040 ,146.78\n724, C0042 ,215.81\n725,c0074,24.25\n726, C0055 ,712.74\n727, C0029 ,55.41\n728,c0126,213.13\n729,c0004,103.72\n730,C0088,528.41\n731, C0115 ,857.43\n732,c0079,294.63\n733, C0071 ,595.58\n734,C0008,167.49\n735,c0090,549.32\n736,C-26,217.21\n737,C0031,66.11\n738,C0105,562.48\n739, C0029 ,623.44\n740, C0006 ,140.91\n741,11,252.51\n742,C-81,847.86\n743,c0081,119.2\n744,c0020,122.3\n745,C-74,603.01\n746,c0117,836.08\n747,C0080,401.58\n748, C0069 ,498.09\n749,c0049,120.55\n750,C-39,262.47\n751,55,473.74\n752,c0073,483.82\n753,C-125,426.34\n754, C0131 ,811.08\n755,C-28,75.33\n756, C0061 ,101.6\n757,C0090,790.72\n758,c0041,360.74\n759,c0127,614.77\n760,C0014,553.57\n761,C-131,860.35\n762, C0113 ,779.6\n763, C0073 ,639.34\n764, C0023 ,586.66\n765, C0122 ,201.61\n766, C0067 ,734.47\n767,C-125,812.48\n768,4,561.56\n769,c0106,792.79\n770,C-124,447.52\n771,73,581.29\n772,141,817.68\n773,C0061,10.91\n774,c0112,320.01\n775,146,457.15\n776,37,826.68\n777, C0041 ,180.36\n778,c0125,815.98\n779,C0141,505.01\n780,C0093,367.79\n781,C-31,403.65\n782,43,36.8\n783,137,773.47\n784,c0015,474.85\n785,C0052,394.34\n786, C0042 ,761.29\n787,134,404.03\n788,71,690.77\n789,c0062,601.6\n790, C0073 ,809.95\n791,21,686.03\n792,39,620.34\n793,C0122,739.75\n794,c0035,46.02\n795,60,894.44\n796,c0068,177.61\n797,76,223.61\n798,C0143,411.8\n799,C-84,885.06\n800,58,582.14\n801,4,833.29\n802,C0120,417.8\n803,38,17.37\n804, C0032 ,186.04\n805, C0138 ,411.07\n806,C0119,681.71\n807,C-23,60.19\n808,60,117.97\n809, C0067 ,354.62\n810, C0114 ,640.94\n811,C-30,321.05\n812, C0136 ,85.1\n813,C-38,825.05\n814,c0130,866.8\n815, C0011 ,709.61\n816,25,486.63\n817,C0015,373.75\n818, C0072 ,404.78\n819,61,880.69\n820,C0034,717.27\n821,136,219.98\n822,145,34.26\n823, C0013 ,864.26\n824, C0026 ,34.61\n825,56,395.1\n826, C0145 ,377.09\n827,127,832.18\n828,142,291.59\n829,C-126,766.05\n830,c0148,712.39\n831,c0108,79.83\n832, C0111 ,626.75\n833,C0051,25.56\n834,C-99,41.06\n835,C0097,14.59\n836,C-85,56.07\n837,C-8,446.46\n838,36,329.35\n839,c0127,307.73\n840,C-18,208.55\n841,C-84,407.02\n842,c0020,309.94\n843, C0119 ,781.28\n844, C0047 ,103.65\n845, C0095 ,784.08\n846,C-140,520.27\n847,C-6,666.62\n848,C-96,232.9\n849,C0101,296.42\n850,C-105,123.09\n851, C0056 ,372.88\n852,c0092,472.82\n853, C0041 ,493.59\n854,C0041,299.97\n855,c0033,701.68\n856,C0113,660.66\n857, C0112 ,768.19\n858,C0034,786.44\n859,C-119,675.01\n860,C0079,298.14\n861,c0096,29.01\n862, C0100 ,412.54\n863,19,116.49\n864, C0075 ,676.46\n865, C0010 ,617.25\n866,C-87,770.25\n867, C0108 ,174.14\n868, C0092 ,140.35\n869,c0059,43.98\n870,22,649.82\n871,c0120,739.36\n872,C0059,266.94\n873,111,852.93\n874,5,395.13\n875,c0064,367.03\n876, C0117 ,649.06\n877,c0008,309.56\n878,C0014,791.24\n879, C0100 ,564.37\n880,C0014,437.53\n881,C-36,381.14\n882,C-35,493.93\n883,C0045,177.89\n884,c0116,315.8\n885,126,643.8\n886,C0101,473.78\n887,c0122,558.79\n888,C-40,259.71\n889,c0099,380.02\n890,C0122,712.43\n891,C0011,373.93\n892,31,721.35\n893,C0068,162.33\n894,C-37,417.37\n895,C0017,421.13\n896, C0081 ,324.51\n897,c0103,177.72\n898,C-57,676.73\n899, C0076 ,853.68\n"
+  },
+  "grade": {
+   "must": [
+    "Enterprise",
+    "170,?289.34"
+   ],
+   "must_not": [],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-sensor-units",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "readings.csv has temperature readings in mixed units (C, F, K). -999 means the sensor failed. What is the mean temperature in Celsius over valid readings, to 2 decimal places?",
+  "files": {
+   "readings.csv": "reading_id,value,unit\n0,289.750,K\n1,22.910,C\n2,291.990,K\n3,71.150,F\n4,20.950,C\n5,82.508,F\n6,292.060,K\n7,290.400,K\n8,19.130,C\n9,-999,F\n10,66.398,F\n11,85.748,F\n12,289.570,K\n13,289.820,K\n14,20.460,C\n15,295.450,K\n16,21.790,C\n17,66.596,F\n18,27.270,C\n19,16.770,C\n20,289.860,K\n21,294.530,K\n22,69.440,F\n23,294.710,K\n24,65.930,F\n25,82.364,F\n26,290.300,K\n27,294.770,K\n28,29.810,C\n29,74.372,F\n30,19.530,C\n31,74.120,F\n32,16.470,C\n33,302.890,K\n34,73.076,F\n35,16.710,C\n36,59.054,F\n37,18.970,C\n38,77.360,F\n39,-999,F\n40,301.970,K\n41,299.510,K\n42,64.328,F\n43,302.550,K\n44,83.570,F\n45,24.190,C\n46,70.592,F\n47,27.110,C\n48,25.380,C\n49,22.310,C\n50,20.710,C\n51,68.954,F\n52,21.670,C\n53,-999,C\n54,301.770,K\n55,300.450,K\n56,23.360,C\n57,71.654,F\n58,61.070,F\n59,298.350,K\n60,16.450,C\n61,29.710,C\n62,-999,C\n63,25.150,C\n64,293.840,K\n65,82.868,F\n66,-999,K\n67,61.196,F\n68,298.370,K\n69,23.230,C\n70,59.216,F\n71,82.094,F\n72,292.550,K\n73,15.440,C\n74,296.650,K\n75,291.390,K\n76,294.790,K\n77,294.720,K\n78,75.236,F\n79,85.136,F\n80,80.114,F\n81,71.852,F\n82,29.610,C\n83,17.930,C\n84,289.510,K\n85,288.570,K\n86,75.308,F\n87,21.360,C\n88,16.020,C\n89,63.950,F\n90,18.040,C\n91,295.240,K\n92,72.446,F\n93,75.470,F\n94,82.148,F\n95,19.570,C\n96,295.970,K\n97,68.864,F\n98,29.390,C\n99,29.990,C\n100,16.000,C\n101,65.156,F\n102,297.010,K\n103,17.660,C\n104,73.994,F\n105,73.094,F\n106,60.080,F\n107,17.980,C\n108,27.740,C\n109,66.596,F\n110,79.916,F\n111,24.060,C\n112,23.180,C\n113,296.300,K\n114,79.304,F\n115,61.178,F\n116,24.400,C\n117,26.180,C\n118,23.730,C\n119,61.862,F\n120,292.900,K\n121,76.982,F\n122,72.644,F\n123,295.410,K\n124,24.490,C\n125,19.770,C\n126,291.190,K\n127,22.680,C\n128,21.390,C\n129,289.150,K\n130,300.510,K\n131,82.814,F\n132,302.300,K\n133,294.480,K\n134,19.450,C\n135,76.658,F\n136,24.500,C\n137,20.890,C\n138,288.300,K\n139,26.590,C\n140,23.390,C\n141,17.020,C\n142,27.250,C\n143,300.440,K\n144,84.542,F\n145,79.142,F\n146,294.970,K\n147,18.900,C\n148,83.570,F\n149,-999,F\n150,85.244,F\n151,292.930,K\n152,-999,K\n153,20.150,C\n154,64.094,F\n155,84.308,F\n156,288.200,K\n157,78.008,F\n158,24.040,C\n159,78.980,F\n160,80.690,F\n161,71.258,F\n162,296.660,K\n163,69.458,F\n164,62.420,F\n165,300.380,K\n166,24.950,C\n167,15.340,C\n168,28.880,C\n169,28.030,C\n170,18.150,C\n171,60.080,F\n172,29.500,C\n173,16.280,C\n174,23.420,C\n175,293.180,K\n176,70.322,F\n177,288.390,K\n178,-999,C\n179,61.556,F\n180,297.100,K\n181,19.510,C\n182,78.638,F\n183,19.830,C\n184,66.380,F\n185,301.350,K\n186,18.240,C\n187,72.464,F\n188,17.410,C\n189,20.020,C\n190,74.840,F\n191,83.912,F\n192,23.200,C\n193,288.740,K\n194,29.910,C\n195,83.732,F\n196,26.330,C\n197,75.326,F\n198,74.480,F\n199,289.970,K\n200,21.000,C\n201,301.230,K\n202,60.800,F\n203,301.690,K\n204,29.410,C\n205,299.270,K\n206,16.650,C\n207,68.000,F\n208,24.670,C\n209,27.350,C\n210,25.570,C\n211,66.884,F\n212,83.840,F\n213,300.460,K\n214,25.100,C\n215,-999,F\n216,76.460,F\n217,292.930,K\n218,289.430,K\n219,22.770,C\n220,299.440,K\n221,291.160,K\n222,69.836,F\n223,27.320,C\n224,72.518,F\n225,21.220,C\n226,294.860,K\n227,298.990,K\n228,65.804,F\n229,67.424,F\n230,69.800,F\n231,26.980,C\n232,79.772,F\n233,293.840,K\n234,21.720,C\n235,60.080,F\n236,302.690,K\n237,29.170,C\n238,17.580,C\n239,29.680,C\n240,22.270,C\n241,-999,C\n242,28.080,C\n243,296.670,K\n244,23.620,C\n245,291.530,K\n246,67.460,F\n247,83.192,F\n248,28.760,C\n249,19.400,C\n250,295.920,K\n251,16.120,C\n252,81.914,F\n253,288.470,K\n254,298.100,K\n255,295.500,K\n256,29.180,C\n257,293.730,K\n258,59.342,F\n259,66.884,F\n260,-999,C\n261,20.850,C\n262,15.520,C\n263,74.552,F\n264,18.920,C\n265,73.922,F\n266,28.860,C\n267,70.214,F\n268,71.240,F\n269,79.070,F\n270,296.780,K\n271,-999,K\n272,80.312,F\n273,75.182,F\n274,26.180,C\n275,74.804,F\n276,302.630,K\n277,288.840,K\n278,23.430,C\n279,24.460,C\n280,18.050,C\n281,74.930,F\n282,17.750,C\n283,69.494,F\n284,84.398,F\n285,62.222,F\n286,67.550,F\n287,18.560,C\n288,-999,F\n289,-999,F\n290,84.614,F\n291,15.880,C\n292,289.630,K\n293,26.490,C\n294,71.204,F\n295,299.280,K\n296,83.678,F\n297,22.210,C\n298,-999,C\n299,23.350,C\n300,59.738,F\n301,290.850,K\n302,23.970,C\n303,78.728,F\n304,291.570,K\n305,81.590,F\n306,291.970,K\n307,62.222,F\n308,289.610,K\n309,302.750,K\n310,294.700,K\n311,293.070,K\n312,301.120,K\n313,21.830,C\n314,296.790,K\n315,293.700,K\n316,16.490,C\n317,25.410,C\n318,295.570,K\n319,291.830,K\n320,63.932,F\n321,22.340,C\n322,301.060,K\n323,23.830,C\n324,77.360,F\n325,79.340,F\n326,289.140,K\n327,295.420,K\n328,78.836,F\n329,295.540,K\n330,72.176,F\n331,24.750,C\n332,16.770,C\n333,300.470,K\n334,79.322,F\n335,27.480,C\n336,62.510,F\n337,24.190,C\n338,299.560,K\n339,21.160,C\n340,25.510,C\n341,26.520,C\n342,294.630,K\n343,300.160,K\n344,68.990,F\n345,81.248,F\n346,62.114,F\n347,292.040,K\n348,63.284,F\n349,71.276,F\n350,27.510,C\n351,292.030,K\n352,59.144,F\n353,71.762,F\n354,23.430,C\n355,29.380,C\n356,28.750,C\n357,27.960,C\n358,60.836,F\n359,291.340,K\n360,22.910,C\n361,17.760,C\n362,73.490,F\n363,295.690,K\n364,67.388,F\n365,66.236,F\n366,25.280,C\n367,80.582,F\n368,301.670,K\n369,292.180,K\n370,297.320,K\n371,290.440,K\n372,21.640,C\n373,68.108,F\n374,62.132,F\n375,295.870,K\n376,289.830,K\n377,85.190,F\n378,29.870,C\n379,24.950,C\n380,59.252,F\n381,79.232,F\n382,76.424,F\n383,73.922,F\n384,72.284,F\n385,21.930,C\n386,300.760,K\n387,81.572,F\n388,294.880,K\n389,298.470,K\n390,27.100,C\n391,82.868,F\n392,78.710,F\n393,77.918,F\n394,295.240,K\n395,302.170,K\n396,295.910,K\n397,21.350,C\n398,292.750,K\n399,21.260,C\n400,291.510,K\n401,18.860,C\n402,24.770,C\n403,300.510,K\n404,27.660,C\n405,84.956,F\n406,300.200,K\n407,23.260,C\n408,62.258,F\n409,16.860,C\n410,15.450,C\n411,16.140,C\n412,24.380,C\n413,297.590,K\n414,15.830,C\n415,301.360,K\n416,-999,K\n417,26.030,C\n418,291.800,K\n419,62.762,F\n420,59.018,F\n421,292.530,K\n422,-999,C\n423,294.970,K\n424,298.400,K\n425,71.060,F\n426,21.390,C\n427,77.792,F\n428,24.890,C\n429,300.210,K\n430,292.750,K\n431,28.840,C\n432,27.050,C\n433,61.574,F\n434,72.842,F\n435,25.890,C\n436,27.250,C\n437,292.050,K\n438,79.052,F\n439,302.310,K\n440,26.100,C\n441,82.958,F\n442,77.774,F\n443,295.250,K\n444,76.298,F\n445,297.650,K\n446,289.490,K\n447,25.760,C\n448,25.300,C\n449,29.020,C\n450,-999,F\n451,60.206,F\n452,289.820,K\n453,23.310,C\n454,-999,F\n455,25.540,C\n456,24.080,C\n457,61.736,F\n458,296.980,K\n459,66.650,F\n460,72.734,F\n461,63.518,F\n462,17.810,C\n463,69.224,F\n464,76.640,F\n465,298.860,K\n466,295.910,K\n467,18.410,C\n468,20.720,C\n469,23.420,C\n470,66.056,F\n471,294.490,K\n472,59.378,F\n473,298.470,K\n474,21.980,C\n475,16.760,C\n476,290.570,K\n477,291.870,K\n478,63.374,F\n479,22.360,C\n480,295.000,K\n481,75.398,F\n482,289.810,K\n483,20.750,C\n484,15.350,C\n485,27.180,C\n486,72.338,F\n487,82.238,F\n488,64.616,F\n489,295.790,K\n490,66.812,F\n491,19.220,C\n492,16.020,C\n493,70.610,F\n494,69.278,F\n495,291.860,K\n496,76.550,F\n497,295.810,K\n498,18.970,C\n499,77.450,F\n500,299.580,K\n501,19.650,C\n502,78.386,F\n503,63.518,F\n504,27.780,C\n505,293.600,K\n506,17.670,C\n507,28.450,C\n508,80.168,F\n509,-999,K\n510,26.280,C\n511,73.544,F\n512,18.240,C\n513,17.270,C\n514,68.774,F\n515,18.560,C\n516,291.870,K\n517,299.570,K\n518,295.880,K\n519,65.408,F\n520,18.100,C\n521,289.710,K\n522,78.638,F\n523,17.380,C\n524,20.690,C\n525,23.340,C\n526,297.660,K\n527,63.014,F\n528,24.780,C\n529,60.548,F\n530,70.844,F\n531,61.070,F\n532,294.160,K\n533,296.970,K\n534,23.220,C\n535,25.110,C\n536,84.830,F\n537,62.870,F\n538,24.450,C\n539,28.690,C\n540,289.020,K\n541,16.740,C\n542,65.786,F\n543,300.250,K\n544,302.720,K\n545,85.118,F\n546,23.440,C\n547,85.442,F\n548,300.690,K\n549,24.900,C\n550,301.140,K\n551,73.148,F\n552,79.934,F\n553,60.692,F\n554,291.910,K\n555,84.992,F\n556,81.734,F\n557,82.904,F\n558,28.050,C\n559,64.742,F\n560,59.900,F\n561,19.520,C\n562,30.000,C\n563,64.202,F\n564,59.648,F\n565,16.040,C\n566,297.870,K\n567,293.130,K\n568,23.270,C\n569,19.430,C\n570,59.306,F\n571,295.940,K\n572,298.990,K\n573,288.460,K\n574,75.578,F\n575,20.920,C\n576,297.370,K\n577,77.522,F\n578,65.750,F\n579,20.640,C\n580,74.408,F\n581,19.180,C\n582,292.550,K\n583,26.730,C\n584,288.770,K\n585,84.956,F\n586,71.636,F\n587,25.510,C\n588,293.100,K\n589,301.500,K\n590,19.510,C\n591,21.730,C\n592,288.630,K\n593,27.830,C\n594,-999,F\n595,78.872,F\n596,83.156,F\n597,67.892,F\n598,61.682,F\n599,71.618,F\n"
+  },
+  "grade": {
+   "must": [
+    "22.40"
+   ],
+   "must_not": [],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-cohort-retention",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "From activity.csv: of the users who signed up in January 2026, what percentage were active at least once in March 2026? One decimal place.",
+  "files": {
+   "activity.csv": "user_id,date,kind\n123,2026-05-10,active\n209,2026-04-22,active\n224,2026-04-09,active\n365,2026-01-01,signup\n342,2026-02-08,active\n346,2026-01-21,signup\n67,2026-02-15,active\n328,2026-04-08,active\n343,2026-01-16,signup\n64,2026-06-01,active\n151,2026-02-02,signup\n200,2026-05-18,active\n52,2026-02-20,signup\n51,2026-03-05,active\n397,2026-02-19,signup\n259,2026-02-19,active\n396,2026-01-17,signup\n81,2026-02-05,active\n42,2026-02-13,active\n372,2026-02-13,signup\n328,2026-03-11,active\n229,2026-01-21,signup\n70,2026-03-02,active\n253,2026-01-09,signup\n187,2026-02-03,active\n89,2026-02-20,active\n248,2026-04-02,active\n310,2026-03-12,active\n133,2026-04-26,active\n312,2026-03-12,active\n270,2026-03-20,active\n354,2026-05-22,active\n44,2026-05-11,active\n163,2026-02-20,signup\n194,2026-05-04,active\n339,2026-04-07,active\n362,2026-03-03,active\n14,2026-04-28,active\n173,2026-02-26,signup\n390,2026-04-22,active\n380,2026-05-15,active\n327,2026-04-10,active\n144,2026-05-04,active\n66,2026-03-05,active\n65,2026-01-11,signup\n278,2026-02-25,active\n379,2026-01-09,signup\n383,2026-03-27,active\n193,2026-04-23,active\n15,2026-01-25,signup\n248,2026-03-02,active\n221,2026-01-20,signup\n329,2026-05-17,active\n186,2026-01-13,signup\n291,2026-04-15,active\n19,2026-02-23,active\n278,2026-02-17,active\n94,2026-02-26,active\n1,2026-04-06,active\n73,2026-05-06,active\n13,2026-01-18,signup\n261,2026-04-25,active\n244,2026-04-15,active\n51,2026-03-20,active\n253,2026-03-21,active\n261,2026-02-27,active\n217,2026-04-25,active\n239,2026-02-19,signup\n40,2026-03-18,active\n13,2026-02-27,active\n210,2026-03-10,active\n383,2026-02-26,active\n353,2026-03-10,active\n398,2026-03-23,active\n169,2026-05-15,active\n136,2026-02-08,signup\n159,2026-04-24,active\n229,2026-03-03,active\n20,2026-05-04,active\n349,2026-05-27,active\n89,2026-04-19,active\n108,2026-02-11,signup\n116,2026-02-15,active\n173,2026-05-10,active\n32,2026-04-21,active\n303,2026-01-16,signup\n166,2026-03-15,active\n316,2026-05-10,active\n156,2026-01-27,signup\n229,2026-02-26,active\n172,2026-02-09,signup\n133,2026-02-13,active\n95,2026-03-15,active\n253,2026-01-24,active\n216,2026-04-05,active\n277,2026-02-26,signup\n140,2026-02-20,signup\n194,2026-03-30,active\n134,2026-03-16,active\n52,2026-04-11,active\n109,2026-05-04,active\n178,2026-03-26,active\n107,2026-01-03,signup\n261,2026-02-22,signup\n52,2026-04-20,active\n232,2026-03-10,active\n49,2026-02-19,active\n352,2026-04-11,active\n285,2026-02-12,signup\n285,2026-02-13,active\n164,2026-01-03,signup\n2,2026-03-31,active\n305,2026-03-10,active\n227,2026-02-07,active\n362,2026-03-07,active\n125,2026-02-28,signup\n33,2026-03-20,active\n387,2026-02-23,signup\n27,2026-02-17,signup\n262,2026-01-24,signup\n316,2026-02-16,signup\n187,2026-03-19,active\n336,2026-04-07,active\n271,2026-03-31,active\n17,2026-02-24,signup\n302,2026-04-17,active\n263,2026-03-07,active\n255,2026-04-03,active\n236,2026-03-12,active\n348,2026-01-14,signup\n319,2026-01-19,active\n115,2026-01-01,signup\n348,2026-02-09,active\n268,2026-03-12,active\n133,2026-02-10,active\n45,2026-03-28,active\n364,2026-05-27,active\n351,2026-02-16,signup\n143,2026-03-30,active\n65,2026-03-01,active\n343,2026-04-23,active\n176,2026-04-04,active\n359,2026-04-09,active\n146,2026-01-01,signup\n206,2026-02-01,signup\n318,2026-03-04,active\n267,2026-03-19,active\n25,2026-05-02,active\n230,2026-02-25,active\n216,2026-03-21,active\n317,2026-01-30,active\n266,2026-02-23,signup\n298,2026-03-21,active\n290,2026-02-01,signup\n165,2026-02-08,active\n42,2026-03-23,active\n102,2026-02-24,active\n355,2026-06-05,active\n14,2026-04-08,active\n114,2026-04-07,active\n41,2026-02-15,signup\n242,2026-01-28,signup\n238,2026-03-24,active\n213,2026-02-07,signup\n6,2026-04-12,active\n216,2026-02-13,active\n321,2026-04-19,active\n227,2026-01-27,active\n383,2026-03-01,active\n99,2026-02-15,signup\n199,2026-01-18,active\n180,2026-01-30,active\n86,2026-02-14,active\n72,2026-02-22,active\n190,2026-03-15,active\n272,2026-05-03,active\n53,2026-03-05,active\n55,2026-02-19,active\n379,2026-03-25,active\n1,2026-01-01,signup\n153,2026-01-28,active\n320,2026-05-13,active\n334,2026-01-27,signup\n110,2026-01-13,signup\n382,2026-02-02,active\n226,2026-02-05,signup\n330,2026-02-25,signup\n377,2026-02-08,active\n339,2026-04-14,active\n308,2026-02-15,active\n220,2026-01-18,signup\n275,2026-01-23,active\n178,2026-03-03,active\n231,2026-03-01,active\n188,2026-01-03,signup\n300,2026-01-11,signup\n35,2026-02-19,signup\n189,2026-02-17,signup\n220,2026-04-25,active\n320,2026-03-18,active\n109,2026-03-01,active\n67,2026-02-08,active\n396,2026-02-05,active\n174,2026-02-13,active\n321,2026-02-09,active\n155,2026-04-04,active\n263,2026-01-26,active\n360,2026-03-05,active\n267,2026-02-04,active\n75,2026-05-08,active\n123,2026-02-20,signup\n133,2026-01-19,signup\n141,2026-01-25,signup\n379,2026-03-20,active\n264,2026-01-02,signup\n356,2026-02-18,signup\n79,2026-02-12,signup\n119,2026-02-01,signup\n329,2026-02-23,signup\n318,2026-02-19,signup\n48,2026-02-24,active\n360,2026-02-09,signup\n214,2026-03-24,active\n78,2026-04-27,active\n299,2026-01-19,active\n313,2026-03-09,active\n345,2026-02-11,signup\n122,2026-02-08,active\n336,2026-04-18,active\n53,2026-03-09,active\n398,2026-03-21,active\n231,2026-04-03,active\n182,2026-03-08,active\n395,2026-02-03,active\n88,2026-03-06,active\n127,2026-04-10,active\n126,2026-03-21,active\n5,2026-05-13,active\n380,2026-02-27,signup\n6,2026-04-03,active\n376,2026-04-16,active\n289,2026-02-23,signup\n91,2026-01-07,signup\n224,2026-01-17,active\n329,2026-03-18,active\n245,2026-03-26,active\n292,2026-02-02,signup\n220,2026-03-17,active\n9,2026-03-29,active\n65,2026-03-01,active\n365,2026-01-17,active\n136,2026-03-29,active\n176,2026-01-24,signup\n339,2026-04-30,active\n295,2026-03-14,active\n63,2026-04-02,active\n224,2026-03-26,active\n373,2026-03-14,active\n49,2026-05-12,active\n98,2026-01-25,signup\n181,2026-04-19,active\n135,2026-02-03,signup\n135,2026-04-19,active\n198,2026-02-28,signup\n86,2026-02-10,active\n356,2026-02-28,active\n150,2026-02-19,active\n382,2026-01-06,signup\n294,2026-02-04,active\n249,2026-01-22,signup\n121,2026-01-02,signup\n94,2026-05-02,active\n294,2026-04-07,active\n386,2026-04-17,active\n224,2026-04-02,active\n143,2026-03-28,active\n236,2026-04-16,active\n391,2026-03-14,active\n94,2026-02-08,signup\n93,2026-03-19,active\n40,2026-04-15,active\n175,2026-03-19,active\n123,2026-03-12,active\n269,2026-03-20,active\n90,2026-03-10,active\n45,2026-01-29,active\n66,2026-05-10,active\n352,2026-03-05,active\n223,2026-02-10,active\n395,2026-03-09,active\n308,2026-03-28,active\n102,2026-01-03,signup\n370,2026-01-23,signup\n106,2026-04-25,active\n345,2026-02-12,active\n22,2026-05-08,active\n331,2026-04-11,active\n313,2026-02-07,active\n209,2026-05-27,active\n296,2026-05-03,active\n231,2026-02-22,active\n49,2026-03-19,active\n394,2026-04-13,active\n144,2026-02-28,active\n310,2026-04-01,active\n278,2026-01-14,signup\n40,2026-04-03,active\n218,2026-03-02,active\n359,2026-04-17,active\n129,2026-05-13,active\n243,2026-03-28,active\n368,2026-03-02,active\n29,2026-02-11,signup\n317,2026-01-10,signup\n33,2026-04-11,active\n4,2026-03-15,active\n113,2026-02-12,active\n294,2026-01-24,active\n48,2026-03-09,active\n334,2026-04-02,active\n231,2026-05-29,active\n8,2026-02-22,active\n160,2026-02-05,signup\n129,2026-04-15,active\n200,2026-04-16,active\n83,2026-03-27,active\n67,2026-01-06,signup\n155,2026-02-01,active\n7,2026-02-19,signup\n309,2026-04-23,active\n193,2026-04-13,active\n318,2026-03-19,active\n303,2026-01-26,active\n227,2026-02-08,active\n230,2026-02-20,active\n302,2026-05-21,active\n395,2026-03-22,active\n347,2026-02-27,active\n379,2026-03-24,active\n133,2026-03-25,active\n245,2026-05-12,active\n201,2026-03-09,active\n263,2026-02-06,active\n15,2026-03-01,active\n323,2026-01-28,active\n108,2026-04-19,active\n276,2026-04-10,active\n344,2026-05-20,active\n241,2026-04-04,active\n377,2026-01-27,active\n371,2026-01-28,signup\n8,2026-04-17,active\n325,2026-02-26,signup\n122,2026-04-26,active\n114,2026-03-19,active\n199,2026-01-23,active\n44,2026-02-07,signup\n240,2026-03-23,active\n242,2026-05-01,active\n185,2026-01-20,signup\n185,2026-02-07,active\n316,2026-05-14,active\n279,2026-01-05,active\n113,2026-01-23,active\n317,2026-01-12,active\n14,2026-03-19,active\n206,2026-04-22,active\n254,2026-04-26,active\n174,2026-03-03,active\n238,2026-05-04,active\n284,2026-03-01,active\n69,2026-01-27,signup\n311,2026-02-14,active\n180,2026-02-11,active\n161,2026-02-26,signup\n170,2026-04-01,active\n86,2026-01-04,signup\n161,2026-05-03,active\n396,2026-04-19,active\n197,2026-03-16,active\n314,2026-03-29,active\n148,2026-02-27,signup\n34,2026-01-11,signup\n267,2026-02-02,signup\n82,2026-03-31,active\n61,2026-01-05,signup\n84,2026-04-20,active\n237,2026-03-28,active\n271,2026-01-10,signup\n199,2026-01-25,active\n235,2026-02-04,signup\n24,2026-01-19,active\n399,2026-02-06,signup\n20,2026-03-08,active\n297,2026-03-03,active\n347,2026-02-04,signup\n276,2026-01-09,signup\n209,2026-03-18,active\n38,2026-04-09,active\n46,2026-03-07,active\n132,2026-02-17,active\n61,2026-03-30,active\n217,2026-03-29,active\n9,2026-03-25,active\n213,2026-03-12,active\n58,2026-03-17,active\n381,2026-03-13,active\n72,2026-01-02,signup\n327,2026-02-11,active\n142,2026-02-20,signup\n118,2026-03-27,active\n70,2026-03-28,active\n203,2026-01-09,signup\n289,2026-05-15,active\n313,2026-02-17,active\n113,2026-02-21,active\n287,2026-04-02,active\n105,2026-02-23,signup\n387,2026-04-16,active\n198,2026-06-08,active\n343,2026-02-19,active\n33,2026-02-13,active\n330,2026-03-03,active\n328,2026-01-16,signup\n115,2026-02-19,active\n363,2026-05-09,active\n153,2026-01-26,signup\n175,2026-03-02,active\n204,2026-01-11,signup\n316,2026-03-12,active\n338,2026-02-01,signup\n111,2026-03-28,active\n381,2026-01-07,signup\n86,2026-02-24,active\n227,2026-01-22,active\n97,2026-04-28,active\n250,2026-04-08,active\n26,2026-03-02,active\n268,2026-04-11,active\n3,2026-03-21,active\n349,2026-03-08,active\n303,2026-03-16,active\n182,2026-02-07,signup\n238,2026-03-13,active\n113,2026-01-03,signup\n116,2026-04-05,active\n341,2026-01-03,signup\n233,2026-01-16,active\n268,2026-03-21,active\n93,2026-03-02,active\n393,2026-05-09,active\n47,2026-01-12,signup\n319,2026-03-09,active\n8,2026-04-23,active\n191,2026-05-02,active\n245,2026-03-25,active\n155,2026-04-21,active\n342,2026-04-08,active\n221,2026-04-08,active\n152,2026-05-14,active\n13,2026-03-05,active\n181,2026-02-26,active\n344,2026-04-11,active\n57,2026-02-22,signup\n240,2026-02-01,active\n130,2026-01-18,signup\n263,2026-02-21,active\n233,2026-01-04,signup\n195,2026-05-20,active\n157,2026-01-04,signup\n311,2026-01-26,signup\n30,2026-02-16,signup\n139,2026-04-08,active\n22,2026-05-12,active\n312,2026-02-08,active\n139,2026-02-12,signup\n95,2026-02-06,active\n229,2026-02-19,active\n138,2026-05-20,active\n251,2026-01-20,signup\n279,2026-01-03,signup\n295,2026-01-25,signup\n321,2026-01-26,signup\n382,2026-02-23,active\n175,2026-01-26,signup\n96,2026-04-03,active\n315,2026-04-04,active\n44,2026-04-17,active\n22,2026-05-16,active\n329,2026-03-24,active\n336,2026-05-10,active\n304,2026-02-16,signup\n8,2026-03-03,active\n50,2026-02-21,signup\n228,2026-03-17,active\n198,2026-06-05,active\n46,2026-02-10,active\n138,2026-05-10,active\n9,2026-01-23,active\n42,2026-02-05,signup\n202,2026-01-30,active\n315,2026-02-03,active\n58,2026-03-13,active\n366,2026-03-23,active\n261,2026-02-24,active\n228,2026-04-12,active\n44,2026-02-17,active\n370,2026-03-28,active\n384,2026-02-19,signup\n86,2026-03-19,active\n232,2026-01-20,active\n361,2026-01-18,signup\n99,2026-04-03,active\n395,2026-01-31,active\n294,2026-02-13,active\n75,2026-05-17,active\n288,2026-05-24,active\n95,2026-03-22,active\n183,2026-02-05,signup\n335,2026-04-12,active\n243,2026-03-02,active\n75,2026-03-26,active\n69,2026-03-31,active\n228,2026-02-26,signup\n12,2026-03-28,active\n392,2026-02-26,signup\n174,2026-02-19,active\n138,2026-02-09,signup\n150,2026-03-07,active\n236,2026-03-29,active\n89,2026-05-01,active\n311,2026-04-09,active\n174,2026-04-01,active\n396,2026-02-12,active\n44,2026-04-05,active\n395,2026-03-29,active\n375,2026-01-01,signup\n326,2026-01-03,signup\n84,2026-02-15,active\n19,2026-02-02,signup\n8,2026-02-16,active\n362,2026-04-18,active\n93,2026-02-12,active\n150,2026-03-04,active\n96,2026-04-21,active\n78,2026-01-21,signup\n286,2026-03-30,active\n157,2026-02-22,active\n289,2026-02-24,active\n73,2026-04-01,active\n13,2026-01-29,active\n195,2026-02-18,signup\n389,2026-01-05,signup\n153,2026-01-30,active\n381,2026-03-13,active\n318,2026-04-26,active\n201,2026-02-23,active\n15,2026-02-13,active\n272,2026-02-10,active\n36,2026-05-28,active\n362,2026-05-03,active\n270,2026-02-08,active\n209,2026-03-30,active\n14,2026-02-06,signup\n68,2026-03-21,active\n135,2026-05-05,active\n120,2026-01-25,signup\n181,2026-02-01,signup\n263,2026-01-10,signup\n81,2026-03-10,active\n3,2026-03-23,active\n70,2026-01-18,signup\n310,2026-02-17,signup\n299,2026-03-05,active\n390,2026-02-08,signup\n93,2026-01-23,active\n291,2026-01-25,signup\n377,2026-02-18,active\n193,2026-02-05,signup\n211,2026-03-08,active\n294,2026-02-05,active\n312,2026-03-14,active\n329,2026-05-11,active\n101,2026-01-20,signup\n237,2026-01-06,signup\n344,2026-03-14,active\n277,2026-04-06,active\n4,2026-01-28,signup\n50,2026-02-26,active\n379,2026-03-09,active\n319,2026-01-01,signup\n12,2026-01-15,signup\n81,2026-01-02,signup\n370,2026-04-19,active\n256,2026-03-01,active\n284,2026-01-05,signup\n87,2026-01-09,signup\n173,2026-04-19,active\n118,2026-04-05,active\n167,2026-02-25,active\n400,2026-02-26,signup\n238,2026-03-27,active\n34,2026-03-11,active\n396,2026-02-03,active\n215,2026-01-06,active\n73,2026-04-07,active\n117,2026-01-10,active\n335,2026-05-17,active\n344,2026-05-30,active\n393,2026-03-28,active\n315,2026-03-17,active\n45,2026-01-08,signup\n276,2026-04-11,active\n22,2026-04-07,active\n330,2026-04-03,active\n47,2026-02-04,active\n184,2026-05-10,active\n223,2026-01-24,signup\n246,2026-04-08,active\n77,2026-01-20,signup\n22,2026-03-13,active\n228,2026-05-25,active\n357,2026-02-05,signup\n210,2026-05-17,active\n6,2026-02-19,active\n63,2026-05-02,active\n79,2026-03-10,active\n233,2026-01-06,active\n337,2026-03-01,active\n296,2026-03-02,active\n216,2026-04-08,active\n271,2026-04-04,active\n370,2026-02-22,active\n299,2026-02-03,active\n374,2026-01-23,active\n320,2026-02-08,signup\n263,2026-03-12,active\n326,2026-04-05,active\n248,2026-02-05,active\n155,2026-01-22,signup\n250,2026-02-26,signup\n333,2026-04-27,active\n164,2026-01-08,active\n311,2026-03-12,active\n277,2026-06-06,active\n228,2026-04-24,active\n277,2026-04-26,active\n227,2026-01-31,active\n299,2026-01-06,signup\n2,2026-01-21,active\n224,2026-04-03,active\n262,2026-02-19,active\n250,2026-06-05,active\n58,2026-05-06,active\n31,2026-02-23,signup\n142,2026-04-07,active\n260,2026-03-21,active\n340,2026-02-01,active\n70,2026-04-27,active\n83,2026-05-26,active\n58,2026-05-06,active\n191,2026-02-26,active\n299,2026-04-09,active\n337,2026-02-01,signup\n325,2026-04-18,active\n370,2026-04-27,active\n69,2026-04-04,active\n53,2026-01-06,signup\n36,2026-03-18,active\n352,2026-01-05,signup\n218,2026-05-04,active\n296,2026-05-10,active\n311,2026-03-17,active\n215,2026-01-16,active\n324,2026-04-14,active\n355,2026-03-04,active\n395,2026-01-23,active\n200,2026-05-03,active\n100,2026-02-03,signup\n183,2026-03-05,active\n242,2026-05-03,active\n288,2026-05-08,active\n170,2026-01-25,signup\n66,2026-04-09,active\n147,2026-04-21,active\n2,2026-04-01,active\n398,2026-01-26,signup\n200,2026-04-03,active\n379,2026-04-02,active\n239,2026-05-21,active\n324,2026-04-26,active\n320,2026-04-23,active\n143,2026-02-03,signup\n7,2026-05-03,active\n72,2026-02-14,active\n178,2026-02-22,signup\n144,2026-05-13,active\n166,2026-05-27,active\n47,2026-03-18,active\n189,2026-04-21,active\n66,2026-05-02,active\n332,2026-03-30,active\n169,2026-04-30,active\n189,2026-02-22,active\n289,2026-04-15,active\n142,2026-03-30,active\n65,2026-02-23,active\n67,2026-04-06,active\n199,2026-03-23,active\n24,2026-04-01,active\n71,2026-05-05,active\n328,2026-03-10,active\n257,2026-02-08,signup\n225,2026-02-09,active\n355,2026-03-01,active\n364,2026-02-18,signup\n227,2026-01-10,signup\n240,2026-02-12,active\n224,2026-01-02,signup\n60,2026-02-10,signup\n147,2026-05-01,active\n182,2026-04-03,active\n250,2026-05-05,active\n230,2026-01-07,signup\n264,2026-01-07,active\n352,2026-01-24,active\n241,2026-01-06,signup\n146,2026-02-18,active\n132,2026-04-25,active\n85,2026-02-28,signup\n199,2026-01-17,signup\n84,2026-03-08,active\n268,2026-03-08,active\n231,2026-03-25,active\n196,2026-04-25,active\n252,2026-05-24,active\n281,2026-02-13,signup\n24,2026-04-05,active\n202,2026-03-05,active\n395,2026-01-07,signup\n152,2026-03-17,active\n358,2026-03-17,active\n100,2026-03-11,active\n331,2026-02-14,active\n121,2026-03-23,active\n39,2026-04-26,active\n71,2026-02-01,active\n8,2026-03-11,active\n41,2026-04-29,active\n159,2026-03-06,active\n253,2026-03-06,active\n2,2026-02-19,active\n289,2026-04-09,active\n256,2026-01-14,signup\n127,2026-03-22,active\n302,2026-05-22,active\n217,2026-02-03,signup\n181,2026-03-01,active\n221,2026-03-26,active\n24,2026-02-25,active\n368,2026-05-18,active\n174,2026-01-24,active\n76,2026-01-30,active\n213,2026-03-20,active\n9,2026-04-23,active\n324,2026-02-20,active\n148,2026-04-27,active\n33,2026-03-11,active\n278,2026-02-18,active\n70,2026-04-20,active\n141,2026-03-31,active\n298,2026-01-10,signup\n165,2026-02-02,active\n235,2026-04-17,active\n166,2026-05-15,active\n276,2026-03-28,active\n160,2026-03-23,active\n36,2026-03-11,active\n293,2026-02-16,signup\n5,2026-02-08,signup\n250,2026-03-23,active\n110,2026-01-16,active\n191,2026-03-17,active\n57,2026-04-21,active\n359,2026-04-27,active\n63,2026-03-17,active\n213,2026-02-12,active\n95,2026-01-26,signup\n20,2026-03-06,active\n246,2026-01-23,active\n25,2026-02-24,active\n30,2026-02-17,active\n194,2026-01-26,signup\n334,2026-05-03,active\n255,2026-02-20,signup\n150,2026-01-22,signup\n16,2026-02-13,signup\n29,2026-05-10,active\n39,2026-02-13,signup\n118,2026-05-24,active\n291,2026-02-14,active\n109,2026-03-10,active\n104,2026-02-12,signup\n364,2026-05-17,active\n42,2026-05-06,active\n129,2026-02-05,signup\n308,2026-02-14,signup\n2,2026-01-17,active\n200,2026-05-15,active\n147,2026-02-08,signup\n171,2026-02-09,signup\n282,2026-01-27,signup\n10,2026-01-28,signup\n9,2026-02-26,active\n286,2026-02-02,signup\n75,2026-03-05,active\n164,2026-04-04,active\n308,2026-03-17,active\n252,2026-05-21,active\n159,2026-03-05,active\n400,2026-03-24,active\n302,2026-05-07,active\n282,2026-04-07,active\n305,2026-01-08,signup\n28,2026-01-09,signup\n267,2026-04-04,active\n287,2026-01-15,signup\n152,2026-02-04,signup\n109,2026-05-25,active\n83,2026-03-17,active\n303,2026-02-26,active\n376,2026-02-28,active\n378,2026-02-05,signup\n188,2026-01-21,active\n355,2026-05-15,active\n213,2026-04-30,active\n252,2026-02-21,signup\n254,2026-03-08,active\n230,2026-01-25,active\n64,2026-05-28,active\n113,2026-02-15,active\n173,2026-03-22,active\n173,2026-04-23,active\n335,2026-05-24,active\n266,2026-05-13,active\n387,2026-03-01,active\n47,2026-03-15,active\n97,2026-03-17,active\n140,2026-04-19,active\n385,2026-02-10,signup\n320,2026-03-11,active\n48,2026-02-15,signup\n7,2026-04-01,active\n166,2026-02-21,signup\n319,2026-04-06,active\n12,2026-02-14,active\n8,2026-02-13,signup\n114,2026-03-21,active\n41,2026-05-11,active\n58,2026-04-01,active\n114,2026-03-04,active\n348,2026-04-15,active\n229,2026-04-03,active\n159,2026-06-02,active\n118,2026-02-25,signup\n326,2026-02-22,active\n230,2026-03-07,active\n370,2026-04-18,active\n220,2026-03-20,active\n6,2026-04-08,active\n38,2026-01-19,signup\n232,2026-03-17,active\n19,2026-04-07,active\n344,2026-02-22,signup\n376,2026-03-22,active\n248,2026-01-23,signup\n359,2026-02-04,signup\n280,2026-05-05,active\n316,2026-05-15,active\n207,2026-03-10,active\n314,2026-02-13,signup\n140,2026-04-25,active\n99,2026-05-26,active\n196,2026-04-14,active\n82,2026-02-03,active\n311,2026-04-02,active\n99,2026-05-13,active\n294,2026-02-16,active\n205,2026-03-11,active\n376,2026-03-15,active\n174,2026-01-07,signup\n46,2026-01-12,signup\n345,2026-02-20,active\n54,2026-02-17,signup\n26,2026-02-28,signup\n152,2026-04-19,active\n258,2026-01-26,signup\n283,2026-03-22,active\n97,2026-02-02,signup\n317,2026-04-16,active\n185,2026-01-31,active\n391,2026-01-11,signup\n334,2026-03-08,active\n179,2026-01-06,signup\n176,2026-03-31,active\n69,2026-02-17,active\n149,2026-02-08,signup\n293,2026-03-11,active\n234,2026-02-08,signup\n14,2026-04-04,active\n213,2026-02-08,active\n393,2026-04-08,active\n21,2026-02-27,signup\n260,2026-03-23,active\n378,2026-03-11,active\n259,2026-03-10,active\n337,2026-04-16,active\n182,2026-03-04,active\n52,2026-04-18,active\n294,2026-01-13,signup\n288,2026-04-14,active\n315,2026-03-25,active\n296,2026-02-27,signup\n51,2026-01-24,active\n283,2026-02-21,active\n155,2026-04-13,active\n118,2026-05-02,active\n30,2026-05-05,active\n218,2026-02-24,signup\n254,2026-04-15,active\n197,2026-02-17,active\n94,2026-05-04,active\n324,2026-03-16,active\n340,2026-01-26,signup\n189,2026-05-18,active\n296,2026-04-20,active\n339,2026-04-17,active\n105,2026-04-19,active\n125,2026-05-31,active\n333,2026-01-23,signup\n176,2026-04-14,active\n386,2026-01-14,signup\n227,2026-02-10,active\n38,2026-04-26,active\n373,2026-02-06,signup\n339,2026-04-10,active\n306,2026-02-22,signup\n259,2026-04-02,active\n51,2026-01-20,signup\n20,2026-02-28,signup\n76,2026-01-14,signup\n339,2026-05-02,active\n38,2026-03-31,active\n210,2026-03-27,active\n206,2026-05-04,active\n1,2026-01-22,active\n218,2026-03-02,active\n301,2026-02-20,signup\n184,2026-06-04,active\n396,2026-04-26,active\n154,2026-02-05,active\n34,2026-04-16,active\n3,2026-04-07,active\n134,2026-02-13,active\n92,2026-01-10,signup\n23,2026-01-20,signup\n330,2026-04-29,active\n53,2026-02-18,active\n302,2026-02-27,active\n284,2026-02-18,active\n247,2026-03-28,active\n342,2026-01-11,signup\n192,2026-01-16,signup\n62,2026-03-18,active\n298,2026-01-11,active\n132,2026-02-22,active\n75,2026-04-19,active\n287,2026-03-18,active\n95,2026-03-29,active\n59,2026-01-09,signup\n96,2026-01-21,signup\n96,2026-04-24,active\n169,2026-02-13,signup\n122,2026-01-28,signup\n232,2026-02-23,active\n116,2026-01-13,signup\n394,2026-04-05,active\n60,2026-04-09,active\n53,2026-04-07,active\n249,2026-03-01,active\n63,2026-05-09,active\n376,2026-01-27,signup\n42,2026-04-06,active\n41,2026-04-09,active\n64,2026-04-14,active\n134,2026-03-11,active\n328,2026-01-23,active\n244,2026-02-20,signup\n24,2026-01-11,signup\n340,2026-04-18,active\n188,2026-02-27,active\n99,2026-04-07,active\n59,2026-03-24,active\n96,2026-03-09,active\n387,2026-05-24,active\n306,2026-03-14,active\n106,2026-02-01,signup\n364,2026-04-04,active\n279,2026-01-25,active\n175,2026-02-25,active\n284,2026-03-11,active\n384,2026-03-26,active\n259,2026-01-22,signup\n328,2026-04-02,active\n51,2026-03-19,active\n326,2026-03-25,active\n167,2026-04-01,active\n51,2026-03-18,active\n55,2026-01-28,signup\n209,2026-03-23,active\n232,2026-01-19,signup\n67,2026-02-03,active\n283,2026-02-15,signup\n362,2026-03-02,active\n56,2026-02-22,signup\n47,2026-01-31,active\n57,2026-04-05,active\n254,2026-01-28,signup\n49,2026-03-30,active\n37,2026-02-27,signup\n89,2026-02-10,signup\n155,2026-04-01,active\n106,2026-02-04,active\n82,2026-01-16,active\n64,2026-02-21,signup\n182,2026-02-15,active\n313,2026-01-29,active\n276,2026-03-07,active\n117,2026-01-01,signup\n203,2026-02-23,active\n352,2026-03-06,active\n377,2026-02-27,active\n166,2026-03-28,active\n144,2026-02-09,signup\n233,2026-01-16,active\n368,2026-02-15,signup\n15,2026-02-09,active\n245,2026-02-24,signup\n351,2026-03-16,active\n12,2026-03-08,active\n170,2026-03-29,active\n313,2026-01-15,signup\n328,2026-01-31,active\n387,2026-04-21,active\n9,2026-01-20,signup\n64,2026-04-23,active\n188,2026-02-16,active\n336,2026-03-11,active\n121,2026-02-12,active\n249,2026-04-22,active\n219,2026-02-17,active\n269,2026-02-17,signup\n280,2026-02-04,signup\n355,2026-02-28,signup\n318,2026-05-27,active\n106,2026-05-09,active\n315,2026-01-12,signup\n200,2026-04-18,active\n70,2026-04-10,active\n390,2026-04-22,active\n366,2026-05-05,active\n6,2026-02-08,signup\n231,2026-03-10,active\n104,2026-02-18,active\n376,2026-02-03,active\n279,2026-02-25,active\n138,2026-03-12,active\n43,2026-01-04,signup\n134,2026-01-29,active\n379,2026-04-12,active\n138,2026-04-19,active\n200,2026-02-09,signup\n113,2026-03-14,active\n131,2026-01-22,active\n41,2026-02-19,active\n3,2026-04-02,active\n239,2026-04-14,active\n37,2026-05-22,active\n32,2026-01-28,signup\n309,2026-04-02,active\n262,2026-04-27,active\n129,2026-02-17,active\n278,2026-03-15,active\n278,2026-01-27,active\n78,2026-04-09,active\n312,2026-01-20,signup\n118,2026-03-02,active\n82,2026-01-15,signup\n71,2026-03-01,active\n231,2026-02-19,signup\n288,2026-02-27,signup\n71,2026-01-26,signup\n15,2026-03-30,active\n272,2026-03-24,active\n94,2026-04-16,active\n98,2026-03-18,active\n9,2026-04-19,active\n347,2026-03-05,active\n14,2026-03-22,active\n112,2026-05-01,active\n225,2026-01-11,signup\n96,2026-01-29,active\n185,2026-03-26,active\n198,2026-04-20,active\n393,2026-05-12,active\n12,2026-02-22,active\n296,2026-05-23,active\n157,2026-01-08,active\n89,2026-03-31,active\n306,2026-03-03,active\n196,2026-04-27,active\n239,2026-05-24,active\n346,2026-03-27,active\n201,2026-01-13,active\n184,2026-04-04,active\n215,2026-01-05,signup\n336,2026-02-06,active\n340,2026-03-21,active\n197,2026-05-09,active\n165,2026-01-09,signup\n327,2026-01-29,active\n121,2026-03-21,active\n92,2026-04-08,active\n197,2026-03-22,active\n180,2026-01-15,signup\n302,2026-04-09,active\n41,2026-05-04,active\n12,2026-03-21,active\n65,2026-04-07,active\n308,2026-03-23,active\n318,2026-03-26,active\n346,2026-04-28,active\n38,2026-03-02,active\n24,2026-03-01,active\n202,2026-05-04,active\n212,2026-02-11,signup\n259,2026-03-11,active\n190,2026-02-19,signup\n325,2026-04-03,active\n362,2026-02-08,signup\n68,2026-01-16,signup\n49,2026-02-15,signup\n265,2026-01-01,signup\n202,2026-03-25,active\n208,2026-01-14,signup\n353,2026-01-01,signup\n228,2026-04-28,active\n73,2026-04-02,active\n24,2026-03-08,active\n11,2026-01-13,signup\n214,2026-02-05,signup\n88,2026-01-27,active\n276,2026-02-02,active\n2,2026-02-02,active\n238,2026-02-06,signup\n96,2026-04-14,active\n320,2026-02-24,active\n388,2026-01-01,signup\n154,2026-02-27,active\n73,2026-04-14,active\n132,2026-02-08,active\n191,2026-04-20,active\n335,2026-04-21,active\n90,2026-01-24,signup\n386,2026-03-14,active\n144,2026-04-28,active\n339,2026-02-28,signup\n75,2026-02-24,signup\n64,2026-05-19,active\n65,2026-02-26,active\n387,2026-03-31,active\n70,2026-04-06,active\n221,2026-03-06,active\n193,2026-02-28,active\n201,2026-02-05,active\n73,2026-02-19,signup\n219,2026-01-09,signup\n150,2026-04-12,active\n309,2026-01-17,active\n155,2026-02-25,active\n106,2026-02-02,active\n48,2026-04-11,active\n310,2026-03-20,active\n257,2026-05-06,active\n266,2026-04-21,active\n225,2026-03-30,active\n177,2026-01-28,signup\n275,2026-03-18,active\n42,2026-03-12,active\n1,2026-01-06,active\n228,2026-03-04,active\n310,2026-03-14,active\n209,2026-02-23,signup\n165,2026-04-18,active\n25,2026-04-01,active\n324,2026-02-25,active\n84,2026-02-17,active\n260,2026-02-17,signup\n223,2026-02-23,active\n40,2026-02-07,active\n374,2026-01-09,signup\n95,2026-04-14,active\n218,2026-06-03,active\n134,2026-04-02,active\n344,2026-04-12,active\n215,2026-02-09,active\n206,2026-04-14,active\n371,2026-02-14,active\n156,2026-03-22,active\n139,2026-03-29,active\n220,2026-04-10,active\n326,2026-03-27,active\n192,2026-02-11,active\n273,2026-01-14,signup\n182,2026-02-15,active\n366,2026-05-04,active\n164,2026-02-07,active\n47,2026-03-14,active\n331,2026-04-22,active\n3,2026-04-01,active\n71,2026-02-03,active\n192,2026-03-29,active\n323,2026-01-09,signup\n324,2026-05-13,active\n126,2026-01-31,active\n115,2026-03-27,active\n154,2026-01-05,signup\n204,2026-02-07,active\n272,2026-05-05,active\n326,2026-03-24,active\n289,2026-03-04,active\n345,2026-03-18,active\n78,2026-03-31,active\n366,2026-01-25,signup\n189,2026-03-05,active\n327,2026-01-12,signup\n210,2026-03-29,active\n83,2026-02-26,signup\n44,2026-05-05,active\n61,2026-01-21,active\n49,2026-04-14,active\n129,2026-03-19,active\n26,2026-05-25,active\n126,2026-01-14,signup\n7,2026-04-07,active\n335,2026-05-05,active\n275,2026-01-12,signup\n312,2026-03-16,active\n211,2026-01-17,signup\n215,2026-04-03,active\n354,2026-03-24,active\n301,2026-04-12,active\n166,2026-04-08,active\n168,2026-01-21,signup\n134,2026-01-21,signup\n271,2026-03-23,active\n330,2026-03-24,active\n46,2026-04-17,active\n261,2026-03-07,active\n82,2026-01-19,active\n356,2026-03-14,active\n316,2026-05-10,active\n202,2026-02-12,active\n307,2026-03-07,active\n291,2026-03-13,active\n5,2026-04-15,active\n86,2026-03-15,active\n61,2026-03-13,active\n137,2026-03-24,active\n123,2026-02-27,active\n103,2026-01-11,signup\n335,2026-05-19,active\n331,2026-02-13,signup\n109,2026-04-24,active\n133,2026-03-01,active\n377,2026-01-06,signup\n267,2026-04-03,active\n374,2026-02-02,active\n352,2026-03-29,active\n332,2026-02-20,signup\n375,2026-04-06,active\n53,2026-02-16,active\n237,2026-01-12,active\n65,2026-02-24,active\n394,2026-03-06,active\n363,2026-02-07,active\n67,2026-03-15,active\n393,2026-02-18,signup\n362,2026-03-10,active\n263,2026-03-14,active\n66,2026-02-04,signup\n251,2026-04-03,active\n120,2026-05-01,active\n47,2026-03-26,active\n308,2026-04-17,active\n306,2026-05-25,active\n298,2026-01-24,active\n380,2026-05-22,active\n112,2026-04-11,active\n111,2026-01-16,signup\n25,2026-02-20,signup\n127,2026-02-15,active\n268,2026-03-09,active\n374,2026-04-18,active\n345,2026-02-17,active\n127,2026-01-06,active\n285,2026-02-23,active\n192,2026-02-16,active\n224,2026-02-26,active\n349,2026-02-20,signup\n147,2026-04-11,active\n80,2026-02-27,signup\n302,2026-02-13,signup\n193,2026-03-19,active\n315,2026-03-11,active\n236,2026-01-20,signup\n295,2026-04-21,active\n296,2026-04-03,active\n243,2026-01-09,signup\n380,2026-04-17,active\n123,2026-04-28,active\n196,2026-03-07,active\n187,2026-01-09,signup\n346,2026-01-22,active\n52,2026-03-26,active\n22,2026-04-25,active\n288,2026-03-01,active\n159,2026-02-27,signup\n52,2026-04-13,active\n147,2026-05-04,active\n201,2026-02-10,active\n160,2026-04-19,active\n191,2026-02-15,signup\n288,2026-04-08,active\n216,2026-01-24,signup\n350,2026-02-11,signup\n366,2026-04-09,active\n320,2026-04-09,active\n366,2026-02-15,active\n272,2026-03-10,active\n85,2026-05-23,active\n247,2026-01-09,signup\n131,2026-01-13,signup\n253,2026-03-17,active\n184,2026-02-27,signup\n248,2026-03-19,active\n197,2026-02-01,signup\n135,2026-03-06,active\n113,2026-03-08,active\n202,2026-01-26,signup\n324,2026-02-18,signup\n63,2026-02-08,signup\n222,2026-02-14,signup\n210,2026-02-22,signup\n268,2026-02-04,signup\n66,2026-02-21,active\n90,2026-02-15,active\n174,2026-02-16,active\n241,2026-03-18,active\n69,2026-04-22,active\n303,2026-04-08,active\n305,2026-02-20,active\n184,2026-03-25,active\n361,2026-03-25,active\n167,2026-01-26,signup\n86,2026-01-28,active\n161,2026-04-02,active\n336,2026-02-03,signup\n358,2026-01-23,signup\n118,2026-05-21,active\n359,2026-04-15,active\n52,2026-05-21,active\n311,2026-02-26,active\n211,2026-04-04,active\n201,2026-01-07,signup\n36,2026-02-26,signup\n149,2026-02-19,active\n207,2026-04-20,active\n134,2026-02-05,active\n254,2026-01-29,active\n327,2026-04-15,active\n33,2026-03-11,active\n18,2026-02-03,signup\n114,2026-02-09,signup\n130,2026-03-07,active\n217,2026-04-14,active\n238,2026-03-24,active\n90,2026-04-14,active\n26,2026-04-14,active\n147,2026-03-14,active\n178,2026-04-26,active\n22,2026-02-08,signup\n383,2026-01-10,signup\n158,2026-01-01,signup\n94,2026-02-11,active\n1,2026-02-01,active\n75,2026-05-25,active\n194,2026-04-24,active\n321,2026-02-18,active\n168,2026-02-23,active\n166,2026-05-06,active\n248,2026-04-17,active\n137,2026-01-10,signup\n367,2026-04-01,active\n68,2026-02-09,active\n14,2026-03-28,active\n142,2026-03-25,active\n111,2026-02-24,active\n145,2026-02-17,signup\n167,2026-02-13,active\n288,2026-03-05,active\n137,2026-01-26,active\n373,2026-04-20,active\n266,2026-05-26,active\n123,2026-03-22,active\n344,2026-03-01,active\n146,2026-01-07,active\n7,2026-05-19,active\n223,2026-02-12,active\n112,2026-02-11,signup\n85,2026-05-03,active\n361,2026-02-06,active\n128,2026-01-05,signup\n307,2026-01-20,signup\n368,2026-03-24,active\n268,2026-04-06,active\n109,2026-05-26,active\n129,2026-04-18,active\n363,2026-04-30,active\n229,2026-03-02,active\n205,2026-01-13,signup\n309,2026-01-15,signup\n13,2026-02-18,active\n15,2026-04-22,active\n206,2026-02-06,active\n394,2026-02-23,signup\n88,2026-01-08,signup\n139,2026-04-23,active\n299,2026-02-10,active\n164,2026-01-12,active\n326,2026-03-18,active\n182,2026-05-13,active\n146,2026-04-04,active\n7,2026-05-13,active\n325,2026-04-21,active\n240,2026-01-16,signup\n398,2026-02-11,active\n204,2026-04-16,active\n84,2026-01-17,signup\n206,2026-03-03,active\n380,2026-04-11,active\n173,2026-03-25,active\n15,2026-03-27,active\n40,2026-01-17,signup\n336,2026-02-09,active\n315,2026-03-25,active\n157,2026-03-23,active\n181,2026-02-08,active\n181,2026-04-20,active\n127,2026-01-05,signup\n41,2026-03-22,active\n58,2026-02-22,active\n335,2026-02-23,signup\n278,2026-03-23,active\n213,2026-02-20,active\n132,2026-01-17,signup\n310,2026-02-28,active\n277,2026-04-22,active\n140,2026-05-16,active\n89,2026-03-11,active\n58,2026-02-06,signup\n121,2026-04-11,active\n7,2026-04-17,active\n241,2026-04-16,active\n160,2026-05-03,active\n274,2026-02-10,signup\n196,2026-02-22,signup\n129,2026-04-22,active\n318,2026-04-09,active\n170,2026-04-22,active\n216,2026-02-08,active\n69,2026-04-20,active\n210,2026-05-03,active\n216,2026-03-07,active\n62,2026-01-26,signup\n36,2026-02-27,active\n295,2026-03-03,active\n354,2026-02-26,signup\n162,2026-01-03,signup\n97,2026-04-20,active\n369,2026-02-12,signup\n33,2026-01-27,signup\n40,2026-04-18,active\n240,2026-04-23,active\n28,2026-03-14,active\n209,2026-03-24,active\n48,2026-04-12,active\n215,2026-04-02,active\n354,2026-04-02,active\n66,2026-03-06,active\n153,2026-04-19,active\n270,2026-01-06,signup\n363,2026-05-11,active\n93,2026-01-05,signup\n322,2026-01-03,signup\n95,2026-03-10,active\n257,2026-02-28,active\n276,2026-04-12,active\n269,2026-03-01,active\n235,2026-03-10,active\n42,2026-03-01,active\n92,2026-02-03,active\n363,2026-02-02,signup\n74,2026-02-25,signup\n109,2026-02-23,signup\n246,2026-01-15,signup\n31,2026-04-08,active\n135,2026-04-03,active\n180,2026-03-25,active\n373,2026-03-05,active\n297,2026-02-15,signup\n289,2026-04-19,active\n3,2026-02-15,signup\n150,2026-04-12,active\n367,2026-02-18,signup\n272,2026-02-08,signup\n2,2026-01-02,signup\n181,2026-04-04,active\n309,2026-02-06,active\n207,2026-01-21,signup\n124,2026-01-06,signup\n243,2026-03-24,active\n230,2026-03-08,active\n69,2026-03-16,active\n121,2026-04-10,active\n377,2026-01-07,active\n151,2026-04-09,active\n135,2026-04-05,active\n157,2026-02-14,active\n373,2026-04-25,active\n87,2026-03-17,active\n"
+  },
+  "grade": {
+   "must": [
+    "61.5\\s*%"
+   ],
+   "must_not": [],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-simpson",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "ab_test.csv has our checkout experiment (variant, device, converted). Which variant should we ship if we want the better conversion rate for users on every device? Answer with the variant letter first, then a one-sentence reason with the per-device rates.",
+  "files": {
+   "ab_test.csv": "variant,device,converted\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,mobile,1\nB,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,1\nA,desktop,0\nB,desktop,1\nA,desktop,0\nA,mobile,1\nA,desktop,1\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,desktop,0\nA,desktop,0\nA,mobile,0\nA,desktop,1\nB,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,mobile,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nB,desktop,1\nA,desktop,0\nA,mobile,1\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,mobile,0\nA,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,desktop,1\nA,mobile,0\nB,desktop,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nA,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,desktop,0\nB,desktop,1\nA,mobile,0\nA,desktop,1\nB,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,mobile,1\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nA,mobile,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nB,mobile,0\nA,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nA,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,1\nA,mobile,0\nB,mobile,0\nA,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,mobile,0\nA,mobile,1\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,1\nB,desktop,1\nA,mobile,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nA,mobile,1\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nA,mobile,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,1\nB,desktop,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nB,desktop,1\nA,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nB,mobile,0\nB,desktop,0\nA,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nB,mobile,0\nB,desktop,1\nA,mobile,1\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,desktop,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,desktop,1\nA,mobile,0\nA,desktop,0\nB,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,desktop,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,desktop,0\nA,mobile,0\nB,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,1\nA,mobile,0\nA,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,desktop,1\nB,desktop,0\nA,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,1\nB,desktop,1\nA,mobile,0\nA,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nB,desktop,1\nB,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,1\nB,mobile,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,desktop,0\nB,desktop,0\nB,mobile,0\nA,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,mobile,1\nA,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,mobile,1\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nB,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,desktop,1\nB,desktop,1\nB,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,desktop,1\nA,mobile,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,1\nB,mobile,0\nA,mobile,1\nA,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,desktop,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nB,desktop,0\nA,mobile,0\nB,mobile,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,1\nA,mobile,1\nB,desktop,1\nA,desktop,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,desktop,1\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nB,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nB,desktop,0\nA,desktop,1\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,1\nA,mobile,0\nB,desktop,0\nB,mobile,0\nA,mobile,1\nA,mobile,0\nB,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nB,desktop,0\nA,mobile,0\nA,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,desktop,0\nB,mobile,0\nA,desktop,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nA,mobile,1\nB,mobile,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,1\nB,desktop,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,mobile,0\nB,desktop,0\nA,mobile,0\nA,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,mobile,0\nB,mobile,1\nA,mobile,0\nB,desktop,0\nA,desktop,1\nB,desktop,1\nA,mobile,0\nA,desktop,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nB,desktop,0\nA,desktop,0\nA,mobile,1\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nB,mobile,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,desktop,0\nB,desktop,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nA,mobile,1\nB,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nB,desktop,0\nB,desktop,1\nB,mobile,0\nA,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nA,mobile,1\nB,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,1\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,desktop,1\nA,mobile,0\nB,desktop,0\nB,desktop,1\nA,desktop,0\nB,desktop,0\nB,desktop,0\nA,mobile,1\nB,mobile,1\nB,desktop,0\nB,desktop,0\nA,desktop,1\nA,mobile,1\nB,desktop,0\nB,desktop,1\nA,desktop,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nA,desktop,1\nA,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,1\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,1\nB,desktop,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,mobile,0\nA,mobile,0\nB,desktop,1\nB,mobile,0\nA,mobile,0\nB,mobile,1\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,1\nA,desktop,1\nA,desktop,0\nA,mobile,1\nB,desktop,1\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nB,desktop,1\nA,mobile,0\nB,desktop,0\nA,mobile,0\nA,mobile,0\nA,mobile,1\nA,mobile,0\nB,desktop,1\nA,mobile,0\nA,mobile,0\nB,desktop,1\nB,desktop,1\nB,desktop,0\nA,mobile,0\nA,mobile,1\nA,desktop,1\nA,mobile,0\nA,mobile,0\nA,mobile,0\nA,desktop,0\nA,desktop,0\nA,mobile,0\n"
+  },
+  "grade": {
+   "must": [
+    "^\\W*(?:\\*\\*)?(?:variant\\s+)?A\\b"
+   ],
+   "must_not": [
+    "^\\W*(?:\\*\\*)?(?:variant\\s+)?B\\b"
+   ],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-data-cagr-gaps",
+  "category": "data",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "work",
+  "prompt": "monthly_revenue.csv has monthly revenue from January 2023 to December 2025, but some months are missing rows. What is the compound annual growth rate between January 2023 and December 2025, treating that as 35 months (CAGR = (last/first)^(12/35) - 1)? One decimal place.",
+  "files": {
+   "monthly_revenue.csv": "month,revenue\n2024-04,13404.7\n2024-09,15078.39\n2023-12,12118.9\n2023-11,12147.24\n2024-06,14187.64\n2024-03,12813.2\n2025-07,17503.88\n2023-04,11036.79\n2024-07,13965.65\n2025-02,16316.47\n2025-08,18305.29\n2023-06,11742.13\n2024-10,14936.11\n2023-07,12050.91\n2023-10,11767.76\n2024-12,15669.09\n2023-08,11902.82\n2023-05,11407.93\n2023-09,11687.21\n2024-02,12329.36\n2023-01,10165.39\n2025-12,19983.13\n2025-06,17757.27\n2024-05,13513.43\n2025-11,19272.85\n2024-01,12302.04\n2025-03,16606.86\n2025-04,17300.56\n2025-09,18546.68\n2023-02,10536.1\n2024-08,14480.74\n"
+  },
+  "grade": {
+   "must": [
+    "26.1\\s*%"
+   ],
+   "must_not": [],
+   "max_words": 400
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-tz-daily",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "The daily sales report puts late-evening sales on the wrong day for our Dubai store (UTC+4). Events are stored with UTC timestamps; the report must group by the store's local calendar day. Fix it without changing how events are stored.",
+  "files": {
+   "store.py": "STORES = {'dubai': 4, 'london': 0, 'nyc': -5}  # UTC offset in hours\n",
+   "events.py": "from datetime import datetime\n\ndef parse(ts):\n    # timestamps are ISO strings in UTC, e.g. 2026-03-01T21:30:00Z\n    return datetime.strptime(ts, '%Y-%m-%dT%H:%M:%SZ')\n",
+   "report.py": "from collections import defaultdict\nfrom events import parse\nfrom store import STORES\n\ndef daily_totals(store, sales):\n    out = defaultdict(float)\n    for ts, amount in sales:\n        day = parse(ts).date().isoformat()\n        out[day] += amount\n    return dict(out)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from report import daily_totals\nsales=[('2026-03-01T19:59:59Z',10),('2026-03-01T20:00:00Z',5),('2026-03-01T23:30:00Z',1),('2026-02-28T22:00:00Z',2)]\nassert daily_totals('dubai', sales) == {'2026-03-01': 12.0, '2026-03-02': 6.0}, daily_totals('dubai', sales)\nassert daily_totals('london', sales) == {'2026-03-01': 16.0, '2026-02-28': 2.0}\nassert daily_totals('nyc', [('2026-03-02T03:00:00Z', 7)]) == {'2026-03-01': 7.0}\nfrom events import parse\nassert parse('2026-03-01T21:30:00Z').hour == 21\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-shared-registry",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Two independent plugin registries interfere: registering a plugin in one shows up in the other, and Registry.copy() returns a registry whose changes leak back into the original. Fix it.",
+  "files": {
+   "registry.py": "class Registry:\n    plugins = {}\n    order = []\n\n    def register(self, name, fn):\n        if name in self.plugins:\n            raise ValueError(f'duplicate plugin {name}')\n        self.plugins[name] = fn\n        self.order.append(name)\n\n    def names(self):\n        return list(self.order)\n\n    def copy(self):\n        r = Registry()\n        r.plugins = self.plugins\n        r.order = self.order\n        return r\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from registry import Registry\na,b=Registry(),Registry()\na.register('x',1); b.register('x',2)\nassert a.names()==['x'] and b.names()==['x'] and a.plugins['x']==1 and b.plugins['x']==2\nc=a.copy(); c.register('y',3)\nassert a.names()==['x'] and c.names()==['x','y']\ntry:\n    a.register('x',9); raise SystemExit('dup allowed')\nexcept ValueError: pass\nassert Registry().names()==[]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-async-lost-update",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Under load the wallet balance ends up too high or too low: concurrent deposits and withdrawals lose updates, and a withdrawal sometimes succeeds even though two concurrent ones together exceed the balance. Keep the async API and the simulated I/O delay; make the operations correct under concurrency.",
+  "files": {
+   "wallet.py": "import asyncio\n\nclass InsufficientFunds(Exception):\n    pass\n\nclass Wallet:\n    def __init__(self, balance=0):\n        self.balance = balance\n\n    async def _io(self):\n        await asyncio.sleep(0.001)  # simulated database round trip\n\n    async def deposit(self, amount):\n        b = self.balance\n        await self._io()\n        self.balance = b + amount\n\n    async def withdraw(self, amount):\n        b = self.balance\n        await self._io()\n        if b < amount:\n            raise InsufficientFunds(amount)\n        self.balance = b - amount\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import asyncio\nfrom wallet import Wallet, InsufficientFunds\nasync def main():\n    w=Wallet(0)\n    await asyncio.gather(*[w.deposit(1) for _ in range(200)])\n    assert w.balance==200, w.balance\n    w=Wallet(100)\n    res=await asyncio.gather(*[w.withdraw(60), w.withdraw(60)], return_exceptions=True)\n    assert sum(isinstance(r, InsufficientFunds) for r in res)==1 and w.balance==40, (res, w.balance)\n    w=Wallet(50)\n    await asyncio.gather(*[w.deposit(10) for _ in range(10)], *[w.withdraw(5) for _ in range(10)])\n    assert w.balance==100, w.balance\n    import inspect; assert inspect.iscoroutinefunction(Wallet.deposit)\nasyncio.run(main()); print('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-generator-reuse",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "summary() reports a max of None and a count of 0 for real data, but the mean is right. Fix the root cause; readings must still be streamed from the file (do not read the whole file into a list in reader.py: other callers rely on it being lazy).",
+  "files": {
+   "reader.py": "def readings(path):\n    with open(path) as f:\n        for line in f:\n            line = line.strip()\n            if line and not line.startswith('#'):\n                yield float(line)\n",
+   "stats.py": "def mean(xs):\n    total = n = 0\n    for x in xs:\n        total += x\n        n += 1\n    return total / n if n else None\n\ndef maximum(xs):\n    m = None\n    for x in xs:\n        m = x if m is None or x > m else m\n    return m\n\ndef count(xs):\n    return sum(1 for _ in xs)\n",
+   "summary.py": "from reader import readings\nfrom stats import mean, maximum, count\n\ndef summary(path):\n    data = readings(path)\n    return {'mean': mean(data), 'max': maximum(data), 'count': count(data)}\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import tempfile, os, types\nfrom summary import summary\nfrom reader import readings\np=os.path.join(tempfile.mkdtemp(),'r.txt'); open(p,'w').write('# header\\n1\\n5\\n\\n3\\n')\nassert summary(p)=={'mean':3.0,'max':5.0,'count':3}, summary(p)\nassert isinstance(readings(p), types.GeneratorType)\nq=os.path.join(tempfile.mkdtemp(),'e.txt'); open(q,'w').write('# none\\n')\nassert summary(q)=={'mean':None,'max':None,'count':0}\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-csv-import",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Importing contacts.csv exported from Excel fails with KeyError: 'name', and once that is worked around some contacts get the wrong email. Fix the importer so it handles real exported files.",
+  "files": {
+   "importer.py": "def load_contacts(path):\n    with open(path, encoding='utf-8') as f:\n        header = f.readline().strip().split(',')\n        out = []\n        for line in f:\n            if not line.strip():\n                continue\n            row = dict(zip(header, line.strip().split(',')))\n            out.append({'name': row['name'], 'email': row['email'].lower()})\n        return out\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import tempfile, os\nfrom importer import load_contacts\np=os.path.join(tempfile.mkdtemp(),'c.csv')\nopen(p,'w',encoding='utf-8-sig',newline='').write('name,email,company\\r\\n\"Doe, Jane\",JANE@X.COM,\"Acme, Inc\"\\r\\nBob,bob@y.org,Y\\r\\n\\r\\n\"Ann \"\"A\"\" Lee\",ann@z.io,\"Z\"\\r\\n')\nr=load_contacts(p)\nassert r==[{'name':'Doe, Jane','email':'jane@x.com'},{'name':'Bob','email':'bob@y.org'},{'name':'Ann \"A\" Lee','email':'ann@z.io'}], r\nq=os.path.join(tempfile.mkdtemp(),'d.csv'); open(q,'w').write('name,email\\nA,a@b.c\\n'); assert load_contacts(q)==[{'name':'A','email':'a@b.c'}]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-retry",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Our retry helper hides failures: after the last attempt callers get None instead of the error, the waits do not double as documented, and it even retries ValueError (a bug in the caller, which must fail at once). Fix retry() to match its docstring.",
+  "files": {
+   "retry.py": "import time\n\nclass TransientError(Exception):\n    pass\n\ndef retry(fn, attempts=3, base_delay=0.1, sleep=time.sleep):\n    \"\"\"Call fn(); on TransientError wait base_delay, 2*base_delay, 4*base_delay ... between attempts and try\n    again, up to `attempts` calls in total. Any other exception propagates at once. After the last failed\n    attempt the last TransientError propagates.\"\"\"\n    delay = base_delay\n    for i in range(attempts):\n        try:\n            return fn()\n        except Exception:\n            sleep(delay)\n            delay += base_delay\n    return None\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from retry import retry, TransientError\nwaits=[]\ncalls={'n':0}\ndef flaky():\n    calls['n']+=1\n    if calls['n']<3: raise TransientError(calls['n'])\n    return 'ok'\nassert retry(flaky, attempts=5, base_delay=1, sleep=waits.append)=='ok' and waits==[1,2] and calls['n']==3, (waits, calls)\nwaits.clear()\ndef always(): raise TransientError('x')\ntry:\n    retry(always, attempts=3, base_delay=0.5, sleep=waits.append); raise SystemExit('no raise')\nexcept TransientError: pass\nassert waits==[0.5,1.0], waits\nn={'c':0}\ndef bad():\n    n['c']+=1; raise ValueError('bug')\ntry:\n    retry(bad, sleep=waits.append); raise SystemExit('no raise')\nexcept ValueError: pass\nassert n['c']==1\nassert retry(lambda: 0, sleep=waits.append)==0\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-pagination-sync",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Syncing the full product catalogue through the paged API sometimes skips products and sometimes duplicates them. Both the server (api.py) and the client (sync.py) may be involved. Fix it so fetch_all() returns every product exactly once, in id order, for any page size.",
+  "files": {
+   "api.py": "PRODUCTS = [{'id': i, 'sku': f'S{i % 7}', 'name': f'p{i}'} for i in range(1, 52)]\n\ndef page(after_id=0, size=10):\n    items = [p for p in PRODUCTS if p['id'] >= after_id][:size]\n    return {'items': items, 'more': len(items) == size}\n",
+   "sync.py": "import api\n\ndef fetch_all(size=10):\n    seen, out, after = set(), [], 0\n    while True:\n        r = api.page(after, size)\n        for p in r['items']:\n            if p['sku'] not in seen:\n                seen.add(p['sku'])\n                out.append(p)\n        if not r['more']:\n            break\n        after = r['items'][-1]['id']\n    return out\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import api, sync\nfor size in (1,3,7,10,51,52,100):\n    got=[p['id'] for p in sync.fetch_all(size)]\n    assert got==list(range(1,52)), (size, got[:12])\napi.PRODUCTS=[]\nassert sync.fetch_all(5)==[]\napi.PRODUCTS=[{'id':i,'sku':'A','name':'x'} for i in range(1,21)]\nassert [p['id'] for p in sync.fetch_all(10)]==list(range(1,21))\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-dbg-stale-cache",
+  "category": "debugging",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "After a user changes their plan, permissions still reflect the old plan until the app restarts. Fix the stale permissions without removing caching (permission checks are hot).",
+  "files": {
+   "users.py": "class User:\n    def __init__(self, uid, plan):\n        self.uid = uid\n        self.plan = plan\n\n    def change_plan(self, plan):\n        self.plan = plan\n",
+   "perms.py": "PLANS = {'free': {'read'}, 'pro': {'read', 'write'}, 'team': {'read', 'write', 'admin'}}\n_cache = {}\nCALLS = {'n': 0}\n\ndef _compute(plan):\n    CALLS['n'] += 1\n    return frozenset(PLANS[plan])\n\ndef permissions(user):\n    if user.uid not in _cache:\n        _cache[user.uid] = _compute(user.plan)\n    return _cache[user.uid]\n\ndef can(user, action):\n    return action in permissions(user)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from users import User\nimport perms\nu=User(1,'free')\nassert not perms.can(u,'write')\nu.change_plan('pro'); assert perms.can(u,'write') and not perms.can(u,'admin')\nu.change_plan('team'); assert perms.can(u,'admin')\nu.change_plan('free'); assert not perms.can(u,'write')\nv=User(2,'pro'); perms.CALLS['n']=0\nfor _ in range(1000): perms.can(v,'write')\nassert perms.CALLS['n']<=1, perms.CALLS['n']\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-config-layers",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Settings come from defaults.json. Add environment overrides: a variable APP_<KEY> overrides a top-level key and APP_<A>__<B> a nested key (case-insensitive). Values are converted to the type of the default they replace (int, float, bool from true/false/1/0/yes/no, list from comma-separated strings); a value that cannot be converted raises ConfigError naming the variable. Unknown keys raise ConfigError too. app.py must keep working.",
+  "files": {
+   "defaults.json": "{\"port\": 8080, \"debug\": false, \"ratio\": 0.5, \"name\": \"svc\", \"hosts\": [\"a\"], \"db\": {\"pool\": 5, \"url\": \"sqlite://\"}}\n",
+   "config.py": "import json, os\n\nclass ConfigError(Exception):\n    pass\n\ndef load(path=None, env=None):\n    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'defaults.json')\n    with open(path) as f:\n        return json.load(f)\n",
+   "app.py": "from config import load\n\ndef banner(env=None):\n    c = load(env=env)\n    return f\"{c['name']} on :{c['port']} pool={c['db']['pool']} debug={c['debug']}\"\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from config import load, ConfigError\nfrom app import banner\nassert banner({})=='svc on :8080 pool=5 debug=False'\nc=load(env={'APP_PORT':'9000','app_debug':'yes','APP_RATIO':'0.25','APP_HOSTS':'x, y','APP_DB__POOL':'12','APP_DB__URL':'pg://h','PATH':'/bin'})\nassert c['port']==9000 and c['debug'] is True and c['ratio']==0.25 and c['hosts']==['x','y'] and c['db']=={'pool':12,'url':'pg://h'}, c\nassert load(env={'APP_DEBUG':'0'})['debug'] is False\nfor bad in ({'APP_PORT':'abc'},{'APP_DEBUG':'maybe'},{'APP_NOPE':'1'},{'APP_DB__X':'1'}):\n    try:\n        load(env=bad); raise SystemExit('accepted %r'%bad)\n    except ConfigError as e:\n        assert list(bad)[0].upper() in str(e).upper(), str(e)\nassert banner({'APP_PORT':'1'})=='svc on :1 pool=5 debug=False'\nimport os; os.environ['APP_NAME']='fromenv'; assert load()['name']=='fromenv'\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-atomic-transfer",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add an audit trail to transfers: every successful transfer appends one entry {'from','to','amount','balance_from','balance_to'} to ledger.AUDIT (balances after the transfer). A transfer that fails for any reason (unknown account, insufficient funds, non-positive amount, or an error raised by the notifier) must leave balances and the audit trail exactly as they were. Notifications must only be sent for transfers that succeed.",
+  "files": {
+   "accounts.py": "BALANCES = {}\n\nclass Insufficient(Exception):\n    pass\n\ndef open_account(name, amount=0):\n    BALANCES[name] = amount\n\ndef debit(name, amount):\n    if BALANCES[name] < amount:\n        raise Insufficient(name)\n    BALANCES[name] -= amount\n\ndef credit(name, amount):\n    BALANCES[name] += amount\n",
+   "ledger.py": "AUDIT = []\n",
+   "notify.py": "SENT = []\nFAIL = [False]\n\ndef send(msg):\n    if FAIL[0]:\n        raise RuntimeError('mail down')\n    SENT.append(msg)\n",
+   "transfer.py": "import accounts, notify\n\ndef transfer(src, dst, amount):\n    accounts.debit(src, amount)\n    notify.send(f'{src}->{dst}:{amount}')\n    accounts.credit(dst, amount)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import accounts, ledger, notify\nfrom transfer import transfer\naccounts.open_account('a',100); accounts.open_account('b',0)\ntransfer('a','b',30)\nassert accounts.BALANCES=={'a':70,'b':30} and ledger.AUDIT==[{'from':'a','to':'b','amount':30,'balance_from':70,'balance_to':30}] and notify.SENT==['a->b:30']\nsnap=(dict(accounts.BALANCES), list(ledger.AUDIT), list(notify.SENT))\nfor args in (('a','zz',10),('zz','a',10),('a','b',1000),('a','b',0),('a','b',-5)):\n    try:\n        transfer(*args)\n    except Exception: pass\n    assert (accounts.BALANCES, ledger.AUDIT, notify.SENT)==snap, args\nnotify.FAIL[0]=True\ntry:\n    transfer('a','b',10)\nexcept Exception: pass\nassert (accounts.BALANCES, ledger.AUDIT, notify.SENT)==snap\nnotify.FAIL[0]=False\ntransfer('b','a',5)\nassert accounts.BALANCES=={'a':75,'b':25} and len(ledger.AUDIT)==2 and notify.SENT[-1]=='b->a:5'\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-i18n-plurals",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add language support to the CLI output: report(n_files, n_errors, lang='en') in cli.py must produce the summary in the requested language using messages.py, with correct plural forms (English: 1 file / 2 files; French: 0 and 1 use the singular, 2+ the plural; Arabic not supported yet). An unknown language falls back to English. Keep the current English output byte-for-byte identical.",
+  "files": {
+   "messages.py": "MESSAGES = {\n    'en': {'files': ('{n} file', '{n} files'), 'errors': ('{n} error', '{n} errors'), 'summary': 'Checked {files}, found {errors}.'},\n    'fr': {'files': ('{n} fichier', '{n} fichiers'), 'errors': ('{n} erreur', '{n} erreurs'), 'summary': 'V\u00e9rifi\u00e9 {files}, trouv\u00e9 {errors}.'},\n}\n",
+   "formatter.py": "def count(n, word):\n    return f'{n} {word}' + ('' if n == 1 else 's')\n",
+   "cli.py": "from formatter import count\n\ndef report(n_files, n_errors):\n    return f\"Checked {count(n_files, 'file')}, found {count(n_errors, 'error')}.\"\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from cli import report\nassert report(1,0)=='Checked 1 file, found 0 errors.' and report(2,1)=='Checked 2 files, found 1 error.'\nassert report(0,0)=='Checked 0 files, found 0 errors.'\nassert report(0,1,lang='fr')=='V\u00e9rifi\u00e9 0 fichier, trouv\u00e9 1 erreur.', report(0,1,lang='fr')\nassert report(2,5,lang='fr')=='V\u00e9rifi\u00e9 2 fichiers, trouv\u00e9 5 erreurs.'\nassert report(1,1,lang='fr')=='V\u00e9rifi\u00e9 1 fichier, trouv\u00e9 1 erreur.'\nassert report(3,0,lang='xx')=='Checked 3 files, found 0 errors.'\nassert report(1,2,lang='en')=='Checked 1 file, found 2 errors.'\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-rate-limit",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add per-client rate limiting to the HTTP app: at most `limit` requests per client in any rolling `window` seconds (a sliding window, not fixed buckets). Over the limit the app answers 429 with the same body shape as other errors and a 'retry_after' field (seconds until the oldest counted request leaves the window, rounded up to an int). Use the clock passed to create_app so tests can control time. Health checks (/health) are never limited and never counted.",
+  "files": {
+   "http.py": "def error(status, message):\n    return status, {'error': message}\n",
+   "middleware.py": "def logging_mw(handler, log):\n    def wrapped(req):\n        resp = handler(req)\n        log.append((req['path'], resp[0]))\n        return resp\n    return wrapped\n",
+   "app.py": "import time\nfrom http import error\nfrom middleware import logging_mw\n\ndef router(req):\n    if req['path'] == '/health':\n        return 200, {'ok': True}\n    if req['path'] == '/items':\n        return 200, {'items': [1, 2]}\n    return error(404, 'not found')\n\ndef create_app(limit=5, window=60, clock=time.monotonic, log=None):\n    log = [] if log is None else log\n    return logging_mw(router, log)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from app import create_app\nnow=[1000.0]\nlog=[]\napp=create_app(limit=3, window=10, clock=lambda: now[0], log=log)\nr=lambda c,p='/items': app({'client':c,'path':p})\nassert [r('a')[0] for _ in range(3)]==[200,200,200]\ns,b=r('a'); assert s==429 and b['error'] and b['retry_after']==10, (s,b)\nassert r('b')[0]==200\nfor _ in range(5): assert r('a','/health')[0]==200\nnow[0]+=4; assert r('a')[0]==429\nnow[0]+=6; assert [r('a')[0] for _ in range(3)]==[200,200,200]\ns,b=r('a'); assert s==429 and b['retry_after']==10, b\nnow[0]+=0.5\ns,b=r('a'); assert b['retry_after']==10, b\nnow[0]+=6\ns,b=r('a'); assert s==429 and b['retry_after']==4, b\nassert r('c','/nope')[0]==404\nassert ('/items',429) in log\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-manifest-validation",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Plugin manifests are validated one error at a time, with messages that do not say where the problem is. Change validation so validate(manifest) returns a list of ALL problems as 'path: message' strings (paths like 'name', 'permissions[1]', 'entry.module'), in document order; an empty list means valid. loader.load() must raise InvalidManifest containing every problem when any exist, and otherwise return the manifest unchanged.",
+  "files": {
+   "schema.py": "SCHEMA = {\n    'name': str,\n    'version': str,\n    'permissions': [str],\n    'entry': {'module': str, 'function': str},\n}\n",
+   "validate.py": "from schema import SCHEMA\n\ndef validate(m):\n    for key, typ in SCHEMA.items():\n        if key not in m:\n            raise ValueError('missing field')\n        if isinstance(typ, type) and not isinstance(m[key], typ):\n            raise ValueError('bad type')\n    return []\n",
+   "loader.py": "import json\nfrom validate import validate\n\nclass InvalidManifest(Exception):\n    pass\n\ndef load(text):\n    m = json.loads(text)\n    try:\n        validate(m)\n    except ValueError as e:\n        raise InvalidManifest(str(e))\n    return m\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import json\nfrom validate import validate\nfrom loader import load, InvalidManifest\ngood={'name':'p','version':'1','permissions':['net','fs'],'entry':{'module':'m','function':'f'}}\nassert validate(good)==[] and load(json.dumps(good))==good\nbad={'version':2,'permissions':['net',3,None],'entry':{'module':'m'}}\nerrs=validate(bad)\nassert len(errs)==5, errs\nassert errs[0].startswith('name:') and errs[1].startswith('version:') and errs[2].startswith('permissions[1]:') and errs[3].startswith('permissions[2]:') and errs[4].startswith('entry.function:'), errs\nassert validate({'name':'p','version':'1','permissions':'net','entry':[]})==[e for e in validate({'name':'p','version':'1','permissions':'net','entry':[]})] and len(validate({'name':'p','version':'1','permissions':'net','entry':[]}))==2\ntry:\n    load(json.dumps(bad)); raise SystemExit('no raise')\nexcept InvalidManifest as e:\n    assert all(x in str(e) for x in errs), str(e)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-js-recipe-units",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "The recipe scaler (src/) ignores units: scaling '2 cups flour' by 3 should give '1.5 quarts flour' style promotion. Implement unit-aware scaling: volumes in tsp, tbsp, cup, quart (3 tsp = 1 tbsp, 16 tbsp = 1 cup, 4 cup = 1 quart) and weights in g, kg (1000 g = 1 kg). After scaling, express each amount in the largest unit of its family where the amount is >= 1, rounded to at most 2 decimals with trailing zeros removed. Lines without a known unit keep scaling as numbers ('2 eggs' x 3 = '6 eggs'). Plural unit spellings (cups, quarts) are accepted on input; output uses the singular unit name.",
+  "files": {
+   "package.json": "{\"name\":\"recipes\",\"type\":\"commonjs\"}\n",
+   "src/parse.js": "function parseLine(line) {\n  const m = line.match(/^(\\d+(?:\\.\\d+)?)\\s+(.*)$/)\n  if (!m) return { qty: null, rest: line }\n  return { qty: Number(m[1]), rest: m[2] }\n}\nmodule.exports = { parseLine }\n",
+   "src/format.js": "function formatQty(q) {\n  return String(Math.round(q * 100) / 100)\n}\nmodule.exports = { formatQty }\n",
+   "src/scale.js": "const { parseLine } = require('./parse')\nconst { formatQty } = require('./format')\nfunction scaleLine(line, factor) {\n  const p = parseLine(line)\n  if (p.qty === null) return line\n  return `${formatQty(p.qty * factor)} ${p.rest}`\n}\nfunction scaleRecipe(lines, factor) { return lines.map(l => scaleLine(l, factor)) }\nmodule.exports = { scaleLine, scaleRecipe }\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.js": "const assert=require('assert')\nconst {scaleLine,scaleRecipe}=require('./src/scale')\nassert.strictEqual(scaleLine('2 cups flour',3),'1.5 quart flour')\nassert.strictEqual(scaleLine('1 tbsp salt',2),'2 tbsp salt')\nassert.strictEqual(scaleLine('2 tsp sugar',3),'2 tbsp sugar')\nassert.strictEqual(scaleLine('8 tbsp butter',2),'1 cup butter')\nassert.strictEqual(scaleLine('1 tsp vanilla',0.5),'0.5 tsp vanilla')\nassert.strictEqual(scaleLine('600 g rice',2),'1.2 kg rice')\nassert.strictEqual(scaleLine('250 g cheese',1),'250 g cheese')\nassert.strictEqual(scaleLine('2 eggs',3),'6 eggs')\nassert.strictEqual(scaleLine('salt to taste',2),'salt to taste')\nassert.deepStrictEqual(scaleRecipe(['1 cup milk','3 eggs'],2),['2 cup milk','6 eggs'])\nassert.strictEqual(scaleLine('1 quart stock',0.25),'1 cup stock')\nconsole.log('ok')\n"
+   },
+   "check": "node hidden_t.js",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-job-hooks",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add hooks to the job runner. runner.add_hook(stage, fn) with stage 'before' or 'after'; hooks run in the order added; each gets a context dict {'job': name, 'attempt': n} and 'after' hooks also get 'result' or 'error'. A 'before' hook that raises cancels that job (result recorded as status 'cancelled', the job is not run, 'after' hooks still run). An 'after' hook that raises must not affect the job's result; its error is appended to runner.HOOK_ERRORS as (stage, job, message). Existing retry behaviour stays the same, and hooks run once per attempt.",
+  "files": {
+   "jobs.py": "def ok():\n    return 'done'\n\nFLAKY = {'n': 0}\ndef flaky():\n    FLAKY['n'] += 1\n    if FLAKY['n'] < 2:\n        raise RuntimeError('try again')\n    return 'eventually'\n\ndef broken():\n    raise ValueError('nope')\n",
+   "runner.py": "RESULTS = {}\n\ndef run(name, fn, retries=1):\n    for attempt in range(1, retries + 2):\n        try:\n            RESULTS[name] = {'status': 'ok', 'value': fn(), 'attempts': attempt}\n            return RESULTS[name]\n        except Exception as e:\n            last = e\n    RESULTS[name] = {'status': 'failed', 'error': str(last), 'attempts': retries + 1}\n    return RESULTS[name]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import runner, jobs\nlog=[]\nrunner.add_hook('before', lambda c: log.append(('b1', c['job'], c['attempt'])))\nrunner.add_hook('before', lambda c: log.append(('b2', c['job'], c['attempt'])))\nrunner.add_hook('after', lambda c: log.append(('a', c['job'], c.get('result'), c.get('error'))))\nr=runner.run('ok', jobs.ok); assert r=={'status':'ok','value':'done','attempts':1}\nassert log==[('b1','ok',1),('b2','ok',1),('a','ok','done',None)], log\nlog.clear(); r=runner.run('flaky', jobs.flaky, retries=2)\nassert r['status']=='ok' and r['attempts']==2 and [x[0] for x in log]==['b1','b2','a','b1','b2','a'], log\nassert log[2][3]=='try again'\nlog.clear(); r=runner.run('broken', jobs.broken, retries=0); assert r['status']=='failed' and r['error']=='nope'\ndef boom(c): raise KeyError('hook')\nrunner.add_hook('after', boom)\nr=runner.run('ok2', jobs.ok); assert r['status']=='ok' and runner.HOOK_ERRORS and runner.HOOK_ERRORS[-1][0]=='after' and runner.HOOK_ERRORS[-1][1]=='ok2'\ncalled=[]\ndef veto(c):\n    if c['job']=='vetoed': raise PermissionError('no')\nrunner.add_hook('before', veto)\nr=runner.run('vetoed', lambda: called.append(1))\nassert r['status']=='cancelled' and not called and log[-1][1]=='vetoed', (r, log[-1])\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-mf-rename-module",
+  "category": "multi-file",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Rename the package module geo/calc.py to geo/distance.py and the function dist() in it to haversine_km(). Update every import and call site in the project. For backwards compatibility geo.calc must still import and geo.calc.dist must still work but emit a DeprecationWarning when called. The CLI output must not change.",
+  "files": {
+   "geo/__init__.py": "from .calc import dist\n",
+   "geo/calc.py": "import math\n\ndef dist(a, b):\n    lat1, lon1 = map(math.radians, a)\n    lat2, lon2 = map(math.radians, b)\n    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2\n    return 2 * 6371.0 * math.asin(math.sqrt(h))\n",
+   "geo/routes.py": "from geo.calc import dist\n\ndef total(points):\n    return sum(dist(points[i], points[i + 1]) for i in range(len(points) - 1))\n",
+   "stores.py": "import geo\n\ndef nearest(here, stores):\n    return min(stores, key=lambda s: geo.dist(here, s[1]))[0]\n",
+   "cli.py": "from geo.routes import total\nfrom stores import nearest\n\nif __name__ == '__main__':\n    pts = [(51.5, -0.12), (48.85, 2.35), (52.52, 13.4)]\n    print(round(total(pts), 1))\n    print(nearest((50.0, 8.0), [('paris', (48.85, 2.35)), ('berlin', (52.52, 13.4))]))\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.sh": "set -e\ntest \"$(python3 cli.py)\" = \"$(printf '1220.8\\nparis')\" || { python3 cli.py; exit 1; }\ntest -f geo/distance.py\n! grep -rn 'def dist(' --include=*.py geo/distance.py\nn=$(grep -rln 'geo.calc\\|from .calc\\|\\bdist(' --include=*.py . | grep -v 'geo/calc.py' | grep -v hidden_ | wc -l | tr -d ' '); test \"$n\" = 0 || { grep -rn 'geo.calc\\|from .calc\\|\\bdist(' --include=*.py . | grep -v geo/calc.py; exit 1; }\npython3 -W error::DeprecationWarning -c 'import geo.distance as d; assert abs(d.haversine_km((0,0),(0,1))-111.19)<0.01'\npython3 -c \"\nimport warnings\nwith warnings.catch_warnings(record=True) as w:\n    warnings.simplefilter('always')\n    import geo.calc\n    v=geo.calc.dist((0,0),(0,1))\nassert abs(v-111.19)<0.01 and any(issubclass(x.category, DeprecationWarning) for x in w)\n\"\necho ok\n"
+   },
+   "check": "bash hidden_t.sh",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-n-plus-one",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "The order summary page takes seconds to load. report.build(order_ids) makes one database round trip per order and per customer. Make it fast using what db.py offers, with identical output.",
+  "files": {
+   "db.py": "import time\nORDERS = {i: {'id': i, 'customer': i % 50, 'total': i * 1.5} for i in range(1, 2001)}\nCUSTOMERS = {c: {'id': c, 'name': f'cust{c}'} for c in range(50)}\nCALLS = {'n': 0}\n\ndef _trip():\n    CALLS['n'] += 1\n    time.sleep(0.002)\n\ndef get_order(i):\n    _trip(); return dict(ORDERS[i])\n\ndef get_orders(ids):\n    _trip(); return [dict(ORDERS[i]) for i in ids if i in ORDERS]\n\ndef get_customer(c):\n    _trip(); return dict(CUSTOMERS[c])\n\ndef get_customers(ids):\n    _trip(); return {c: dict(CUSTOMERS[c]) for c in set(ids) if c in CUSTOMERS}\n",
+   "report.py": "import db\n\ndef build(order_ids):\n    rows = []\n    for i in order_ids:\n        o = db.get_order(i)\n        c = db.get_customer(o['customer'])\n        rows.append(f\"{o['id']}: {c['name']} {o['total']:.2f}\")\n    return rows\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import time, db, report\nids=list(range(1,2001))[::-1][:1500]+[7,7]\nexp=[f\"{i}: cust{i%50} {i*1.5:.2f}\" for i in ids]\ndb.CALLS['n']=0; t=time.time(); r=report.build(ids); dt=time.time()-t\nassert r==exp, r[:3]\nassert db.CALLS['n']<=4 and dt<1.0, (db.CALLS['n'], dt)\nassert report.build([])==[]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-regex-redos",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "A user reported that submitting a long tag list hangs the server for minutes. validate_tags(s) uses a regex. Make it run in linear time on any input while accepting and rejecting exactly the same strings as the documented rule: one or more tags separated by single commas; a tag is 1-20 characters of letters, digits or '-', not starting or ending with '-'.",
+  "files": {
+   "tags.py": "import re\nTAGS = re.compile(r'^(([a-z0-9]+-?)+[a-z0-9],?)+$', re.I)\n\ndef validate_tags(s):\n    return bool(TAGS.match(s)) and not s.endswith(',') and all(1 <= len(t) <= 20 and not t.startswith('-') and not t.endswith('-') for t in s.split(','))\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import time\nfrom tags import validate_tags as v\nfor s in ('abc','a-b,c1,XYZ','ab','a1-b2-c3','x'*20,'a,b'):\n    assert v(s), s\nfor s in ('','a,,b','-a','a-','a,','x'*21,'a b','a--b,c'[0:0]+'a,-b','a_b',',a'):\n    assert not v(s), s\nassert v('a--b') == True\nfor bad in ('a'*5000+'!', ('ab-'*3000)+'!', ('a-'*4000)+'-'):\n    t=time.time(); v(bad); assert time.time()-t<0.5, len(bad)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-rolling-max",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "rolling_max(xs, k) (the maximum of every window of k consecutive values) is too slow for our 300k-point series with k=2000. Make it fast; results must be identical, including for k larger than the series (empty result) and k <= 0 (ValueError).",
+  "files": {
+   "series.py": "def rolling_max(xs, k):\n    if k <= 0:\n        raise ValueError('k must be positive')\n    return [max(xs[i:i + k]) for i in range(len(xs) - k + 1)]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import random, time\nfrom series import rolling_max as rm\nrnd=random.Random(4)\nfor _ in range(50):\n    xs=[rnd.randint(-9,9) for _ in range(rnd.randint(0,30))]; k=rnd.randint(1,35)\n    assert rm(xs,k)==[max(xs[i:i+k]) for i in range(len(xs)-k+1)], (xs,k)\ntry:\n    rm([1],0); raise SystemExit(1)\nexcept ValueError: pass\nxs=[rnd.random() for _ in range(300000)]\nt=time.time(); r=rm(xs,2000); dt=time.time()-t\nassert len(r)==298001 and dt<3, dt\nassert r[0]==max(xs[:2000]) and r[-1]==max(xs[-2000:])\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 240
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-dag-paths",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "count_paths(graph, src, dst) counts distinct paths in a directed acyclic graph modulo 1_000_000_007. It is exponential and never finishes on our build graph (thousands of nodes). Make it fast with identical results; it must not hit Python's recursion limit on long chains.",
+  "files": {
+   "paths.py": "MOD = 1_000_000_007\n\ndef count_paths(graph, src, dst):\n    if src == dst:\n        return 1\n    return sum(count_paths(graph, n, dst) for n in graph.get(src, [])) % MOD\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import time\nfrom paths import count_paths as c\nassert c({'a':['b','c'],'b':['d'],'c':['d'],'d':[]},'a','d')==2 and c({},'a','a')==1 and c({'a':['b']},'b','a')==0\ng={i:[i+1,i+2] for i in range(3000)}\nt=time.time(); r=c(g,0,3000); assert time.time()-t<3\nf=[1,1]\nfor _ in range(3000): f.append((f[-1]+f[-2])%1_000_000_007)\nassert r==f[3000], r\nchain={i:[i+1] for i in range(20000)}\nassert c(chain,0,20000)==1\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-perf-config-reload",
+  "category": "performance",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "settings.get(key) is called on every request and re-reads and parses config.json each time, which dominates our CPU profile. Make it fast, but changes to config.json must still be picked up on the next call (we edit it while the service runs). Do not add background threads.",
+  "files": {
+   "config.json": "{\"limit\": 10, \"mode\": \"fast\"}\n",
+   "settings.py": "import json, os\nPATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'config.json')\nREADS = {'n': 0}\n\ndef _load():\n    READS['n'] += 1\n    with open(PATH) as f:\n        return json.load(f)\n\ndef get(key, default=None):\n    return _load().get(key, default)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import json, os, time, settings\nassert settings.get('limit')==10 and settings.get('nope',3)==3\nsettings.READS['n']=0\nt=time.time()\nfor _ in range(20000): settings.get('mode')\nassert settings.READS['n']<=2 and time.time()-t<1, settings.READS['n']\nfor v in (11, 12345):\n    time.sleep(0.01)\n    json.dump({'limit': v, 'mode':'slow'}, open(settings.PATH,'w'))\n    assert settings.get('limit')==v and settings.get('mode')=='slow', settings.get('limit')\nst=os.stat(settings.PATH)\njson.dump({'limit': 99, 'mode':'slow'}, open(settings.PATH,'w')); os.utime(settings.PATH, ns=(st.st_atime_ns, st.st_mtime_ns))\nassert settings.get('limit')==99\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-search-normalize",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Users complain product search misses things they can see in the catalogue. Make search match what users type the way the rest of the app compares names.",
+  "files": {
+   "textutil.py": "import unicodedata\n\ndef normalize(s):\n    s = unicodedata.normalize('NFKD', s)\n    s = ''.join(ch for ch in s if not unicodedata.combining(ch))\n    return ' '.join(s.casefold().split())\n",
+   "customers.py": "from textutil import normalize\n\ndef find_customer(customers, query):\n    q = normalize(query)\n    return [c for c in customers if q in normalize(c)]\n",
+   "search.py": "PRODUCTS = ['Cr\u00e8me Br\u00fbl\u00e9e Kit', 'STRASSE Map', 'Caf\u00e9  Noir', 'Jalape\u00f1o Salt', 'Plain Tea']\n\ndef search(query, products=PRODUCTS):\n    return [p for p in products if query in p]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from search import search\nassert search('creme brulee')==['Cr\u00e8me Br\u00fbl\u00e9e Kit']\nassert search('cafe noir')==['Caf\u00e9  Noir'] and search('CAF\u00c9')==['Caf\u00e9  Noir']\nassert search('jalapeno')==['Jalape\u00f1o Salt'] and search('  plain   tea ')==['Plain Tea']\nassert search('strasse')==['STRASSE Map'] and search('Stra\u00dfe')==['STRASSE Map']\nassert search('zzz')==[]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-display-names",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "The members list shows people's names differently from their profile page. Fix the members list.",
+  "files": {
+   "profile.py": "def display_name(user):\n    if user.get('nickname'):\n        return user['nickname']\n    last = user.get('last', '')\n    return f\"{user['first']} {last[:1]}.\" if last else user['first']\n\ndef render_profile(user):\n    return f\"<h1>{display_name(user)}</h1>\"\n",
+   "members.py": "def member_list(users):\n    return [f\"{u['first']} {u.get('last', '')}\".strip() for u in sorted(users, key=lambda u: u['first'])]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from members import member_list\nfrom profile import display_name\nus=[{'first':'Zoe','last':'Adams'},{'first':'Ann','last':'Lee','nickname':'Annie'},{'first':'Bo'}]\nr=member_list(us)\nassert sorted(r)==sorted(display_name(u) for u in us), r\nassert set(r)=={'Zoe A.','Annie','Bo'}, r\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-orders-pagination",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add pagination to the orders listing like our other list endpoints.",
+  "files": {
+   "products.py": "from paging import paginate\nPRODUCTS = [{'id': i} for i in range(1, 46)]\n\ndef list_products(query):\n    return paginate(PRODUCTS, query)\n",
+   "paging.py": "import math\nDEFAULT, MAX = 20, 100\n\ndef paginate(items, query):\n    try:\n        page = int(query.get('page', 1)); per = int(query.get('per_page', DEFAULT))\n    except (TypeError, ValueError):\n        return 400, {'error': 'page and per_page must be integers'}\n    if page < 1 or per < 1:\n        return 400, {'error': 'page and per_page must be positive'}\n    per = min(per, MAX)\n    start = (page - 1) * per\n    return 200, {'items': items[start:start + per], 'page': page, 'per_page': per, 'total': len(items),\n                 'pages': math.ceil(len(items) / per)}\n",
+   "orders.py": "ORDERS = [{'id': i, 'total': i * 2} for i in range(1, 131)]\n\ndef list_orders(query):\n    return 200, ORDERS\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from orders import list_orders, ORDERS\ns,b=list_orders({})\nassert s==200 and b['page']==1 and b['per_page']==20 and b['total']==130 and b['pages']==7 and b['items']==ORDERS[:20], b.keys() if isinstance(b,dict) else b\ns,b=list_orders({'page':'7','per_page':'20'}); assert b['items']==ORDERS[120:]\ns,b=list_orders({'per_page':'500'}); assert b['per_page']==100 and len(b['items'])==100 and b['pages']==2\nassert list_orders({'page':'0'})[0]==400 and list_orders({'page':'x'})[0]==400 and 'error' in list_orders({'page':'x'})[1]\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-signup-errors",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Make the signup endpoint's errors consistent with the rest of the API.",
+  "files": {
+   "errors.py": "def validation_error(fields):\n    \"\"\"The API's one shape for invalid input: 422 and every problem by field.\"\"\"\n    return 422, {'error': 'validation_failed', 'fields': {k: list(v) for k, v in fields.items()}}\n",
+   "products.py": "from errors import validation_error\n\ndef create_product(body):\n    fields = {}\n    if not body.get('name'):\n        fields.setdefault('name', []).append('is required')\n    if not isinstance(body.get('price'), (int, float)) or body.get('price', 0) <= 0:\n        fields.setdefault('price', []).append('must be a positive number')\n    if fields:\n        return validation_error(fields)\n    return 201, {'id': 1}\n",
+   "signup.py": "def signup(body):\n    if not body.get('email') or '@' not in body.get('email', ''):\n        return 400, 'Invalid email'\n    if len(body.get('password', '')) < 8:\n        return 400, 'Password too short'\n    return 201, {'id': 7}\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from signup import signup\nassert signup({'email':'a@b.co','password':'x'*8})==(201,{'id':7})\ns,b=signup({'email':'nope','password':'short'})\nassert s==422 and b['error']=='validation_failed' and set(b['fields'])=={'email','password'} and all(isinstance(v,list) and v for v in b['fields'].values()), (s,b)\ns,b=signup({'password':'longenough'}); assert s==422 and list(b['fields'])==['email']\ns,b=signup({'email':'a@b.co'}); assert s==422 and list(b['fields'])==['password']\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-amb-invoice-cents",
+  "category": "ambiguous",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Finance says our invoice totals are sometimes a cent off from their spreadsheet. Fix it.",
+  "files": {
+   "FINANCE.md": "# How finance computes an invoice\n\n1. Each line: quantity x unit price, rounded to the cent, halves rounded up (0.005 -> 0.01).\n2. Subtotal: the sum of the rounded lines.\n3. Tax: 7.5% of the subtotal, rounded to the cent, halves rounded up.\n4. Total: subtotal + tax.\n",
+   "invoice.py": "def totals(lines, tax_rate=0.075):\n    subtotal = sum(q * p for q, p in lines)\n    tax = subtotal * tax_rate\n    return {'subtotal': round(subtotal, 2), 'tax': round(tax, 2), 'total': round(subtotal + tax, 2)}\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "from invoice import totals\nassert totals([(3,0.335)])=={'subtotal':1.01,'tax':0.08,'total':1.09}, totals([(3,0.335)])\nassert totals([(1,0.005),(1,0.005)])=={'subtotal':0.02,'tax':0.0,'total':0.02}, totals([(1,0.005),(1,0.005)])\nassert totals([(2,10.0),(1,2.5)])=={'subtotal':22.5,'tax':1.69,'total':24.19}\nassert totals([(7,1.115)])=={'subtotal':7.81,'tax':0.59,'total':8.4}, totals([(7,1.115)])\nassert totals([])=={'subtotal':0.0,'tax':0.0,'total':0.0}\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-break-cycle",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Importing orders before customers works, but importing customers first crashes with an ImportError (circular import). Restructure the modules so both import orders work, without changing the public functions customers.lifetime_value(cid) and orders.orders_for(cid) or their results.",
+  "files": {
+   "customers.py": "from orders import orders_for\n\nCUSTOMERS = {1: 'Ann', 2: 'Bo'}\n\ndef name(cid):\n    return CUSTOMERS[cid]\n\ndef lifetime_value(cid):\n    return sum(o['total'] for o in orders_for(cid))\n",
+   "orders.py": "from customers import name\n\nORDERS = [{'cid': 1, 'total': 10}, {'cid': 2, 'total': 5}, {'cid': 1, 'total': 7}]\n\ndef orders_for(cid):\n    return [dict(o, customer=name(o['cid'])) for o in ORDERS if o['cid'] == cid]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.sh": "set -e\npython3 -c 'import customers, orders; assert customers.lifetime_value(1)==17 and orders.orders_for(2)==[{\"cid\":2,\"total\":5,\"customer\":\"Bo\"}]'\npython3 -c 'import orders, customers; assert customers.lifetime_value(2)==5 and orders.orders_for(1)[1][\"customer\"]==\"Ann\"'\npython3 -c 'import customers; assert customers.lifetime_value(1)==17'\npython3 -c 'import orders; assert len(orders.orders_for(1))==2'\necho ok\n"
+   },
+   "check": "bash hidden_t.sh",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-dedupe-validation",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "signup.py, profile.py and invite.py each validate emails and phone numbers with their own slightly different copies. Move validation into one module validation.py (functions valid_email and valid_phone) used by all three, following RULES.md exactly, so all three accept and reject the same inputs.",
+  "files": {
+   "RULES.md": "# Validation rules\n\n- Email: one '@'; local part 1-64 chars of letters, digits and . _ + -, not starting or ending with '.', no '..'; domain has at least one '.', labels of letters, digits and '-', not starting or ending with '-'; top-level label at least 2 letters. Case-insensitive; surrounding spaces are ignored.\n- Phone: optional leading '+', then 8 to 15 digits; spaces, '-' and parentheses are allowed between digits and ignored.\n",
+   "signup.py": "import re\n\ndef signup(email, phone):\n    if not re.match(r'^[^@]+@[^@]+\\.[a-z]{2,}$', email.strip().lower()):\n        return 'bad email'\n    digits = re.sub(r'[ -]', '', phone)\n    if not re.match(r'^\\+?\\d{8,15}$', digits):\n        return 'bad phone'\n    return 'ok'\n",
+   "profile.py": "def update(email, phone):\n    if '@' not in email or '.' not in email.split('@')[-1]:\n        return 'bad email'\n    d = ''.join(c for c in phone if c.isdigit())\n    if not 8 <= len(d) <= 15:\n        return 'bad phone'\n    return 'ok'\n",
+   "invite.py": "import re\nEMAIL = re.compile(r'^[\\w.+-]+@[\\w-]+(\\.[\\w-]+)+$')\n\ndef invite(email):\n    return 'ok' if EMAIL.match(email) else 'bad email'\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import inspect, signup, profile, invite, validation\ngood=['a@b.co',' Ann.Lee+x@Mail-1.example.ORG ','x_y@d.io']\nbad=['a@b','a..b@c.io','.a@b.io','a.@b.io','a@-b.io','a@b-.io','a@b.c','a@b@c.io','a b@c.io','@b.io','a@b.i1','x'*65+'@b.io']\nfor e in good:\n    assert validation.valid_email(e) and signup.signup(e,'+44 20 7946 0958')=='ok' and profile.update(e,'0123456789')=='ok' and invite.invite(e)=='ok', e\nfor e in bad:\n    assert not validation.valid_email(e) and signup.signup(e,'12345678')=='bad email' and profile.update(e,'12345678')=='bad email' and invite.invite(e)=='bad email', e\npgood=['+1 (555) 123-4567','12345678','+123456789012345']\npbad=['1234567','+1234567890123456','12a45678','++12345678','(555) 12-34','']\nfor p in pgood: assert validation.valid_phone(p) and signup.signup('a@b.co',p)=='ok' and profile.update('a@b.co',p)=='ok', p\nfor p in pbad: assert not validation.valid_phone(p) and signup.signup('a@b.co',p)=='bad phone' and profile.update('a@b.co',p)=='bad phone', p\nfor m in (signup, profile, invite):\n    src=inspect.getsource(m); assert 'import re' not in src and 'validation' in src, m.__name__\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-globals-to-instance",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "metrics.py keeps its counters in module globals, so two components can't keep separate metrics and tests leak into each other. Introduce a Metrics class (incr, observe, snapshot, reset) so separate instances are independent. Keep the existing module-level functions working exactly as before, backed by one default instance (metrics.default).",
+  "files": {
+   "metrics.py": "COUNTS = {}\nOBS = {}\n\ndef incr(name, by=1):\n    COUNTS[name] = COUNTS.get(name, 0) + by\n\ndef observe(name, value):\n    OBS.setdefault(name, []).append(value)\n\ndef snapshot():\n    return {'counts': dict(COUNTS), 'means': {k: sum(v) / len(v) for k, v in OBS.items()}}\n\ndef reset():\n    COUNTS.clear(); OBS.clear()\n",
+   "server.py": "import metrics\n\ndef handle(path):\n    metrics.incr('requests')\n    metrics.observe('latency_ms', 12 if path == '/' else 40)\n    return 200\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import metrics, server\nfrom metrics import Metrics\na,b=Metrics(),Metrics()\na.incr('x'); a.incr('x',2); b.incr('x'); a.observe('t',1); a.observe('t',3)\nassert a.snapshot()=={'counts':{'x':3},'means':{'t':2.0}} and b.snapshot()=={'counts':{'x':1},'means':{}}\na.reset(); assert a.snapshot()=={'counts':{},'means':{}} and b.snapshot()['counts']=={'x':1}\nmetrics.reset(); server.handle('/'); server.handle('/x')\nassert metrics.snapshot()=={'counts':{'requests':2},'means':{'latency_ms':26.0}}\nassert metrics.default.snapshot()==metrics.snapshot() and isinstance(metrics.default, Metrics)\nassert a.snapshot()['counts']=={}\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-split-invoice",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "invoice.total() is one long function nobody dares touch. Split it into small, named functions (no function longer than 20 lines, measured from def to its last line) without changing any result, including errors.",
+  "files": {
+   "invoice.py": "def total(lines, country, coupon=None, member=False):\n    if not lines:\n        raise ValueError('empty invoice')\n    subtotal = 0.0\n    for l in lines:\n        if l['qty'] <= 0:\n            raise ValueError('bad qty')\n        price = l['price']\n        if l.get('category') == 'book':\n            price = price * 0.95\n        subtotal += price * l['qty']\n    discount = 0.0\n    if coupon == 'SAVE10':\n        discount = subtotal * 0.10\n    elif coupon == 'FLAT5':\n        discount = min(5.0, subtotal)\n    elif coupon is not None:\n        raise ValueError('unknown coupon')\n    if member:\n        discount += (subtotal - discount) * 0.02\n    net = subtotal - discount\n    if country == 'UK':\n        tax = net * 0.20\n    elif country == 'DE':\n        tax = net * 0.19\n    elif country == 'US':\n        tax = 0.0\n    else:\n        raise ValueError('unsupported country')\n    shipping = 0.0 if net >= 50 else 4.99\n    if country == 'US' and net < 50:\n        shipping = 6.99\n    return round(net + tax + shipping, 2)\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import ast, inspect, invoice\nfrom invoice import total\nL=[{'price':20,'qty':2},{'price':10,'qty':1,'category':'book'}]\ncases=[((L,'UK'),),((L,'DE','SAVE10'),),((L,'US','FLAT5',True),),(([{'price':5,'qty':1}],'US'),),(([{'price':5,'qty':1}],'UK',None,True),),((L*3,'DE','FLAT5',True),)]\nexp=[64.39, 58.0, 50.6, 11.99, 10.87, 167.35]\nfor c,e in zip(cases,exp):\n    assert total(*c[0])==e, (c, total(*c[0]), e)\nfor bad in (([],'UK'),([{'price':1,'qty':0}],'UK'),(L,'FR'),(L,'UK','NOPE')):\n    try:\n        total(*bad); raise SystemExit('accepted')\n    except ValueError: pass\ntree=ast.parse(inspect.getsource(invoice))\nlong=[(n.name, n.end_lineno-n.lineno+1) for n in ast.walk(tree) if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef)) and n.end_lineno-n.lineno+1>20]\nassert not long, long\nassert len([n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)])>=4\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-exporter-registry",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "export.export(rows, fmt) hard-codes every format. Refactor to a registry: formats register themselves with a decorator @exporter('name'); export() looks them up and raises ValueError listing the available formats for an unknown one. CSV and JSON output must stay byte-identical. A new format must be addable from another module without editing export.py.",
+  "files": {
+   "export.py": "import csv, io, json\n\ndef export(rows, fmt):\n    if fmt == 'csv':\n        buf = io.StringIO()\n        w = csv.DictWriter(buf, fieldnames=list(rows[0]) if rows else [])\n        w.writeheader(); w.writerows(rows)\n        return buf.getvalue()\n    if fmt == 'json':\n        return json.dumps(rows, indent=2, sort_keys=True)\n    raise ValueError('unknown format')\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import export\nfrom export import export as ex, exporter\nrows=[{'b':1,'a':'x,y'},{'b':2,'a':'z'}]\nassert ex(rows,'csv')=='b,a\\r\\n1,\"x,y\"\\r\\n2,z\\r\\n' and ex([],'csv')=='\\r\\n'\nimport json; assert ex(rows,'json')==json.dumps(rows, indent=2, sort_keys=True)\n@exporter('tsv')\ndef tsv(rows):\n    return '\\n'.join('\\t'.join(str(v) for v in r.values()) for r in rows)\nassert ex(rows,'tsv')=='1\\tx,y\\n2\\tz'\ntry:\n    ex(rows,'xml'); raise SystemExit('accepted')\nexcept ValueError as e:\n    assert 'csv' in str(e) and 'json' in str(e) and 'tsv' in str(e), str(e)\nimport inspect; src=inspect.getsource(export.export)\nassert \"'csv'\" not in src and \"'json'\" not in src\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-rf-sync-async-client",
+  "category": "refactoring",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Add an async API next to the existing synchronous one: AsyncClient with the same methods as Client (get_user, list_users) but awaitable, using transport.async_fetch. Request building and response parsing (including the error mapping) must live in one place used by both clients, not be duplicated. The sync client must behave exactly as before.",
+  "files": {
+   "transport.py": "import asyncio\nDATA = {'/users/1': (200, {'id': 1, 'name': 'Ann'}), '/users': (200, [{'id': 1, 'name': 'Ann'}, {'id': 2, 'name': 'Bo'}]), '/users/9': (404, {'error': 'no such user'})}\n\ndef fetch(path):\n    return DATA.get(path, (500, {'error': 'boom'}))\n\nasync def async_fetch(path):\n    await asyncio.sleep(0)\n    return fetch(path)\n",
+   "client.py": "import transport\n\nclass NotFound(Exception):\n    pass\n\nclass ApiError(Exception):\n    pass\n\nclass Client:\n    def get_user(self, uid):\n        status, body = transport.fetch(f'/users/{int(uid)}')\n        if status == 404:\n            raise NotFound(body['error'])\n        if status != 200:\n            raise ApiError(f'{status}: {body.get(\"error\")}')\n        return body\n\n    def list_users(self):\n        status, body = transport.fetch('/users')\n        if status == 404:\n            raise NotFound(body['error'])\n        if status != 200:\n            raise ApiError(f'{status}: {body.get(\"error\")}')\n        return [u['name'] for u in body]\n"
+  },
+  "grade": {
+   "hidden": {
+    "hidden_t.py": "import asyncio, inspect, client, transport\nfrom client import Client, AsyncClient, NotFound, ApiError\nc=Client(); assert c.get_user(1)=={'id':1,'name':'Ann'} and c.list_users()==['Ann','Bo']\nasync def main():\n    a=AsyncClient(); assert await a.get_user('1')=={'id':1,'name':'Ann'} and await a.list_users()==['Ann','Bo']\n    try:\n        await a.get_user(9); raise SystemExit('no raise')\n    except NotFound as e: assert 'no such user' in str(e)\n    try:\n        await a.get_user(5); raise SystemExit('no raise')\n    except ApiError as e: assert str(e)=='500: boom'\nasyncio.run(main())\nfor bad,exc in ((9,NotFound),(5,ApiError)):\n    try:\n        c.get_user(bad); raise SystemExit('no raise')\n    except exc: pass\nsrc=inspect.getsource(client)\nassert src.count('status == 404')+src.count('status==404')<=1 and src.count('raise NotFound(')<=1, 'error mapping duplicated'\nassert inspect.iscoroutinefunction(AsyncClient.get_user)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_t.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-money-split",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for money.split(amount_cents, n): it splits an amount into n parts that sum exactly to the amount, differ by at most one cent, with the larger parts first; n <= 0 and negative amounts raise ValueError. Put the tests in test_money.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_money.py`. Do not change money.py.",
+  "files": {
+   "money.py": "def split(amount_cents, n):\n    if n <= 0:\n        raise ValueError('n must be positive')\n    if amount_cents < 0:\n        raise ValueError('amount must not be negative')\n    q, r = divmod(amount_cents, n)\n    return [q + 1] * r + [q] * (n - r)\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"money.py\", \"test\": \"test_money.py\", \"mutants\": {\"rem_last\": \"def split(amount_cents, n):\\n    if n <= 0:\\n        raise ValueError('n must be positive')\\n    if amount_cents < 0:\\n        raise ValueError('amount must not be negative')\\n    q, r = divmod(amount_cents, n)\\n    return [q] * (n - r) + [q + 1] * r\\n\", \"drop_rem\": \"def split(amount_cents, n):\\n    if n <= 0:\\n        raise ValueError('n must be positive')\\n    if amount_cents < 0:\\n        raise ValueError('amount must not be negative')\\n    q, r = divmod(amount_cents, n)\\n    return [q] * n\\n\", \"n_zero\": \"def split(amount_cents, n):\\n    if n < 0:\\n        raise ValueError('n must be positive')\\n    if amount_cents < 0:\\n        raise ValueError('amount must not be negative')\\n    q, r = divmod(amount_cents, n)\\n    return [q + 1] * r + [q] * (n - r)\\n\", \"neg_ok\": \"def split(amount_cents, n):\\n    if n <= 0:\\n        raise ValueError('n must be positive')\\n    if amount_cents < -10**9:\\n        raise ValueError('amount must not be negative')\\n    q, r = divmod(amount_cents, n)\\n    return [q + 1] * r + [q] * (n - r)\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-semver",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for semver.compare(a, b) (returns -1, 0 or 1 following Semantic Versioning 2.0 precedence: numeric parts compared as numbers; a pre-release ranks below its release; pre-release identifiers compared numerically when numeric and lexically otherwise, numeric ones ranking lower; build metadata after '+' ignored). Put the tests in test_semver.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_semver.py`. Do not change semver.py.",
+  "files": {
+   "semver.py": "def _key(v):\n    v = v.split('+', 1)[0]\n    core, _, pre = v.partition('-')\n    nums = tuple(int(x) for x in core.split('.'))\n    if not pre:\n        return nums, (1,)\n    ids = tuple((0, int(p), '') if p.isdigit() else (1, 0, p) for p in pre.split('.'))\n    return nums, (0,) + ids\n\ndef compare(a, b):\n    ka, kb = _key(a), _key(b)\n    return (ka > kb) - (ka < kb)\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"semver.py\", \"test\": \"test_semver.py\", \"mutants\": {\"str_nums\": \"def _key(v):\\n    v = v.split('+', 1)[0]\\n    core, _, pre = v.partition('-')\\n    nums = tuple(x for x in core.split('.'))\\n    if not pre:\\n        return nums, (1,)\\n    ids = tuple((0, int(p), '') if p.isdigit() else (1, 0, p) for p in pre.split('.'))\\n    return nums, (0,) + ids\\n\\ndef compare(a, b):\\n    ka, kb = _key(a), _key(b)\\n    return (ka > kb) - (ka < kb)\\n\", \"pre_high\": \"def _key(v):\\n    v = v.split('+', 1)[0]\\n    core, _, pre = v.partition('-')\\n    nums = tuple(int(x) for x in core.split('.'))\\n    if not pre:\\n        return nums, (-1,)\\n    ids = tuple((0, int(p), '') if p.isdigit() else (1, 0, p) for p in pre.split('.'))\\n    return nums, (0,) + ids\\n\\ndef compare(a, b):\\n    ka, kb = _key(a), _key(b)\\n    return (ka > kb) - (ka < kb)\\n\", \"pre_str\": \"def _key(v):\\n    v = v.split('+', 1)[0]\\n    core, _, pre = v.partition('-')\\n    nums = tuple(int(x) for x in core.split('.'))\\n    if not pre:\\n        return nums, (1,)\\n    ids = tuple((1, 0, p) for p in pre.split('.'))\\n    return nums, (0,) + ids\\n\\ndef compare(a, b):\\n    ka, kb = _key(a), _key(b)\\n    return (ka > kb) - (ka < kb)\\n\", \"build\": \"def _key(v):\\n    v = v.replace('+', '.')\\n    core, _, pre = v.partition('-')\\n    nums = tuple(int(x) for x in core.split('.'))\\n    if not pre:\\n        return nums, (1,)\\n    ids = tuple((0, int(p), '') if p.isdigit() else (1, 0, p) for p in pre.split('.'))\\n    return nums, (0,) + ids\\n\\ndef compare(a, b):\\n    ka, kb = _key(a), _key(b)\\n    return (ka > kb) - (ka < kb)\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-business-days",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for dates.business_days(start, end, holidays): working days (Monday to Friday, excluding the given holiday dates) from start included to end excluded; 0 when end is not after start. Put the tests in test_dates.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_dates.py`. Do not change dates.py.",
+  "files": {
+   "dates.py": "from datetime import timedelta\n\ndef business_days(start, end, holidays=()):\n    if end <= start:\n        return 0\n    hol = set(holidays)\n    n, d = 0, start\n    while d < end:\n        if d.weekday() < 5 and d not in hol:\n            n += 1\n        d += timedelta(days=1)\n    return n\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"dates.py\", \"test\": \"test_dates.py\", \"mutants\": {\"incl_end\": \"from datetime import timedelta\\n\\ndef business_days(start, end, holidays=()):\\n    if end <= start:\\n        return 0\\n    hol = set(holidays)\\n    n, d = 0, start\\n    while d <= end:\\n        if d.weekday() < 5 and d not in hol:\\n            n += 1\\n        d += timedelta(days=1)\\n    return n\\n\", \"sat\": \"from datetime import timedelta\\n\\ndef business_days(start, end, holidays=()):\\n    if end <= start:\\n        return 0\\n    hol = set(holidays)\\n    n, d = 0, start\\n    while d < end:\\n        if d.weekday() < 6 and d not in hol:\\n            n += 1\\n        d += timedelta(days=1)\\n    return n\\n\", \"no_hol\": \"from datetime import timedelta\\n\\ndef business_days(start, end, holidays=()):\\n    if end <= start:\\n        return 0\\n    hol = set(holidays)\\n    n, d = 0, start\\n    while d < end:\\n        if d.weekday() < 5 :\\n            n += 1\\n        d += timedelta(days=1)\\n    return n\\n\", \"monday\": \"from datetime import timedelta\\n\\ndef business_days(start, end, holidays=()):\\n    if end <= start:\\n        return 0\\n    hol = set(holidays)\\n    n, d = 0, start\\n    while d < end:\\n        if 0 < d.weekday() < 5 and d not in hol:\\n            n += 1\\n        d += timedelta(days=1)\\n    return n\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-bankers-round",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for rounding.bankers_round(x, places): round half to even at the given number of decimal places, treating the input as the decimal number it prints as (2.675 is exactly 2.675, not its binary approximation). Put the tests in test_rounding.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_rounding.py`. Do not change rounding.py.",
+  "files": {
+   "rounding.py": "from decimal import Decimal, ROUND_HALF_EVEN\n\ndef bankers_round(x, places=2):\n    q = Decimal(1).scaleb(-places)\n    return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_EVEN))\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"rounding.py\", \"test\": \"test_rounding.py\", \"mutants\": {\"half_up\": \"from decimal import Decimal, ROUND_HALF_EVEN\\n\\ndef bankers_round(x, places=2):\\n    q = Decimal(1).scaleb(-places)\\n    return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_UP))\\n\", \"float_in\": \"from decimal import Decimal, ROUND_HALF_EVEN\\n\\ndef bankers_round(x, places=2):\\n    q = Decimal(1).scaleb(-places)\\n    return float(Decimal(x).quantize(q, rounding=ROUND_HALF_EVEN))\\n\", \"places\": \"from decimal import Decimal, ROUND_HALF_EVEN\\n\\ndef bankers_round(x, places=2):\\n    q = Decimal(1).scaleb(-2)\\n    return float(Decimal(str(x)).quantize(q, rounding=ROUND_HALF_EVEN))\\n\", \"builtin\": \"from decimal import Decimal, ROUND_HALF_EVEN\\n\\ndef bankers_round(x, places=2):\\n    q = Decimal(1).scaleb(-places)\\n    return round(x + 1e-12, places)\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-token-bucket",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for bucket.TokenBucket(rate, capacity, clock).allow(n): tokens refill continuously at `rate` per second up to `capacity`; allow(n) takes n tokens and returns True if at least n are available, otherwise returns False and takes nothing; a clock that goes backwards adds nothing. Put the tests in test_bucket.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_bucket.py`. Do not change bucket.py.",
+  "files": {
+   "bucket.py": "class TokenBucket:\n    def __init__(self, rate, capacity, clock):\n        self.rate, self.capacity, self.clock = rate, capacity, clock\n        self.tokens = capacity\n        self.last = clock()\n\n    def allow(self, n=1):\n        now = self.clock()\n        if now > self.last:\n            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)\n            self.last = now\n        if self.tokens >= n:\n            self.tokens -= n\n            return True\n        return False\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"bucket.py\", \"test\": \"test_bucket.py\", \"mutants\": {\"no_cap\": \"class TokenBucket:\\n    def __init__(self, rate, capacity, clock):\\n        self.rate, self.capacity, self.clock = rate, capacity, clock\\n        self.tokens = capacity\\n        self.last = clock()\\n\\n    def allow(self, n=1):\\n        now = self.clock()\\n        if now > self.last:\\n            self.tokens = self.tokens + (now - self.last) * self.rate\\n            self.last = now\\n        if self.tokens >= n:\\n            self.tokens -= n\\n            return True\\n        return False\\n\", \"int_refill\": \"class TokenBucket:\\n    def __init__(self, rate, capacity, clock):\\n        self.rate, self.capacity, self.clock = rate, capacity, clock\\n        self.tokens = capacity\\n        self.last = clock()\\n\\n    def allow(self, n=1):\\n        now = self.clock()\\n        if now > self.last:\\n            self.tokens = min(self.capacity, self.tokens + int(now - self.last) * self.rate)\\n            self.last = now\\n        if self.tokens >= n:\\n            self.tokens -= n\\n            return True\\n        return False\\n\", \"partial\": \"class TokenBucket:\\n    def __init__(self, rate, capacity, clock):\\n        self.rate, self.capacity, self.clock = rate, capacity, clock\\n        self.tokens = capacity\\n        self.last = clock()\\n\\n    def allow(self, n=1):\\n        now = self.clock()\\n        if now > self.last:\\n            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)\\n            self.last = now\\n        if self.tokens > n - 1:\\n            self.tokens -= n\\n            return True\\n        return False\\n\", \"no_last\": \"class TokenBucket:\\n    def __init__(self, rate, capacity, clock):\\n        self.rate, self.capacity, self.clock = rate, capacity, clock\\n        self.tokens = capacity\\n        self.last = clock()\\n\\n    def allow(self, n=1):\\n        now = self.clock()\\n        if now > self.last:\\n            self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)\\n        if self.tokens >= n:\\n            self.tokens -= n\\n            return True\\n        return False\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ },
+ {
+  "id": "v2-te-csv-line",
+  "category": "test-engineering",
+  "difficulty": "hard",
+  "split": "eval",
+  "mode": "code",
+  "prompt": "Write thorough tests for csvline.parse_line(line, delim): splits one CSV line into fields; fields may be quoted with \"; inside quotes the delimiter is literal and \"\" is one quote; an unterminated quote raises ValueError; an empty line is one empty field; the delimiter is configurable. Put the tests in test_csvline.py as a plain Python script (asserts; it must exit non-zero when a test fails) runnable with `python3 test_csvline.py`. Do not change csvline.py.",
+  "files": {
+   "csvline.py": "def parse_line(line, delim=','):\n    out, cur, q, i = [], '', False, 0\n    while i < len(line):\n        ch = line[i]\n        if q:\n            if ch == '\"' and i + 1 < len(line) and line[i + 1] == '\"':\n                cur += '\"'; i += 1\n            elif ch == '\"':\n                q = False\n            else:\n                cur += ch\n        elif ch == '\"':\n            q = True\n        elif ch == delim:\n            out.append(cur); cur = ''\n        else:\n            cur += ch\n        i += 1\n    if q:\n        raise ValueError('unterminated quote')\n    out.append(cur)\n    return out\n"
+  },
+  "grade": {
+   "hidden": {
+    ".mutants.json": "{\"module\": \"csvline.py\", \"test\": \"test_csvline.py\", \"mutants\": {\"no_escape\": \"def parse_line(line, delim=','):\\n    out, cur, q, i = [], '', False, 0\\n    while i < len(line):\\n        ch = line[i]\\n        if q:\\n            if ch == '\\\"' and i + 1 < len(line) and line[i + 1] == '\\\"':\\n                q = False\\n            elif ch == '\\\"':\\n                q = False\\n            else:\\n                cur += ch\\n        elif ch == '\\\"':\\n            q = True\\n        elif ch == delim:\\n            out.append(cur); cur = ''\\n        else:\\n            cur += ch\\n        i += 1\\n    if q:\\n        raise ValueError('unterminated quote')\\n    out.append(cur)\\n    return out\\n\", \"unterm\": \"def parse_line(line, delim=','):\\n    out, cur, q, i = [], '', False, 0\\n    while i < len(line):\\n        ch = line[i]\\n        if q:\\n            if ch == '\\\"' and i + 1 < len(line) and line[i + 1] == '\\\"':\\n                cur += '\\\"'; i += 1\\n            elif ch == '\\\"':\\n                q = False\\n            else:\\n                cur += ch\\n        elif ch == '\\\"':\\n            q = True\\n        elif ch == delim:\\n            out.append(cur); cur = ''\\n        else:\\n            cur += ch\\n        i += 1\\n    if False:\\n        pass\\n    out.append(cur)\\n    return out\\n\", \"delim\": \"def parse_line(line, delim=','):\\n    out, cur, q, i = [], '', False, 0\\n    while i < len(line):\\n        ch = line[i]\\n        if q:\\n            if ch == '\\\"' and i + 1 < len(line) and line[i + 1] == '\\\"':\\n                cur += '\\\"'; i += 1\\n            elif ch == '\\\"':\\n                q = False\\n            else:\\n                cur += ch\\n        elif ch == '\\\"':\\n            q = True\\n        elif ch == ','\\n            out.append(cur); cur = ''\\n        else:\\n            cur += ch\\n        i += 1\\n    if q:\\n        raise ValueError('unterminated quote')\\n    out.append(cur)\\n    return out\\n\", \"last\": \"def parse_line(line, delim=','):\\n    out, cur, q, i = [], '', False, 0\\n    while i < len(line):\\n        ch = line[i]\\n        if q:\\n            if ch == '\\\"' and i + 1 < len(line) and line[i + 1] == '\\\"':\\n                cur += '\\\"'; i += 1\\n            elif ch == '\\\"':\\n                q = False\\n            else:\\n                cur += ch\\n        elif ch == '\\\"':\\n            q = True\\n        elif ch == delim:\\n            out.append(cur); cur = ''\\n        else:\\n            cur += ch\\n        i += 1\\n    if q:\\n        raise ValueError('unterminated quote')\\n    if cur:\\n        out.append(cur)\\n    return out\\n\"}}",
+    "hidden_mutate.py": "\nimport json, shutil, subprocess, sys\nspec = json.load(open('.mutants.json'))\nmod, test = spec['module'], spec['test']\nimport os\ndef run():\n    shutil.rmtree('__pycache__', ignore_errors=True)           # never a stale compiled copy of the module\n    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1')\n    return subprocess.run([sys.executable, test], capture_output=True, text=True, timeout=60, env=env).returncode\norig = open(mod).read()\nif run() != 0:\n    print('tests fail on the correct code'); sys.exit(1)\nsurvived = []\nfor name, src in spec['mutants'].items():\n    open(mod, 'w').write(src)\n    try:\n        rc = run()\n    except subprocess.TimeoutExpired:\n        rc = 1\n    if rc == 0:\n        survived.append(name)\nopen(mod, 'w').write(orig)\nif survived:\n    print('mutants not caught:', survived); sys.exit(1)\nprint('ok')\n"
+   },
+   "check": "python3 hidden_mutate.py",
+   "timeout": 180
+  },
+  "suite": "v2"
+ }
+]

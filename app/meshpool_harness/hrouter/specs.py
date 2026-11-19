@@ -53,14 +53,17 @@ SPECS = {s.id: s for s in [
          "3. Fix the cause with the smallest edit. Never change a test to make it pass.\n"
          "4. Verify: rerun the reproduction and the nearest tests. For a regression, `git log -p` or "
          "`git bisect run <check>` finds the change that broke it.\n"
-         "Edits to code files come back with a syntax and bug check; fix what it reports first. Reply in two or "
-         "three lines: the cause (file:line), the fix, and the command that now passes.",
+         "Edits to code files come back with a syntax and bug check; fix what it reports first. Run the tests for the "
+         "code you changed (one file, or -k by name), not the whole suite. Solve it from the code: never fetch the "
+         "project's own upstream fix (its pull requests, commits or patches) online. Reply in two or three lines: the "
+         "cause (file:line), the fix, and the command that now passes.",
          ("diagnostics",), LEAN_FOCUSED),
     Spec("code.build", "Build", "code", "code",
          "Building: find the closest existing pattern in the project and follow it. Make the change in as few edits "
          "as it needs (edits come back with a syntax and bug check), then run the relevant tests or the program "
-         "once. Do not add dependencies, files or abstractions the task does not need. Reply in a few lines: what "
-         "you built and the command that shows it works.", ("diagnostics",)),
+         "once. Do not add dependencies, files or abstractions the task does not need. Never fetch the project's own "
+         "upstream solution online. Reply in a few lines: what you built and the command that shows it works.",
+         ("diagnostics",)),
     Spec("code.refactor", "Refactor", "code", "code",
          "Refactoring method: behaviour must not change. Run the tests before you start and after each step. For "
          "mechanical changes across many files (renames, API migrations) prefer one scripted change (sed, a short "
