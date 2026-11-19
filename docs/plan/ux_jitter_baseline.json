@@ -1,0 +1,355 @@
+{
+ "a. open the app": {
+  "cls": 0.0001,
+  "topShifts": [
+   [
+    90,
+    0.0001,
+    "#betaBtn"
+   ],
+   [
+    107,
+    0,
+    "#attBtn"
+   ]
+  ],
+  "longTasks": {
+   "n": 0,
+   "totalMs": 0,
+   "maxMs": 0
+  },
+  "mutPerFrame": {
+   "mean": 1.6,
+   "p95": 0,
+   "max": 133
+  },
+  "activeFramesPerSec": 0.8,
+  "blankFrames": 4,
+  "distinctHeights": 1,
+  "jumps": [],
+  "fwdJumps": 0,
+  "backJumps": 0,
+  "shrinks": 0,
+  "maxGapPx": 0,
+  "growthPerSec": 0,
+  "medianGrowthPx": 0,
+  "listRebuilds": 0,
+  "indicatorMoves": 0,
+  "regionRebuilds": {
+   "sideList": 1,
+   "topbar": 3,
+   "cbar": 4
+  },
+  "liveRewrites": 0,
+  "landmarkGeometries": {
+   "#composer": 1,
+   "#topbar": 1,
+   "#sideList": 1,
+   ".side": 1,
+   "#conv": 1,
+   "#colw": 1,
+   "#panel": 1
+  },
+  "frames": 153,
+  "seconds": 2.5
+ },
+ "b. send + stream a long reply with 3 tool calls": {
+  "cls": 0.002,
+  "topShifts": [
+   [
+    27273,
+    0.002,
+    "div.msg-ai"
+   ]
+  ],
+  "longTasks": {
+   "n": 0,
+   "totalMs": 0,
+   "maxMs": 0
+  },
+  "mutPerFrame": {
+   "mean": 3,
+   "p95": 0,
+   "max": 126
+  },
+  "activeFramesPerSec": 2.5,
+  "blankFrames": 3,
+  "distinctHeights": 37,
+  "jumps": [
+   [
+    14089,
+    "scroll +208",
+    "height +208"
+   ],
+   [
+    27255,
+    "scroll -72",
+    "height -72"
+   ]
+  ],
+  "fwdJumps": 1,
+  "backJumps": 1,
+  "shrinks": 1,
+  "maxGapPx": 0,
+  "growthPerSec": 1.5,
+  "medianGrowthPx": 23,
+  "listRebuilds": 0,
+  "indicatorMoves": 10,
+  "regionRebuilds": {
+   "topbar": 5,
+   "cbar": 5,
+   "panel": 167,
+   "sideList": 2
+  },
+  "liveRewrites": 959,
+  "landmarkGeometries": {
+   "#composer": 2,
+   "#topbar": 2,
+   "#sideList": 1,
+   ".side": 1,
+   "#conv": 2,
+   "#colw": 2,
+   "#panel": 2
+  },
+  "frames": 1426,
+  "seconds": 23.8
+ },
+ "requestsDuringStream": {
+  "seconds": 23.9,
+  "thread": 55,
+  "list": 9,
+  "other": 4,
+  "threadPollsPerSec": 2.3
+ },
+ "colWidths": [
+  "760",
+  "706"
+ ],
+ "c. switch between chats (8 switches)": {
+  "cls": 0,
+  "topShifts": [],
+  "longTasks": {
+   "n": 0,
+   "totalMs": 0,
+   "maxMs": 0
+  },
+  "mutPerFrame": {
+   "mean": 41.7,
+   "p95": 0,
+   "max": 3037
+  },
+  "activeFramesPerSec": 2.1,
+  "blankFrames": 8,
+  "distinctHeights": 3,
+  "jumps": [
+   [
+    29788,
+    "scroll -1261",
+    "height -1261"
+   ],
+   [
+    30771,
+    "scroll +1241",
+    "height +1241"
+   ],
+   [
+    31705,
+    "scroll -1241",
+    "height -1241"
+   ],
+   [
+    31721,
+    "scroll +1241",
+    "height +1241"
+   ],
+   [
+    32655,
+    "scroll -1241",
+    "height -1241"
+   ],
+   [
+    32671,
+    "scroll +1241",
+    "height +1241"
+   ],
+   [
+    33605,
+    "scroll -1241",
+    "height -1241"
+   ],
+   [
+    34571,
+    "scroll +1241",
+    "height +1241"
+   ]
+  ],
+  "fwdJumps": 6,
+  "backJumps": 6,
+  "shrinks": 6,
+  "maxGapPx": 0,
+  "growthPerSec": 0.8,
+  "medianGrowthPx": 1241,
+  "listRebuilds": 8,
+  "indicatorMoves": 0,
+  "regionRebuilds": {
+   "topbar": 16,
+   "cbar": 16,
+   "panel": 48
+  },
+  "liveRewrites": 5754,
+  "landmarkGeometries": {
+   "#composer": 1,
+   "#topbar": 1,
+   "#sideList": 1,
+   ".side": 1,
+   "#conv": 1,
+   "#colw": 1,
+   "#panel": 1
+  },
+  "frames": 456,
+  "seconds": 7.6,
+  "blankFramesPerSwitch": 1,
+  "layoutsPerSwitch": 0.4
+ },
+ "d. sidebar toggle, side panels, settings, pickers": {
+  "cls": 0,
+  "topShifts": [],
+  "longTasks": {
+   "n": 0,
+   "totalMs": 0,
+   "maxMs": 0
+  },
+  "mutPerFrame": {
+   "mean": 0.7,
+   "p95": 0,
+   "max": 52
+  },
+  "activeFramesPerSec": 1.8,
+  "blankFrames": 0,
+  "distinctHeights": 2,
+  "jumps": [
+   [
+    37438,
+    "scroll -46",
+    "height -46"
+   ],
+   [
+    38988,
+    "scroll -46",
+    "height -46"
+   ],
+   [
+    41254,
+    "scroll -46",
+    "height -46"
+   ],
+   [
+    42804,
+    "scroll -46",
+    "height -46"
+   ]
+  ],
+  "fwdJumps": 0,
+  "backJumps": 4,
+  "shrinks": 4,
+  "maxGapPx": 0,
+  "growthPerSec": 0.3,
+  "medianGrowthPx": 46,
+  "listRebuilds": 0,
+  "indicatorMoves": 0,
+  "regionRebuilds": {
+   "topbar": 8,
+   "panel": 11
+  },
+  "liveRewrites": 0,
+  "landmarkGeometries": {
+   "#composer": 3,
+   "#topbar": 3,
+   "#sideList": 2,
+   ".side": 2,
+   "#conv": 3,
+   "#colw": 3,
+   "#panel": 2
+  },
+  "frames": 567,
+  "seconds": 9.5
+ },
+ "checks": [
+  {
+   "name": "open: CLS",
+   "ok": true
+  },
+  {
+   "name": "open: no long task over 200 ms",
+   "ok": true
+  },
+  {
+   "name": "stream: CLS",
+   "ok": true
+  },
+  {
+   "name": "stream: no backward scroll steps",
+   "ok": false
+  },
+  {
+   "name": "stream: no forward scroll jumps > 150px",
+   "ok": false
+  },
+  {
+   "name": "stream: transcript never shrinks (no raw-to-Markdown swap)",
+   "ok": false
+  },
+  {
+   "name": "stream: message list not rebuilt",
+   "ok": true
+  },
+  {
+   "name": "stream: no frame with more than 60 DOM mutations (updates are paced, not dumped)",
+   "ok": false
+  },
+  {
+   "name": "stream: smooth growth (>= 20 growth events/s)",
+   "ok": false
+  },
+  {
+   "name": "stream: composer, top bar and sidebar do not move",
+   "ok": false
+  },
+  {
+   "name": "stream: no long task over 100 ms",
+   "ok": true
+  },
+  {
+   "name": "switch: CLS",
+   "ok": true
+  },
+  {
+   "name": "switch: no blank frames while a chat loads (<= 2 per switch)",
+   "ok": true
+  },
+  {
+   "name": "switch: a chat appears in one layout (<= 2 distinct heights per switch)",
+   "ok": true
+  },
+  {
+   "name": "switch: composer, top bar and sidebar do not move",
+   "ok": true
+  },
+  {
+   "name": "switch: no long task over 150 ms",
+   "ok": true
+  },
+  {
+   "name": "panels: CLS",
+   "ok": true
+  },
+  {
+   "name": "panels: no long task over 150 ms",
+   "ok": true
+  },
+  {
+   "name": "no page errors",
+   "ok": true
+  }
+ ]
+}
