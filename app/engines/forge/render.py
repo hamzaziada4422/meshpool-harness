@@ -183,9 +183,9 @@ def _bullet(p, level=0, color="accent1"):
     clr = pPr.makeelement(qn("a:buClr"), {})
     clr.append(clr.makeelement(qn("a:schemeClr"), {"val": color}))
     pPr.append(clr)
-    pPr.append(pPr.makeelement(qn("a:buSzPct"), {"val": "70000"}))
+    pPr.append(pPr.makeelement(qn("a:buSzPct"), {"val": "90000"}))
     pPr.append(pPr.makeelement(qn("a:buFont"), {"typeface": FACE["body"]}))
-    pPr.append(pPr.makeelement(qn("a:buChar"), {"char": "▪"}))
+    pPr.append(pPr.makeelement(qn("a:buChar"), {"char": "•"}))   # a small round accent dot
 
 
 def _box(sl, x, y, w, h, name, anchor=MSO_ANCHOR.TOP, pad=0.0):
@@ -500,16 +500,11 @@ def draw_icon(sl, key, x, y, d, color, meaning="", shape_name=None, icon_set=Non
 
 
 def _icon(sl, name, x, y, d, meaning="", muted=False):
-    """Thin line icon (Lucide, ISC; or the deck's icon set) in a thin circle, drawn as a native vector shape; muted
-    draws it in the rule grey (an agenda's other sections)."""
-    circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
-    circ.name = f"ov_IconRing_{name}"
-    _strip_style(circ)
-    circ.fill.background()
-    circ.line.color.theme_color = TC.ACCENT_5 if muted else TC.TEXT_1
-    circ.line.width = Pt(0.75)
-    pad = d * 0.24
-    draw_icon(sl, name, x + pad, y + pad, d - 2 * pad, TC.ACCENT_5 if muted else TC.TEXT_1, meaning,
+    """Line icon (Lucide, ISC; or the deck's icon set) in the accent colour, drawn as a native vector shape, with no
+    ring around it (a ring per icon reads as a template); muted draws it in the rule grey (an agenda's other
+    sections)."""
+    pad = d * 0.1
+    draw_icon(sl, name, x + pad, y + pad, d - 2 * pad, TC.ACCENT_5 if muted else TC.ACCENT_1, meaning,
               f"ov_Icon_{name}")
 
 
@@ -2319,7 +2314,7 @@ def a_closing(ctx, s, sl, n):
     for x, w, t in heads:
         _write(_box(sl, x, y0, w, 0.3, f"role_subtitle_Head{len(t)}", MSO_ANCHOR.BOTTOM),
                [{"text": t, "size": T["head"], "bold": True, "numbers": False}])
-    _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.TEXT_1, 0.75, "HeadRule")
+    _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.ACCENT_1, 0.75, "HeadRule")
     top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
     notes = s.get("footnotes") or []
     if notes:
@@ -2417,7 +2412,7 @@ def a_challenge_matrix(ctx, s, sl, n):
     for x, w, t in ((lx, lw, heads[0]), (ax, aw, heads[1]), (bx, bw, heads[2])):
         _write(_box(sl, x, y0, w, 0.3, f"role_subtitle_Head{len(t)}", MSO_ANCHOR.BOTTOM),
                [{"text": t, "size": DENSE["head"], "bold": True, "numbers": False}])
-    _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.TEXT_1, 0.75, "HeadRule")
+    _rule(sl, LEFT, y0 + 0.36, RIGHT - LEFT, TC.ACCENT_1, 0.75, "HeadRule")
     rows = s.get("rows") or []
 
     def blocks(c):

@@ -253,12 +253,13 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                          [{"text": cap[:60], "size": R.T["label"], "bold": True, "numbers": False,
                            "color": TC.TEXT_2}])
         elif mode == "process":
-            shp = R._fill(sl, x, y, w + (0.12 if j < k - 1 else 0), 0.46, TC.TEXT_2 if j == k - 1 else TC.ACCENT_4,
+            shp = R._fill(sl, x, y + 0.06, w + (0.12 if j < k - 1 else 0), 0.32,     # a slim step bar: the last
+                          TC.TEXT_2 if j == k - 1 else TC.ACCENT_1,                     # one dark, the rest accent
                           f"ov_Step{j + 1}", MSO_SHAPE.PENTAGON if j == 0 else MSO_SHAPE.CHEVRON)
-            shp.adjustments[0] = 0.35
-            R._shape_text(shp, [{"text": f"{j + 1}", "size": R.T["head"], "bold": True, "numbers": False,
+            shp.adjustments[0] = 0.3
+            R._shape_text(shp, [{"text": f"{j + 1}", "size": R.T["label"], "bold": True, "numbers": False,
                                  "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
-                          (x + 0.2, y + 0.02, w - 0.3, 0.42), MSO_ANCHOR.MIDDLE)
+                          (x + 0.2, y + 0.06, w - 0.3, 0.32), MSO_ANCHOR.MIDDLE)
         elif mode == "icons" and icons[j]:
             R._icon(sl, icons[j], x, y, 0.52, plain(it["lead"])[:60])
         else:
@@ -267,7 +268,7 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             R._shape_text(b, [{"text": str(j + 1), "size": R.T["head"], "bold": True, "numbers": False,
                                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
                           (x, y + 0.03, d, d), MSO_ANCHOR.MIDDLE)
-        R._rule(sl, x, y + mark_h - 0.1, w, TC.TEXT_1, 0.75, f"ov_ColumnRule{j + 1}")
+        R._rule(sl, x, y + mark_h - 0.1, w, TC.ACCENT_1, 0.75, f"ov_ColumnRule{j + 1}")
         blocks = _col_blocks(it, z, figs[j])
         if extra_pt:
             for b in blocks[1:]:

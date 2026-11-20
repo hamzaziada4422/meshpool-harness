@@ -59,8 +59,8 @@ SYS = {"windowText": "000000", "window": "FFFFFF", "menuText": "000000", "btnFac
 NS_SCHEME = {"bg1": "lt1", "tx1": "dk1", "bg2": "lt2", "tx2": "dk2"}
 SLOTS = {"bg1": "lt1", "bg2": "lt2", "tx1": "dk1", "tx2": "dk2", "accent1": "accent1", "accent2": "accent2",
          "accent3": "accent3", "accent4": "accent4", "accent5": "accent5", "accent6": "accent6"}
-DEFAULT_THEME = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "ECECEC", "accent1": "1E5BD8",
-                 "accent2": "F4A582", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF",
+DEFAULT_THEME = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "EEF3FA", "accent1": "1E5BD8",
+                 "accent2": "D6E3F8", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF",
                  "accent6": "6B6B6B"}
 HUE_SLOTS = ("accent1", "accent3", "accent2", "accent4")
 

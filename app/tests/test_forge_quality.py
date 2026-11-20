@@ -130,7 +130,7 @@ def test_variety_sends_back_look_alike_pages_and_text_led_neighbours_alternate(t
     render(deck[1:3], str(out), carry=False, density="balanced")
     tops = []
     for sl in Presentation(str(out)).slides:
-        ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_IconRing")})
+        ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_Icon_")})
         tops.append(len(ys))
     assert tops[0] == 1 and tops[1] > 1           # columns (icons on one line), then rows (icons stacked)
 

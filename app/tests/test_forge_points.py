@@ -47,7 +47,7 @@ def test_four_short_points_make_a_2x2_of_icon_boxes(tmp_path):
     cards = _cards(sl)
     assert len(cards) == 4
     assert len({round(c.left / 914400, 2) for c in cards}) == 2 and len({round(c.top / 914400, 2) for c in cards}) == 2
-    assert sum(sh.name.startswith("ov_IconRing_") for sh in sl.shapes) == 4      # an icon per point
+    assert sum(sh.name.startswith("ov_Icon_") for sh in sl.shapes) == 4      # an icon per point
     for b in FOUR:
         assert b["label"] in _text(sl) and b["text"].split()[0] in _text(sl)
     v = VP.validate(out, VP.load_rules(), render=False, density="balanced")
