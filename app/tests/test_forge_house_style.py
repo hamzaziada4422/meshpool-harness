@@ -170,3 +170,15 @@ def test_never_an_eyebrow_over_the_title(tmp_path):
                  and not sh.name.startswith(("ov_Tag", "ov_SectionNo"))]
         assert not above, [(sh.name, sh.text_frame.text) for sh in above]
         assert "ov_SectionNo" in {sh.name for sh in sl.shapes}
+
+
+def test_small_multiples_share_one_scale():
+    from engines.forge import parts as P
+    mk = lambda vals: {"type": "chart", "chart": {"kind": "bar", "categories": ["N", "S"], "unit": "$M",  # noqa: E731
+                                                  "series": [{"name": "x", "values": vals}]}}
+    parts = [mk([120, 84]), mk([64, 52]), mk([38, 35])]
+    P._share_scale(parts)
+    assert {p["chart"]["_shared_max"] for p in parts} == {120}
+    mixed = [mk([1, 2]), dict(mk([3, 4]), chart=dict(mk([3, 4])["chart"], unit="%"))]
+    P._share_scale(mixed)
+    assert not any("_shared_max" in p["chart"] for p in mixed)   # different units: each its own scale

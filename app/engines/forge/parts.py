@@ -1072,6 +1072,7 @@ def a_grid(ctx, s, sl, n):
         return R.a_argument_only(ctx, s, sl, n)
     R._header(ctx, s, sl, n)
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
+    _share_scale(parts)
     look = s.get("look") or "editorial"
     if look not in LOOKS:
         _note(s, f"look '{look}' is not one of {', '.join(LOOKS)}; used editorial")
@@ -1095,6 +1096,25 @@ def a_grid(ctx, s, sl, n):
         ctx.last_side = n
     for j, box, p in placed:
         render_part(ctx, sl, n, p, box, look, j + 1, s)
+
+
+def _share_scale(parts) -> None:
+    """Two or more bar or column charts of one unit on a slide (small multiples) share one value scale, so their
+    bars compare at a glance; without it each chart fills its own frame and a small number looks large."""
+    charts = [p for p in parts if p.get("type") == "chart"]
+    cs = [_chart_of(p) for p in charts]
+    if len(cs) < 2 or len({c.get("kind") for c in cs}) != 1 or cs[0].get("kind") not in ("bar", "column") \
+            or len({str(c.get("unit") or "") for c in cs}) != 1:
+        return
+    vals = [v for c in cs for se in c.get("series") or [] if isinstance(se, dict)
+            for v in se.get("values") or [] if isinstance(v, (int, float))]
+    if not vals or min(vals) < 0:
+        return
+    for p, c in zip(charts, cs):
+        if isinstance(p.get("chart"), dict):
+            p["chart"] = dict(c, _shared_max=max(vals))
+        else:
+            p["_shared_max"] = max(vals)
 
 
 def _chart_left(placed) -> bool:

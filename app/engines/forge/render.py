@@ -1335,9 +1335,10 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         if kind in ("bar", "column", "stacked_bar", "stacked_column", "waterfall") and ends:
             if min(ends) >= 0:                                 # the axis is hidden: bars must start at zero, or
                 va.minimum_scale = 0                           # auto-scaling exaggerates the differences
-                if kind in ("bar", "column") and max(ends) > 0:   # room past the longest bar for its outside label:
+                top_ = max(c.get("_shared_max") or 0, max(ends))   # small multiples on a slide share one scale
+                if kind in ("bar", "column") and top_ > 0:        # room past the longest bar for its outside label:
                     lab = max(len(f"{v:,.{dec}f}{usfx}") for v in allv)   # without it the label wraps ("22.20 / %")
-                    va.maximum_scale = max(ends) * (1 + (0.04 + 0.022 * lab if kind == "bar" else 0.12))
+                    va.maximum_scale = top_ * (1 + (0.04 + 0.022 * lab if kind == "bar" else 0.12))
             elif max(ends) <= 0:
                 va.maximum_scale = 0
     except Exception:

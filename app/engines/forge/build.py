@@ -39,6 +39,10 @@ renderer applies a strict consulting design; you only fill fields.
   timeline {"milestones": [{"date", "label", "text": 1-2 lines on what happens or is decided then}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
   harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"}.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
+  Several charts on one slide when the message needs them: two measures behind one point (e.g. revenue grew AND
+  margin fell) are two chart parts side by side ("halves"), each with a "heading" naming its measure and unit; the
+  same measure for 3-4 groups is small multiples ("thirds" or "quarters"), one chart part per group, same kind and
+  unit (they share one scale). The title still states ONE message that the charts prove together.
 - executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
   answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
   1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
@@ -204,7 +208,9 @@ visual on two slides in a row; at most two chart-plus-side-panel slides (bar_tak
 waterfall_bridge, table_focus, benchmark) in a row; in 8 or more slides use at least 5 different visuals; when the
 brief asks a question or a decision, one slide weighs the options against criteria; when it ends on action, the
 plan is a roadmap or process (or the closing steps), not bullets. The storyline: situation, complication, then the
-answer on slide 2; 2-4 sections, each one claim its slides prove, most important first."""
+answer on slide 2; 2-4 sections, each one claim its slides prove, most important first. A slide whose point rests on
+two measures, or on one measure across a few groups, shows several charts ("two charts" or "small multiples": a grid
+with chart parts); every slide still makes exactly one point."""
 
 
 TEXT_LED = {"challenge_matrix", "text_matrix", "argument_only", "table_focus"}
