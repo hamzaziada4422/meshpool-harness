@@ -277,7 +277,7 @@
     },
     "archetype": {
       "type": "string",
-      "description": "a name from engine-spec.md archetype library (P15); diagrams: risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel"
+      "description": "a name from engine-spec.md archetype library (P15); diagrams: risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel; built-in layouts: layout (with 'layout' and 'slots')"
     },
     "title": {
       "type": "string",
@@ -376,7 +376,7 @@
     },
     "layout": {
       "type": "string",
-      "description": "grid: full, halves, halves_v, thirds, quarters, main_side, side_main, main_stack, stack_main"
+      "description": "grid: full, halves, halves_v, thirds, quarters, main_side, side_main, main_stack, stack_main; layout archetype: the built-in layout id"
     },
     "look": {
       "type": "string",
@@ -613,6 +613,17 @@
     },
     "callout": {
       "type": "object"
+    },
+    "slots": {
+      "type": [
+        "object",
+        "array"
+      ],
+      "description": "layout and library: slot number -> text"
+    },
+    "item": {
+      "type": "string",
+      "description": "library: the private library item id (local only)"
     }
   }
 }

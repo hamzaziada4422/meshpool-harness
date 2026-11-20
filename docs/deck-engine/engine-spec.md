@@ -95,6 +95,9 @@ stay.
 | 35 | `hub_spoke` | everything depends on one centre | hub and 3-8 spokes with glued connectors | 95 |
 | 36 | `pyramid` | each layer builds on the one below | 3-5 stacked trapezoids, text beside each band | 85 |
 | 37 | `funnel` | most drop out between these stages | 3-6 narrowing bars, values and conversion rates | 75 |
+| 38 | `cases` | these firms already show it works | one row per company: its logo (fetched, own colours, native shapes) or name, a big figure and a line | 70 |
+| 39 | `layout` | (any; a built-in layout fits the message) | one of 91 shipped layout specs (`data/layouts.json`), slots filled by the writer, side column for the argument | 100 |
+| 40 | `library` | (any; local only) | a golden library item rebuilt as native themed shapes with the writer's text in its slots; needs `MESHPOOL_KB` | 100 |
 
 Archetypes 29 to 37 are diagrams (`app/engines/forge/diagrams/`). Each is also a grid part of the same name (the 3x3
 part is `matrix3x3`), so it can fill a grid region beside a chart or text. As an archetype it draws the diagram on
@@ -106,6 +109,13 @@ as numbers in code; no shape, text or image was copied.
 
 The `slide_layouts` tool (engines/forge/tools.py, on the office MCP server) names the archetypes that prove a
 message, with the reference decks' numbers for them.
+
+Archetypes 38 to 40 are composite. `cases` fetches each company's logo once from the internet (full-colour CC0
+logos from gilbarbara/logos, else the Simple Icons mark in the brand's own colour) and draws it as a group of native
+shapes; shapes marked `logo:` keep their own colours and are not counted by P6. With no network or no mark, the
+company's name is shown. `layout` draws a shipped layout spec: abstract geometry and slot roles only, with no template
+text, colours, fonts or source names. The storyline prompt lists the layouts, and the writer is given the chosen
+layout's slots. `library` and `layout` fall back to their `fallback` slide when the item or spec is missing.
 
 Selection rule: the archetype is chosen to prove the title, not at random. The same archetype may appear at most 3
 times in a row (P15). Stock imagery is never used unless the user supplied it.

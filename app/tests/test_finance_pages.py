@@ -155,7 +155,8 @@ def test_build_inserts_fixed_pages_before_the_closing(monkeypatch, tmp_path):
     titles = [s["title"] for s in rendered["slides"]]
     assert titles == ["Demand drives the growth story", page["title"], "Act now to secure the deal"]
     assert rendered["slides"][1]["fixed"]
-    assert "do NOT plan slides that repeat them" in seen["story"] and "Exactly 3 slides" in seen["story"]
+    # 3 slides asked, one of them the fixed page: 2 narrative slides (the brief's count is the count, P16)
+    assert "do NOT plan slides that repeat them" in seen["story"] and "Exactly 2 slides" in seen["story"]
     assert json.loads((tmp_path / "facts.json").read_text())[-1]["id"] == "W1"
 
 

@@ -58,7 +58,11 @@ def test_archetype_guide_and_fill_checks_know_the_diagrams():
     thin = dict(_risk(2), takeaway=None, bullets=[])
     msgs = fill_checks([thin], "balanced")
     assert any("at least 3" in m for m in msgs[1]) and any("takeaway" in m for m in msgs[1])
-    assert not fill_checks([_risk(4)], "balanced")
+    full = dict(_risk(4), bullets=[{"text": "A second source cuts the worst case by $9M across the two plants"},
+                                   {"text": "Freight contracts reprice in January, so locking rates now saves $3M"},
+                                   {"text": "Key engineer retention costs $1.2M and protects the ERP cutover date"}])
+    assert not fill_checks([full], "balanced")
+    assert any("thin" in m for m in fill_checks([_risk(4)], "balanced")[1])
 
 
 @pytest.mark.parametrize("n_items,label", [(3, "Risk"), (7, "Supplier fails"), (12, "A long risk name " * 4)])

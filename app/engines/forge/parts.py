@@ -409,6 +409,12 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
     room = max(0, MAX_BUMP.get(R.DENSITY["mode"], 3) - int(part.get("_bump") or 0))   # never past the mode's limit
     bl = _fit_trim(R._grow(bl, w, h, min(room, 6 if R.DENSITY["mode"] == "present" else 2)), w, h, s,
                    f"the text of part {i}", ctx, n)     # presenting: short text steps well up the scale
+    if part.get("_spread") and len(bl) > 1:              # a side column beside a drawing: spare height goes between
+        left = h - R._need(bl, w) - 0.1                  # the points, up to 0.3in each (the argument rhythm)
+        if left > 0.4:
+            gap = min(left * 0.85 / (len(bl) - 1), 0.3) * 72
+            for b in bl[1:]:
+                b["space_before"] = (b.get("space_before") or 0) + gap
     if card is not None and not part.get("heading"):
         R._shape_text(card, bl, ctx, n, (x, y, w, h))   # the card is the text's own shape
         return
@@ -980,6 +986,9 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
         if LAYOUTS[cand] > k:
             continue
         placed, over, empty = _compose_one(parts, cand, look, top, bottom)
+        if cand == lay and over <= 0.01 and (s or {}).get("_keep_layout"):
+            return placed                                  # a diagram beside its argument stays beside it (a flat,
+                                                           # full-width diagram above short text read worse)
         if cand == lay and (any(p.get("type") == "table" for p in parts) or over <= 0.01 and empty <= KEEP_EMPTY):
             return placed                                  # the asked-for layout fits (and fills): keep it; a table
                                                            # is never moved into a narrower column for fill alone

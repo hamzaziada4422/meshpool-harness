@@ -545,6 +545,19 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                                   f"'{s['layout']}').", slide=n, fix_scope="renderer"))
         edges, (cl, cr) = _grid(m, R)
         tol = R["layout"]["snap_tolerance_in"]
+        on_grid = lambda v: min(abs(v - e) for e in edges) <= tol                        # noqa: E731
+        cards = [c for c in s["shapes"] if c.get("filled") and not (c.get("text") or "").strip() and c["x"] is not None
+                 and c["w"] and on_grid(c["x"]) and on_grid(c["x"] + c["w"])]          # filled, text-free, on grid
+
+        def in_card(sh, v, left):
+            """v is a padded edge inside a card on the grid (a card's content sits up to 0.3in in from its edge)."""
+            for c in cards:
+                if c is sh or not (c["x"] - tol <= sh["x"] and sh["x"] + sh["w"] <= c["x"] + c["w"] + tol
+                                   and c["y"] - tol <= sh["y"] <= c["y"] + c["h"]):
+                    continue
+                if (left and 0 <= v - c["x"] <= 0.3 + tol) or (not left and 0 <= c["x"] + c["w"] - v <= 0.3 + tol):
+                    return True
+            return False
         for sh in s["shapes"]:
             if sh["depth"] or sh["x"] is None or sh["role"] in ("footer", "line") or \
                     sh["name"].startswith(R["layout"]["overlap_declare_prefix"]):
@@ -552,9 +565,10 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
             if sh["ph_type"] is not None and not sh.get("own_xfrm"):
                 continue                      # geometry inherited from the layout: on the template by definition
             off = []
-            if "left" in R["layout"]["edge_check"] and min(abs(sh["x"] - e) for e in edges) > tol:
+            if "left" in R["layout"]["edge_check"] and not on_grid(sh["x"]) and not in_card(sh, sh["x"], True):
                 off.append(f"left {sh['x']:.2f}in")
-            if "right" in R["layout"]["edge_check"] and min(abs(sh["x"] + sh["w"] - e) for e in edges) > tol:
+            if "right" in R["layout"]["edge_check"] and not on_grid(sh["x"] + sh["w"]) and \
+                    not in_card(sh, sh["x"] + sh["w"], False):
                 off.append(f"right {sh['x'] + sh['w']:.2f}in")
             if off:
                 failures.append(F("P7", "off_grid", f"Slide {n}, {sh['name']}: edge off the grid ({', '.join(off)}).",
@@ -737,8 +751,9 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                         if not any(_close(c, d, tol) for c in _candidates(abs(v), u) for d in {abs(x) for x in derived})]
             if mismatch:
                 failures.append(F("P14", "text_chart_mismatch", f"Slide {n}: {', '.join(mismatch[:5])} in the text "
-                                  "do not match the chart data. Quote the chart's values, rounded as shown.", slide=n,
-                                  measured=len(mismatch), limit=0))
+                                  "do not match the chart data. Quote the chart's values, rounded as shown; a figure "
+                                  "the chart does not plot moves to a footnote or to a slide without a chart, or is "
+                                  "dropped.", slide=n, measured=len(mismatch), limit=0))
 
         # ---------------- P17 editability
         if s["max_group_depth"] > R["editability"]["max_group_depth"]:

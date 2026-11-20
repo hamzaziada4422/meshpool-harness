@@ -309,7 +309,10 @@ def measure(path: str, rules: dict | None = None) -> dict:
     for n, slide in enumerate(prs.slides, 1):
         sx = etree.fromstring(slide.part.blob)
         s_scheme = len(sx.findall(".//a:schemeClr", NS))
-        s_srgb_vals = sx.xpath(".//a:srgbClr/@val", namespaces=NS)
+        # a fetched company logo keeps its own colours (shapes tagged "logo:<company>", render.logo_shape): those
+        # are not off-brand colours (P6) but counted apart
+        s_srgb_vals = sx.xpath(".//a:srgbClr[not(ancestor::*[(self::p:sp or self::p:grpSp) and "
+                               "*/p:cNvPr[starts-with(@descr, 'logo:')]])]/@val", namespaces=NS)
         cname = slide._element.find(qn("p:cSld")).get("name") or ""
         rec = {"n": n, "slide_id": slide.slide_id, "layout": slide.slide_layout.name, "name": cname,
                "archetype": (tag_re.search(cname).group(1) if tag_re.search(cname) else None),

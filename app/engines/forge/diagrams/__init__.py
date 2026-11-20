@@ -108,7 +108,8 @@ def as_grid(s: dict) -> dict:
     out = {k: v for k, v in s.items() if k in ("title", "source", "notes", "node", "id", "section", "density",
                                                 "footnotes", "gaps", "tags", "title_prov", "_cont")}
     lay = "full" if len(parts) == 1 else ("main_side" if len(parts) == 2 else "main_stack")
-    out.update(archetype="grid", layout=s.get("layout") or lay, look=s.get("look") or "editorial", parts=parts)
+    out.update(archetype="grid", layout=s.get("layout") or lay, look=s.get("look") or "editorial", parts=parts,
+               _keep_layout=not s.get("layout"))
     return out
 
 

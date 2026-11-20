@@ -1,6 +1,10 @@
 # Forge knowledge base: blockers
 
-## 1. No model calls (2026-11-20)
+## 1. No model calls (2026-11-20, resolved the same day)
+
+Resolved: the user raised the Meshpool key's budget and live builds ran (results doc, "Live builds"). The gateway
+answers chat completions and `/v1/models` (17 models); `/v1/usage` answers 401, so spend per deck is still not
+readable. What follows is the state before that.
 
 - The Meshpool test key answers every call with `budget_exceeded` (max budget 0.0, spent 23.10).
 - The DeepSeek key the session proxy injects for `api.deepseek.com` is rejected as invalid.

@@ -1959,7 +1959,7 @@ def _as_written(v: float, text: str) -> str | None:
         return None
     forms = {f"{v:,.2f}", f"{v:,.1f}", f"{v:,.0f}" if v == int(v) else None, f"{v:g}"} - {None}
     for f in sorted(forms, key=len, reverse=True):
-        m = re.search(r"(\$?)" + re.escape(f) + r"(?![\d.])\s?(bn|tn|m\b|%|x\b|/sh|per share)?", text)
+        m = re.search(r"(\$?)" + re.escape(f) + r"(?![\d.])\s?((?i:bn|tn|mn|m|b|k)\b|%|x\b|/sh|per share)?", text)
         if m and (m.group(1) or m.group(2)):
             unit = {"per share": "/sh"}.get(m.group(2) or "", m.group(2) or "")
             return f"{m.group(1)}{f}{unit}"
@@ -1982,7 +1982,8 @@ def stat_stack(c: dict, text: str = "") -> dict:
                 continue
             cat = str(cat)                                  # categories may be numbers (years)
             ctx_ = f"{cat} {se.get('name', '')}"
-            pct = cunit == "%" or (usfx is None and not other and abs(v) <= 100
+            money = bool(cm and (cm.group(1) or cm.group(2)))    # "$M", "€bn": a currency unit is never a percent,
+            pct = cunit == "%" or (usfx is None and not other and not money and abs(v) <= 100   # whatever the label
                                    and bool(re.search(r"%|share of|percent|premium|margin|growth", ctx_, re.I)))
             per_share = bool(re.search(r"/\s*sh|per share|price", ctx_, re.I) or (cm and cm.group(3)))
             cur = (cm.group(1) if cm and cm.group(1) else
@@ -2040,6 +2041,9 @@ def schema_errors(s: dict) -> list[str]:
     if a == "library":                                # a layout from the private slide library (component.py)
         from .component import schema_errors as library_errors
         return errs + library_errors(s)
+    if a == "layout":                                 # a built-in layout (layouts.py)
+        from .layouts import schema_errors as layout_errors
+        return errs + layout_errors(s)
     if a == "grid":                                   # parts library: each part is checked on its own
         from .parts import grid_errors
         return errs + grid_errors(s)
@@ -2128,6 +2132,9 @@ def fallback(s: dict) -> dict:
     if s.get("archetype") == "library":
         from .component import fallback as library_fallback
         return library_fallback(s)
+    if s.get("archetype") == "layout":
+        from .layouts import fallback as layout_fallback
+        return layout_fallback(s)
     c = s.get("chart") or {}
     if c.get("kind") == "range" and chart_problems(c):
         return football_fallback(s)
@@ -3197,6 +3204,13 @@ def _register_library_archetype():
     ARCHETYPES.setdefault("library", a_library)
 
 
+def _register_layout_archetype():
+    """layout: a built-in layout (engines/forge/data/layouts.json) drawn as native shapes (layouts.py). Registered on
+    first render, like library."""
+    from .layouts import a_layout
+    ARCHETYPES.setdefault("layout", a_layout)
+
+
 FRAME_TOP = os.environ.get("FORGE_FRAME", "lines") == "lines"   # a rule on top and the source rule at the foot
 COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
 NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
@@ -3318,14 +3332,14 @@ def logo_shape(sl, path, x, y, h, max_aspect, name, alt, exact_w=None) -> float:
     theme); a raster logo only when pictures are allowed. Returns the drawn width in inches (0: not drawn)."""
     p = Path(path)
     if p.suffix.lower() == ".svg":
-        from .vector import add_svg, parse_svg, tight_box
+        from .vector import add_svg_colors, parse_svg, tight_box
         try:
             txt = p.read_text()
             box = tight_box(parse_svg(txt))                 # the mark's own bounds, not its canvas
             w = exact_w or min(h * box[2] / max(box[3], 1e-6), h * max_aspect)
             if not exact_w and w < h * box[2] / max(box[3], 1e-6):      # too wide for the room: keep the aspect
                 h = w * box[3] / box[2]
-            shp = add_svg(sl, txt, x, y, w, h, name, TC.TEXT_1, alt=alt, tight=True)
+            shp = add_svg_colors(sl, txt, x, y, w, h, name, "logo:" + re.sub(r"\s+logo$", "", alt))   # own colours
             return w if shp is not None else 0.0
         except Exception:                                  # a broken logo never breaks the deck
             return 0.0
@@ -3418,6 +3432,7 @@ def _relabel(slides, out_path) -> int:
 def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
     _register_diagram_archetypes()
     _register_library_archetype()
+    _register_layout_archetype()
     prs = Presentation(template or default_template())
     for sid in list(prs.slides._sldIdLst):
         prs.part.drop_rel(sid.rId)

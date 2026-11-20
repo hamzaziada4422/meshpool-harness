@@ -203,6 +203,19 @@ def slide_layouts(message: str, kind: str = "all", show_references: bool | None 
     if hits:
         lines.append("Layout notes:")
         lines += [f"   [{h['vault']}] {h['name']}: {h['use_when'][:110]}" for h in hits]
+    try:                                                   # built-in layouts (shipped specs, every user has them)
+        from . import layouts as LY
+        built = LY.search(message, limit=3)
+    except Exception:                                      # noqa: BLE001
+        built = []
+    if built:
+        lines.append('Built-in layouts (archetype "layout", "layout": id, "slots": {number: text}):')
+        for b in built:
+            spec = LY.get(b["id"]) or {}
+            sl_ = spec.get("slots") or []
+            slots = "; ".join(f"{k}: {role} ({holds[:40]}, <= {mw} words)" for k, (role, holds, mw) in
+                              enumerate(sl_[:8], 1)) + (f"; ... {len(sl_)} slots in all" if len(sl_) > 8 else "")
+            lines.append(f"   {b['id']}: {b['name']}. Use when: {b['use_when'][:90]}. Slots: {slots}")
     lines.append("Pick the one whose structure IS the message; write the slide in that archetype's fields.")
     return "\n".join(lines), False
 
