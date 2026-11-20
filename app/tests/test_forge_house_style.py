@@ -98,7 +98,9 @@ def test_a_callout_beside_an_exhibit_takes_its_height(tmp_path):
     assert r["errors"] == [] and not _feet_failures(out)
 
 
-def test_a_roadmap_with_room_gives_each_milestone_a_card(tmp_path):
+def test_a_roadmap_is_a_band_with_diamonds_and_left_aligned_columns(tmp_path):
+    """The roadmap look: dates over a slim accent band, a diamond per milestone, a left-aligned column of words under
+    each with thin rules between; no boxes (the boxed version read as machine-made)."""
     s = {"archetype": "grid", "id": "s", "node": "9", "title": "The plan reaches a plant decision in 24 months",
          "layout": "full", "parts": [{"type": "timeline", "heading": "Entry roadmap", "milestones": [
              {"date": "Month 0", "label": "Sign co-manufacturer", "text": "Approve $6M and sign the contract"},
@@ -107,9 +109,13 @@ def test_a_roadmap_with_room_gives_each_milestone_a_card(tmp_path):
          "source": SRC}
     r, prs, _ = _render([s], tmp_path)
     sl = prs.slides[0]
-    cards = [sh for sh in sl.shapes if sh.name.startswith("ov_TLCard")]
-    assert r["errors"] == [] and len(cards) == 3
-    assert all(c.has_text_frame and c.text_frame.text.strip() for c in cards)    # the label is in its card (P17)
+    names = [sh.name for sh in sl.shapes]
+    assert r["errors"] == []
+    assert sum(nm.startswith("ov_RoadMark") for nm in names) == 3 and sum(nm.startswith("ov_RoadRule") for nm in
+                                                                         names) == 2
+    texts = [sh for sh in sl.shapes if sh.name.startswith("ov_RoadText")]
+    assert len(texts) == 3 and all(sh.text_frame.text.strip() for sh in texts)
+    assert not any(nm.startswith("ov_TLCard") for nm in names)
 
 
 def _chart_slide(t, arch="bar_takeaway"):

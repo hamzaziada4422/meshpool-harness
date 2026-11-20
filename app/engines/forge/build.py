@@ -552,6 +552,10 @@ def _present_checks(s, a) -> list[str]:
             msgs.append("a presented slide needs one exhibit: show the point as a chart, 2-4 big numbers (stats), a "
                         "process, a timeline or a 2x2, with at most one short text part beside it")
         tls = [p for p in parts if p.get("type") == "timeline"]
+        if tls and len(parts) == 1:
+            msgs.append("a roadmap alone fills half the slide: add a second part under it, the targets each phase "
+                        "delivers (a stats part with 2-4 numbers) or the cost or volume per phase (a chart part), and "
+                        "use layout halves_v")
         if tls and len(parts) <= 2 and any(not (m or {}).get("text") for t_ in tls
                                            for m in (t_.get("milestones") or t_.get("items") or [])
                                            if isinstance(m, dict)):
@@ -1560,7 +1564,12 @@ supports it. Choose varied archetypes that prove each title.
         if not (start and isinstance(story, dict) and story.get("slides")):   # a resumed run brings its storyline
             raise RuntimeError(f"storyline came back empty from {STORY_MODEL}: {why or 'no slides'}")
     notes = story_variety([x for x in story.get("slides", []) if isinstance(x, dict)], brief) if not insert else []
-    if notes and len(story.get("slides") or []) >= 4:
+    planned = [x for x in story.get("slides", []) if isinstance(x, dict) and x.get("archetype") != "agenda"]
+    short_by = narrative_n - len(planned) if not insert else 0
+    if short_by > 0:                              # the brief's count is the count (P16): a short storyboard grows
+        notes.append(f"plan exactly {narrative_n} slides; you planned {len(planned)}: add {short_by} slide(s) "
+                     "from evidence the deck has not used yet, each with its own exhibit")
+    if notes and (len(story.get("slides") or []) >= 4 or short_by > 0):
         try:                                     # the partner's read of the storyboard, sent back once
             again = _call(client, STORY_MODEL, "You revise a consulting storyboard's visual plan. Keep the governing "
                           "thought, the number of slides, the order of the argument and the evidence; change archetypes, "
@@ -1568,8 +1577,12 @@ supports it. Choose varied archetypes that prove each title.
                           + VISUALS + "\n" + help_, "Fix:\n- " + "\n- ".join(notes) + "\n\nStoryboard:\n"
                           + json.dumps(story), task_id + "-story2", 6000)
             calls += 1
-            if isinstance(again.get("slides"), list) and abs(len(again["slides"]) - len(story["slides"])) <= 1 and \
-                    len(story_variety(again["slides"], brief)) < len(notes):
+            n_again = len([x for x in again.get("slides") or [] if isinstance(x, dict)
+                           and x.get("archetype") != "agenda"]) if isinstance(again.get("slides"), list) else 0
+            closer = short_by > 0 and abs(n_again - narrative_n) < short_by
+            if isinstance(again.get("slides"), list) and (closer or (
+                    abs(len(again["slides"]) - len(story["slides"])) <= 1 and
+                    len(story_variety(again["slides"], brief)) < len(notes))):
                 story = again
         except Exception:
             pass

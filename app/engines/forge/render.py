@@ -3880,10 +3880,11 @@ def _relabel(slides, out_path) -> int:
 
 
 def _tabular(s: dict) -> bool:
-    """A slide whose body is rows of text across the page: a table slide, or a grid with a table part."""
+    """A slide whose body is rows of text across the page: a table slide, or a grid with a table, Harvey-ball or
+    text-only rows part."""
     a = s.get("archetype")
     return a in ("table_focus", "table_highlight") or (a == "grid" and any(
-        isinstance(p, dict) and p.get("type") == "table" for p in s.get("parts") or []))
+        isinstance(p, dict) and p.get("type") in ("table", "harvey") for p in s.get("parts") or []))
 
 
 def _flex_rows(s: dict) -> bool:

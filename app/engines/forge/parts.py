@@ -533,6 +533,8 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
     k = max(1, len(ms))
     hl = part.get("highlight")
     dot = 0.18
+    if w > h and card is None:                           # a roadmap: dates over a slim band with milestone
+        return _roadmap(ctx, sl, n, ms, hl, x, y, w, h, i, s)   # diamonds, a column of words under each
     if w > h:                                            # horizontal: dates above the axis, labels below
         sp = w / k
         cw = sp - 0.12
@@ -593,6 +595,52 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
         _shape(sl, MSO_SHAPE.OVAL, ax - dd / 2, ry + 0.02 + R._pitch(R.bump(12)) / 144 - dd / 2 + 0.03, dd, dd,
                f"ov_TLDot{i}_{j + 1}", fill=TC.ACCENT_3 if on else TC.ACCENT_1, line=TC.BACKGROUND_1, weight=1.5)
         R._write(R._box(sl, tx, ry, tw, max(need, rh - 0.04), f"ov_TLLabel{i}_{j + 1}"), bl, ctx, n)
+
+
+def _roadmap(ctx, sl, n, ms, hl, x, y, w, h, i, s):
+    """The roadmap look (BCG, think-cell): each milestone's date left-aligned in the accent colour, a slim accent band
+    with a diamond per milestone (the highlighted one dark and larger), and under it a column per milestone with its
+    label in bold and what happens then, left-aligned, thin rules between the columns down to the foot. No boxes
+    and no centred text."""
+    k = max(1, len(ms))
+    gap = 0.25
+    cw = (w - gap * (k - 1)) / k
+    dz = R.bump(14)
+    dates = [[{"text": _txt(m.get("date")), "size": dz, "bold": True, "numbers": False, "color": TC.ACCENT_1}]
+             for m in ms]
+    dh = max([R._need(d, cw) for d in dates if d[0]["text"]] or [0.0]) + 0.04
+    yb = y + dh + 0.1                                     # the band
+    R._fill(sl, x, yb, w, 0.05, TC.ACCENT_1, f"ov_RoadBand{i}")
+    top = yb + 0.32
+    avail = max(0.4, y + h - top)
+    cols_ = []
+    for m in ms:
+        bl = [{"text": _txt(m.get("label") or m.get("title")), "size": R.bump(16), "bold": True, "numbers": False,
+               "prov": m.get("prov")}]
+        if m.get("text"):
+            bl.append({"text": _txt(m["text"]), "size": R.bump(14), "space_before": 6, "prov": m.get("prov")})
+        for d in m.get("bullets") or []:
+            bl.append({"text": _txt(d), "size": R.bump(13), "bullet": True, "space_before": 4})
+        cols_.append(bl)
+    for bump in (4, 3, 2, 1, 0):                          # the largest step at which every column fits
+        grown = [[dict(b_, size=b_["size"] + bump) for b_ in bl] for bl in cols_]
+        if all(R._need(bl, cw) <= 0.8 * avail for bl in grown):
+            cols_ = grown
+            break
+    used = max(R._need(bl, cw) for bl in cols_) if cols_ else 0.0
+    rule_h = min(avail, used + 0.5)                       # the rules end a little under the longest column
+    for j, m in enumerate(ms):
+        cx = x + j * (cw + gap)
+        on = hl == j
+        dd = 0.3 if on else 0.24
+        _shape(sl, MSO_SHAPE.DIAMOND, cx, yb + 0.025 - dd / 2, dd, dd, f"ov_RoadMark{i}_{j + 1}",
+               fill=TC.TEXT_2 if on else TC.ACCENT_1, line=TC.BACKGROUND_1, weight=1.0)
+        if dates[j][0]["text"]:
+            R._write(R._box(sl, cx, y, cw, dh, f"ov_RoadDate{i}_{j + 1}", MSO_ANCHOR.BOTTOM), dates[j])
+        bl = _fit_trim(cols_[j], cw, avail, s, f"milestone {j + 1} of part {i}", ctx, n)
+        R._write(R._box(sl, cx, top, cw, avail, f"ov_RoadText{i}_{j + 1}"), bl, ctx, n)
+        if j:                                             # a thin rule between the columns
+            _vline(sl, cx - gap / 2, top, rule_h, TC.ACCENT_5, 0.5, f"ov_RoadRule{i}_{j}")
 
 
 def _axis(v):
