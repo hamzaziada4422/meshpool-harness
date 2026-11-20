@@ -1527,7 +1527,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if not (periods or target is not None or tcat or delta or any(desc)):
         return
     top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
-    M = top * (1.42 if periods else 1.3 if delta else 1.18)   # headroom: an arrow rides above the tallest label
+    M = top * (1.42 if periods else 1.5 if delta else 1.18)   # headroom: an arrow and its pill ride above the
+                                                              # tallest label, clear of the chart's heading
     ch = gf.chart
     va = ch.value_axis
     va.minimum_scale, va.maximum_scale = 0, M
@@ -1554,6 +1555,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         dh = min(dh, h * 0.28)
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
+    if delta and ph > 0.5:                                # a short plot needs room in inches above the tallest
+        M = max(M, top / (1 - min(0.7, 1.0 / ph)))        # label for the arrow and its pill (a fraction of the
+        va.maximum_scale = M                              # scale was not enough on a 2 in chart)
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
@@ -1597,16 +1601,26 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         side = -1 if j1 > j0 else 1                       # corner to corner: from the first bar's far top corner to
         a_ = (cx(j0) - side * bwid, yv(vals[j0]) - 0.06)  # the other bar's near one, clear of both value labels
         b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)
-        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
-                                     Inches(b_[1]))
-        ln.name = "ov_DeltaArrow"
-        ln.line.color.theme_color = TC.ACCENT_1
-        ln.line.width = Pt(1.25)
-        end = ln.line._get_or_add_ln()
-        end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         bw = _need_w(lab, T["label"] + 1, True) * 1.15 + 0.4
-        mx = (a_[0] + b_[0]) / 2                          # the pill rides above both bars' value labels, never on
-        my = yv(max(vals[j0], vals[j1])) - 0.55           # them (labels sit ~0.3 in over each bar)
+        between = vals[min(j0, j1): max(j0, j1) + 1]
+        if abs(j1 - j0) > 1:                              # bars in between: an elbow above all their labels (the
+            ya = max(py + 0.25, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
+            segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
+                    ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
+            mx, my = (cx(j0) + cx(j1)) / 2, ya
+        else:
+            segs = [(a_, b_)]
+            mx = (a_[0] + b_[0]) / 2                      # the pill rides above both bars' value labels, never on
+            my = max(py + 0.2, yv(max(vals[j0], vals[j1])) - 0.55)   # them, and never above the plot
+        for k_, (p0, p1) in enumerate(segs):
+            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(p0[0]), Inches(p0[1]), Inches(p1[0]),
+                                         Inches(p1[1]))
+            ln.name = "ov_DeltaArrow" + (str(k_ + 1) if len(segs) > 1 else "")
+            ln.line.color.theme_color = TC.ACCENT_1
+            ln.line.width = Pt(1.25)
+            if k_ == len(segs) - 1:
+                end = ln.line._get_or_add_ln()
+                end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
             my = min(my, yv(target)) - 0.32                      # label: it rides above them
         box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.OVAL)

@@ -1330,6 +1330,11 @@ def _share_scale(parts) -> None:
     if len(cs) < 2 or len({c.get("kind") for c in cs}) != 1 or cs[0].get("kind") not in ("bar", "column") \
             or len({str(c.get("unit") or "") for c in cs}) != 1:
         return
+    same_measure = (len({tuple(sorted(str(se.get("name", "")).lower() for se in c.get("series") or []
+                                       if isinstance(se, dict))) for c in cs}) == 1
+                    or len({tuple(str(x) for x in c.get("categories") or []) for c in cs}) == 1)
+    if not same_measure:                                   # two different measures that happen to share a unit (a
+        return                                             # price rise and a renewal rate, both %): own scales
     vals = [v for c in cs for se in c.get("series") or [] if isinstance(se, dict)
             for v in se.get("values") or [] if isinstance(v, (int, float))]
     if not vals or min(vals) < 0:
