@@ -1651,7 +1651,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         ln.line.dash_style = 4
         lab = "Target " + fmt_value(target, unit, dec)
         lw_ = _need_w(lab, T["label"], True) + 0.1
-        _write(_box(sl, px, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),   # at the line's start
+        lx_ = px                                          # at the line's start, or at its end when the first bar's
+        if abs(yt - (yv(vals[0]) - 0.2)) < 0.4:           # value label sits there (Target 83% met the 84% label)
+            lx_ = px + pw - lw_
+        _write(_box(sl, lx_, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.ACCENT_1}], ctx, n)
         ctx.track(n, lab, prov)
 

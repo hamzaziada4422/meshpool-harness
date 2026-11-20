@@ -735,6 +735,14 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
                             "multiple or gap is drawn as an arrow, or \"target\" for the goal line, and "
                             "\"descriptors\" saying what each category is")
                 break
+        thin = [ch for ch in charts if isinstance(ch, dict) and ch.get("kind") in ("bar", "column")
+                and len(ch.get("categories") or []) == 3 and len(ch.get("series") or []) == 1
+                and not ch.get("delta") and ch.get("target") is None
+                and not all(_PERIOD.match(str(x)) for x in ch.get("categories") or [])]   # a trend gets its CAGR
+        if thin and density != "present":
+            msgs.append("a chart of three bars is thin evidence: plot every comparable value the facts hold (each "
+                        "year, peer, segment or site, or a second series such as the target or the benchmark), or "
+                        "say in a footnote that the facts hold no more; never add a value the facts do not give")
         if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
             msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
                         "split over time, or a comparison with a benchmark")
