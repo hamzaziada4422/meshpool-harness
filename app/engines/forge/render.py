@@ -3408,7 +3408,8 @@ def a_executive_summary(ctx, s, sl, n):
     _header(ctx, s, sl, n)
     pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
     ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
-    if ask and repeats(ask, s.get("title", "")):           # the title already is the answer: a band saying it again
+    if ask and repeats(re.sub(r"(?i)^\s*decision today:\s*", "", ask), s.get("title", ""), 0.55):   # the title
+        # already is the answer: a band saying it again
         s["notes"] = (s.get("notes", "") + "\n[QA] decision band left out: it repeats the title: " + ask).strip()
         ask = ""
     top, bottom = BODY_Y + 0.1, BODY_B
