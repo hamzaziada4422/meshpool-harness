@@ -328,12 +328,12 @@ class Session:
     def _start_mcp(self):
         self.emit({"type": "status", "text": "Starting MCP servers..."})
         try:
-            extra = {}
-            if getattr(self.agent, "profile", "") == "work":
-                # Meshpool Work gets the office server Hermes and Pi get: Word documents (make_document), PDFs,
-                # conversions and document reading. Its own office_task covers slides, sheets and data only.
-                from meshpool_harness.harnesses.acp import office_extra
-                extra = office_extra(self.workdir)
+            # Meshpool Work and Meshpool Code get the office server Hermes and Pi get: decks (make_deck), Word
+            # documents, workbooks, PDFs, conversions and document reading. Work's own office_task covers slides,
+            # sheets and data too. A Code chat in Codex style shows the office tools only once a message asks for an
+            # office file (Agent.office_on), so coding chats do not pay for them.
+            from meshpool_harness.harnesses.acp import office_extra
+            extra = office_extra(self.workdir)
             self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
@@ -512,6 +512,106 @@ class Session:
         self._start_turn(text, images)
         return {"queued": False}
 
+    def _capability_turn(self, text: str) -> list:
+        """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
+        The chat keeps its agent when that agent can; otherwise it moves, with its history, to the agent Auto would
+        pick among those that can; only when none can does it say so. Returns the capabilities the message needs,
+        for the hidden note (empty when no agent can make them)."""
+        from meshpool_harness import capabilities as CAP
+        try:
+            caps = CAP.needs(text)
+        except Exception:  # noqa: BLE001 - a check never blocks a message
+            return []
+        if not caps:
+            return []
+        try:
+            from meshpool_harness import harness_router as HRT
+            ready = HRT._ready(self.kind)
+            cur = self.harness.get("id")
+            ready.setdefault(cur, self.harness)
+            try:
+                ranked = [r["harness"] for r in HRT.route(text, self.kind).get("ranking") or []]
+            except Exception:  # noqa: BLE001
+                ranked = []
+            target = CAP.pick(caps, cur, [*ranked, "meshpool-work", "meshpool-code"], ready)
+            if target is None:
+                self.emit({"type": "status", "text": f"No agent in Meshpool can make {CAP.labels(caps)}."})
+                return []
+            if target != cur:
+                self.handoff(target, f"{self.harness.get('name', 'This agent')} cannot make {CAP.labels(caps)}")
+        except Exception as e:  # noqa: BLE001 - the current agent still answers
+            self.emit({"type": "status", "text": f"Could not check which agent can do this: {e}"})
+        if self.harness.get("type") not in ("acp", "pi"):
+            self.agent.office_on = True              # Meshpool's agents: the office tools from this message on
+        return caps
+
+    def switch_harness(self, hid: str) -> None:
+        """The user picked another agent for this chat: it continues there, with the conversation so far."""
+        if self.state in ("working", "waiting"):
+            raise ValueError("Wait for the current reply to finish (or stop it) before switching agents.")
+        if not hid or hid == self.harness.get("id"):
+            return
+        if hid == "meshpool-auto":
+            raise ValueError("Auto picks the agent when a chat starts. Pick a specific agent to switch this chat.")
+        h = HR.get(hid)
+        if h.get("unsupported"):
+            raise ValueError(h["unsupported"])
+        self.handoff(hid, f"You switched this chat to {h.get('name', hid)}")
+
+    def handoff(self, hid: str, why: str = "") -> None:
+        """Move this chat to another agent, keeping what was said: the new agent starts with the conversation so far
+        (Meshpool's agents as messages, outside agents as context with the next message), under the same chat id,
+        so the chat, its files and its history stay one thread. Used when the current agent cannot do what a message
+        asks; the user sees one line saying which agent took over and why."""
+        model = getattr(self.agent, "model", None) or read_meta(self.id).get("model") or None
+        new = HR.get(hid, model)
+        if not new.get("ready", True) or (new.get("type") in ("acp", "pi") and not new.get("available")):
+            raise ValueError(f"{new.get('name', hid)} cannot run here")
+        kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
+        with self.lock:
+            history = [{k: v for k, v in e.items() if k != "i"} for e in self.events
+                       if e.get("type") in ("user", "assistant", "tool_start")]
+        old = self.agent
+        if new["type"] in ("acp", "pi"):
+            cls = PiAgent if new["type"] == "pi" else ACPAgent
+            a = cls(new, self.workdir, session_id=self.id, **kw)
+            a.events = list(history)                  # before_turn() reads them; _carry sends them with the message
+            a._carry = any(e.get("type") in ("user", "assistant") for e in history)
+        else:
+            a = Agent(self.workdir, session_id=self.id, profile="work" if hid == "meshpool-work" else "code", **kw)
+            a.messages = [a.messages[0]] + _messages_from_events(history)
+            a.interactive = lambda: not self.scheduled and not getattr(self, "deleted", False)
+            if hasattr(a, "plan"):
+                a.plan = self.plan
+        if model and hasattr(a, "model") and not getattr(a, "model", None):
+            try:
+                from meshpool_harness import providers as PV
+                if not new.get("providers") or PV.split(model)[0] in new["providers"]:
+                    a.model = model
+            except Exception:  # noqa: BLE001
+                pass
+        self.agent, self.harness = a, new
+        try:
+            if hasattr(old, "close") and old is not a:
+                old.close()
+        except Exception:  # noqa: BLE001
+            pass
+        if new["type"] in ("acp", "pi"):
+            if self.mcp:
+                try:
+                    self.mcp.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.mcp = None
+        elif self.mcp:
+            a.mcp = self.mcp
+        else:
+            threading.Thread(target=self._start_mcp, daemon=True).start()
+        a.save()
+        write_meta(self.id, routed=hid, handoff=hid)
+        self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
+                   "handoff": {"harness": hid, "reason": why}})
+
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
@@ -524,6 +624,7 @@ class Session:
                     return
         except Exception:  # noqa: BLE001
             pass
+        caps = self._capability_turn(text)
         self.state = "working"
         self._stop_req = False
         if hasattr(self.agent, "plan"):
@@ -553,6 +654,9 @@ class Session:
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "status", "text": f"Could not record a checkpoint: {e}"})
                 body = self._body(text, images)
+                if caps:                                # a file the agent can make: say so, with the tools for it
+                    from meshpool_harness import capabilities as CAP
+                    body += CAP.note(caps, self.harness)
                 from meshpool_harness import pace as PACE
                 quick = (not self.plan and not self.scheduled and not self.goal
                          and PACE.classify(text, bool(images)) == "quick")

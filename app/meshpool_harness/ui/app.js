@@ -700,7 +700,12 @@ function harnessPop(anchor) {
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
     if (harness(id).ready === false) { openSettings(harness(id).login ? "harnesses" : "general"); return; }
-    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("An agent can’t change mid-chat, so this started a new chat with " + harness(id).name + "."); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
+    if (S.cur) {                                   // the chat continues on the new agent, with what was said so far
+      if (id === S.cur.view.harness.id) return;
+      try { const v = await post(`/api/agent/${S.cur.id}/harness`, {harness: id, since: 1e9}); S.cur.view.harness = v.harness || harness(id); }
+      catch (e) { return toast(e.message); }
+      renderBar(); return;
+    }
     S.draft.harness = id; renderBar(); renderHero();
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
