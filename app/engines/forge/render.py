@@ -682,7 +682,8 @@ def _header(ctx, s, sl, n, title_w=None):
         ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
         if not one(sub_t, ssz):                       # two lines would run up into the title: keep the head of the
             head = None                               # label (the unit): at a colon or dash first, then a comma
-            for pat in (r"\s*(?::|;|\s[–—-]\s)", r"\s*(?:,|\s\()"):
+            for pat in (r"\.\s", r"\s*(?::|;|\s[–—-]\s)", r"\s*(?:(?<!\d),|,(?!\d)|\s\()"):   # sentence first;
+                # never inside a number ($7,500)
                 for c in reversed([m.start() for m in re.finditer(pat, sub_t)]):
                     h_ = sub_t[:c].rstrip(" ,;:")
                     if h_.count("(") == h_.count(")") and one(h_, 14):
