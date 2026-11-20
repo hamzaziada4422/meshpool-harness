@@ -1178,7 +1178,7 @@ def _compose_one(parts, lay, look, top, bottom):
         if len(slots) > 1 and slack > 0.01:                # what is left: a larger, equal rhythm between the parts
             gap = GAP + min(slack / (len(slots) - 1), RHYTHM_MAX - GAP)
         left = H - (sum(hs.values()) + gap * (len(slots) - 1))
-        if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout":
+        if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout" and len(cols) > 1:
             hs[slots[-1]] += left                          # a column ending in a callout runs it to the foot, level
                                                            # with the column beside it
         y = top

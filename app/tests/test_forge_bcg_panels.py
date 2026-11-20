@@ -133,3 +133,33 @@ def test_a_steep_fall_reads_as_times_lower_and_period_charts_keep_their_cagr():
 
 def test_a_from_to_slide_counts_as_an_exhibit():
     assert "shift" in B.EXHIBIT_PARTS and "evidence" in B.EXHIBIT_PARTS
+
+
+def test_a_plan_never_schedules_work_in_the_past():
+    import datetime
+    s = {"archetype": "closing", "title": "Approve the pilot", "steps": [
+        {"action": "Select depots", "detail": "Pick the two depots by end of January 2026", "timing": "Q1 2026"},
+        {"action": "Launch", "detail": "Vans on the road", "timing": "Q2 2027"}]}
+    out = B.date_checks([s], datetime.date(2026, 11, 20))
+    assert any("Q1 2026" in m for m in out[1]) and any("January 2026" in m for m in out[1])
+    assert not any("2027" in m for m in out[1])
+    assert B.date_checks([dict(s, archetype="exhibit_argument")], datetime.date(2026, 11, 20)) == {}
+
+
+def test_the_writer_is_told_today(monkeypatch):
+    monkeypatch.setenv("MH_TODAY", "2026-11-20")
+    assert "20 November 2026" in B.today_line() and "after today" in B.today_line()
+
+
+def test_repeated_bullets_are_cut_and_a_block_keeps_its_lead():
+    slides = [{"archetype": "exhibit_argument", "title": "a", "blocks": [
+                  {"text": "Electric vans save $0.21 on every mile driven at current power prices",
+                   "bullets": [{"text": "$0.21 saved on every mile driven at current power prices"}]}]},
+              {"archetype": "exhibit_argument", "title": "b", "blocks": [
+                  {"text": "Depot charging costs $1.4M per city across both pilot cities",
+                   "bullets": [{"text": "Electric vans save $0.21 on every mile driven at current power prices"},
+                               {"text": "Grid upgrades take nine months from order to power on site"}]}]}]
+    assert B.drop_repeats(slides) == 2
+    assert slides[0]["blocks"][0]["bullets"] == [] and slides[0]["blocks"][0]["text"]
+    assert [b["text"] for b in slides[1]["blocks"][0]["bullets"]] == [
+        "Grid upgrades take nine months from order to power on site"]

@@ -505,7 +505,8 @@ UNIT_HINT = re.compile(r"\(([^)]*)\)|%|\bLQ\b|thousand|million|billion|\$", re.I
 
 
 _SKIP_KEYS = {"title", "subtitle", "source", "notes", "footnotes", "prov", "title_prov", "id", "node", "archetype",
-              "section", "tags", "layout", "look", "chart", "visual", "icon", "date", "owner", "timing", "columns"}
+              "section", "tags", "layout", "look", "chart", "visual", "icon", "date", "owner", "timing", "columns",
+              "calcs", "calc", "section_icon", "table", "rows", "options"}
 
 
 def _lines(v, out: list) -> list:
@@ -523,6 +524,113 @@ def _lines(v, out: list) -> list:
     return out
 
 
+def _today():
+    import datetime as _dt
+    v = os.environ.get("MH_TODAY")                       # tests pin the date
+    return _dt.date.fromisoformat(v) if v else _dt.date.today()
+
+
+def today_line() -> str:
+    d = _today()
+    return (f"- Today is {d:%-d %B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
+            f"in a plan, roadmap or next step is after today.")
+
+
+_MONTHS = {m: i for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                       "dec"), 1)}
+_WHEN = re.compile(r"(?i)\b(?:(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?|(q[1-4])|(h[12]))\s+"
+                   r"((?:19|20)\d\d)\b")
+_PLANS = ("closing", "next_steps", "gantt", "gantt_plan")
+
+
+def date_checks(slides, today=None) -> dict[int, list[str]]:
+    """A plan never schedules work in the past: a month, quarter or half that ended before today goes back."""
+    today = today or _today()
+    now = today.year * 12 + today.month
+    out: dict[int, list[str]] = {}
+    for i, s in enumerate(slides, 1):
+        if not isinstance(s, dict):
+            continue
+        planned = s.get("archetype") in _PLANS or any(
+            isinstance(p, dict) and p.get("type") in ("timeline", "process", "gantt") for p in s.get("parts") or [])
+        if not planned:
+            continue
+        for line in _lines(s, []) + [str(x) for x in _strs(s)]:
+            for m in _WHEN.finditer(line):
+                y = int(m.group(4))
+                end = (y * 12 + _MONTHS[m.group(1).lower()[:3]] if m.group(1) else
+                       y * 12 + 3 * int(m.group(2)[1]) if m.group(2) else y * 12 + 6 * int(m.group(3)[1]))
+                if end < now:
+                    out.setdefault(i, []).append(f"\"{m.group(0)}\" is in the past (today is {today:%B %Y}): "
+                                                 "every date in the plan comes after today")
+    for k in out:
+        out[k] = list(dict.fromkeys(out[k]))
+    return out
+
+
+def _strs(v):
+    if isinstance(v, str):
+        yield v
+    elif isinstance(v, dict):
+        for x in v.values():
+            yield from _strs(x)
+    elif isinstance(v, list):
+        for x in v:
+            yield from _strs(x)
+
+
+def drop_repeats(slides) -> int:
+    """The writer's last word on repetition: a bullet that repeats an earlier slide, or a line already on its own
+    slide, is removed when its list keeps another item (leads, titles and table cells are never touched). Returns
+    the number removed."""
+    from engines.forge.render import repeats
+    seen: list[str] = []
+    dropped = 0
+
+    def plain(x):
+        return (x.get("text") if isinstance(x, dict) else x) if isinstance(x, (str, dict)) else None
+
+    def walk(v, mine):
+        nonlocal dropped
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k in _SKIP_KEYS:
+                    continue
+                if k == "bullets" and isinstance(x, list):
+                    keep = []
+                    for b in x:
+                        tx = plain(b)
+                        long_ = isinstance(tx, str) and len(tx.replace("**", "").split()) >= 6
+                        if long_ and any(repeats(tx, o, 0.8) for o in seen + mine):
+                            continue
+                        keep.append(b)
+                        if long_:
+                            mine.append(tx)
+                    if not keep and x and not (v.get("text") or v.get("lead")):   # a list that carries the block
+                        keep = [x[0]]                                               # keeps its first item
+                    dropped += len(x) - len(keep)
+                    v[k] = keep
+                else:
+                    walk(x, mine)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, mine)
+        elif isinstance(v, str) and len(v.replace("**", "").split()) >= 6:
+            mine.append(v)
+
+    for s in slides:
+        if not isinstance(s, dict) or s.get("archetype") in ("cover", "section_divider", "agenda", "end") \
+                or s.get("fixed"):
+            continue
+        mine: list[str] = []
+        if s.get("archetype") != "executive_summary":
+            walk(s, mine)
+        else:
+            mine = _lines(s, [])
+        seen += mine if s.get("archetype") != "executive_summary" else []
+    return dropped
+
+
 def repeat_checks(slides) -> dict[int, list[str]]:
     """A point made once is not made again: a line on a slide that repeats a line of an earlier slide goes back to
     the writer (the executive summary sums up the deck by design, so it is neither checked nor checked against)."""
@@ -534,8 +642,9 @@ def repeat_checks(slides) -> dict[int, list[str]]:
                                                              "executive_summary") or s.get("fixed"):
             continue
         mine = _lines(s, [])
+        sums_up = s.get("archetype") == "closing"           # the plan restates the decisions it acts on
         for j, line in enumerate(mine):
-            hit = next((k for k, prev in seen if repeats(line, prev, 0.8)), None)
+            hit = None if sums_up else next((k for k, prev in seen if repeats(line, prev, 0.8)), None)
             if hit:
                 out.setdefault(i, []).append(f"\"{line.replace('**', '')[:80]}\" repeats slide {hit}: make "
                                              "a new point with evidence the deck has not used, or drop it")
@@ -1547,7 +1656,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     from engines.forge.playbooks import playbook_for   # every writer prompt of this build (storyline, slides,
     from engines.review import memory as _MEM          # and the partner's and MD's masterclass, every model
     CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "") + \
-        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "")
+        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "") + "\n" + today_line()
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()
@@ -1817,6 +1926,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
         for n, msgs in repeat_checks(slides).items():
             fails.setdefault(n, []).extend(f"[repeat] {m}" for m in msgs)
+        for n, msgs in date_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[date] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for n, msgs in arith_checks(slides).items():
@@ -1937,6 +2048,13 @@ choice or the number of items; never layout. Keep node and keep the point of the
         fails = collect(r, res)
         rounds.append({"round": f"best={best[1]}", "rules": res["rules"],
                        "content_failures": sum(len(v) for v in fails.values())})
+    if any("[repeat]" in m for v in fails.values() for m in v):
+        cut = drop_repeats(slides)                           # what the writer left repeated is cut, not shipped
+        if cut:
+            r, res = draw()
+            fails = collect(r, res)
+            rounds.append({"round": f"dedupe={cut}", "rules": res["rules"],
+                           "content_failures": sum(len(v) for v in fails.values())})
 
     # the review panel: the senior partner and the MD read the rendered pages; every issue goes to the step that can
     # fix it (content and data -> the writer, layout -> a re-layout or an archetype instruction, storyline -> a re-plan
