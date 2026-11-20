@@ -541,10 +541,22 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
             dates, dh, ln, band = _tl_band(ms, cw, z)    # sits at the top of the box (the composition gave the box
             if band <= h or z == 0:                      # its height from the band: no white above and below it)
                 break
-        h = min(h, band + 0.04)
+        cards = h - band > 0.9 and card is None           # room under the band: each milestone gets a card that runs
+        if not cards:                                      # to the foot of its box (no white block under a roadmap)
+            if card is not None and h - band > 0.6:        # inside a card: the band sits in the card's middle
+                y += (h - band) / 2
+            h = min(h, band + 0.04)
         ly = y + dh + 0.16 + dot / 2
         R._rule(sl, x, ly, w, TC.TEXT_2, 1.5, f"ov_TimelineAxis{i}")
         lh = max(0.2, y + h - (ly + dot / 2 + 0.12))
+        tl_cards = {}
+        if cards:                                          # each card as tall as the longest label needs, plus air: a
+            lh = min(lh, ln + 0.5)                         # thin roadmap stays thin and is flagged (P20) for detail
+            for j in range(len(ms)):
+                cx = x + sp * (j + 0.5)
+                tl_cards[j] = _shape(sl, MSO_SHAPE.RECTANGLE, cx - cw / 2, ly + dot / 2 + 0.12, cw, lh,
+                                     f"ov_TLCard{i}_{j + 1}", fill=TC.ACCENT_1 if hl == j else TC.BACKGROUND_2)
+            cw, lh = cw - 0.24, lh - 0.24                  # the label is written into its card
         for j, m in enumerate(ms):
             cx = x + sp * (j + 0.5)
             on = hl == j
@@ -554,6 +566,11 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
             if dates[j][0]["text"]:
                 R._write(R._box(sl, cx - cw / 2, y, cw, dh, f"ov_TLDate{i}_{j + 1}", MSO_ANCHOR.BOTTOM), dates[j])
             lb = _fit_trim(lab(j, z), cw, lh, s, f"milestone {j + 1} of part {i}", ctx, n)
+            if cards:
+                if on:
+                    lb = [dict(b_, color=TC.BACKGROUND_1) for b_ in lb]
+                R._shape_text(tl_cards[j], lb, ctx, n, (cx - cw / 2, ly + dot / 2 + 0.24, cw, lh), MSO_ANCHOR.TOP)
+                continue
             R._write(R._box(sl, cx - cw / 2, ly + dot / 2 + 0.12, cw, lh, f"ov_TLLabel{i}_{j + 1}"), lb, ctx, n)
         return
     # vertical: axis down the left, each milestone's date and label to its right
@@ -681,7 +698,7 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
         R._write(R._box(sl, x + lw + c_ * cw + 0.04, y, cw - 0.08, hh, f"ov_HvHead{i}_{c_ + 1}", MSO_ANCHOR.BOTTOM), b)
     R._rule(sl, x, y + hh + 0.04, w, TC.TEXT_1, 0.75, f"HvRule{i}")
     body_y = y + hh + 0.08
-    rh = min(1.0, (y + h - body_y) / max(1, len(rows)))
+    rh = min(1.3, (y + h - body_y) / max(1, len(rows)))
     keep = rows
     while keep and rh < 0.3:
         _note(s, f"part {i}: Harvey-ball row left out: {_txt(keep[-1].get('label'))}")
@@ -694,6 +711,8 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     d = min(0.34, rh * 0.62, cw * 0.6)
     for r_, r in enumerate(keep):
         ry = body_y + r_ * rh
+        if rh > 0.75 and r_ % 2 == 0 and card is None:    # tall rows: alternate light bands keep the eye on the row
+            _shape(sl, MSO_SHAPE.RECTANGLE, x, ry, w, rh, f"ov_HvBand{i}_{r_ + 1}", fill=TC.BACKGROUND_2)
         lb = [{"text": _txt(r.get("label")), "size": R.bump(12), "numbers": False, "bold": bool(r.get("highlight"))}]
         lb = _fit_trim(lb, lw - 0.1, rh - 0.04, s, f"row {r_ + 1} of part {i}", ctx, n)
         R._write(R._box(sl, x, ry, lw - 0.1, rh, f"ov_HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
@@ -852,7 +871,8 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         cw = iw / max(1, len(ms)) - 0.12
         band = lambda z: _tl_band(ms, cw, z)[3] * 1.08 + 0.04   # noqa: E731  the renderer sets labels looser
         top = band(TL_STEPS[0])
-        return oh + min(MIN_H[t], top), oh + min(top, band(TL_STEPS[1])), oh + top
+        return oh + min(MIN_H[t], top), oh + min(top, band(TL_STEPS[1])), 99.0   # with room, cards under the
+                                                                                    # milestones take the height
     if t in FLEX:
         return oh + MIN_H[t], oh + MIN_H[t] + 0.8, 99.0
     if t == "stats":
@@ -880,7 +900,7 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
     if t == "harvey":
         k = len(part.get("rows") or [])
         nat = 0.5 + 0.5 * k
-        return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 0.8 * k
+        return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 1.3 * k     # rows spread (banded) to fill the column
     if t == "quote":
         bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18 + bump, "italic": True}]
         if part.get("attribution"):
@@ -962,15 +982,17 @@ def _compose_one(parts, lay, look, top, bottom):
             out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
             y += hs[j] + gap
         empty += max(0.0, H - (y - gap - top)) * w
-    # side-by-side single cards of nearly one height share it (aligned feet); a much shorter card keeps its own
+    # side-by-side single parts share one height: their tops and feet align (a callout or a text column that stops
+    # short of the exhibit beside it leaves a block of white; house style: blocks share the top and bottom edge)
     xs = {}
     for o in out:
         xs[o[1][0]] = xs.get(o[1][0], 0) + 1
-    row = [o for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1 and o[2].get("type") not in FLEX]
-    if len(row) >= 2:
-        tallest = max(o[1][3] for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1)
+    singles = [o for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1]
+    row = [o for o in singles if o[2].get("type") not in FLEX]
+    if len(singles) >= 2 and row:
+        tallest = max(o[1][3] for o in singles)
         for k_, (j, (x, y, w, h), p) in enumerate(out):
-            if (j, (x, y, w, h), p) in row and h >= 0.8 * tallest:
+            if (j, (x, y, w, h), p) in row:
                 out[k_] = (j, (x, y, w, tallest), p)
     return out, over_all, empty / (H * (R.RIGHT - R.LEFT))
 

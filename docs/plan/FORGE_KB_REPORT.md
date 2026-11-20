@@ -28,6 +28,9 @@
   card per point with an icon chosen by its meaning (numbered badges when not every point has one) and a short
   header the writer gives it; four short points make a 2x2 of icon boxes. Text that would not fit as cards stays a
   text column, so nothing is cut.
+- **House style.** The rules of two consulting deck skills are built in (`docs/deck-engine/house-style.md`): in
+  the writer's prompt, in the renderer (aligned feet, rows that use the body, full-width tables with the so-what
+  under them) and in the validator (P20 `unaligned_feet`).
 - **Storyline.** The brief's slide count is kept (a two-page memo is two slides), and "no cover" means no cover.
 - **Reference-guided review**, behind a flag and off.
 - **Engine fixes** found by looking:
@@ -38,8 +41,8 @@
 ## Measured gains and costs
 
 Renderer-only A/B on frozen content (`docs/results/2026-11-20-forge-kb.md`):
-- Dev failures went from 92 to 75.
-- Test failures went from 45 to 38.
+- Dev failures went from 92 to 59.
+- Test failures went from 45 to 26.
 
 Live builds on the Meshpool gateway (DeepSeek V4.1 Flash) of six short briefs found five engine defects, fixed with
 tests. After the fixes, a two-slide investor memo passes every rule and the other reruns end with P13 or P14 only:

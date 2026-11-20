@@ -7,6 +7,7 @@ quality doesn't depend on which model writes the content.
 | Document | What it holds |
 |---|---|
 | [design-grammar.md](design-grammar.md) | the design system every deck gets, and what keeps it from breaking |
+| [house-style.md](house-style.md) | the consulting rules every deck follows (storyline, titles, visuals, spacing) and where each is enforced |
 | [engine-spec.md](engine-spec.md) | slide JSON schema, archetype library, renderer contract, workbook block schema, all rules (P0–P20, X0–X14) |
 | [kb.md](kb.md) | the private slide knowledge base: what it is, how to fetch it, what degrades without it, ingest, licensing |
 | [reference-measurements.md](reference-measurements.md) | 130 published decks measured: title, words, empty space, margins, type sizes, colours |

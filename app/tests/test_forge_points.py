@@ -90,7 +90,7 @@ def test_points_off_draws_the_text_column(tmp_path):
 def test_one_block_with_bullets_makes_an_intro_and_points():
     intro, items = R.point_items([{"text": "Three things changed", "bullets": ["Price", {"text": "Mix", "prov": ["F1"]},
                                                                               "Scale"]}])
-    assert intro == "Three things changed" and [i["lead"] for i in items] == ["Price", "Mix", "Scale"]
+    assert intro["text"] == "Three things changed" and [i["lead"] for i in items] == ["Price", "Mix", "Scale"]
     assert items[1]["prov"] == ["F1"]
     intro, items = R.point_items([{"label": "A", "text": "x", "bullets": ["y"]}, {"text": "z"}])
     assert intro == "" and items[0]["label"] == "A" and items[0]["bullets"][0]["text"] == "y"

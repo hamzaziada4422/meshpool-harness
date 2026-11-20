@@ -36,7 +36,7 @@ renderer applies a strict consulting design; you only fill fields.
   stack_main; "look": editorial | boxed | minimal | bold; "parts": one per region, each {"type", "heading", ...}:
   chart {"chart": as above}; table {"table": as above}; stats {"items": [{"value": "34%", "label", "delta"}]};
   text {"lead", "bullets"}; callout {"text" or "bullets"}; process {"steps": [{"title", "text"}]};
-  timeline {"milestones": [{"date", "label"}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
+  timeline {"milestones": [{"date", "label", "text": 1-2 lines on what happens or is decided then}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
   harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"}.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
 - executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
@@ -155,7 +155,18 @@ CONSULTING = """House style (always, whatever the brief says about look):
   return = EPS / share price; idle cash earns the Treasury yield), and any score in a grid follows from numbers shown
   on the page, never asserted. One recommendation, the same amount on every slide.
 - Fact, calc and option ids (F7, S2O1) go in prov only, never in the words the reader sees.
-- Never invent a number. Missing evidence is [GAP: what], shown as N/A."""
+- Never invent a number. Missing evidence is [GAP: what], shown as N/A.
+- Titles: 15 words or fewer, two lines at most, no full stop; the number in the title when the point is a number;
+  an active verb that carries the point (falls, drives, pays back, doubles); not the same title pattern twice.
+- The most important number is a big number with a short label, never buried in a sentence.
+- Inside a block: a bold label, then the detail in regular weight; 25 words or fewer per block; bold only the one or
+  two words that matter.
+- Parallel items (drivers, pillars, options, risks) are 3-4 equal cards; steps in order are a numbered process; a
+  plan is a roadmap whose every milestone says what happens; results are big numbers.
+- One exhibit across the page with its so-what under it is the norm. Put an argument beside the exhibit only when it
+  has 3-4 points of its own; give each point a 2-4 word header. Blocks side by side share their top and bottom
+  edges: never a column that stops short of the one beside it.
+- The last slide is the decision and the next steps, each with an owner and a date."""
 CONSULTING_BASE = CONSULTING
 
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
@@ -187,7 +198,8 @@ drivers with evidence -> "icon rows" (challenge_matrix); a chart and its argumen
 visual on two slides in a row; at most two chart-plus-side-panel slides (bar_takeaway, column_trend, line_trend,
 waterfall_bridge, table_focus, benchmark) in a row; in 8 or more slides use at least 5 different visuals; when the
 brief asks a question or a decision, one slide weighs the options against criteria; when it ends on action, the
-plan is a roadmap or process (or the closing steps), not bullets."""
+plan is a roadmap or process (or the closing steps), not bullets. The storyline: situation, complication, then the
+answer on slide 2; 2-4 sections, each one claim its slides prove, most important first."""
 
 
 TEXT_LED = {"challenge_matrix", "text_matrix", "argument_only", "table_focus"}
@@ -518,6 +530,12 @@ def _present_checks(s, a) -> list[str]:
         if parts and not any(p.get("type") in EXHIBIT_PARTS + ("quote",) for p in parts) and len(parts) < 3:
             msgs.append("a presented slide needs one exhibit: show the point as a chart, 2-4 big numbers (stats), a "
                         "process, a timeline or a 2x2, with at most one short text part beside it")
+        tls = [p for p in parts if p.get("type") == "timeline"]
+        if tls and len(parts) <= 2 and any(not (m or {}).get("text") for t_ in tls
+                                           for m in (t_.get("milestones") or t_.get("items") or [])
+                                           if isinstance(m, dict)):
+            msgs.append("the roadmap is thin: give every milestone a 'text' (1-2 lines: what happens, what is decided, "
+                        "the measure of success) so the plan fills the slide")
     elif a == "challenge_matrix":
         if any(not (c or {}).get("lead") for r in s.get("rows") or [] if isinstance(r, dict)
                for c in r.get("cells") or [] if isinstance(c, dict)):

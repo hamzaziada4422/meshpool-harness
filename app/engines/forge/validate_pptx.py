@@ -755,6 +755,12 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                                   "the chart does not plot moves to a footnote or to a slide without a chart, or is "
                                   "dropped.", slide=n, measured=len(mismatch), limit=0))
 
+        # ---------------- P20 aligned feet: blocks side by side share their top and bottom edges (house style).
+        # A panel that stops short of the table or chart beside it leaves a block of white under it.
+        un = _unaligned_feet(s, n)
+        if un:
+            failures.append(un)
+
         # ---------------- P17 editability
         if s["max_group_depth"] > R["editability"]["max_group_depth"]:
             failures.append(F("P17", "group_depth", f"Slide {n}: groups nested {s['max_group_depth']} levels deep; "
@@ -952,6 +958,45 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     rules_status = summarize(failures, RULES)
     return {"file": str(path), "sha256": m["sha256"], "rules": rules_status, "failures": failures, "stats": stats,
             "evidence": m["evidence"], "measurement": public(m)}
+
+
+def _unaligned_feet(s: dict, n: int):
+    """The first pair of side-by-side blocks (tables, charts, filled panels and cards of real size) that start
+    together but whose feet differ by more than 0.45in, with nothing under the shorter one: a P20 failure, or None."""
+    blocks = []
+    for sh in s["shapes"]:
+        if sh.get("depth") or sh.get("x") is None or not sh.get("w") or not sh.get("h"):
+            continue
+        big = sh["kind"] == "graphicFrame" or (sh.get("filled") and sh["w"] * sh["h"] >= 1.5)
+        if big and sh["h"] >= 1.0 and sh["h"] < 6.0 and sh["w"] < 11.0 and sh["y"] > 1.2:
+            blocks.append(sh)
+    tol = 0.05
+    inside = lambda a, b: (a is not b and b["x"] - tol <= a["x"] and a["x"] + a["w"] <= b["x"] + b["w"] + tol  # noqa
+                           and b["y"] - tol <= a["y"] and a["y"] + a["h"] <= b["y"] + b["h"] + tol)
+    blocks = [a for a in blocks if not any(inside(a, b) for b in blocks)]
+    others = [sh for sh in s["shapes"] if not sh.get("depth") and sh.get("x") is not None and sh.get("h")
+              and sh.get("role") not in ("footer", "line", "title") and ((sh.get("text") or "").strip() or sh.get("filled")
+                                                                        or sh["kind"] == "graphicFrame")]
+    for i, a in enumerate(blocks):
+        for b in blocks[i + 1:]:
+            if not (a["x"] + a["w"] <= b["x"] + tol or b["x"] + b["w"] <= a["x"] + tol):
+                continue                                   # not side by side
+            if abs(a["y"] - b["y"]) > 0.6:                 # a heading tab may sit over one of them
+                continue                                   # not started together
+            lo, hi = (a, b) if a["y"] + a["h"] < b["y"] + b["h"] else (b, a)
+            diff = (hi["y"] + hi["h"]) - (lo["y"] + lo["h"])
+            if diff <= 0.45:
+                continue
+            below = [o for o in others if o is not lo and o["y"] >= lo["y"] + lo["h"] - tol
+                     and o["x"] < lo["x"] + lo["w"] - tol and o["x"] + o["w"] > lo["x"] + tol
+                     and o["y"] < hi["y"] + hi["h"] - 0.2 and o["y"] + o["h"] >= hi["y"] + hi["h"] - 0.45]
+            if below:
+                continue                                   # the shorter column goes on with another part
+            return F("P20", "unaligned_feet", f"Slide {n}: '{lo['name']}' ends {diff:.1f}in above '{hi['name']}' "
+                     "beside it. Blocks side by side share their top and bottom edges: give the shorter one the "
+                     "height (more substance, or its points as cards), or put it under the exhibit.", slide=n,
+                     shape=lo["name"], measured=round(diff, 2), limit=0.45, fix_scope="renderer")
+    return None
 
 
 def _looks_divider(s: dict) -> bool:

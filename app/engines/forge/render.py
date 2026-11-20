@@ -2317,18 +2317,21 @@ def a_closing(ctx, s, sl, n):
         s["notes"] = (s.get("notes", "") + "\nMilestones not shown: " + " | ".join(cut)).strip()
     if sum(need) > bottom - top:
         ctx.miss(n, "the next steps", int((sum(need) - (bottom - top)) * 30))
-    gap = min(0.35, max(0.0, (bottom - top - sum(need)) / max(1, len(steps))))  # thin steps stay flagged (P20)
-    y = top
+    gap = max(0.0, (bottom - top - sum(need)) / max(1, len(steps)))   # the rows share the body: no block of white
+    y = top                                                           # under the last step
     for i, ((a, d, wh), h) in enumerate(zip(laid, need)):
         rh = h + gap
-        _write(_box(sl, nx, y, 0.5, 0.5, f"role_numeral_{i + 1}"),
+        if i % 2 == 0 and gap > 0.15:                                 # alternate rows on a light band
+            _fill(sl, LEFT, y, RIGHT - LEFT, rh - 0.02, TC.BACKGROUND_2, f"ov_RowBand{i + 1}")
+        mid = MSO_ANCHOR.MIDDLE if gap > 0.15 else MSO_ANCHOR.TOP       # a tall row centres its content
+        _write(_box(sl, nx, y + 0.04, 0.5, rh - 0.1, f"role_numeral_{i + 1}", mid),
                [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
                  "color": TC.ACCENT_1}])
-        _write(_box(sl, ax, y + 0.04, aw, rh - 0.1, f"Action{i + 1}"), a, ctx, n)
+        _write(_box(sl, ax, y + 0.04, aw, rh - 0.1, f"Action{i + 1}", mid), a, ctx, n)
         if d:
-            _write(_box(sl, dx, y + 0.04, dw, rh - 0.1, f"Detail{i + 1}"), d, ctx, n)
+            _write(_box(sl, dx, y + 0.04, dw, rh - 0.1, f"Detail{i + 1}", mid), d, ctx, n)
         if wh:
-            _write(_box(sl, wx, y + 0.04, ww, rh - 0.1, f"When{i + 1}"), wh, ctx, n)
+            _write(_box(sl, wx, y + 0.04, ww, rh - 0.1, f"When{i + 1}", mid), wh, ctx, n)
         y += rh
         if i < len(steps) - 1:
             _rule(sl, ax, y - 0.02, RIGHT - ax, TC.ACCENT_5, 0.5, f"StepRule{i + 1}")
@@ -2393,21 +2396,25 @@ def a_challenge_matrix(ctx, s, sl, n):
     if keep < len(rows):
         ctx.carry = dict(s, rows=rows[keep:], title=_cont_title(s["title"]), number_from=s.get("number_from", 1) + keep,
                          _cont=True)
-    gap = min(0.3 if DENSITY["mode"] == "read" else 0.42,                    # never airy rows
-              max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep)))
+    gap = max(0.0, (avail - sum(x[2] for x in laid[:keep])) / max(1, keep))   # the rows share the body
     y = top
     first = s.get("number_from", 1)
     for i, (r, (ba, bb, need)) in enumerate(zip(rows[:keep], laid[:keep])):
         rh = need + gap
-        _write(_box(sl, lx, y + 0.0, 0.42, 0.5, f"role_numeral_{i + 1}"),
+        if i % 2 == 0 and gap > 0.15:                                 # alternate rows on a light band
+            _fill(sl, LEFT, y, RIGHT - LEFT, rh, TC.BACKGROUND_2, f"ov_RowBand{i + 1}")
+        mid = gap > 0.15                                      # a tall row centres its content
+        lab_h = min(rh - 0.1, _need([{"text": r.get("label", ""), "size": size, "bold": True}], lw - 0.85) + 0.06)
+        top_ = y + ((rh - max(lab_h, 0.5)) / 2 if mid else 0.0)
+        _write(_box(sl, lx, top_, 0.42, 0.5, f"role_numeral_{i + 1}"),
                [{"text": str(first + i), "size": DENSE["num"], "bold": True, "heading": True, "numbers": False}])
         if r.get("icon"):
-            _icon(sl, r["icon"], lx + 0.36, y + 0.03, 0.36, re.sub(r"\*\*", "", r.get("label", "")))
-        lab_h = min(rh - 0.1, _need([{"text": r.get("label", ""), "size": size, "bold": True}], lw - 0.85) + 0.06)
-        _write(_box(sl, lx + 0.85, y + 0.04, lw - 0.85, lab_h, f"Label{i + 1}"),
+            _icon(sl, r["icon"], lx + 0.36, top_ + 0.03, 0.36, re.sub(r"\*\*", "", r.get("label", "")))
+        _write(_box(sl, lx + 0.85, top_ + 0.04, lw - 0.85, lab_h, f"Label{i + 1}"),
                [{"text": r.get("label", ""), "size": size, "numbers": False}])
-        _write(_box(sl, ax, y + 0.06, aw, rh - 0.1, f"A{i + 1}"), ba, ctx, n)
-        _write(_box(sl, bx, y + 0.06, bw, rh - 0.1, f"B{i + 1}"), bb, ctx, n)
+        anc = MSO_ANCHOR.MIDDLE if mid else MSO_ANCHOR.TOP
+        _write(_box(sl, ax, y + 0.06, aw, rh - 0.1, f"A{i + 1}", anc), ba, ctx, n)
+        _write(_box(sl, bx, y + 0.06, bw, rh - 0.1, f"B{i + 1}", anc), bb, ctx, n)
         y += rh
         if i < keep - 1:
             _rule(sl, lx + 0.85, y, RIGHT - lx - 0.85, TC.ACCENT_5, 0.5, f"RowRule{i + 1}")
@@ -2503,7 +2510,7 @@ def point_items(blocks) -> tuple[str, list[dict]]:
     blocks = [norm(b) for b in blocks or [] if b]
     blocks = [b for b in blocks if (b.get("text") or "").strip() or b.get("bullets")]
     if len(blocks) == 1 and len(blocks[0].get("bullets") or []) >= 2:
-        return blocks[0].get("text") or "", [{"lead": norm(x)["text"], "bullets": [], "prov": norm(x).get("prov"),
+        return blocks[0], [{"lead": norm(x)["text"], "bullets": [], "prov": norm(x).get("prov"),
                                               "label": norm(x).get("label") or ""} for x in blocks[0]["bullets"]]
     out = []
     for b in blocks:
@@ -2536,7 +2543,7 @@ def _point_marker(ctx, sl, n, j, icon, x, y, d, meaning):
                      "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n, (x, y, d, d), MSO_ANCHOR.MIDDLE)
 
 
-def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False) -> float:
+def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False, fill=True) -> float:
     """An argument column drawn as designed points, not a bullet list: 2-4 cards, each with an icon chosen by its
     meaning (numbered badges when not every point has one), a bold lead and its detail. Four short points make a 2x2
     of boxes; otherwise the cards stack and share the height. A one-block column's text is the intro line above them.
@@ -2550,8 +2557,12 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
     if not all(icons) or len(items) > MAX_ICONS:
         icons = [None] * len(items)
     ib, ih = [], 0.0
+    if isinstance(intro, dict):                                # the intro line keeps its sources (P13)
+        intro, intro_prov = intro.get("text") or "", intro.get("prov")
+    else:
+        intro_prov = None
     if intro:
-        ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": True, "numbers": False}]
+        ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": True, "numbers": False, "prov": intro_prov}]
         ih = _need(ib, w) + 0.1
     room = h - ih
     d = POINT_MARK
@@ -2587,23 +2598,24 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
         cw, chh = (w - POINT_GAP) / 2, (room - POINT_GAP) / 2
         for j, it in enumerate(items):
             cx, cy = x + (j % 2) * (cw + POINT_GAP), y0 + (j // 2) * (chh + POINT_GAP)
-            _fill(sl, cx, cy, cw, chh, card, f"ov_PointCard{j + 1}")
+            box = _fill(sl, cx, cy, cw, chh, card, f"ov_PointCard{j + 1}")
+            ty = cy + POINT_PAD + d + 0.1                      # the text is written into the card itself (P17)
+            _shape_text(box, _point_blocks(it, ls, ds), ctx, n,
+                        (cx + POINT_PAD, ty, cw - 2 * POINT_PAD, cy + chh - POINT_PAD - ty), MSO_ANCHOR.TOP)
             _point_marker(ctx, sl, n, j, icons[j], cx + POINT_PAD, cy + POINT_PAD, d, plain(it["lead"])[:60])
-            ty = cy + POINT_PAD + d + 0.1
-            _write(_box(sl, cx + POINT_PAD, ty, cw - 2 * POINT_PAD, cy + chh - POINT_PAD - ty, f"ov_PointText{j + 1}"),
-                   _point_blocks(it, ls, ds), ctx, n)
         return ih + room
     hs = plan[3]
     spare = room - sum(hs) - POINT_GAP * (len(items) - 1)
-    grow = min(spare / len(items), 0.6)                        # cards share the height, up to 0.6in more each
+    grow = spare / len(items) if fill else min(spare / len(items), 0.6)   # the cards share the column's height:
+                                                                          # the column ends where its neighbour does
     cy = y0
     for j, (it, hh) in enumerate(zip(items, hs)):
         hh += grow
-        _fill(sl, x, cy, w, hh, card, f"ov_PointCard{j + 1}")
+        box = _fill(sl, x, cy, w, hh, card, f"ov_PointCard{j + 1}")
+        tx = x + POINT_PAD + d + 0.12                          # the text is written into the card itself (P17)
+        _shape_text(box, _point_blocks(it, ls, ds), ctx, n, (tx, cy + 0.08, x + w - POINT_PAD - tx, hh - 0.16),
+                    MSO_ANCHOR.MIDDLE)
         _point_marker(ctx, sl, n, j, icons[j], x + POINT_PAD, cy + (hh - d) / 2, d, plain(it["lead"])[:60])
-        tx = x + POINT_PAD + d + 0.12
-        _write(_box(sl, tx, cy + 0.08, x + w - POINT_PAD - tx, hh - 0.16, f"ov_PointText{j + 1}", MSO_ANCHOR.MIDDLE),
-               _point_blocks(it, ls, ds), ctx, n)
         cy += hh + POINT_GAP
     return cy - POINT_GAP - y
 
@@ -2788,7 +2800,8 @@ def a_table_focus(ctx, s, sl, n):
     if as_chart and DENSITY["mode"] == "present" and len(as_chart["series"]) > 1:
         as_chart = None                                    # presenting: one measure per chart, else the table
     side = None
-    if bullets and not as_chart and len(t.get("columns") or []) <= 4 and natural < 0.72 * (bottom - y):
+    if bullets and not as_chart and SPLIT_TABLES["on"] and len(t.get("columns") or []) <= 4 \
+            and natural < 0.72 * (bottom - y):
         side = _table(ctx, sl, n, dict(t), tx, y, tw, hgt, dry=True)   # measured at the width it will be drawn
         ctx.carry_rows = None
         if side == float("inf"):
@@ -2828,12 +2841,12 @@ def a_table_focus(ctx, s, sl, n):
               for b in bullets]
         # the panel aligns to the exhibit's height (taller when its text needs it); when the exhibit is short of the
         # body, the panel's text steps up the scale and runs on down the body, so the page does not end high
-        need = _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True, grow=False)
-        ph = max(eh, min(hgt, need))
-        if eh < (1 - THIN) * hgt:
-            ph = max(ph, _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True))
-        _panel(ctx, s, sl, n, ax, y, aw, ph, [], lead + bl, shrink=True)
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
+        pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]
+        if POINTS["on"] and draw_points(ctx, s, sl, n, ax, y, aw, eh, pts, card=TC.BACKGROUND_2):
+            return                                         # the points end where the exhibit ends
+        need = _panel(ctx, s, sl, n, ax, y, aw, hgt, [], lead + bl, dry=True, grow=False)
+        _panel(ctx, s, sl, n, ax, y, aw, max(eh, min(hgt, need)), [], lead + bl)   # never shorter than the exhibit
         return
     # Full width (wide or long table): the table at its natural size, then the so-what panel down to the bottom of
     # the body with the takeaway and bullets, grown to fill it. No dead block under a short table.
@@ -2916,6 +2929,10 @@ def a_chart_takeaway(ctx, s, sl, n):
         x, w = span(0, split - 1)
         bx, bw = span(split, 11)
         _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
+        pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]
+        if POINTS["on"] and 2 <= len(bullets) <= 4 and \
+                draw_points(ctx, s, sl, n, bx, BODY_Y, bw, body_h, pts, card=TC.BACKGROUND_2):
+            return                                          # the takeaway, then a card per point, down to the foot
         for b in blocks_:                                   # the panel grows the text itself, from the base sizes
             b["size"] = T["head"] if b.get("bold") and not b.get("bullet") else T["body"]
         _panel(ctx, s, sl, n, bx, BODY_Y, bw, body_h, [], blocks_)
@@ -3447,6 +3464,7 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
 
 
 FRAME = {"band": False}         # the deck's content-slide frame (template.FRAMES): "band" = dark title band
+SPLIT_TABLES = {"on": False}  # a short table beside its argument; off: the table runs full width, its so-what under it
 POINTS = {"on": True}      # argument columns as designed points (icon cards); off: the text column as before
 PICTURES = {"allow": False}     # zero images (rules pptx.images.allow_pictures): raster logos are left out
 

@@ -66,3 +66,8 @@ Choices made where the plan left room, with the reason. Newest last.
     text, a header (`label`, 2-4 words, asked of the writer for exhibit_argument), and four one-line points as a 2x2.
     Cards are overlays (`ov_PointCard`) inside the panel; their text is checked like any text (fit, provenance).
     When the points do not fit at 10 pt the column stays text. `render.POINTS["on"] = False` turns it off.
+24. **No gaps, splits are the exception (user request, 2026-11-20).** A short table no longer sits beside a shorter
+    panel: it runs full width with its so-what under it (`render.SPLIT_TABLES` off). Next steps and risk rows share
+    the body on alternate light bands; grid parts side by side share one height; a side column of points ends at
+    the exhibit's foot. Where the content is too thin to fill a slide (a roadmap of one-line milestones) the
+    renderer does not pad: P20 flags it and the writer is asked for the detail.
