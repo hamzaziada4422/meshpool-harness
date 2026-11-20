@@ -375,4 +375,44 @@ fastest. The file also lists a `mode_bonus`: in code mode, Meshpool Code +2 and 
 
 ## PowerPoint in chat: before and after the 0.0.8 fix (20 Nov 2026)
 
-RESULTS PENDING
+What was run: `testkit/deck_matrix.py`. Each harness got a new chat, in Chat ("cowork") and in Code, whose first message
+was "Make a 3-slide PowerPoint about the history of coffee and save it in this folder." Auto was also tested with a
+deck request as the second message and with three other phrasings. The model was DeepSeek V4.1 Flash in auto mode,
+with 3 chats at a time and 6 minutes per message (a deck turn still running got 5 more minutes, then was stopped).
+A run passes when a .pptx is in the chat's folder and opens with python-pptx. Before: the pre-fix code (f8c5ac3).
+After: the 0.0.8 branch (599b316). One run per cell.
+
+| Harness | Chat: before | Chat: after | Code: before | Code: after |
+|---|---|---|---|---|
+| Meshpool Work | deck (278 s) | deck (turn 349 s) | deck, late (537 s) | deck (turn 447 s) |
+| Meshpool Code | deck only by working around the missing tool (found the app source, called it from the shell) | deck (make_deck 5 times), turn did not end | **refused** ("office tools ... are not available in this session") | deck, but the first message ran before the office tools had started; fixed in 2559090, re-run below |
+| Pi | deck (76 s) | deck (turn 533 s) | deck (86 s) | deck (turn 435 s) |
+| Hermes | **no deck**: make_deck failed in about 2 s every time | deck (turn 239 s) | **no deck**, same | deck (turn 561 s) |
+| Auto (picked Meshpool Work) | deck | deck | deck | deck |
+| Auto, deck request as the second message | deck (58 s) | deck (turn 316 s) | | |
+| Auto, "can you create a ppt on coffee" | **no deck** (asked "what angle?" and stopped) | deck (12 slides) | | |
+| Auto, "I need slides for a talk about coffee" | deck (12 slides), turn did not end | deck (14 slides), turn did not end | | |
+| Auto, "make a deck about coffee" | deck (10 slides), turn did not end | deck (12 slides), turn did not end | | |
+
+**Decks produced: 10 of 14 before (3 of them after the 6-minute window), 14 of 14 after.** No harness refused after
+the fix. The script flagged three after-runs as refusals, but each one produced a deck; the flagged sentences were
+caveats, for example "I cannot rule out Office offering a repair prompt".
+
+What changed between the two runs:
+
+| Problem in the before run | Fix (commit) |
+|---|---|
+| "can you create a ppt" was classed as a quick question, whose hidden note says "Do not create or change files" | Requests to make an office file are never quick (95efc72) |
+| Meshpool Code had no office tools | Office server for Code chats, office tools in Codex style once a message asks for a file (95efc72) |
+| Hermes: the office server lost the proxy and CA settings in Hermes' filtered environment, so the deck engine could not reach the model | Meshpool's servers carry those settings in their own env (c0be1e9) |
+| Agents asked about the brief and stopped, or rebuilt a finished deck twice | The note with a file request: recommended defaults, at most one question, at most one rebuild (c0be1e9) |
+| Web search had no ddgs in the bundled runtime (the after run had it installed, as 0.0.8 will) | ddgs bundled (599b316) |
+| The first message of a new Code chat ran before its office tools had started | Office requests wait for them (2559090) |
+
+**Caveats.**
+- One run per cell, and 3 chats ran at once on one key, so times vary run to run. The deck engine takes about 2.5
+  minutes for 3 slides and about 5.5 minutes for 12 under that load; a rebuild doubles it.
+- The after run had working web search and the before run did not, so their times are not directly comparable.
+- Gateway spend for the after run was about $5.43, most of it the Meshpool Code (Code) run that had no office tools
+  at first (6.7M input tokens). The before run cost about $2.93.
+
