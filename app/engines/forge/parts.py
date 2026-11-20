@@ -442,7 +442,8 @@ def p_callout(ctx, sl, n, part, box, look, i, s, card):
     if not bl:
         return
     iw, ih = w - 0.5, h - 0.3
-    bl = _fit_trim(R._grow(bl, iw, ih, 6), iw, ih, s, f"the callout of part {i}", ctx, n)
+    near_table = any(isinstance(p_, dict) and p_.get("type") == "table" for p_ in (s or {}).get("parts") or [])
+    bl = _fit_trim(R._grow(bl, iw, ih, 1 if near_table else 6), iw, ih, s, f"the callout of part {i}", ctx, n)
     shp = R._fill(sl, x, y, w, h, TC.TEXT_2, f"Callout{i}")
     R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
 
@@ -1148,9 +1149,12 @@ def _compose_one(parts, lay, look, top, bottom):
         # (a callout and the figures at most two steps: a callout is already large, a figure grows 6 pt a step)
         step = lambda j, b: (min(b, 2) if parts[j].get("type") == "callout" else  # noqa: E731
                              min(b, 3) if parts[j].get("type") == "stats" else b)
+        beside_table = any(p_.get("type") == "table" for p_ in parts) and not any(
+            parts[j].get("type") == "table" for j in slots)    # words beside a table stay near its type size (a
+        cap_ = 1 if beside_table else MAX_BUMP.get(R.DENSITY["mode"], BUMPS[-1])   # 16 pt callout by a 9 pt table)
         if not any(parts[j].get("type") in FLEX and ms[j][2] > 50 for j in slots):   # an exhibit that takes any
                                                                                        # height takes the room first
-            for b in range(1, MAX_BUMP.get(R.DENSITY["mode"], BUMPS[-1]) + 1):
+            for b in range(1, cap_ + 1):
                 trial = {j: (measure(parts[j], w, look, step(j, b))
                              if parts[j].get("type") in GROWS else ms[j]) for j in slots}
                 if sum(m[1] for m in trial.values()) + gaps > H:
