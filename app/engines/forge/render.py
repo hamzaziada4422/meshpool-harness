@@ -1556,7 +1556,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
     if delta and ph > 0.5:                                # a short plot needs room in inches above the tallest
-        M = max(M, top / (1 - min(0.7, 1.0 / ph)))        # label for the arrow and its pill (a fraction of the
+        M = max(M, top / (1 - min(0.6, (1.0 if ph >= 1.8 else 0.8) / ph)))   # label for the arrow and its pill (a
         va.maximum_scale = M                              # scale was not enough on a 2 in chart)
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
@@ -1603,7 +1603,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)
         bw = _need_w(lab, T["label"] + 1, True) * 1.15 + 0.4
         between = vals[min(j0, j1): max(j0, j1) + 1]
-        if abs(j1 - j0) > 1:                              # bars in between: an elbow above all their labels (the
+        if abs(j1 - j0) > 1 and ph < 1.8:                 # a short plot has no room for an elbow: the gap sits in a
+            segs = []                                     # pill over the bar it lands on
+            mx, my = cx(j1), max(py + 0.17, yv(vals[j1]) - 0.62)
+        elif abs(j1 - j0) > 1:                            # bars in between: an elbow above all their labels (the
             ya = max(py + 0.25, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
             segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
                     ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
