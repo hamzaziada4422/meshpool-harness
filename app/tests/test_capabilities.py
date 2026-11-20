@@ -163,3 +163,22 @@ def test_switching_agent_mid_chat_keeps_the_chat(chat):
     s.state = "working"
     with pytest.raises(ValueError, match="before switching"):
         s.switch_harness("meshpool-work")
+
+
+def test_meshpools_servers_keep_proxy_and_settings_under_a_filtering_agent(monkeypatch, tmp_path):
+    """Hermes starts MCP servers with only PATH, HOME, USER, LANG, LC_ALL, TERM, SHELL, TMPDIR plus the server's own
+    env. Without the proxy and CA settings the office server could not reach the model and make_deck returned an empty
+    dossier in 2 s (found with testkit/deck_matrix.py). Each server's own env now carries them."""
+    from meshpool_harness.harnesses import acp
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.corp:3128")
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/corp-ca.pem")
+    monkeypatch.setenv("MH_MODEL", "deepseek-v4.1-flash")
+    monkeypatch.setenv("UNRELATED_TOKEN", "do-not-pass")
+    spec = acp.office_server([str(tmp_path)])
+    own = {e["name"]: e["value"] for e in spec["env"]}
+    hermes_env = {k: v for k, v in {"PATH": "/bin", "HOME": "/h", "AWS_SECRET": "x"}.items()
+                  if k in {"PATH", "HOME", "USER", "LANG", "LC_ALL", "TERM", "SHELL", "TMPDIR"}}
+    hermes_env.update(own)                                      # what Hermes' _build_safe_env hands the server
+    assert hermes_env["HTTPS_PROXY"] == "http://proxy.corp:3128" and hermes_env["SSL_CERT_FILE"] == "/etc/corp-ca.pem"
+    assert hermes_env["MH_MODEL"] == "deepseek-v4.1-flash" and "UNRELATED_TOKEN" not in hermes_env
+    assert own["MESHPOOL_PROJECT"] == str(tmp_path.resolve())    # the server's own settings win

@@ -99,7 +99,10 @@ def note(caps, harness: dict | None = None) -> str:
             + ("these files" if len(caps) > 1 else "this file")
             + f" with the Meshpool office tools ({how}). Make it, save it in the project folder, check it, and tell "
             "the user where it is. Do not answer that you cannot create it, and do not hand over only text or code "
-            "to paste instead of the file.")
+            "to paste instead of the file. Where the request leaves details open (audience, length, look), build with "
+            "the recommended defaults (make_deck: brief_ok=true) and say which you chose, instead of asking first; "
+            "ask at most one question, and only when the answer would change the whole file. After a check, fix "
+            "only real defects, and rebuild a whole file at most once.")
 
 
 def pick(caps, current: str, ranked: list[str], ready: dict) -> str | None:

@@ -118,6 +118,23 @@ def _diff_of(content) -> str:
     return "\n".join(_text_of([c]) for c in content or [] if c.get("type") == "diff")
 
 
+# What Meshpool's own servers need from this process's environment, named in each server's config because an
+# outside agent may start its servers with a filtered environment: Hermes passes only PATH, HOME, USER, LANG, LC_ALL,
+# TERM, SHELL and TMPDIR plus the server's own env. Without the proxy and CA settings the office server could not reach
+# the model, so make_deck under Hermes returned an empty dossier in 2 s and never a deck (found 20 Nov 2026 with
+# testkit/deck_matrix.py; reproduced with exactly Hermes' environment, and fixed by adding these back).
+NET_ENV = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy",
+           "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+           "PLAYWRIGHT_BROWSERS_PATH")
+
+
+def passthrough_env() -> dict:
+    """The network settings and Meshpool's own settings (MH_*, MESHPOOL_*) of this process, for a Meshpool server
+    that an outside agent starts."""
+    return {k: v for k, v in os.environ.items()
+            if v and (k in NET_ENV or k.startswith("MH_") or k.startswith("MESHPOOL_"))}
+
+
 def mcp_servers_for_acp(roots: list[str]) -> list[dict]:
     """Meshpool's enabled MCP servers in ACP's session/new format, so every harness sees the same tools."""
     from meshpool_harness.agent import mcp as M
@@ -141,6 +158,7 @@ def mcp_servers_for_acp(roots: list[str]) -> list[dict]:
             env = dict(spec.get("env") or {})
             if cmd in ("python", "python3", "py"):
                 cmd = sys.executable
+                env = {**passthrough_env(), **env}         # its own env wins over this process's settings
                 env["PYTHONPATH"] = str(C.APP)
                 env.setdefault("MESHPOOL_HOME", str(C.home()))
                 env.setdefault("MESHPOOL_CONFIG", str(C.config_path()))
@@ -161,6 +179,7 @@ def office_server(roots: list[str]) -> dict:
     env = {"PYTHONPATH": str(C.APP), "MESHPOOL_PROJECT": str(Path(roots[0]).resolve()) if roots else os.getcwd(),
            "MESHPOOL_HOME": str(C.home()), "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1",
            "PYTHONIOENCODING": "utf-8"}
+    env = {**passthrough_env(), **env}                 # proxies, CA bundles, MH_* and MESHPOOL_* settings
     for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
