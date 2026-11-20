@@ -1896,15 +1896,21 @@ def _txt(v):
     return "" if v is None else str(v)
 
 
-_META_CELL = re.compile(r"(?i)^\s*(?:not stated(?: in the (?:sources|facts|evidence))?|not (?:available|given|"
-                        r"provided|disclosed|reported)(?: in the (?:sources|facts))?|no data|unknown|tbd)\s*\.?\s*$")
+_META_CELL = re.compile(r"(?i)^\s*(?:(?:n/?a|nm)\s*[:\-–]\s*.*|.*\b(?:not stated|not (?:available|given|provided|"
+                        r"disclosed|reported|measured)(?: in the (?:sources|facts|evidence|brief))?|no data|unknown|"
+                        r"tbd)\s*\.?\s*)$")   # a cell that only reports a gap ("N/A: impact not stated") reads n/a
 
 
 def _cell(v):
     """A table cell the model wrote as {lead, bullets}: keep the detail, not just the lead. A cell that only says the
     sources are silent ("Not stated") reads n/a: commentary about the evidence belongs in the notes, not the page."""
     t = _cell_text(v)
-    return "n/a" if _META_CELL.match(t) else t
+    if not _META_CELL.match(t):
+        return t
+    head = re.sub(r"\s*[:;,]\s*[^:;,]*\b(?:not (?:stated|available|given|provided|disclosed|reported|measured)|no data|"
+                  r"unknown|tbd)\b[^:;,]*$", "", t).strip(" :;,")       # a figure then a gap note: keep the figure
+    head = re.sub(r"\s*[:;,]\s*(?:all|each|every)\s+\w+$", "", head)    # ... and no dangling "all clinics" tail
+    return head if re.search(r"\d", head) and not re.match(r"(?i)^\s*n/?a\b", head) else "n/a"
 
 
 def _cell_text(v):
@@ -2759,7 +2765,7 @@ def a_exhibit_argument(ctx, s, sl, n):
         _write(_box(sl, RIGHT - 0.9, 0.72, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
                [{"text": secno, "size": 26, "bold": True, "numbers": False, "color": TC.ACCENT_1,
                  "align": PP_ALIGN.RIGHT}])
-        rw -= 1.0
+        rw -= 1.4                                       # the right heading keeps clear of it
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": T["head"], "bold": True, "heading": True, "color": TC.ACCENT_1,
              "numbers": False, "line_spacing": 1.0}])      # the argument's heading: clearly under the slide title
