@@ -550,6 +550,29 @@ def _cont_title(t: str) -> str:
     return head.rstrip(" .…") + " (continued)"
 
 
+def _balanced(text: str, width: float, size: float) -> tuple[str, str]:
+    """(line 1, line 2) for a title that wraps to two lines with one or two words left on the second: broken where the
+    two lines are closest in width. ("text", "") when it fits one line or already wraps evenly."""
+    from .common import wrap_lines
+    f = _font("head", True)
+    words = text.split()
+    if len(words) < 4 or wrap_lines(text, width, size, f, 0.97) != 2:
+        return text, ""
+    best = None
+    for k in range(2, len(words) - 1):
+        a, b = " ".join(words[:k]), " ".join(words[k:])
+        if wrap_lines(a, width, size, f, 0.97) > 1 or wrap_lines(b, width, size, f, 0.97) > 1:
+            continue
+        d = abs(_need_w(a, size, True) - _need_w(b, size, True))
+        if best is None or d < best[0]:
+            best = (d, a, b)
+    if best is None:
+        return text, ""
+    natural_tail = len(words) - next((k for k in range(len(words), 0, -1)
+                                      if wrap_lines(" ".join(words[:k]), width, size, f, 0.97) == 1), len(words))
+    return (best[1], best[2]) if natural_tail <= 2 else (text, "")
+
+
 def _title_size(text: str, width: float, lines_max: int = 2):
     """25 pt, then 22, then 20: the largest size at which the title fits in two lines (Georgia Bold metrics)."""
     from .common import font_file, wrap_lines
@@ -627,11 +650,16 @@ def _header(ctx, s, sl, n, title_w=None):
                    [{"text": tracker, "size": 28, "bold": True, "numbers": False, "color": TC.ACCENT_3,
                      "align": PP_ALIGN.RIGHT}])
     else:
-        _rich(tf.paragraphs[0], title, tsize, TC.TEXT_1, True, numbers=False, heading=True)
+        first, second = _balanced(title, (title_w or (RIGHT - LEFT)) - 0.2, tsize)
+        _rich(tf.paragraphs[0], first + (" " if second else ""), tsize, TC.TEXT_1, True, numbers=False, heading=True)
+        if second:                                     # two balanced lines, never one word left on the second
+            tf.paragraphs[0].add_line_break()
+            _rich(tf.paragraphs[0], second, tsize, TC.TEXT_1, True, numbers=False, heading=True)
         # never an eyebrow (a small label over the title): the user's standing rule. The section shows as its
         # number in the top right corner only.
-        if secno:                                       # the section number, large, in the top right corner
-            _write(_box(sl, RIGHT - 0.9, 0.3, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.TOP),
+        if secno:                                       # the section number, large, on the title's line, right
+            ty_ = (t.top + t.height) / 914400            # the title's foot (it sits on its rule)
+            _write(_box(sl, RIGHT - 0.9, ty_ - 0.62, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
                    [{"text": secno, "size": 26, "bold": False, "numbers": False, "color": TC.ACCENT_1,
                      "align": PP_ALIGN.RIGHT, "heading": True}])
     ctx.track(n, s["title"], s.get("title_prov"))
@@ -677,6 +705,11 @@ _NOTE_MARK = re.compile(r"^\s*(?:\^?\d{1,2}[.):]?|[¹²³⁴⁵⁶⁷⁸⁹]+)\s
 _NOTE_TAIL = re.compile(r"\s*(?:\^\d{1,2}|[¹²³⁴⁵⁶⁷⁸⁹]+)\s*$")
 
 
+_META_NOTE = re.compile(r"(?i)not (?:stated|given|provided|available|disclosed|in the (?:sources|facts|evidence))|"
+                        r"(?:sources?|facts|evidence) (?:do(?:es)? not|did not|don't) (?:state|say|give|show)|"
+                        r"\bis excluded\b|not a stated fact|no (?:external )?source")
+
+
 def footnote_text(t) -> str:
     """A footnote without the marker the writer typed ("1. ", "^1 ", "¹ ") or a stray one at its end: the footer
     numbers the notes itself."""
@@ -690,6 +723,10 @@ def _notes_h(notes) -> float:
 
 def _footer(ctx, s, sl, n):
     notes = [footnote_text(t) for t in s.get("footnotes") or [] if footnote_text(t)]
+    meta = [x for x in notes if _META_NOTE.search(x)]     # notes about what the sources lack are for the presenter
+    notes = [x for x in notes if x not in meta][:2]       # at most two short notes on the page
+    if meta:
+        s["notes"] = (s.get("notes", "") + "\n[QA] Note moved off the slide: " + " | ".join(meta)).strip()
     lc = getattr(ctx, "label_col_notes", None)
     ctx.label_col_notes = None
     if notes and lc:                                  # dense matrix: footnotes in the bottom of the label column
@@ -1443,7 +1480,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
-    prov = c.get("prov")
+    prov = c.get("prov") or getattr(ctx, "slide_prov", None) or ["calc"]   # derived from the chart's sourced data
     for j in tcat:                                        # a target is a dashed outline, not a bar of fact
         f = ch.plots[0].series[0].points[j].format
         f.fill.background()
@@ -2641,7 +2678,13 @@ def a_exhibit_argument(ctx, s, sl, n):
                            "prov": b.get("prov")})
     if blocks:
         blocks[0]["space_before"] = 0
-    co = s.get("callout") or {}
+    co = dict(s.get("callout") or {})
+    said = " ".join(str(b_.get("text") if isinstance(b_, dict) else b_) for blk in s.get("blocks") or []
+                    if isinstance(blk, dict) for b_ in [blk] + list(blk.get("bullets") or []))
+    if co.get("bullets") and said:                    # a so-what that repeats the points says nothing new
+        keep_ = [b_ for b_ in co["bullets"] if not repeats(str(b_.get("text") if isinstance(b_, dict) else b_),
+                                                            said, 0.75)]
+        co["bullets"] = keep_
     cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": True,
            "color": TC.BACKGROUND_1, "numbers": False, "space_before": 5,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in co.get("bullets") or []]
@@ -2702,7 +2745,7 @@ def _point_blocks(it, lead_size, det_size):
     header), then the detail lines."""
     out = []
     if it.get("label"):
-        out.append({"text": it["label"], "size": lead_size, "bold": True, "numbers": False, "color": TC.ACCENT_1})
+        out.append({"text": it["label"], "size": lead_size, "bold": True, "numbers": False, "color": TC.TEXT_2})
     head = not it.get("label") and bool(it["bullets"])         # a lead over detail lines is the point's header
     alone = not it.get("label") and not it["bullets"]          # a one-line point reads at the lead size
     out.append({"text": it["lead"], "size": lead_size if head or alone else det_size, "bold": head, "numbers": False,
@@ -3129,13 +3172,15 @@ def a_chart_takeaway(ctx, s, sl, n):
     body_h = BODY_B - BODY_Y
     bx, bw = span(8, 11)
     long_series = len((s["chart"] or {}).get("categories") or []) >= 8
+    short = len((s["chart"] or {}).get("categories") or []) <= 5   # a few bars never take the whole slide
     # Composition variety: a chart slide straight after another side-panel chart slide takes the full width with its
     # so-what in a band underneath (when the text fits a band), so a run of chart pages never reads as one template.
     lx_, lw_ = span(0, 3)
     cw_ = (RIGHT - colx(4) - GUT * (1 if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
     halves = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
     band_fits = bool(lead) and max([_need(lead, lw_)] + [_need(c, cw_) for c in halves]) + 0.04 <= 0.4 * body_h
-    if (POINTS["on"] and 2 <= len(bullets) <= 4 and s.get("layout") != "side" and s.get("_form") != "side"
+    if (POINTS["on"] and 2 <= len(bullets) <= 4 and s.get("layout") != "side" and s.get("_form") not in
+            ("side", "mirror") and not short
             and (s.get("_form") == "band" or ctx.last_side == n - 1)):   # after a chart-and-column slide: the
         pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]   # row of cards under it,
         row_h = next((f * body_h for f in (0.26, 0.32, 0.38, 0.44)                       # only as tall as needed
@@ -3148,14 +3193,15 @@ def a_chart_takeaway(ctx, s, sl, n):
                         layout="row")
             return
     vary = ((s.get("layout") == "band" or ctx.last_side == n - 1) and band_fits and s.get("layout") != "side"
-            and s.get("_form") != "side")
+            and s.get("_form") not in ("side", "mirror") and not short)
     if not vary and (not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl)):
-        ctx.last_side = n
+        mirror = s.get("_form") == "mirror"
+        ctx.last_side = -9 if mirror else n
         # The split follows the text: a narrower column for less text (the chart gains the width), then a step up
         # the type scale; the renderer never adds gaps to fake fullness.
         import copy
         best = None
-        for split in (8, 9):
+        for split in ((6, 7) if short else (8, 9)):     # a short chart: half the slide, the argument the rest
             tx, tw = span(split, 11)
             for bump in (0, 1, 2):
                 trial = copy.deepcopy(lead + bl)
@@ -3169,9 +3215,12 @@ def a_chart_takeaway(ctx, s, sl, n):
                     break
             if best and best[0] == split and best[2] >= 0.62 * body_h:
                 break
-        split, blocks_, _ = best or (8, lead + bl, 0)
+        split, blocks_, _ = best or ((6 if short else 8), lead + bl, 0)
         x, w = span(0, split - 1)
         bx, bw = span(split, 11)
+        if mirror:                                      # the argument on the left, the chart on the right
+            bx, bw = span(0, 11 - split)
+            x, w = span(12 - split, 11)
         _chart(ctx, sl, n, s["chart"], x, BODY_Y, w, body_h)
         pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]
         if POINTS["on"] and 2 <= len(bullets) <= 4 and \
@@ -3848,12 +3897,16 @@ def _flex_rows(s: dict) -> bool:
 
 
 def _chart_kind(s: dict) -> str | None:
-    """'flex' for a chart slide that can draw its points beside the chart or under it, 'side' for one that always
-    has a column beside its exhibit (exhibit_argument), None otherwise."""
+    """'flex' for a chart slide that can draw its points beside the chart or under it, 'short' for a chart of a few
+    bars (beside its argument, on the left or mirrored), 'side' for one that always has a column beside its exhibit
+    (exhibit_argument), None otherwise."""
     if not isinstance(s, dict):
         return None
-    if s.get("archetype") == "exhibit_argument":
+    if s.get("archetype") == "exhibit_argument" or s.get("layout") == "side":   # asked for: kept
         return "side"
+    if s.get("archetype") in CHART_SIDE and isinstance(s.get("chart"), dict) and \
+            len(s["chart"].get("categories") or []) <= 5:
+        return "short"
     if s.get("archetype") in CHART_SIDE and 2 <= len(s.get("bullets") or []) <= 4:
         return "flex"
     if s.get("archetype") in ("table_focus", "table_highlight") and 2 <= len(s.get("bullets") or []) <= 4 \
@@ -3879,10 +3932,11 @@ def plan_chart_forms(slides: list) -> list:
         while j + 1 < len(out) and _chart_kind(out[j + 1]):
             j += 1
         want = None
+        options = {"side": ["side"], "flex": ["side", "band"], "short": ["side", "mirror"]}
         for k in range(j, i - 1, -1):                    # from the end of the run back: alternate around fixed pages
             kind = _chart_kind(out[k])
-            form = "side" if kind == "side" else ("band" if want == "side" else "side")
-            if kind == "flex":
+            form = next((f for f in options[kind] if f != want), options[kind][0])
+            if kind != "side":
                 out[k] = dict(out[k], _form=form)
             want = form
         i = j + 1
@@ -3973,6 +4027,10 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         sl = prs.slides.add_slide(layout(prs, "Title Slide" if arch in DIVIDERS else "Title Only"))
         sl._element.find(qn("p:cSld")).set("name", f"arch:{arch} node:{s.get('node', '')} density:{mode}"
                                            + (" computed:1" if s.get("fixed") else ""))
+        src_ = s.get("source") if isinstance(s.get("source"), dict) else {}
+        chart_ = s.get("chart") if isinstance(s.get("chart"), dict) else {}
+        ctx.slide_prov = chart_.get("prov") or s.get("title_prov") or src_.get("prov")   # what derived figures
+                                                                                          # drawn on the slide cite
         try:
             if spec:
                 if not _designed(ctx, s, sl, n, spec, mode, arch):

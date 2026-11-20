@@ -170,7 +170,7 @@ def _col_blocks(it, z, figure):
                     "space_before": 4, "prov": b.get("prov")})
     if it.get("foot"):                                    # who and when: an accent line at the foot of the column
         out.append({"text": it["foot"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bold": True, "numbers": False,
-                    "color": TC.ACCENT_1, "space_before": 8})
+                    "color": TC.TEXT_2, "space_before": 8})
     return out
 
 
@@ -252,9 +252,9 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             det = max([b_["size"] for b_ in mid_b] or [R.ARGUMENT["bullet"]])
             lead_b = [dict(bl_[0], size=min(det + 2, R.T["head"] + 2))] if bl_ else []   # the lead: one step over
                                                                                           # its detail, never under
-            if extra_pt:
-                for b_ in mid_b[1:]:
-                    b_["space_before"] = (b_.get("space_before") or 0) + extra_pt
+            if extra_pt:                                  # one even rhythm in every column (capped), so the
+                for b_ in mid_b[1:]:                      # columns use the body without ragged gaps
+                    b_["space_before"] = (b_.get("space_before") or 0) + min(extra_pt, 12)
             grid.append((lead_b, mid_b, foot_b))
         lead_h = max(R._need(g[0], w) for g, (_, w) in zip(grid, cols)) if grid else 0.0
         foot_h = max((R._need(g[2], w) for g, (_, w) in zip(grid, cols) if g[2]), default=0.0)
@@ -270,8 +270,8 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                          [{"text": cap[:60], "size": R.T["label"], "bold": True, "numbers": False,
                            "color": TC.TEXT_2}])
         elif mode == "process":
-            shp = R._fill(sl, x, y + 0.06, w + (0.12 if j < k - 1 else 0), 0.32,     # a slim step bar: the last
-                          TC.TEXT_2 if j == k - 1 else TC.ACCENT_1,                     # one dark, the rest accent
+            shp = R._fill(sl, x, y + 0.06, w + (0.12 if j < k - 1 else 0), 0.32,     # a slim step bar, one
+                          TC.ACCENT_1,                                                  # colour for every step
                           f"ov_Step{j + 1}", MSO_SHAPE.PENTAGON if j == 0 else MSO_SHAPE.CHEVRON)
             shp.adjustments[0] = 0.3
             R._shape_text(shp, [{"text": f"{j + 1}", "size": R.T["label"], "bold": True, "numbers": False,

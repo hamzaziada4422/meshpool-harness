@@ -129,7 +129,7 @@ def test_runs_of_chart_slides_alternate_and_rows_are_used_once():
             {"archetype": "table_focus", "title": "t", "table": {"columns": ["a", "b"], "rows": [["x", "y"]] * 3}},
             {"archetype": "closing", "title": "Approve now", "steps": steps}]
     forms = [s.get("_form") for s in R.plan_forms(deck)]
-    assert forms[:3] == ["side", "band", "side"]                 # no two chart slides in a row share a composition
+    assert forms[:3] == ["side", "mirror", "side"]               # short charts: chart left, then right, then left
     assert forms[3] == "columns" and forms[5] == "columns"      # rows next to a table: icon columns, a process
     alone = [risk, _chart_slide("4"), dict(risk, title="Two more risks")]
     assert [s.get("_form") for s in R.plan_forms(alone)][::2] == [None, "columns"]   # banded rows once per deck

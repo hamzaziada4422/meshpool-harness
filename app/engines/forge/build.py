@@ -173,7 +173,12 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - The last slide is the decision and the next steps, each with an owner and a date.
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
   a table is N/A; what a number rests on goes in one short footnote or in the notes.
-- At most four big numbers on a slide, one of them the hero; the rest support it."""
+- At most four big numbers on a slide, one of them the hero; the rest support it.
+- Concise is not thin. Every slide carries enough evidence to stand on its own: a chart plots every comparable value
+  the facts hold (every year, every peer, every segment), never two or three lonely bars; a short chart sits beside
+  3-4 points that add what it cannot show (the driver, the comparison, the implication, each with its number). A
+  slide to present has one clear message and a chart that carries it (highlight, target, the change); a slide to
+  send ahead carries the whole argument on the page, densely."""
 CONSULTING_BASE = CONSULTING
 
 OPENERS = ("cover", "section_divider", "end")            # title pages: only where the storyline plans them
@@ -530,6 +535,11 @@ def _present_checks(s, a) -> list[str]:
     if a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
         if not (s.get("takeaway") or {}).get("text") and not s.get("bullets"):
             msgs.append("give the chart a takeaway: one bold line (<= 12 words) that says what it shows")
+        cats_ = (s.get("chart") or {}).get("categories") or [] if isinstance(s.get("chart"), dict) else []
+        if 0 < len(cats_) <= 3:
+            msgs.append(f"the chart has only {len(cats_)} bars: plot every comparable value the facts give (all "
+                        "years, peers or segments), or show the point as a grid with a second chart or big numbers "
+                        "beside it; a few bars alone do not fill a slide")
     elif a in ("table_focus", "table_highlight"):
         if not (s.get("takeaway") or {}).get("text"):
             msgs.append("give the table a takeaway: one bold line (<= 12 words) that says what it shows")
