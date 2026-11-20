@@ -1659,6 +1659,15 @@ def _drop_na_columns(t: dict) -> dict:
     """A column most of whose cells say nothing (N/A, not stated) is dropped: a grid of N/A reads as machine filler
     (BCG never shows one). The first column and a column the highlighted row fills stay."""
     cols, rows = t.get("columns") or [], [r for r in t.get("rows") or [] if isinstance(r, list)]
+    hl0 = set(t.get("highlight_rows") or [])
+    empty = [i for i, r in enumerate(rows) if len(r) > 1 and i not in hl0
+             and all(_NA_CELL.match(str(c)) for c in r[1:])]
+    if empty and len(rows) - len(empty) >= 2:              # a row of nothing but N/A says nothing: it goes
+        keep_r = [i for i in range(len(rows)) if i not in empty]
+        t = dict(t, rows=[rows[i] for i in keep_r],
+                 highlight_rows=[keep_r.index(i) for i in hl0 if i in keep_r],
+                 italic_rows=[keep_r.index(i) for i in t.get("italic_rows") or [] if i in keep_r])
+        rows = t["rows"]
     if len(cols) < 3 or len(rows) < 2 or t.get("groups") or t.get("col_widths"):
         return t
     hl = set(t.get("highlight_rows") or [])
@@ -1903,7 +1912,7 @@ def _txt(v):
     return "" if v is None else str(v)
 
 
-_META_CELL = re.compile(r"(?i)^\s*(?:(?:n/?a|nm)\s*[:\-–]\s*.*|.*\b(?:not stated|not (?:available|given|provided|"
+_META_CELL = re.compile(r"(?i)^\s*(?:(?:n/?a|nm)\s*[:\-–,(]\s*.*|.*\b(?:not stated|not (?:available|given|provided|"
                         r"disclosed|reported|measured)(?: in the (?:sources|facts|evidence|brief))?|no data|unknown|"
                         r"tbd)\s*\.?\s*)$")   # a cell that only reports a gap ("N/A: impact not stated") reads n/a
 
@@ -2764,18 +2773,16 @@ def a_exhibit_argument(ctx, s, sl, n):
     split = colx24(13) + 0.05
     panel = _fill(sl, split, TITLE_RULE_Y + 0.02, 13.333 - split, FOOT_RULE_Y - 0.08 - TITLE_RULE_Y,   # under the
                   TC.BACKGROUND_2, "ov_ArgumentPanel")                                              # white top
-    _header(ctx, s, sl, n, title_w=lw)
-    rx, rw = span24(14, 23)
+    _header(ctx, s, sl, n)                              # the standard frame: a full-width title, its rule and the
+    rx, rw = span24(14, 23)                             # section number, like every content slide
     tr = s.get("title_right", "")
-    secno = s["_section"].split(" | ")[0] if (not FRAME["band"] and s.get("_section")) else ""
-    if secno:                                           # the section number in its place on every content slide
-        _write(_box(sl, RIGHT - 0.9, 0.72, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
-               [{"text": secno, "size": 26, "bold": True, "numbers": False, "color": TC.ACCENT_1,
-                 "align": PP_ALIGN.RIGHT}])
-        rw -= 1.4                                       # the right heading keeps clear of it
-    _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
-           [{"text": tr, "size": T["head"], "bold": True, "heading": True, "color": TC.ACCENT_1,
-             "numbers": False, "line_spacing": 1.0}])      # the argument's heading: clearly under the slide title
+    pt_y = BODY_Y + 0.08                                # where the argument starts in the panel
+    if tr:                                              # the panel's heading inside the panel, level with the
+        hb_ = [{"text": tr, "size": ARGUMENT["exhibit"], "bold": True, "heading": True, "color": TC.ACCENT_1,
+                "numbers": False, "line_spacing": 1.0}]   # exhibit's heading opposite (BCG: one baseline per row)
+        hh_ = _need(hb_, rw) + 0.08
+        _write(_box(sl, rx, BODY_Y - 0.05, rw, hh_, "role_subtitle_Right"), hb_)
+        pt_y = BODY_Y - 0.05 + hh_ + 0.1
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
@@ -2824,8 +2831,8 @@ def a_exhibit_argument(ctx, s, sl, n):
         _cut_note(s, cut_)
     ch = (_need(cb, rw - 0.3) + 0.28) if cb else 0
     cy = BODY_B - foot - ch
-    space = cy - BODY_Y - 0.12
-    fits_points = bool(draw_points(ctx, s, sl, n, rx, BODY_Y + 0.08, rw, cy - 0.15 - (BODY_Y + 0.08),
+    space = cy - pt_y - 0.04
+    fits_points = bool(draw_points(ctx, s, sl, n, rx, pt_y, rw, cy - 0.15 - (pt_y),
                                    s.get("blocks"), dry=True))
     blocks, ok = _fit(blocks, rw - 0.1, space, 10)
     if not ok:
@@ -2843,8 +2850,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     if not ok:
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
     if not (POINTS["on"] and fits_points and
-            draw_points(ctx, s, sl, n, rx, BODY_Y + 0.08, rw, cy - 0.15 - (BODY_Y + 0.08), s.get("blocks"))):
-        _shape_text(panel, blocks, ctx, n, (rx, BODY_Y + 0.08, rw, space - 0.13))   # the argument lives in the panel
+            draw_points(ctx, s, sl, n, rx, pt_y, rw, cy - 0.15 - (pt_y), s.get("blocks"))):
+        _shape_text(panel, blocks, ctx, n, (rx, pt_y, rw, space - 0.13))   # the argument lives in the panel
     if cb:
         aw_ = max(0.35, rx - split + 0.03)               # the arrow lives in the gutter: never over the chart's labels
         arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
@@ -3444,9 +3451,12 @@ def a_executive_summary(ctx, s, sl, n):
             vb = [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
                    "color": TC.ACCENT_1}]
             ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
-            _write(_box(sl, mx, my + 0.12, mw - 0.1, 0.62, f"role_numeral_Metric{i + 1}"), vb)
-            _write(_box(sl, mx, my + 0.74, mw - 0.1, max(0.3, mh - 0.86), f"MetricLabel{i + 1}"),
-                   [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}])
+            lb_ = [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}]
+            lh_ = _need(lb_, mw - 0.1) + 0.06
+            off = max(0.12, (mh - 0.62 - lh_) / 2)        # the figure and its label centred in their share of the
+            _write(_box(sl, mx, my + off, mw - 0.1, 0.62, f"role_numeral_Metric{i + 1}"), vb)   # panel: no blank
+            _write(_box(sl, mx, my + off + 0.62, mw - 0.1, max(0.3, min(lh_, mh - off - 0.66)),  # foot under each
+                        f"MetricLabel{i + 1}"), lb_)
             if i < len(mets) - 1:
                 _rule(sl, mx, my + mh, mw - 0.1, TC.ACCENT_5, 0.5, f"MetricRule{i + 1}")
     size = T["body"] + 2
