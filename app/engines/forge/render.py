@@ -1528,6 +1528,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if any(desc):                                         # what each category is, in a line or three under its name
         dz = max(9, T["label"] - 2)
         dh = max(_need([{"text": d_, "size": dz}], w / k - 0.12) for d_ in desc if d_) + 0.06
+        cat_extra = max(_need([{"text": str(cv), "size": T["label"]}], w / k - 0.1) for cv in cats) - \
+            _need([{"text": "A", "size": T["label"]}], 1.0)
+        dh += max(0.0, cat_extra) + 0.04                 # a category name that wraps never runs into its descriptor
         dh = min(dh, h * 0.28)
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
@@ -1571,9 +1574,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         lab = lab or _delta_label(vals[j0], vals[j1], unit, dec)
         bwid = band / (1 + (c.get("_gap") if c.get("_gap") is not None else 0.6)) / 2   # half a bar
         lo, hi = (j0, j1) if vals[j1] >= vals[j0] else (j1, j0)
-        a_ = (cx(j0), yv(vals[j0]) - 0.34)                # from above the first bar's label ...
-        side = -1 if j1 > j0 else 1                       # ... to the near top corner of the other bar, clear of its
-        b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)  # label
+        side = -1 if j1 > j0 else 1                       # corner to corner: from the first bar's far top corner to
+        a_ = (cx(j0) - side * bwid, yv(vals[j0]) - 0.06)  # the other bar's near one, clear of both value labels
+        b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
                                      Inches(b_[1]))
         ln.name = "ov_DeltaArrow"
@@ -1582,7 +1585,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         end = ln.line._get_or_add_ln()
         end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         bw = _need_w(lab, T["label"] + 1, True) * 1.15 + 0.4
-        mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+        mx = (a_[0] + b_[0]) / 2                          # the pill rides above both bars' value labels, never on
+        my = yv(max(vals[j0], vals[j1])) - 0.55           # them (labels sit ~0.3 in over each bar)
         if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
             my = min(my, yv(target)) - 0.32                      # label: it rides above them
         box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.OVAL)
@@ -1597,7 +1601,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         dz = max(9, T["label"] - 2)
         for j, d_ in enumerate(desc):
             if d_:
-                _write(_box(sl, px + band * j + 0.04, y + h - dh, band - 0.08, dh, f"ov_CatNote{j + 1}"),
+                _write(_box(sl, px + band * j + 0.04, y + h - dh, band - 0.08, dh, f"ov_CatNote{j + 1}",
+                            MSO_ANCHOR.BOTTOM),
                        [{"text": d_, "size": dz, "numbers": False, "color": TC.TEXT_2, "align": PP_ALIGN.CENTER}],
                        ctx, n)
     if target is not None:
