@@ -227,12 +227,28 @@ def parse_svg(svg: str) -> dict:
     """{"box": (x, y, w, h), "paths": [{"subs", "fill", "stroke", "width", "cap", "join"}]} with the transforms
     applied. "fill"/"stroke" are booleans: what the drawing paints (currentColor or any colour counts, none does not)."""
     root = etree.fromstring(re.sub(r"<\?xml[^>]*>", "", svg).strip().encode())
+    classes: dict[str, dict] = {}                      # simple CSS: .cls-1{fill:#1434cb;stroke:none}
+    for st_el in root.iter(SVG_NS + "style"):
+        for sel, body in re.findall(r"([^{}]+)\{([^}]*)\}", st_el.text or ""):
+            decl = {k.strip(): v.strip() for k, v in (d.split(":", 1) for d in body.split(";") if ":" in d)}
+            for c in re.findall(r"\.([\w-]+)", sel):
+                classes.setdefault(c, {}).update(decl)
+    grads: dict[str, str] = {}                          # gradient id -> its first stop colour (no gradients: P9)
+    for g in root.iter(SVG_NS + "linearGradient", SVG_NS + "radialGradient"):
+        stop = g.find(SVG_NS + "stop")
+        if stop is not None:
+            col = stop.get("stop-color") or dict(d.split(":", 1) for d in (stop.get("style") or "").split(";")
+                                                 if ":" in d).get("stop-color")
+            if col:
+                grads[g.get("id")] = col.strip()
     vb = [float(x) for x in _NUM.findall(root.get("viewBox") or "")] or [0, 0, _f(root, "width", 24),
                                                                          _f(root, "height", 24)]
     out = []
 
     def style(el, inh):
         st = dict(inh)
+        for c in (el.get("class") or "").split():
+            st.update(classes.get(c, {}))
         for k in ("fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "fill-rule", "opacity"):
             if el.get(k) is not None:
                 st[k] = el.get(k)
@@ -272,9 +288,13 @@ def parse_svg(svg: str) -> dict:
             sc = math.sqrt(abs(m[0] * m[3] - m[1] * m[2])) or 1.0
             fill, stroke = st.get("fill", "black"), st.get("stroke", "none")
             if float(st.get("opacity", 1) or 1) > 0:
+                def colour(v):
+                    m = re.match(r"url\(#([^)]+)\)", v or "")
+                    return grads.get(m.group(1), "#000000") if m else v
                 out.append({"subs": [[tr(s) for s in sub] for sub in subs],
                             "fill": fill not in ("none", "transparent"),
                             "stroke": stroke not in ("none", "transparent"),
+                            "fill_val": colour(fill), "stroke_val": colour(stroke),
                             "width": float(_NUM.match(str(st.get("stroke-width", "1"))).group()) * sc,
                             "cap": st.get("stroke-linecap", "butt"), "join": st.get("stroke-linejoin", "miter")})
         for ch in el:
@@ -381,3 +401,99 @@ def add_svg(sl, svg: str, x: float, y: float, w: float, h: float, name: str, the
 
 def emu_in(v) -> float:
     return Emu(v).inches
+
+
+# ------------------------------------------------------------------ logos in their own colours
+_NAMED = {"black": "000000", "white": "FFFFFF", "red": "FF0000", "green": "008000", "blue": "0000FF",
+          "yellow": "FFFF00", "orange": "FFA500", "gray": "808080", "grey": "808080", "currentcolor": "000000"}
+
+
+def hex_colour(v) -> str | None:
+    """'#1434cb', '#fff', 'rgb(20,52,203)', 'black' -> '1434CB' (None for none/transparent/unknown)."""
+    v = (v or "").strip().lower()
+    if v in ("", "none", "transparent"):
+        return None
+    if v in _NAMED:
+        return _NAMED[v]
+    m = re.fullmatch(r"#([0-9a-f]{3}|[0-9a-f]{6})", v)
+    if m:
+        h = m.group(1)
+        return (h if len(h) == 6 else "".join(c * 2 for c in h)).upper()
+    m = re.match(r"rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", v)
+    if m:
+        return "".join(f"{min(255, int(x)):02X}" for x in m.groups())
+    return None
+
+
+def _geometry(shp, paths, box, W, H):
+    """Write the paths into the shape as custom geometry (the shape's own fill and line are set by the caller)."""
+    sp = shp._element
+    spPr = sp.find(qn("p:spPr"))
+    prst = spPr.find(qn("a:prstGeom"))
+    geom = etree.SubElement(spPr, qn("a:custGeom"))
+    prst.addprevious(geom)
+    spPr.remove(prst)
+    for t in ("avLst", "gdLst", "ahLst", "cxnLst"):
+        etree.SubElement(geom, qn(f"a:{t}"))
+    etree.SubElement(geom, qn("a:rect"), l="l", t="t", r="r", b="b")
+    lst = etree.SubElement(geom, qn("a:pathLst"))
+    for p in paths:
+        pa = etree.SubElement(lst, qn("a:path"), w=str(W), h=str(H))
+        if not p["fill"]:
+            pa.set("fill", "none")
+        if not p["stroke"]:
+            pa.set("stroke", "0")
+        for sub in p["subs"]:
+            for seg in sub:
+                tag = {"M": "a:moveTo", "L": "a:lnTo", "C": "a:cubicBezTo"}.get(seg[0])
+                if tag is None:
+                    etree.SubElement(pa, qn("a:close"))
+                    continue
+                m = etree.SubElement(pa, qn(tag))
+                for q in seg[1:]:
+                    etree.SubElement(m, qn("a:pt"), dict(zip(("x", "y"), map(str, _pt(q, box, W, H)))))
+
+
+def add_svg_colors(sl, svg: str, x: float, y: float, w: float, h: float, name: str, alt: str):
+    """A logo in its own colours: one native shape per colour, grouped (one level, P17), each the size of the whole
+    drawing so the parts line up; colours written as they are (srgbClr) and the group tagged alt "logo:<company>",
+    which P6 counts apart. Gradients use their first colour (P9). None when nothing is drawable."""
+    from pptx.dml.color import RGBColor
+    d = parse_svg(svg)
+    paths = [p for p in d["paths"] if p["fill"] or p["stroke"]]
+    if not paths:
+        return None
+    box = tight_box(d)
+    W, H = UNITS, UNITS
+    if box[2] != box[3]:
+        W, H = (UNITS, int(UNITS * box[3] / box[2])) if box[2] > box[3] else (int(UNITS * box[2] / box[3]), UNITS)
+    groups: dict[tuple, list] = {}
+    for p in paths:
+        key = (hex_colour(p["fill_val"]) if p["fill"] else None,
+               hex_colour(p["stroke_val"]) if p["stroke"] else None, round(p["width"], 2) if p["stroke"] else 0)
+        if key[0] is None and key[1] is None:
+            key = ("000000", None, 0)
+        groups.setdefault(key, []).append(p)
+    grp = sl.shapes.add_group_shape()
+    grp.name = name
+    grp._element.find(qn("p:nvGrpSpPr")).find(qn("p:cNvPr")).set("descr", alt)
+    size_in = max(w, h) * max(W, H) / UNITS
+    for k, ((fill, line, width), ps) in enumerate(groups.items()):
+        shp = grp.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+        shp.name = f"{name}_{k + 1}"
+        shp._element.find(qn("p:nvSpPr")).find(qn("p:cNvPr")).set("descr", alt)
+        for el in list(shp._element):
+            if el.tag == qn("p:style"):
+                shp._element.remove(el)
+        _geometry(shp, ps, box, W, H)
+        if fill:
+            shp.fill.solid()
+            shp.fill.fore_color.rgb = RGBColor.from_string(fill)
+        else:
+            shp.fill.background()
+        if line:
+            shp.line.color.rgb = RGBColor.from_string(line)
+            shp.line.width = Pt(max(0.5, width / max(box[2], box[3]) * size_in * 72))
+        else:
+            shp.line.fill.background()
+    return grp

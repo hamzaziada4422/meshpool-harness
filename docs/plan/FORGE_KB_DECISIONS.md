@@ -51,3 +51,13 @@ Choices made where the plan left room, with the reason. Newest last.
     Whether other users get them depends on licences (asked).
 19. **One pull request for steps B to G and the new look.** The changes interlock in render.py and parts.py; splitting
     them after the fact would leave intermediate states untested. The PR lists each change with its tests.
+20. **Logos keep their colours (user request, 2026-11-20).** A logo is fetched, never drawn by hand: the full-colour
+    logo from gilbarbara/logos (CC0-1.0) first, else the Simple Icons mark (CC0-1.0, pinned 13.21.0) filled with the
+    brand hex from Simple Icons' data. Each colour becomes one native shape in a group marked `logo:<company>`; P6
+    skips those shapes. With no network or no mark the company's name is shown. Tests set `MH_FETCH_LOGOS=0`.
+21. **Built-in layouts are abstract and gated.** `data/layouts.json` keeps preset names, boxes in 1/200 units, theme
+    roles and slot descriptions only. A layout is offered to the model only when it passes P1, P5, P7, P8, P17 and P20
+    with filled slots and no cut text (`testkit/forge_layout_gate.py`, 39 of 91). A deck that names a held-back layout
+    still renders it.
+22. **The brief's count and bookends win over the model's plan.** The narrative floor is 1 slide, not 3, and a cover
+    the model plans is dropped when the brief says there is none. A silent brief keeps the default cover.

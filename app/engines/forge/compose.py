@@ -207,6 +207,14 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             break
     z, need = best
     body_h = min(avail - mark_h, need)
+    # what the largest type still leaves goes into an even rhythm between the lines of each column, capped (BCG
+    # benchmark: two short columns ended halfway down the body); never into the words
+    extra_pt = 0.0
+    lines_ = max(len(_col_blocks(it, z, f)) for it, f in zip(items, figs))
+    left = (avail - mark_h) - need
+    if left > 0.4 and lines_ > 1:
+        extra_pt = min(left * 0.85 / (lines_ - 1), 0.32) * 72
+        body_h = min(avail - mark_h, need + extra_pt / 72 * (lines_ - 1) + 0.05)
     for j, (it, (x, w)) in enumerate(zip(items, cols)):
         if mode == "figures":
             val, cap = figs[j]
@@ -234,7 +242,11 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
                           (x, y + 0.03, d, d), MSO_ANCHOR.MIDDLE)
         R._rule(sl, x, y + mark_h - 0.1, w, TC.TEXT_1, 0.75, f"ov_ColumnRule{j + 1}")
-        bl, dropped = R._trim_to_fit(_col_blocks(it, z, figs[j]), w, body_h + 0.02, 11)
+        blocks = _col_blocks(it, z, figs[j])
+        if extra_pt:
+            for b in blocks[1:]:
+                b["space_before"] = (b.get("space_before") or 0) + extra_pt
+        bl, dropped = R._trim_to_fit(blocks, w, body_h + 0.02, 11)
         R._cut_note(s, dropped)
         R._write(R._box(sl, x, y + mark_h, w, body_h + 0.05, f"Column{j + 1}"), bl, ctx, n)
     return mark_h + body_h

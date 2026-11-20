@@ -111,3 +111,21 @@ def test_compact_arc_flags():
     assert a == b
     c = V.parse_path("M0 0a1 1 0 1 0.5.5")[0]
     assert _close(c[-1][3], (0.5, 0.5))
+
+
+def test_logo_keeps_its_colours_and_p6_counts_it_apart(tmp_path):
+    from engines.forge.measure_pptx import measure
+    from engines.forge.validate_pptx import load_rules, validate
+    prs, sl = _slide()
+    svg = ('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20"><defs><style>.a{fill:#eb001b}</style>'
+           '<linearGradient id="g"><stop offset="0" stop-color="#F79E1B"/></linearGradient></defs>'
+           '<circle class="a" cx="10" cy="10" r="10"/><circle fill="url(#g)" cx="30" cy="10" r="10"/></svg>')
+    g = V.add_svg_colors(sl, svg, 1, 1, 2, 1, "ov_Logo", "logo:Mastercard")
+    xml = g._element.xml
+    assert 'val="EB001B"' in xml and 'val="F79E1B"' in xml and "gradFill" not in xml and len(g.shapes) == 2
+    out = tmp_path / "l.pptx"
+    prs.save(out)
+    rules = load_rules()
+    assert measure(str(out), rules)["slides"][0]["srgb_colors"] == 0
+    assert validate(str(out), rules, render=False)["rules"]["P6"] == "pass"
+    assert V.hex_colour("rgb(20, 52, 203)") == "1434CB" and V.hex_colour("#fff") == "FFFFFF"

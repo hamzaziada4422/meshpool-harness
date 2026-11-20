@@ -12,14 +12,19 @@
 - **Seven style packs**, clustered from the reference decks, with `--style` and Settings > Company.
 - **Band frame.** An optional BCG-style look: dark title band, two-tone titles, tracker number, phrases in the accent colour.
 - **Zero images.**
-  - Icons and SVG logos are native vector shapes in theme colours.
-  - P9 fails any picture.
-  - Raster logos are left out unless a deck allows pictures.
+  - Icons are native vector shapes in theme colours.
+  - Company logos are fetched from the internet (full-colour CC0 logos, else the Simple Icons mark in the brand's
+    colour) and drawn as native shape groups in their own colours; P6 does not count them.
+  - P9 fails any picture. Raster logos are left out unless a deck allows pictures.
 - **Layout vault.**
   - Public notes for Forge's 22 layouts are in the repo.
   - Private notes for 321 usable library layouts sit in the knowledge base, written by 8 Haiku agents.
   - The `slide_layouts` tool searches both, and the deck skills use it.
 - **Library components (local only).** A golden library slide is rebuilt as native, editable shapes in the deck's theme, with the writer's text in its slots, and checked by every rule.
+- **Built-in layouts.** 91 layouts ship as abstract specs (geometry and slot roles, no template text, colours,
+  fonts or names). 39 of them render clean and are offered to the storyline, which picks one per slide; the writer
+  fills its slots.
+- **Storyline.** The brief's slide count is kept (a two-page memo is two slides), and "no cover" means no cover.
 - **Reference-guided review**, behind a flag and off.
 - **Engine fixes** found by looking:
   - the minimal look's off-grid parts;
@@ -29,8 +34,13 @@
 ## Measured gains and costs
 
 Renderer-only A/B on frozen content (`docs/results/2026-11-20-forge-kb.md`):
-- Dev failures went from 92 to 80.
-- Test failures went from 45 to 41.
+- Dev failures went from 92 to 78.
+- Test failures went from 45 to 40.
+
+Live builds on the Meshpool gateway (DeepSeek V4.1 Flash) of six short briefs found five engine defects, fixed with
+tests. After the fixes, a two-slide investor memo passes every rule and the other reruns end with P13 or P14 only:
+numbers the model quotes beside a chart that does not plot them, or derives without a fact. Model spend is not
+readable from the session key.
 
 Every deck opens cleanly and has no overflow, no placeholders and no pictures. No change added a model call.
 
@@ -43,16 +53,15 @@ Every deck opens cleanly and has no overflow, no placeholders and no pictures. N
 
 ## Remaining weaknesses
 
-- Live builds, repair rounds, tokens and dollars, and the polish score are unmeasured: both model keys are blocked (`FORGE_KB_BLOCKERS.md`).
+- Number discipline in live builds: P13 and P14 survive four repair rounds on the flash model.
+- 52 of the 91 built-in layouts are held back (mostly P20 on wide layouts).
+- Dollars per deck and the polish score are unmeasured: the gateway does not expose spend to the key.
 - Thin timelines and words-only grids leave empty space. That is content the repair loop must fill, plus one renderer gap (item 7 of the worst slides).
 - Library items whose text sits in group children cannot have those slots filled.
-- Card padding trips P7.
 
 ## Next three improvements
 
-1. With a model key: run the 12 briefs live on the baseline and on this branch, and run the D A/B.
-2. A storyline-first planner. Pick a framework (situation, complication, resolution; issue tree; options), storyboard titles by slide count and depth, and choose each slide's layout from the vault before writing.
-3. Fill the remaining gaps:
-   - the argument layout fills to the foot;
-   - P7 accepts content inside a card's padding;
-   - slot labels for group children.
+1. Run the 12 briefs live on the baseline and on this branch, and the D A/B, with a key whose spend is readable.
+2. Move numbers the chart does not plot into footnotes in the renderer (P14), instead of asking the writer.
+3. Raise the offered layouts past 39: lay out wide layouts with the argument below them, and label group children
+   in library items.

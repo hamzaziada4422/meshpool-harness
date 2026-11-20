@@ -79,7 +79,8 @@ renderer applies a strict consulting design; you only fill fields.
 - Sensitivity grids and other value grids: table_focus with "table": {..., "heat_grid": {"center": base value,
   "base": [row, col]}} shades every cell by its distance from the base case.
 - Diagrams (each also a grid part type of the same name, so it can fill a region beside a chart or text). Every one
-  takes "subtitle" (what is shown), "takeaway" {"text"} and 2-3 "bullets" for the side column, and "source":
+  takes "subtitle" (what is shown), "takeaway" {"text"} and 3 "bullets" (12-18 words each, with numbers) for the
+  side column, and "source":
   risk_matrix: "items": [{"label", "x": likelihood 1-3 or low/medium/high, "y": impact 1-3, "prov"}] (<= 12; x_axis,
   y_axis optional). matrix_3x3: the same with your own "x_axis"/"y_axis" ("Ease, low -> high") and optional "cells"
   (3 rows of 3 zone names, top row first). gantt: "periods" ["Q1 26", ...] and "rows" [{"label", "start", "end"
@@ -95,6 +96,10 @@ renderer applies a strict consulting design; you only fill fields.
   who reports to whom -> org_chart; a loop that feeds itself -> cycle; one centre with dependents -> hub_spoke; a
   hierarchy of needs or layers -> pyramid; drop-off between stages -> funnel; named companies that prove a point
   with one figure each -> cases.
+- layout: one of Forge's built-in consulting layouts (agendas, SWOTs, KPI tiles, frameworks, process and roadmap
+  layouts drawn natively). "layout": its id from the slide_layouts tool or the list below, "slots": {"1": text, ...}
+  with every slot filled within its word limit, plus "takeaway" and 3 "bullets" when the layout leaves room. Use it
+  only when the layout's structure is the message.
 Choose the exhibit by the comparison (Zelazny): ranking -> bar or benchmark; change over time -> column or line;
 parts of a whole -> stacked or waterfall; a bridge from one total to another -> waterfall; ranges -> football field;
 two-way sensitivity -> heat map; qualitative scores -> grid with a harvey part. A table only when the reader needs
@@ -154,6 +159,22 @@ CONSULTING_BASE = CONSULTING
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
 SIDE_PANEL = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "table_focus",
               "table_highlight", "benchmark"}
+def layout_catalogue() -> str:
+    """The built-in layouts the storyline may pick (engines/forge/layouts.py), one compact line each."""
+    try:
+        from engines.forge import layouts as LY
+        items = LY.offered()                                 # only the layouts that render clean
+    except Exception:                                        # noqa: BLE001 - no catalogue, no built-in layouts
+        return ""
+    lines = [f"{x['id']}: {x['n']} ({x['u'][:70].rstrip('.')})" for x in items if isinstance(x, dict) and x.get("id")]
+    if not lines:
+        return ""
+    return ("Built-in layouts: a slide whose message fits one of these classic consulting layouts uses it: archetype "
+            '"layout" and "layout": its id (the slide is drawn natively with the deck\'s look; its slots are filled '
+            "when the slide is written). Named companies that each prove a point with one figure use archetype "
+            '"cases" (their logos are fetched in their own colours).\n' + "\n".join(lines))
+
+
 VISUALS = """Visual plan: give every slide a "visual" naming its exhibit form, chosen from the message, the way a senior
 partner storyboards: ranking -> "bar chart"; change over time -> "column chart" or "line chart"; parts of a whole or
 a bridge -> "waterfall"; peers -> "benchmark bars"; a choice between options -> "options vs criteria" (grid with a
@@ -278,9 +299,23 @@ _CLOSE_RE = re.compile(r"(?i)\b(closing|ending|end|final|last|conclusion|conclud
                        r"\bcall to action\b")
 
 
+_NO_OPEN_RE = re.compile(r"(?i)\b(?:no|without(?: a| an| the)?|skip(?:ping)?(?: the)?|drop(?: the)?)\s+"
+                         r"(?:title|cover|opening|intro(?:duction)?|agenda)(?:\s+(?:slide|page))?\b")
+_NO_CLOSE_RE = re.compile(r"(?i)\b(?:no|without(?: a| an| the)?|skip(?:ping)?(?: the)?|drop(?: the)?)\s+"
+                          r"(?:closing|ending|final|summary|thank[- ]you|next steps?)(?:\s+(?:slide|page))?\b")
+
+
 def bookends(brief: str) -> dict:
-    """Opening and closing slides the brief asks for. When asked for, they must be in the deck (P16)."""
-    return {"opening": bool(_OPEN_RE.search(brief or "")), "closing": bool(_CLOSE_RE.search(brief or ""))}
+    """Opening and closing slides the brief asks for. When asked for, they must be in the deck (P16). "No cover
+    slide" asks for none (a live two-slide build got a cover because "cover slide" matched)."""
+    b = brief or ""
+    return {"opening": bool(_OPEN_RE.search(b)) and not _NO_OPEN_RE.search(b),
+            "closing": bool(_CLOSE_RE.search(b)) and not _NO_CLOSE_RE.search(b)}
+
+
+def no_cover(brief: str) -> bool:
+    """The brief says there is no cover ("No cover slide", "without a title page"); a silent brief keeps the cover."""
+    return bool(_NO_OPEN_RE.search(brief or ""))
 
 
 def _enforce_bookends(plan: list, ends: dict) -> list:
@@ -540,9 +575,25 @@ def _fill_targets(s, a, density) -> list[str]:
         if k < least:
             msgs.append(f"the {a.replace('_', ' ')} has {k} {key}: give at least {least}, or show the point with "
                         "another archetype")
-        if not s.get("takeaway") and len(s.get("bullets") or []) < (1 if light else 2):
-            msgs.append("give a 'takeaway' and " + ("1-2" if light else "2-3") + " bullets that say what the diagram "
-                        "means for the decision; they sit beside it")
+        side = len(s.get("bullets") or [])
+        if not s.get("takeaway") or side < 3 or _words(s.get("bullets")) < (35 if light else 50):
+            msgs.append("the column beside the diagram is thin: give a 'takeaway' and 3 bullets (" +
+                        ("12-18" if light else "15-25") + " words each, with the numbers) that say what the diagram "
+                        "means for the decision: the driver, the comparison, the implication")
+    elif a == "layout":
+        try:
+            from engines.forge import layouts as LY
+            spec = LY.get(s.get("layout") or "")
+        except Exception:                                    # noqa: BLE001
+            spec = None
+        if spec:
+            raw = s.get("slots") or {}
+            given = ({str(k) for k, v in raw.items() if str(v).strip()} if isinstance(raw, dict) else
+                     {str(x.get("k") or x.get("slot")) for x in raw if isinstance(x, dict) and str(x.get("text", "")).strip()})
+            empty = [k for k in range(1, len(spec.get("slots") or []) + 1) if str(k) not in given]
+            if empty:
+                msgs.append(f"layout {s.get('layout')}: slots {', '.join(map(str, empty[:8]))} are empty; fill every "
+                            "slot with its content, or choose a layout with fewer slots")
     elif a == "closing":
         if any(not st.get("detail") or (not light and not st.get("milestones"))
                for st in s.get("steps") or [] if isinstance(st, dict)):
@@ -1379,7 +1430,8 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
         start_slides = start_slides.get("slides", start_slides) if isinstance(start_slides, dict) else start_slides
     fixed = [dict(p, fixed=True) for p in fixed_pages or []]
     agenda = wants_agenda(brief, slides_wanted, insert)
-    narrative_n = max(3, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
+    # the brief's count is the count (P16): a two-page memo is two slides (a floor of 3 built a third one, live build)
+    narrative_n = max(1, slides_wanted - len(fixed) - agenda) if not insert else max(1, slides_wanted)
     fixed_txt = ("\nThese data pages are already built from the model and will be inserted as a section before the "
                  "closing slide; do NOT plan slides that repeat them, build the argument around them and cite their "
                  "facts (W ids) where you use their numbers. Your slides carry no valuation tables, grids or charts of "
@@ -1387,8 +1439,10 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
                  "number the model does not state:\n" + "\n".join(f"- {p['title']}" for p in fixed)
                  if fixed else "")
     ends = bookends(brief) if not insert else {"opening": False, "closing": False}
+    bare = not insert and no_cover(brief)
     opening = ('slide 1 MUST be the cover (node "0", archetype cover; the brief asks for an opening slide); '
-               if ends["opening"] else 'slide 1 is the cover (node "0"); ')
+               if ends["opening"] else "no cover slide (the brief says so); " if bare
+               else 'slide 1 is the cover (node "0"); ')
     closing = ("the LAST slide MUST be archetype closing with the next steps (the brief asks for a closing slide)."
                if ends["closing"] else "end with what to do next.")
     if insert:     # slides added to a deck the user already has: its own cover, agenda and close stay as they are
@@ -1429,6 +1483,7 @@ Exactly {narrative_n} slides: {opening}then the argument in 3-4 sections; {closi
 {STORY[density]}
 {CONSULTING}
 {VISUALS}
+{layout_catalogue()}
 Each slide must have the evidence its point needs. Plan ONLY slides whose evidence
 is in the facts: a table needs >= 3 comparable rows of facts, a chart >= 3 data
 points in one unit. If the facts are thin on a point, merge it into another slide instead of planning a gap. Read top to bottom, the titles alone must tell the whole story; no two titles
@@ -1519,7 +1574,9 @@ supports it. Choose varied archetypes that prove each title.
     # ---- stage 3: content, one call per slide (in parallel), each with only its own facts
     from concurrent.futures import ThreadPoolExecutor
     plan = _enforce_bookends([x for x in story.get("slides", []) if isinstance(x, dict)
-                              and x.get("archetype") != "agenda"], ends)
+                              and x.get("archetype") != "agenda"
+                              and not (bare and x.get("archetype") == "cover")], ends)
+    # a brief that says "no cover" gets none, even when the model plans one (live build)
     if fixed and len(plan) > narrative_n:
         # The model often plans more than asked when model pages exist, and the extra slides restate (or worse,
         # re-estimate) those pages' numbers. Keep the opening slides and the closing one, at the asked length.
@@ -1541,6 +1598,19 @@ supports it. Choose varied archetypes that prove each title.
         rel = [f for f in facts if f["id"] in ev] or facts
         if x.get("archetype") in ("executive_summary", "closing"):
             rel = facts                       # they sum up the whole deck: every fact, or they write gaps for known numbers
+        spec_txt = ""
+        if x.get("archetype") == "layout":                    # the chosen built-in layout's slots, to fill exactly
+            try:
+                from engines.forge import layouts as LY
+                spec = LY.get(x.get("layout") or "")
+            except Exception:                                    # noqa: BLE001
+                spec = None
+            if spec:
+                spec_txt = (f'\nThis slide uses built-in layout {spec["id"]} ("{spec["n"]}": {spec["st"]}). Write '
+                            '{"archetype": "layout", "layout": "' + spec["id"] + '", "title", "slots": {number: text}, '
+                            '"takeaway", "bullets", "source"} and fill EVERY slot, within its words:\n' +
+                            "\n".join(f"{k}: {role}: {holds} (<= {mw} words)"
+                                       for k, (role, holds, mw) in enumerate(spec["slots"], 1)))
         try:
             from meshpool_harness.assistant import HONESTY
             return _call(client, MODEL, f"""You write ONE consulting slide as JSON for a renderer that owns all
@@ -1548,7 +1618,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 {CONSULTING}
 {WRITE[density]}
 {SLIDE_SHAPE}
-{help_}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
+{help_}{spec_txt}""", "Storyline (whole deck, for context):\n" + "\n".join(f"{y.get('node')}: {y.get('title')}" for y in plan)
                 + f"\n\nThis slide: {json.dumps(x)}\n\nFacts (cite by id):\n"
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
@@ -1689,15 +1759,26 @@ choice or the number of items; never layout. Keep node and keep the point of the
             calls += 1
         return repaired
 
-    for rnd in range(rules["repair"]["max_rounds"] + 1):
-        r, res = draw()
+    import copy as _copy
+    best = None                                              # (score, round, slides): a repair round can make the deck
+    for rnd in range(rules["repair"]["max_rounds"] + 1):     # worse (live build: P10 and P11 passed in rounds 2-3 and
+        r, res = draw()                                      # failed again in round 4); the best round is kept
         fails = collect(r, res)
         rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
+        score = (sum(1 for v in res["rules"].values() if v == "fail"), rounds[-1]["content_failures"])
+        if best is None or score < best[0]:
+            best = (score, rnd, _copy.deepcopy(slides))
         if not fails or rnd == rules["repair"]["max_rounds"]:
             break
         if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
             break                                            # two rounds without progress: stop paying for repairs
         repair(fails, f"r{rnd}")
+    if best is not None and best[1] != rounds[-1]["round"]:
+        slides[:] = best[2]                                  # back to the best round, drawn again
+        r, res = draw()
+        fails = collect(r, res)
+        rounds.append({"round": f"best={best[1]}", "rules": res["rules"],
+                       "content_failures": sum(len(v) for v in fails.values())})
 
     # the review panel: the senior partner and the MD read the rendered pages; every issue goes to the step that can
     # fix it (content and data -> the writer, layout -> a re-layout or an archetype instruction, storyline -> a re-plan
@@ -1975,6 +2056,7 @@ if __name__ == "__main__":
     ap.add_argument("--density", choices=["present", "balanced", "read"], default=None)
     ap.add_argument("--design", choices=["archetype", "image", "auto"], default=None)
     ap.add_argument("--style", default=None, help="style pack (engines/forge/styles.py); default look when omitted")
+    ap.add_argument("--frame", choices=["band"], default=None, help="band: the dark title band look (template.FRAMES)")
     a = ap.parse_args()
     theme = None
     if a.style:
@@ -1983,5 +2065,7 @@ if __name__ == "__main__":
             theme = styles.theme(a.style)
         except KeyError:
             ap.error(f"unknown style {a.style!r}; styles: {', '.join(styles.names())}")
+    if a.frame:
+        theme = dict(theme or {"palette": "navy"}, frame=a.frame)
     r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design, theme=theme)
     print(json.dumps(r, indent=1, default=str))

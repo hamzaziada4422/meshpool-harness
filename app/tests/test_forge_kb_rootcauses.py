@@ -84,3 +84,59 @@ def test_band_frame_title_band_tracker_and_two_tone(tmp_path):
     plain = R.render([dict(s, tracker=None)], str(tmp_path / "p.pptx"), carry=False, fix_labels=False)
     assert "Band" not in {sh.name for sh in P_(str(tmp_path / "p.pptx")).slides[0].slide_layout.shapes}
     assert plain["errors"] == [] and default_template({"palette": "forest", "frame": "band"}) != default_template("forest")
+
+
+def test_stat_fallback_keeps_currency_units():
+    """Live build: a "$M" chart whose category said "With 2% espresso rise" became "$41.326%", and "$41.2M" in the text
+    was read back as "$41.2"."""
+    c = {"kind": "bar", "categories": ["Reported Q3", "With 2% espresso rise (illustrative)"],
+         "series": [{"name": "Q3 revenue ($M)", "values": [41.2, 41.326]}], "unit": "$M", "decimals": 3}
+    vals = [it["value"] for it in R.stat_stack(c, "revenue of $41.2M and")["items"]]
+    assert vals == ["$41.2M", "$41.326M"]
+    assert R._as_written(83.0, "reached $83.0bn") == "$83.0bn" and R._as_written(35, "up 35% in") == "35%"
+
+
+def test_bookends_respect_no_cover():
+    """Live build: "No cover slide" got a cover because "cover slide" matched."""
+    from engines.forge.build import bookends, no_cover
+    assert bookends("No cover slide: just the two content slides.") == {"opening": False, "closing": False}
+    assert bookends("Start with a cover and end with next steps.") == {"opening": True, "closing": True}
+    assert bookends("Without a title slide, and no next steps slide") == {"opening": False, "closing": False}
+    assert no_cover("No cover slide: just the two content slides.") and no_cover("Without a title page")
+    assert not no_cover("Q3 update for the board.")                      # a silent brief keeps the default cover
+
+
+def test_p7_accepts_content_padded_inside_a_card_only(tmp_path):
+    """Dev decks 02 and 07: a chart and a text inset 0.15in inside a card on the grid were flagged off the grid."""
+    from pptx import Presentation as P_
+    from pptx.enum.dml import MSO_THEME_COLOR as TC
+    from pptx.enum.shapes import MSO_SHAPE
+    from pptx.util import Inches
+    from engines.forge.measure_pptx import measure
+    from engines.forge.validate_pptx import _grid, load_rules, validate
+    rules = load_rules()
+
+    def deck(path, card_edges=None):
+        prs = P_()
+        prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
+        sl = prs.slides.add_slide(prs.slide_layouts[5])
+        sl.shapes.title.text = "Cards hold padded content on the grid"
+        if card_edges:
+            l_, r_ = card_edges
+            card = sl.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(l_), Inches(1.6), Inches(r_ - l_), Inches(4))
+            card.fill.solid()
+            card.fill.fore_color.theme_color = TC.BACKGROUND_2
+            card.name = "Card1"
+            tb = sl.shapes.add_textbox(Inches(l_ + 0.15), Inches(1.8), Inches(r_ - l_ - 0.3), Inches(1))
+            tb.text_frame.text = "Inside the card"
+            tb.name = "Text1"
+            loose = sl.shapes.add_textbox(Inches(r_ + 0.4), Inches(1.8), Inches(1.5), Inches(1))
+            loose.text_frame.text = "Not in a card"
+            loose.name = "Text2"
+        prs.save(path)
+    deck(tmp_path / "g.pptx")
+    edges = sorted(_grid(measure(str(tmp_path / "g.pptx"), rules), rules["pptx"])[0])
+    inner = [e for e in edges if 0.3 < e < 9]
+    deck(tmp_path / "p7.pptx", (inner[0], inner[len(inner) // 2]))
+    msgs = [f["message"] for f in validate(str(tmp_path / "p7.pptx"), rules, render=False)["failures"] if f["rule"] == "P7"]
+    assert not any("Text1" in m for m in msgs) and any("Text2" in m for m in msgs), msgs
