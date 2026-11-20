@@ -13,3 +13,4 @@ family: "diagram"
 - [[hub_spoke]]: everything depends on one centre
 - [[pyramid]]: each layer builds on the one below
 - [[funnel]]: most drop out between these stages
+- [[cases]]: named companies already prove it

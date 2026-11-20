@@ -3013,7 +3013,10 @@ def a_benchmark(ctx, s, sl, n):
     b = s["benchmark"]
     names = [str(v) for v in b["companies"]]
     panels = b["panels"][:4]
-    logos = b.get("logos") or {}
+    logos = b.get("logos")
+    if logos is None:                                  # fetched marks for real companies (logos.py), drawn as vectors
+        from .logos import for_names
+        logos = for_names(names)
     tk = s.get("takeaway") or {}
     lead = ([{"text": tk["text"], "size": T["head"], "bold": True, "numbers": False, "prov": tk.get("prov")}]
             if tk.get("text") else [])
@@ -3315,12 +3318,14 @@ def logo_shape(sl, path, x, y, h, max_aspect, name, alt, exact_w=None) -> float:
     theme); a raster logo only when pictures are allowed. Returns the drawn width in inches (0: not drawn)."""
     p = Path(path)
     if p.suffix.lower() == ".svg":
-        from .vector import add_svg, parse_svg
+        from .vector import add_svg, parse_svg, tight_box
         try:
             txt = p.read_text()
-            box = parse_svg(txt)["box"]
+            box = tight_box(parse_svg(txt))                 # the mark's own bounds, not its canvas
             w = exact_w or min(h * box[2] / max(box[3], 1e-6), h * max_aspect)
-            shp = add_svg(sl, txt, x, y, w, h, name, TC.TEXT_1, alt=alt)
+            if not exact_w and w < h * box[2] / max(box[3], 1e-6):      # too wide for the room: keep the aspect
+                h = w * box[3] / box[2]
+            shp = add_svg(sl, txt, x, y, w, h, name, TC.TEXT_1, alt=alt, tight=True)
             return w if shp is not None else 0.0
         except Exception:                                  # a broken logo never breaks the deck
             return 0.0
@@ -3343,8 +3348,8 @@ def _firm_label(s) -> str:
 
 def _logo_size(path: str, h: float, max_w: float) -> tuple[float, float]:
     if str(path).lower().endswith(".svg"):
-        from .vector import parse_svg
-        _, _, w0, h0 = parse_svg(Path(path).read_text())["box"]
+        from .vector import parse_svg, tight_box
+        _, _, w0, h0 = tight_box(parse_svg(Path(path).read_text()))
     else:
         from PIL import Image
         with Image.open(path) as im:

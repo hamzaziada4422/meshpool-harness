@@ -102,3 +102,12 @@ def test_logos_svg_as_vector_raster_left_out(tmp_path, monkeypatch):
     assert R.logo_shape(sl, pngf, 1, 2, 0.3, 5, "ov_Logo2", "Acme logo") == 0.0
     monkeypatch.setitem(R.PICTURES, "allow", True)
     assert R.logo_shape(sl, pngf, 1, 2, 0.3, 5, "ov_Logo2", "Acme logo") > 0 and sl.shapes[-1].shape_type == 13
+
+
+def test_compact_arc_flags():
+    """Simple Icons writes arc flags packed with the next number ("a1 1 0 011 1"): a logo failed to parse."""
+    a = V.parse_path("M0 0a1 1 0 011 1")[0]
+    b = V.parse_path("M0 0 a 1 1 0 0 1 1 1")[0]
+    assert a == b
+    c = V.parse_path("M0 0a1 1 0 1 0.5.5")[0]
+    assert _close(c[-1][3], (0.5, 0.5))
