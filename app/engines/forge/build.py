@@ -37,7 +37,15 @@ renderer applies a strict consulting design; you only fill fields.
   chart {"chart": as above}; table {"table": as above}; stats {"items": [{"value": "34%", "label", "delta"}]};
   text {"lead", "bullets"}; callout {"text" or "bullets"}; process {"steps": [{"title", "text"}]};
   timeline {"milestones": [{"date", "label", "text": 1-2 lines on what happens or is decided then}]}; matrix2x2 {"x_axis", "y_axis", "quadrants": 4 x {"title", "items"}};
-  harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"}.
+  harvey {"criteria": [...], "rows": [{"label", "scores": [0-4 per criterion]}]}; quote {"text", "attribution"};
+  shift {"from_head", "to_head", "rows": 2-4 x {"label": 2-4 words, "from": {"text": how it is done today, <= 8
+  words, "value": what it costs or takes, e.g. ">$100K/yr"}, "to": {"text", "value"}, "prov"}} - a change in how
+  something is done, shown as from -> to with the size of the shift (cost, time, rate) on both sides;
+  evidence {"items": 3-5 x {"name": a real company or unit, "text": what it achieved, one line with its figure,
+  "prov"}} - named proof points (their logos are drawn).
+  Panel headings read as ONE argument left to right (the BCG panel story): e.g. "While cost drivers are falling..."
+  | "... revenue potential is rising for AI-first firms" | "Firms set up early capture the most value". A callout
+  part adds the so-what the panels lead to; it never restates them.
   Parts are ideas, not rules: use one only where it proves the title; a part can fill a quarter, a half or the slide.
   Several charts on one slide when the message needs them: two measures behind one point (e.g. revenue grew AND
   margin fell) are two chart parts side by side ("halves"), each with a "heading" naming its measure and unit; the
@@ -74,7 +82,10 @@ renderer applies a strict consulting design; you only fill fields.
   "size": 12 (10 if more than 14 rows)}; "takeaway": {"text": one bold line}; "bullets": 2-4 lines interpreting
   the table (required when it has fewer than 12 rows: a short table sits beside them).
 - bar_takeaway / column_trend / line_trend / waterfall_bridge: "subtitle" (measure, unit, period), one "chart"
-  {kind, categories, series[{name, values}], unit, decimals, highlight_categories} on the left 2/3, a "takeaway"
+  {kind, categories, series[{name, values}], unit, decimals, highlight_categories, "target": a goal value drawn as a
+  dashed line, "delta": {"from": category, "to": category, "label": optional, e.g. "25-35x"} drawn as an arrow
+  with the multiple or gap in a pill, "descriptors": [one short line per category saying what it is]} on the left
+  2/3, a "takeaway"
   {"text"} (bold lead) and "bullets" [2-3 {"text","prov"}] interpreting it on the right 1/3.
 - benchmark: companies (or deals) compared on 1-3 metrics: {"benchmark": {"companies": [...], "panels": [{"title":
   "EV / EBITDA (x)", "unit": "x" | "%", "values": [one per company, null = not meaningful], "median", "p25",
@@ -178,7 +189,15 @@ CONSULTING = """House style (always, whatever the brief says about look):
   the facts hold (every year, every peer, every segment), never two or three lonely bars; a short chart sits beside
   3-4 points that add what it cannot show (the driver, the comparison, the implication, each with its number). A
   slide to present has one clear message and a chart that carries it (highlight, target, the change); a slide to
-  send ahead carries the whole argument on the page, densely."""
+  send ahead carries the whole argument on the page, densely.
+- Say each fact once. On a slide, a number appears in one place (the title or the exhibit or one card), and a callout
+  adds the so-what the cards lead to, never restates them. Across the deck, a point made on one slide is not made
+  again; later slides build on it with new evidence (the executive summary is the only place that sums up).
+- One value per fact across the deck (the same target, cost and date everywhere), every date in a plan after today,
+  and no N/A in the cell the slide's comparison rests on.
+- Put the insight ON the exhibit, the think-cell way: the gap or multiple as an arrow ("delta"), the goal as a target
+  line, what each category is in a short descriptor under it; then the side panel adds what the chart cannot show.
+- Explain what each thing is: a label alone ("Digitally enhanced") gets a short line saying what it means."""
 CONSULTING_BASE = CONSULTING
 
 OPENERS = ("cover", "section_divider", "end")            # title pages: only where the storyline plans them
@@ -207,7 +226,8 @@ partner storyboards: ranking -> "bar chart"; change over time -> "column chart" 
 a bridge -> "waterfall"; peers -> "benchmark bars"; a choice between options -> "options vs criteria" (grid with a
 harvey part, options as rows) or "2x2 matrix" (grid matrix2x2); a sequence or plan -> "roadmap" (grid timeline) or
 "process steps" (grid process); a few headline numbers -> "big numbers" (grid stats beside a chart or text); issues or
-drivers with evidence -> "icon rows" (challenge_matrix); a chart and its argument -> "exhibit + argument"
+drivers with evidence -> "icon rows" (challenge_matrix); a change from the old way to the new with its size ->
+"from-to rows" (grid shift part); named companies as proof -> "evidence list" (grid evidence part, or cases); a chart and its argument -> "exhibit + argument"
 (exhibit_argument); lookup values -> "table". Rules: slide 2 (after the cover) is the executive_summary; never the same
 visual on two slides in a row; at most two chart-plus-side-panel slides (bar_takeaway, column_trend, line_trend,
 waterfall_bridge, table_focus, benchmark) in a row; in 8 or more slides use at least 5 different visuals; when the
@@ -484,6 +504,48 @@ def number_checks(slides, facts, rules) -> dict[int, list[str]]:
 UNIT_HINT = re.compile(r"\(([^)]*)\)|%|\bLQ\b|thousand|million|billion|\$", re.I)
 
 
+_SKIP_KEYS = {"title", "subtitle", "source", "notes", "footnotes", "prov", "title_prov", "id", "node", "archetype",
+              "section", "tags", "layout", "look", "chart", "visual", "icon", "date", "owner", "timing", "columns"}
+
+
+def _lines(v, out: list) -> list:
+    """Every substantive line of a slide's content (bullets, leads, cards, cells, callouts, takeaways)."""
+    if isinstance(v, str):
+        if len(re.sub(r"\*\*", "", v).split()) >= 6:
+            out.append(v)
+    elif isinstance(v, list):
+        for x in v:
+            _lines(x, out)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            if k not in _SKIP_KEYS:
+                _lines(x, out)
+    return out
+
+
+def repeat_checks(slides) -> dict[int, list[str]]:
+    """A point made once is not made again: a line on a slide that repeats a line of an earlier slide goes back to
+    the writer (the executive summary sums up the deck by design, so it is neither checked nor checked against)."""
+    from engines.forge.render import repeats
+    out: dict[int, list[str]] = {}
+    seen: list[tuple[int, str]] = []
+    for i, s in enumerate(slides, 1):
+        if not isinstance(s, dict) or s.get("archetype") in ("cover", "section_divider", "agenda", "end",
+                                                             "executive_summary") or s.get("fixed"):
+            continue
+        mine = _lines(s, [])
+        for j, line in enumerate(mine):
+            hit = next((k for k, prev in seen if repeats(line, prev, 0.8)), None)
+            if hit:
+                out.setdefault(i, []).append(f"\"{line.replace('**', '')[:80]}\" repeats slide {hit}: make "
+                                             "a new point with evidence the deck has not used, or drop it")
+            elif any(repeats(line, prev, 0.8) for prev in mine[:j]):
+                out.setdefault(i, []).append(f"\"{line.replace('**', '')[:80]}\" says again what this slide "
+                                             "already says: one fact in one place; a callout adds the so-what")
+        seen += [(i, x) for x in mine]
+    return out
+
+
 def _words(v) -> int:
     if isinstance(v, dict):
         return sum(_words(x) for x in v.values() if isinstance(x, (str, list, dict)))
@@ -521,6 +583,17 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
         else:
             msgs += _fill_targets(s, a, density)
         c = s.get("chart") or {}
+        charts = [c] + [p.get("chart") if isinstance(p.get("chart"), dict) else p for p in s.get("parts") or []
+                        if isinstance(p, dict) and p.get("type") == "chart"]
+        for ch in charts:
+            if (isinstance(ch, dict) and ch.get("kind") == "column" and 2 <= len(ch.get("categories") or []) <= 4
+                    and len(ch.get("series") or []) == 1 and not ch.get("delta") and ch.get("target") is None
+                    and not (len(ch.get("categories") or []) >= 3
+                             and all(re.match(r"\s*(19|20)\d\d", str(x)) for x in ch.get("categories") or []))):
+                msgs.append("a short column chart must show its point on the chart: add \"delta\" {from, to} so the "
+                            "multiple or gap is drawn as an arrow, or \"target\" for the goal line, and "
+                            "\"descriptors\" saying what each category is")
+                break
         if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
             msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
                         "split over time, or a comparison with a benchmark")
@@ -1742,6 +1815,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[prose] {m}" for m in msgs)
         for n, msgs in variety_checks(slides).items():
             fails.setdefault(n, []).extend(f"[variety] {m}" for m in msgs)
+        for n, msgs in repeat_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[repeat] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for n, msgs in arith_checks(slides).items():

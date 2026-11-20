@@ -40,7 +40,8 @@ LOOKS = {
     "bold": {"heading": "tab", "card": False, "pad": 0.0, "after": 0.14, "inset": 0.0, "tab": TC.ACCENT_1},
 }
 
-PART_TYPES = ("chart", "table", "stats", "text", "callout", "process", "timeline", "matrix2x2", "harvey", "quote")
+PART_TYPES = ("chart", "table", "stats", "text", "callout", "process", "timeline", "matrix2x2", "harvey", "quote",
+              "shift", "evidence")
 
 
 # ------------------------------------------------------------------ grid
@@ -789,8 +790,153 @@ def p_quote(ctx, sl, n, part, box, look, i, s, card):
     R._write(R._box(sl, x, ty, w, bh, f"Quote{i}"), bl, ctx, n)
 
 
+# ------------------------------------------------------------------ shift rows and evidence (the BCG panel grammar)
+def _side(v):
+    v = v if isinstance(v, dict) else {"text": str(v or "")}
+    return _txt(v.get("text") or ""), _txt(v.get("value") or "")
+
+
+def _shift_plan(part, w, up=0):
+    rows = [r for r in part.get("rows") or [] if isinstance(r, dict)][:6]
+    lw = min(1.7, max(1.0, w * 0.24))
+    cw, g = 0.26, 0.12
+    fw = max(0.8, (w - lw - cw - 3 * g) / 2)
+
+    def fits(d):                                          # no word broken, every value on one line
+        sz_, vz_, lz_ = R.bump(12) + d, R.bump(16) + d, R.bump(13) + d
+        for r in rows:
+            if any(R._need_w(wd, lz_, True) > lw - 0.2 for wd in _txt(r.get("label") or "").split()):
+                return False
+            for v in (r.get("from"), r.get("to")):
+                tx, val = _side(v)
+                if val and R._need_w(val, vz_, True) > fw - 0.04:
+                    return False
+                if any(R._need_w(wd, sz_, False) > fw - 0.04 for wd in tx.split()):
+                    return False
+        return True
+
+    up = next((d for d in range(up, -5, -1) if fits(d)), -4)
+    sz, vz, lz = R.bump(12) + up, R.bump(16) + up, R.bump(13) + up
+
+    def side(v, accent):
+        tx, val = _side(v)
+        bl = []
+        if tx:
+            bl.append({"text": tx, "size": sz, "numbers": False, "color": TC.TEXT_2})
+        if val:
+            bl.append({"text": val, "size": vz, "bold": True, "numbers": False, "space_before": 2,
+                       "color": TC.ACCENT_1 if accent else TC.TEXT_1})
+        return bl
+
+    out = []
+    for r in rows:
+        lab = [{"text": _txt(r.get("label") or ""), "size": lz, "bold": True, "numbers": False,
+                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}]
+        fb, tb = side(r.get("from"), False), side(r.get("to"), True)
+        need = max(R._need(lab, lw - 0.16) + 0.16, R._need(fb, fw) * 1.08, R._need(tb, fw) * 1.08) + 0.14
+        out.append((r, lab, fb, tb, need))
+    heads = [_txt(part.get("from_head") or ""), _txt(part.get("to_head") or "")]
+    hh = (R._need([{"text": max(heads, key=len), "size": R.bump(12), "bold": True}], fw) + 0.08) if any(heads) else 0
+    return {"rows": out, "lw": lw, "cw": cw, "g": g, "fw": fw, "hh": hh, "heads": heads,
+            "need": hh + sum(o[4] for o in out) + 0.04 * max(0, len(out) - 1)}
+
+
+def p_shift(ctx, sl, n, part, box, look, i, s, card):
+    """From-to rows (BCG): a label tile, how it is done today and what it costs, a chevron, how it is done in the new
+    way and what that costs. The shift and its size read in one line per row."""
+    x, y, w, h = box
+    P = _shift_plan(part, w, int(part.get("_bump") or 0))
+    if not P["rows"]:
+        return
+    lw, cw, g, fw = P["lw"], P["cw"], P["g"], P["fw"]
+    fx = x + lw + g
+    tx = fx + fw + g + cw + g
+    if P["hh"]:
+        for k_, (hx, ht) in enumerate(((fx, P["heads"][0]), (tx, P["heads"][1]))):
+            if ht:
+                R._write(R._box(sl, hx, y, fw, P["hh"], f"ov_ShiftHead{i}_{k_ + 1}", MSO_ANCHOR.BOTTOM),
+                         [{"text": ht, "size": R.bump(12), "bold": True, "numbers": False, "color": TC.TEXT_2}])
+        y, h = y + P["hh"] + 0.04, h - P["hh"] - 0.04
+    k = len(P["rows"])
+    gap = 0.08
+    extra = max(0.0, (h - sum(o[4] for o in P["rows"]) - gap * (k - 1)) / k)
+    ry = y
+    for j, (r, lab, fb, tb, need) in enumerate(P["rows"], 1):
+        rh = need + min(extra, need * 0.8)
+        prov = r.get("prov")
+        for b in fb + tb:
+            b["prov"] = prov
+        tile = R._fill(sl, x, ry, lw, rh, TC.TEXT_2, f"ov_ShiftTile{i}_{j}")
+        _in_shape(tile, lab, ctx, n, (0.08, 0.04, 0.08, 0.04), MSO_ANCHOR.MIDDLE)
+        R._write(R._box(sl, fx, ry, fw, rh, f"ov_ShiftFrom{i}_{j}", MSO_ANCHOR.MIDDLE), fb, ctx, n)
+        R._fill(sl, fx + fw + g, ry + rh / 2 - 0.14, cw * 0.6, 0.28, TC.TEXT_2, f"ov_ShiftArrow{i}_{j}",
+                MSO_SHAPE.CHEVRON)
+        R._write(R._box(sl, tx, ry, fw, rh, f"ov_ShiftTo{i}_{j}", MSO_ANCHOR.MIDDLE), tb, ctx, n)
+        ry += rh
+        if j < k:
+            R._rule(sl, fx, ry + gap / 2, w - lw - g, TC.ACCENT_5, 0.5, f"ov_ShiftRule{i}_{j}")
+            ry += gap
+
+
+def _evidence_plan(part, w, up=0):
+    items = [it if isinstance(it, dict) else {"text": str(it)} for it in part.get("items") or []][:6]
+    nw = min(1.7, max(1.0, w * 0.3))
+    tw = w - nw - 0.15
+    sz = R.bump(12) + up
+    out = []
+    for it in items:
+        nm = _txt(it.get("name") or "")
+        bl = [{"text": _txt(it.get("text") or ""), "size": sz, "numbers": False, "prov": it.get("prov")}]
+        nz = R.bump(13) + up
+        while nz > 10 and any(R._need_w(wd, nz, True) > nw - 0.55 for wd in nm.split()):
+            nz -= 1                                       # a name is never broken mid-word (a mark may sit before it)
+        nb = [{"text": nm, "size": nz, "bold": True, "numbers": False}]
+        need = max(R._need(bl, tw) * 1.08, R._need(nb, nw - 0.1) * 1.08, 0.42) + 0.14
+        out.append((it, nm, nb, bl, need))
+    return {"items": out, "nw": nw, "tw": tw, "need": sum(o[4] for o in out) + 0.06 * max(0, len(out) - 1)}
+
+
+def p_evidence(ctx, sl, n, part, box, look, i, s, card):
+    """Proof points from named companies (BCG): the company's logo (or its name) on the left, one line of what it
+    achieved on the right, hairlines between."""
+    x, y, w, h = box
+    P = _evidence_plan(part, w, int(part.get("_bump") or 0))
+    if not P["items"]:
+        return
+    from .logos import for_names
+    logos = part.get("logos") if isinstance(part.get("logos"), dict) else for_names([o[1] for o in P["items"] if o[1]])
+    k = len(P["items"])
+    gap = 0.06
+    extra = max(0.0, (h - P["need"]) / k)
+    ry = y
+    for j, (it, nm, nb, bl, need) in enumerate(P["items"], 1):
+        rh = need + min(extra, need * 0.8)
+        lg = logos.get(nm)
+        drawn = 0.0
+        if lg:
+            try:
+                from pathlib import Path
+                if Path(lg).exists():
+                    drawn = R.logo_shape(sl, lg, x, ry + rh / 2 - 0.14, 0.28, 4.5, f"ov_Logo{i}_{j}", f"{nm} logo")
+            except Exception:                              # noqa: BLE001 - a logo never breaks the slide
+                drawn = 0.0
+        if nm:                                             # the name is always said; a mark, when known, before it
+            off = min(drawn + 0.08, 0.5) if drawn else 0.0
+            if drawn and drawn + 0.08 > 0.5:               # a wide wordmark carries the name itself
+                off = None
+            if off is not None:
+                R._write(R._box(sl, x + off, ry, P["nw"] - off, rh, f"ov_EvName{i}_{j}", MSO_ANCHOR.MIDDLE), nb,
+                         ctx, n)
+        R._write(R._box(sl, x + P["nw"] + 0.15, ry, P["tw"], rh, f"ov_EvText{i}_{j}", MSO_ANCHOR.MIDDLE), bl, ctx, n)
+        ry += rh
+        if j < k:
+            R._rule(sl, x, ry + gap / 2, w, TC.ACCENT_5, 0.5, f"ov_EvRule{i}_{j}")
+            ry += gap
+
+
 DRAW = {"chart": p_chart, "table": p_table, "stats": p_stats, "text": p_text, "callout": p_callout,
-        "process": p_process, "timeline": p_timeline, "matrix2x2": p_matrix2x2, "harvey": p_harvey, "quote": p_quote}
+        "process": p_process, "timeline": p_timeline, "matrix2x2": p_matrix2x2, "harvey": p_harvey, "quote": p_quote,
+        "shift": p_shift, "evidence": p_evidence}
 
 
 def _strings(v, out):
@@ -949,6 +1095,12 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         k = len(part.get("rows") or [])
         nat = 0.5 + 0.5 * k
         return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 1.3 * k     # rows spread (banded) to fill the column
+    if t == "shift":
+        nat = _shift_plan(part, iw, bump)["need"]
+        return oh + nat, oh + nat, oh + nat * 1.8
+    if t == "evidence":
+        nat = _evidence_plan(part, iw, bump)["need"]
+        return oh + nat, oh + nat, oh + nat * 1.8
     if t == "quote":
         bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18 + bump, "italic": True}]
         if part.get("attribution"):
@@ -1190,7 +1342,8 @@ def _mirrored(parts, lay):
 # ------------------------------------------------------------------ schema gate
 _NEEDS = {"chart": ("chart", "categories"), "table": ("table", "rows"), "stats": ("items",), "text": ("lead", "text", "bullets"),
           "callout": ("text", "bullets", "lead"), "process": ("steps",), "timeline": ("milestones", "items"),
-          "matrix2x2": ("quadrants",), "harvey": ("rows",), "quote": ("text", "quote")}
+          "matrix2x2": ("quadrants",), "harvey": ("rows",), "quote": ("text", "quote"), "shift": ("rows",),
+          "evidence": ("items",)}
 
 
 def part_errors(p, i) -> list[str]:
@@ -1218,6 +1371,12 @@ def part_errors(p, i) -> list[str]:
         errs.append(f"part {i} (matrix2x2): needs exactly 4 quadrants (top-left, top-right, bottom-left, bottom-right)")
     if t == "harvey" and not p.get("criteria"):
         errs.append(f"part {i} (harvey): needs 'criteria' (the columns) and rows [{{label, scores}}]")
+    if t == "shift" and not all(isinstance(r, dict) and r.get("label") and r.get("from") and r.get("to")
+                                for r in p.get("rows") or []):
+        errs.append(f"part {i} (shift): every row needs 'label', 'from' {{text, value}} and 'to' {{text, value}}")
+    if t == "evidence" and not all(isinstance(it, dict) and it.get("name") and it.get("text")
+                                   for it in p.get("items") or []):
+        errs.append(f"part {i} (evidence): every item needs 'name' (the company) and 'text' (what it achieved)")
     from . import diagrams as D
     if t in D.CHECKS:
         errs += [f"part {i} ({t}): {e}" for e in D.CHECKS[t](p, i)]

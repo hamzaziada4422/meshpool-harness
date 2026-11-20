@@ -169,8 +169,8 @@ def _col_blocks(it, z, figure):
         out.append({"text": b["text"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bullet": True,
                     "space_before": 4, "prov": b.get("prov")})
     if it.get("foot"):                                    # who and when: an accent line at the foot of the column
-        out.append({"text": it["foot"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bold": True, "numbers": False,
-                    "color": TC.TEXT_2, "space_before": 8})
+        out.append({"text": it["foot"], "size": max(11, R.ARGUMENT["bullet"] + SIZES[z][1] - 2), "bold": False,
+                    "numbers": False, "color": TC.TEXT_2, "space_before": 8})   # lighter and smaller than the step
     return out
 
 

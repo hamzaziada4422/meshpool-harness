@@ -156,8 +156,18 @@ def _segments(text: str, numbers: bool, base: str = "plain"):
     return out
 
 
+MINUS = re.compile(r"(?<![\w.\-/])-(?=\$?\d)")             # "-38%" is a minus, not a hyphen (typeset as U+2212)
+ACCENTS_MAX = 2                                         # marked phrases per paragraph: more is a highlighter, not emphasis
+
+
 def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False):
+    text = MINUS.sub("\u2212", str(text))
+    marked = 0
     for seg, st in _segments(text, numbers):
+        if st.endswith("bold") and not heading and color in (TC.TEXT_1, None):
+            marked += 1
+            if marked > ACCENTS_MAX:
+                st = "sup_" if st.startswith("sup_") else "plain"
         r = p.add_run()
         r.text = seg
         sup = st.startswith("sup_")
@@ -660,7 +670,7 @@ def _header(ctx, s, sl, n, title_w=None):
         if secno:                                       # the section number, large, on the title's line, right
             ty_ = (t.top + t.height) / 914400            # the title's foot (it sits on its rule)
             _write(_box(sl, RIGHT - 0.9, ty_ - 0.62, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
-                   [{"text": secno, "size": 26, "bold": False, "numbers": False, "color": TC.ACCENT_1,
+                   [{"text": secno, "size": 26, "bold": True, "numbers": False, "color": TC.ACCENT_1,
                      "align": PP_ALIGN.RIGHT, "heading": True}])
     ctx.track(n, s["title"], s.get("title_prov"))
     w = title_w or (RIGHT - LEFT)
@@ -1445,6 +1455,31 @@ _TARGET_CAT = re.compile(r"(?i)\b(target|goal|plan|budget)\b")
 PLOT_FR = (0.02, 0.03, 0.96, 0.85)                       # x, y, w, h of an annotated column chart's plot area
 
 
+def _delta_pair(d, cats, vals):
+    """chart "delta": {"from": category, "to": category, "label"?}: the two bars a difference arrow joins."""
+    if not isinstance(d, dict):
+        return None
+    idx = lambda v: (int(v) if isinstance(v, int) and 0 <= v < len(cats)       # noqa: E731
+                     else next((j for j, cv in enumerate(cats) if str(cv).strip().lower() == str(v).strip().lower()),
+                           None))
+    j0, j1 = idx(d.get("from")), idx(d.get("to"))
+    if j0 is None or j1 is None or j0 == j1 or not vals[j0] or vals[j0] <= 0:
+        return None
+    return j0, j1, _txt(d.get("label") or "")
+
+
+def _delta_label(a: float, b: float, unit: str, dec) -> str:
+    """The difference the way a consultant says it: a multiple from 2x, else the change in points or units."""
+    r = b / a
+    if r >= 2 or r <= 0.5:
+        return f"{r:.0f}x" if r >= 10 else f"{r:.1f}x".replace(".0x", "x")
+    dv = b - a
+    sign = "+" if dv >= 0 else "\u2212"
+    if (unit or "").strip() == "%":
+        return f"{sign}{abs(dv):.{dec or 0}f} pts"
+    return sign + fmt_value(abs(dv), unit, dec)
+
+
 def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     """think-cell's grammar on a single-series column chart, drawn as native shapes over it: a CAGR arrow over a run of
     periods, a dashed target line (chart "target"), and a target category drawn as a dashed outline, not a solid bar.
@@ -1457,10 +1492,14 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         and c.get("cagr", True) is not False
     target = c.get("target") if isinstance(c.get("target"), (int, float)) else None
     tcat = [j for j, cv in enumerate(cats) if _TARGET_CAT.search(cv)]
-    if not (periods or target is not None or tcat):
+    delta = _delta_pair(c.get("delta"), cats, vals)
+    desc = [_txt(d) for d in (c.get("descriptors") or [])][:k] if isinstance(c.get("descriptors"), list) else []
+    if delta and periods:
+        periods = False                                   # one arrow per chart: the asked-for difference wins
+    if not (periods or target is not None or tcat or delta or any(desc)):
         return
     top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
-    M = top * (1.42 if periods else 1.18)                 # headroom: the arrow rides above the tallest label
+    M = top * (1.42 if periods else 1.3 if delta else 1.18)   # headroom: an arrow rides above the tallest label
     ch = gf.chart
     va = ch.value_axis
     va.minimum_scale, va.maximum_scale = 0, M
@@ -1477,6 +1516,13 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
     lay.append(ml)
     px, py, pw, ph = x + w * PLOT_FR[0], y + h * PLOT_FR[1], w * PLOT_FR[2], h * PLOT_FR[3]
+    dh = 0.0
+    if any(desc):                                         # what each category is, in a line or three under its name
+        dz = max(9, T["label"] - 2)
+        dh = max(_need([{"text": d_, "size": dz}], w / k - 0.12) for d_ in desc if d_) + 0.06
+        dh = min(dh, h * 0.28)
+        ph -= dh
+        ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
@@ -1512,6 +1558,40 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                            "align": PP_ALIGN.CENTER}], ctx, n, ((x0 + x1) / 2 - bw / 2, ya - 0.15, bw, 0.3),
                     MSO_ANCHOR.MIDDLE)
         ctx.track(n, lab, prov)
+    if delta:                                             # think-cell's difference arrow: from one bar's top to the
+        j0, j1, lab = delta                               # other's, the multiple or the gap in a pill on the line
+        lab = lab or _delta_label(vals[j0], vals[j1], unit, dec)
+        bwid = band * (1 - min(0.7, max(0.3, (c.get("_gap") or 0.6) / (1 + (c.get("_gap") or 0.6))))) / 2
+        lo, hi = (j0, j1) if vals[j1] >= vals[j0] else (j1, j0)
+        a_ = (cx(j0), yv(vals[j0]) - 0.34)                # from above the first bar's label ...
+        side = -1 if j1 > j0 else 1                       # ... to the near top corner of the other bar, clear of its
+        b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)  # label
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
+                                     Inches(b_[1]))
+        ln.name = "ov_DeltaArrow"
+        ln.line.color.theme_color = TC.ACCENT_1
+        ln.line.width = Pt(1.25)
+        end = ln.line._get_or_add_ln()
+        end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+        bw = _need_w(lab, T["label"] + 1, True) * 1.15 + 0.4
+        mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+        if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
+            my = min(my, yv(target)) - 0.32                      # label: it rides above them
+        box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.OVAL)
+        box.line.color.theme_color = TC.ACCENT_1
+        box.line.width = Pt(1)
+        _shape_text(box, [{"text": lab, "size": T["label"] + 1, "bold": True, "numbers": False,
+                           "color": TC.ACCENT_1, "align": PP_ALIGN.CENTER}], ctx, n,
+                    (mx - bw / 2, my - 0.17, bw, 0.34), MSO_ANCHOR.MIDDLE)
+        box.text_frame.word_wrap = False                  # the multiple stays on one line
+        ctx.track(n, lab, prov)
+    if any(desc):
+        dz = max(9, T["label"] - 2)
+        for j, d_ in enumerate(desc):
+            if d_:
+                _write(_box(sl, px + band * j + 0.04, y + h - dh, band - 0.08, dh, f"ov_CatNote{j + 1}"),
+                       [{"text": d_, "size": dz, "numbers": False, "color": TC.TEXT_2, "align": PP_ALIGN.CENTER}],
+                       ctx, n)
     if target is not None:
         yt = yv(target)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(px), Inches(yt), Inches(px + pw), Inches(yt))
@@ -2111,7 +2191,7 @@ def chart_problems(c: dict) -> list[str]:
     if len(units) > 1 or (len(series) == 1 and vals and min(abs(v) for v in vals) > 0
                           and max(abs(v) for v in vals) / min(abs(v) for v in vals) > (10 if len(cats) <= 3 else 40)
                           and len(cats) <= 5
-                          and c.get("kind") != "waterfall"):
+                          and c.get("kind") != "waterfall" and not c.get("delta")):   # a stated multiple is the point
         out.append("the chart mixes different measures or units in one series; show one measure in one unit")
     if len(series) == 1 and vals and sorted(vals) == [float(i) for i in range(1, len(vals) + 1)]:
         out.append("the values are ranks 1..n, not quantities; rank in a table or ordered list instead")

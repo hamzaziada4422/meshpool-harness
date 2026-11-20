@@ -352,7 +352,8 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 rec["slide_number"] = True
             if kind == "cxnSp" or (el.find(".//" + qn("a:prstGeom")) is not None and
                                    el.find(".//" + qn("a:prstGeom")).get("prst") in ("line", "straightConnector1")):
-                connected = el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
+                connected = (el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
+                             or el.find(".//" + qn("a:tailEnd")) is not None)   # an arrow points at data: not decor
                 ln = el.find(".//" + qn("a:ln"))
                 weight_pt = int(ln.get("w")) / 12700 if ln is not None and ln.get("w") else 0.75
                 axis = w is not None and (w < 0.02 or h < 0.02)       # horizontal or vertical rule

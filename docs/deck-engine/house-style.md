@@ -30,6 +30,10 @@ McKinsey-style clarity method) and built into the engine. A rule lives in one of
 | The visual follows the message: ranking -> bar, trend -> column or line, sequence -> process, plan -> roadmap, parallel items -> equal cards, results -> big numbers | storyline prompt (`VISUALS`); `story_variety` |
 | Never the same visual on two slides in a row, and never the same look | `story_variety`; the renderer plans forms across the deck (`render.plan_forms`: rows next to a table become icon columns or a numbered process, chart runs alternate a side column and a row of cards, chart grids mirror); validator P15 `same_look` |
 | A big number is shown once | `build.variety_checks` |
+| Say each fact once: a line that repeats an earlier slide, or another line on its own slide (a callout restating the cards), goes back to the writer; the executive summary is exempt | `build.repeat_checks`; prompt |
+| The insight is on the chart (think-cell): the multiple or gap as an arrow with a pill label (`delta`), the goal as a dashed target line, a short descriptor under each category; a short column chart without one goes back to the writer | renderer `_annotate_columns`; `build.fill_checks` |
+| The BCG panel grammar: from-to rows (a label tile, the old way and its cost, a chevron, the new way and its cost) and evidence lists (logo and name, one line of proof); panel headings read as one argument left to right | parts `shift` and `evidence`; prompt |
+| A minus is a minus sign; at most two highlighted phrases per paragraph | renderer `_rich` |
 | One emphasised element per exhibit, the rest muted; values labelled directly | prompt; chart renderer (`highlight_categories`) |
 | Points are drawn as cards with an icon by meaning and a 2-4 word header; four short points make a 2x2 | renderer (`render.draw_points`) |
 | Zero pictures: icons and logos are native shapes | renderer; P9 |
