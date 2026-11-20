@@ -1179,11 +1179,17 @@ def _compose_one(parts, lay, look, top, bottom):
         if len(slots) > 1 and slack > 0.01:                # what is left: a larger, equal rhythm between the parts
             gap = GAP + min(slack / (len(slots) - 1), RHYTHM_MAX - GAP)
         left = H - (sum(hs.values()) + gap * (len(slots) - 1))
+        push = 0.0
         if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout" and len(cols) > 1:
-            hs[slots[-1]] += left                          # a column ending in a callout runs it to the foot, level
-                                                           # with the column beside it
+            for j in slots[:-1]:                           # a column ending in a callout ends level with the column
+                add = min(left, max(0.0, ms[j][2] - hs[j]))   # beside it: the parts above take what they can use,
+                hs[j] += add                               # the callout keeps its own height and sits at the foot
+                left -= add                                # (stretched, it became a tall navy box around one line)
+            push = left
         y = top
         for j in slots:
+            if j == slots[-1]:
+                y += push
             out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
             y += hs[j] + gap
         empty += max(0.0, H - (y - gap - top)) * w
@@ -1282,7 +1288,7 @@ def a_grid(ctx, s, sl, n):
     if len(parts) > LAYOUTS[lay]:
         _note(s, f"layout '{lay}' has {LAYOUTS[lay]} regions for {len(parts)} parts; the extra parts were stacked")
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom = R.FOOT_RULE_Y - 0.08 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h

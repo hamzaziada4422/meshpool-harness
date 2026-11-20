@@ -185,7 +185,7 @@ def argument_layout(ctx, s, sl, n):
     intro, items = _items(s)
     co = [b["text"] if isinstance(b, dict) else str(b) for b in (s.get("callout") or {}).get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom = R.FOOT_RULE_Y - 0.06 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h

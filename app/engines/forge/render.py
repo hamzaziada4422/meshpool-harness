@@ -41,7 +41,7 @@ CW = (RIGHT - LEFT - GUT * (COLS - 1)) / COLS
 TITLE_RULE_Y, SUB_Y, BODY_Y, BODY_B = 1.42, 1.06, 1.55, 6.62
 FOOTNOTE_Y, FOOT_RULE_Y, SRC_Y = 6.62, 7.02, 7.06
 # type scale measured on the reference pages (pt): one title size everywhere, body size set by density
-T = {"title": 25, "sub": 18, "note": 8, "src": 9, "tag": 9, "label": 12, "body": 12, "lead": 12, "cell": 12,
+T = {"title": 25, "sub": 18, "note": 9, "src": 9, "tag": 9, "label": 12, "body": 12, "lead": 12, "cell": 12,
      "head": 14, "num": 20}
 DENSE = {"cell": 10, "lead": 10, "head": 14, "num": 20, "label": 10}            # challenge matrix (page 8)
 ARGUMENT = {"intro": 14, "bullet": 12, "callout": 12, "exhibit": 16, "unit": 12}  # exhibit + argument (page 3)
@@ -161,7 +161,8 @@ ACCENTS_MAX = 2                                         # marked phrases per par
 
 
 def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False, accent=True):
-    text = MINUS.sub("\u2212", str(text))
+    text = MINUS.sub("\u2212", str(text)).replace(" -> ", " to ").replace("->", " to ")   # "18% -> 11%" reads "18% to 11%" (an arrow glyph falls back to
+    # another face in the house font and overlaps)
     marked = 0
     for seg, st in _segments(text, numbers):
         if st.endswith("bold") and not heading and color in (TC.TEXT_1, None):
@@ -728,7 +729,7 @@ def footnote_text(t) -> str:
 
 def _notes_h(notes) -> float:
     """Height the footnotes take above the source rule (one line per ~190 characters, 8 pt)."""
-    return (0.14 * max(1, (len("    ".join(map(str, notes))) // 190) + 1) + 0.04) if notes else 0.0
+    return (0.155 * max(1, (len("    ".join(map(str, notes))) // 170) + 1) + 0.05) if notes else 0.0
 
 
 def _footer(ctx, s, sl, n):
@@ -2543,7 +2544,7 @@ def _as_columns(ctx, s, sl, n, items, mode):
     """Items drawn as columns under their markers (compose: numbered chevrons or icons), the body's full height."""
     from .compose import _columns
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom = FOOT_RULE_Y - 0.06 - notes_h if notes else BODY_B
     if notes:
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
@@ -2584,7 +2585,7 @@ def a_closing(ctx, s, sl, n):
     top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
     notes = s.get("footnotes") or []
     if notes:
-        notes_h = 0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04
+        notes_h = 0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05
         bottom -= notes_h + 0.06
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
 
@@ -3172,7 +3173,7 @@ def a_table_focus(ctx, s, sl, n):
         y += 0.36
     tk = s.get("takeaway") or {}
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     tk_h = 0.34 if tk.get("text") else 0
     bottom = FOOT_RULE_Y - 0.04 - notes_h - tk_h
     ctx.carry_rows = None
@@ -3609,7 +3610,7 @@ def a_benchmark(ctx, s, sl, n):
     bl = [{"text": x["text"] if isinstance(x, dict) else str(x), "size": T["body"], "bullet": True,
            "space_before": 4, "prov": x.get("prov") if isinstance(x, dict) else None} for x in s.get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom_all = FOOT_RULE_Y - 0.04 - notes_h
     rows_n = len(names) + 1
     head_h = 0.42
@@ -3675,7 +3676,7 @@ def a_football_field(ctx, s, sl, n):
     bl = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": T["body"], "bullet": True, "space_before": 4,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in s.get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom = FOOT_RULE_Y - 0.04 - notes_h
     need = _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.5 * (bottom - BODY_Y), lead, bl, dry=True, grow=False)
     gf = _range_chart(ctx, sl, n, dict(s["chart"], kind="range"), LEFT, BODY_Y, RIGHT - LEFT,
