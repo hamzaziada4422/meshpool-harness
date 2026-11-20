@@ -1046,9 +1046,13 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pvmore{align-self:center;font-size:var(--fs-xs);color:var(--ink-3)}
 
 /* Preview button on html and svg code blocks */
-.codewrap{position:relative}
-.pvbtn{position:absolute;top:18px;right:8px;border:1px solid var(--line-3);background:var(--surface);color:var(--ink-2);border-radius:var(--r-s);padding:2px 9px;font-size:var(--fs-xs);opacity:.85}
+/* a header row above the code (language, Preview), so the button never sits on the code */
+.codewrap{margin:12px 0 8px;background:var(--fill);border-radius:var(--r-m);overflow:hidden}
+.codehd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px 0 14px;font:var(--fs-xs)/1.4 var(--mono);color:var(--ink-3)}
+.msg-ai .codewrap pre{margin:0;border-radius:0}
+.msg-ai .codewrap:last-child{margin-bottom:0}
+.pvbtn{border:1px solid var(--line-3);background:var(--surface);color:var(--ink-2);border-radius:var(--r-s);padding:2px 9px;font-size:var(--fs-xs);opacity:.85}
 .pvbtn:hover,.pvbtn:focus-visible{opacity:1;background:var(--hover);color:var(--ink)}
 .pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}
 .pvth{width:96px}
-.codewrap pre{padding-right:78px}
+

@@ -110,6 +110,9 @@ fs.mkdirSync(shots, {recursive: true});
 
   // ---- code blocks in a reply
   const btns = await p.$$eval(".msg-ai .pvbtn", e => e.map(x => x.dataset.pvcode));
+  check("the Preview button sits above the code, never on it", await p.$$eval(".msg-ai .codewrap", ws => ws.length > 0 && ws.every(w => {
+    const b = w.querySelector(".pvbtn").getBoundingClientRect(), c = w.querySelector("pre").getBoundingClientRect(); return b.bottom <= c.top + 1; })));
+  await (await p.$(".msg-ai .codewrap")).scrollIntoViewIfNeeded(); await shot(p, "08b-code-blocks");
   check("html and svg code blocks get a Preview button", btns.join("|") === "html|svg", btns.join("|"));
   await p.click('.msg-ai .pvbtn[data-pvcode="html"]'); await p.waitForSelector("iframe.pv-frame");
   check("Preview on html code opens it with no file", await p.evaluate(() => /Snippet page/.test($("iframe.pv-frame").srcdoc) && $("#pvOpen").hidden));
