@@ -161,7 +161,8 @@ ACCENTS_MAX = 2                                         # marked phrases per par
 
 
 def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False, accent=True):
-    text = MINUS.sub("\u2212", str(text))
+    text = MINUS.sub("\u2212", str(text)).replace(" -> ", " to ").replace("->", " to ")   # "18% -> 11%" reads "18% to 11%" (an arrow glyph falls back to
+    # another face in the house font and overlaps)
     marked = 0
     for seg, st in _segments(text, numbers):
         if st.endswith("bold") and not heading and color in (TC.TEXT_1, None):
