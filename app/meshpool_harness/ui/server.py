@@ -392,6 +392,9 @@ class Handler(BaseHTTPRequestHandler):
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
                 return self._send(200, {"sessions": A.listing()})
+            if u.path == "/api/styles":
+                from meshpool_harness import styles as ST
+                return self._send(200, ST.listing())
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_info())
             if u.path == "/api/mcp-library":
@@ -697,6 +700,23 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/install-cli":
                 from meshpool_harness.ui.desktop import install_cli
                 return self._send(200, install_cli(admin=True))
+            if u.path == "/api/styles":                       # create, update, delete, default, sample
+                from meshpool_harness import styles as ST
+                b = self._json()
+                act = b.get("action", "create")
+                if act == "sample":
+                    return self._send(200, ST.from_sample(b.get("sample", "")))
+                if act == "create":
+                    ST.create(b.get("name", ""), b.get("instruction", ""))
+                elif act == "update":
+                    ST.update(b.get("id", ""), b.get("name", ""), b.get("instruction", ""))
+                elif act == "delete":
+                    ST.delete(b.get("id", ""))
+                elif act == "default":
+                    ST.set_default(b.get("id", ""))
+                else:
+                    return self._send(400, {"error": "Unknown action."})
+                return self._send(200, ST.listing())
             if u.path == "/api/agent":
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":
@@ -940,7 +960,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style)", u.path)
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "model":
@@ -953,6 +973,8 @@ class Handler(BaseHTTPRequestHandler):
                     s_.set_plan(bool(b.get("on")))
                 elif act == "goal":
                     s_.set_goal(b.get("text", ""))
+                elif act == "style":
+                    s_.set_style(b.get("style", ""))
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))

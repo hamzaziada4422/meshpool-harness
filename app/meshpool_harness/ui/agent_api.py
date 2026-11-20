@@ -466,7 +466,26 @@ class Session:
             body = text
         if images:
             body += _image_text(images)
-        return body
+        return body + self._style_note()
+
+    def style_id(self) -> str:
+        """This chat's own writing style (see styles.py), or "" while it follows the default."""
+        return str(read_meta(self.id).get("style") or "") if getattr(self, "id", None) else ""
+
+    def _style_note(self) -> str:
+        """The chat's writing style as a hidden note on every message: the same for every agent. Normal adds nothing."""
+        try:
+            from meshpool_harness import styles as ST
+            return ST.note(self.style_id())
+        except Exception:  # noqa: BLE001 - a style never blocks a message
+            return ""
+
+    def set_style(self, style_id: str):
+        from meshpool_harness import styles as ST
+        style_id = (style_id or "").strip()
+        if style_id and not ST.get(style_id):
+            raise ValueError("That style does not exist any more.")
+        write_meta(self.id, style=style_id or ST.NORMAL)
 
     def send(self, text: str, images: list | None = None, interrupt: bool = False) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
@@ -1026,6 +1045,7 @@ class Session:
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
+                "style": self.style_id() or _default_style(),
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1040,6 +1060,14 @@ class Session:
 
 
 # ---------- module API used by server.py ----------------------------------------------------------------------------
+
+def _default_style() -> str:
+    try:
+        from meshpool_harness import styles as ST
+        return ST.default_id()
+    except Exception:  # noqa: BLE001
+        return "normal"
+
 
 def create(body: dict) -> dict:
     from meshpool_harness import project_store as PS
@@ -1124,6 +1152,12 @@ def create(body: dict) -> dict:
         except (KeyError, ValueError):
             pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    try:
+        from meshpool_harness import styles as ST
+        picked = str(body.get("style") or "")
+        write_meta(s.id, style=picked if picked and ST.get(picked) else ST.default_id())   # fixed for this chat
+    except Exception:  # noqa: BLE001
+        pass
     if pid:
         PS.touch(pid)
     with LOCK:

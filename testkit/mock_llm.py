@@ -130,7 +130,8 @@ class H(BaseHTTPRequestHandler):
                                 "stream": body.get("stream"), "cache_key": body.get("prompt_cache_key"),
                                 "n_tools": len(body.get("tools") or []), "n_msgs": len(body.get("messages", [])),
                                 "tool_names": [t["function"]["name"] for t in body.get("tools") or []],
-                                "has_ctx": "No em dashes" in json.dumps(body), "has_mem": "The user prefers" in json.dumps(body)}) + "\n")
+                                "has_ctx": "No em dashes" in json.dumps(body), "has_mem": "The user prefers" in json.dumps(body),
+                                "style": (lambda t: t.split("Writing style for your replies: ", 1)[1][:160] if "Writing style for your replies: " in t else "")(json.dumps(body))}) + "\n")
         if self.headers.get("Authorization") != "Bearer test-key-1234":
             self.send_response(401); self.end_headers(); self.wfile.write(b'{"error":"bad key"}'); return
         p = plan(body["messages"], body.get("tools"))
