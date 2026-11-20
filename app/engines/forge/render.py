@@ -1305,6 +1305,26 @@ def _no_wrap(dl) -> None:
 
 
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
+    c = _clean_chart(c)
+    if _small_multiples(c):                               # one chart per measure, each on its own scale
+        cats, series = [str(v) for v in c["categories"]], c["series"]
+        gap = 0.35
+        sw = (w - gap * (len(cats) - 1)) / len(cats)
+        gf = None
+        for j, cat in enumerate(cats):
+            sx = x + j * (sw + gap)
+            _write(_box(sl, sx, y, sw, 0.3, f"ov_MultipleTitle{j + 1}"),
+                   [{"text": cat, "size": T["label"], "bold": True, "numbers": False}])
+            vals = [se["values"][j] if j < len(se.get("values") or []) else None for se in series]
+            sub = {"kind": "column", "categories": [se.get("name", "") for se in series],
+                   "series": [{"name": cat, "values": vals}], "highlight_categories": [series[-1].get("name", "")],
+                   "unit": "%" if re.search(r"%|rate|share|accuracy|percent", cat, re.I) and
+                   all(isinstance(v, (int, float)) and 0 <= v <= 100 for v in vals) else "",
+                   "prov": c.get("prov")}
+            if all(isinstance(v, (int, float)) for v in vals) and len(vals) == 2 and vals[0]:
+                sub["delta"] = {"from": sub["categories"][0], "to": sub["categories"][1]}
+            gf = _chart(ctx, sl, n, sub, sx, y + 0.32, sw, h - 0.32, name=f"{name}_{j + 1}")
+        return gf
     if c.get("kind") == "range":
         return _range_chart(ctx, sl, n, c, x, y, w, h)
     if c.get("kind") == "stats":
@@ -2218,9 +2238,38 @@ def range_markers(c: dict) -> list[dict]:
     return out
 
 
+def _clean_chart(c: dict) -> dict:
+    """A category with no value in any series is dropped (a site not measured yet is not a bar of zero, and it made
+    the whole chart fall back to two bare figures)."""
+    if not isinstance(c, dict) or c.get("kind") in ("bubble", "range", "stats", "waterfall"):
+        return c
+    cats, series = list(c.get("categories") or []), [se for se in c.get("series") or [] if isinstance(se, dict)]
+    keep = [j for j in range(len(cats)) if any(j < len(se.get("values") or []) and
+                                                isinstance(se["values"][j], (int, float)) for se in series)]
+    if len(keep) == len(cats) or len(keep) < 2:
+        return c
+    out = dict(c, categories=[cats[j] for j in keep],
+               series=[dict(se, values=[se["values"][j] for j in keep]) for se in series])
+    if isinstance(c.get("descriptors"), list):
+        out["descriptors"] = [c["descriptors"][j] for j in keep if j < len(c["descriptors"])]
+    return out
+
+
+MIXED_UNITS = ("mixed", "various", "multiple", "different units", "several")
+
+
+def _small_multiples(c: dict) -> bool:
+    """Measures with different units as categories of one clustered chart (picks per hour beside an accuracy %):
+    drawn as one small chart per measure, each on its own scale."""
+    u = str(c.get("unit") or "").strip().lower()
+    return (c.get("kind") in ("column", "bar", None) and len(c.get("series") or []) >= 2
+            and 2 <= len(c.get("categories") or []) <= 4 and (u in MIXED_UNITS or " and " in u))
+
+
 def chart_problems(c: dict) -> list[str]:
     """Charts that would mislead: one bar, mixed units in one series, ranks drawn as quantities, short lines."""
-    if not c or c.get("kind") == "bubble":
+    c = _clean_chart(c)
+    if not c or c.get("kind") == "bubble" or (isinstance(c, dict) and _small_multiples(c)):
         return []
     if c.get("kind") == "range":
         return range_problems(c)
