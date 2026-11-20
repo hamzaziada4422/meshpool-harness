@@ -617,5 +617,7 @@ def test_executive_summary_and_band_composition(tmp_path):
              "decision": "Approve the $36m programme"}, side("North drives revenue"), side("South is second")], str(out))
     s = [{sh.name: sh for sh in sl.shapes} for sl in P2(str(out)).slides]
     assert "Claim3" in s[0] and "ov_Decision" in s[0]
-    assert "ov_PanelCol1" not in s[1] and "ov_PanelCol1" in s[2]          # the second chart page changes composition
-    assert "West is flat" in s[2]["ov_PanelCol1"].text_frame.text           # nothing dropped from the band
+    wide = [any(sh.has_chart and sh.width > 10 * 914400 for sh in d.values()) for d in s]
+    assert wide[1] != wide[2]                             # two chart pages in a row never share a composition
+    assert "West is flat" in " ".join(sh.text_frame.text for sh in s[2].values() if sh.has_text_frame)   # nothing
+                                                                                                    # dropped

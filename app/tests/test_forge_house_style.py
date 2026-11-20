@@ -110,3 +110,49 @@ def test_a_roadmap_with_room_gives_each_milestone_a_card(tmp_path):
     cards = [sh for sh in sl.shapes if sh.name.startswith("ov_TLCard")]
     assert r["errors"] == [] and len(cards) == 3
     assert all(c.has_text_frame and c.text_frame.text.strip() for c in cards)    # the label is in its card (P17)
+
+
+def _chart_slide(t, arch="bar_takeaway"):
+    return {"archetype": arch, "id": t, "node": t, "title": f"{t} sales lead the region", "subtitle": "Sales, $M",
+            "chart": {"kind": "bar", "categories": ["North", "South", "East"],
+                      "series": [{"name": "Sales", "values": [12, 9, 6]}], "unit": "$M"},
+            "takeaway": {"text": "North leads"}, "bullets": [{"text": "North grew 18%"}, {"text": "South is flat"}],
+            "source": SRC}
+
+
+def test_runs_of_chart_slides_alternate_and_rows_are_used_once():
+    steps = [{"action": "Approve", "detail": "x", "owner": "CFO"}, {"action": "Sign", "detail": "y", "owner": "COO"}]
+    risk = {"archetype": "challenge_matrix", "title": "Two risks need owners", "columns": ["Risk", "Today", "Action"],
+            "rows": [{"label": "Supply", "cells": [{"lead": "One source"}, {"lead": "Add a second"}]},
+                     {"label": "Price", "cells": [{"lead": "Rivals cut 8%"}, {"lead": "Hold list price"}]}]}
+    deck = [_chart_slide("1"), _chart_slide("2", "column_trend"), _chart_slide("3"), risk,
+            {"archetype": "table_focus", "title": "t", "table": {"columns": ["a", "b"], "rows": [["x", "y"]] * 3}},
+            {"archetype": "closing", "title": "Approve now", "steps": steps}]
+    forms = [s.get("_form") for s in R.plan_forms(deck)]
+    assert forms[:3] == ["side", "band", "side"]                 # no two chart slides in a row share a composition
+    assert forms[3] == "columns" and forms[5] == "columns"      # rows next to a table: icon columns, a process
+    alone = [risk, _chart_slide("4"), dict(risk, title="Two more risks")]
+    assert [s.get("_form") for s in R.plan_forms(alone)][::2] == [None, "columns"]   # banded rows once per deck
+
+
+def test_two_slides_in_a_row_that_look_alike_fail(tmp_path):
+    R.POINTS["on"] = True
+    deck = [_chart_slide("1"), _chart_slide("2")]
+    for s in deck:
+        s["layout"] = "side"                                    # forced: the same composition twice
+    _, _, out = _render(deck, tmp_path)
+    v = VP.validate(out, VP.load_rules(), render=False, density="balanced")
+    assert any(f["rule"] == "P15" and "looks like slide 1" in f["message"] for f in v["failures"])
+    _, _, out2 = _render([_chart_slide("1"), _chart_slide("2")], tmp_path, "d2.pptx")   # planned: they alternate
+    v2 = VP.validate(out2, VP.load_rules(), render=False, density="balanced")
+    assert not [f for f in v2["failures"] if "looks like slide" in f["message"]]
+
+
+def test_a_big_number_shown_twice_goes_back_to_the_writer():
+    from engines.forge.build import variety_checks
+    st = lambda v: {"type": "stats", "items": [{"value": v, "label": "saving per van"}]}  # noqa: E731
+    slides = [{"archetype": "grid", "title": "a", "parts": [st("$6,510"), {"type": "text", "lead": "x"}]},
+              {"archetype": "bar_takeaway", "title": "b", "chart": {"categories": ["a"], "series": []}},
+              {"archetype": "grid", "title": "c", "parts": [st("$6,510"), {"type": "chart", "chart": {}}]}]
+    msgs = variety_checks(slides)
+    assert any("already a big number on slide 1" in m for m in msgs.get(3, []))

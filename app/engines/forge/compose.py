@@ -167,6 +167,9 @@ def _col_blocks(it, z, figure):
     for b in it["bullets"]:
         out.append({"text": b["text"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bullet": True,
                     "space_before": 4, "prov": b.get("prov")})
+    if it.get("foot"):                                    # who and when: an accent line at the foot of the column
+        out.append({"text": it["foot"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bold": True, "numbers": False,
+                    "color": TC.ACCENT_1, "space_before": 8})
     return out
 
 
@@ -208,7 +211,8 @@ def argument_layout(ctx, s, sl, n):
 
 
 def _spans(k):
-    return {2: [(0, 11), (12, 23)], 3: [(0, 7), (8, 15), (16, 23)], 4: [(0, 5), (6, 11), (12, 17), (18, 23)]}[k]
+    return {2: [(0, 11), (12, 23)], 3: [(0, 7), (8, 15), (16, 23)], 4: [(0, 5), (6, 11), (12, 17), (18, 23)],
+            5: [(0, 3), (5, 8), (10, 13), (15, 18), (20, 23)]}[k]
 
 
 def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
@@ -221,7 +225,7 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
         mode = "badges" if sum(1 for i in icons if i) < 2 else "icons"   # one shared look per slide
     mark_h = {"figures": 0.95, "process": 0.62, "icons": 0.72, "badges": 0.62}[mode]
     best = None
-    for z in range(len(SIZES)):
+    for z in range(len(SIZES) if k <= 4 else 2):          # five narrow columns grow one step at most
         need = max(R._need(_col_blocks(it, z, f), w) for it, f, (_, w) in zip(items, figs, cols))
         if need <= avail - mark_h or best is None:
             best = (z, need)

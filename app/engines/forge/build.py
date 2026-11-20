@@ -1089,6 +1089,21 @@ def variety_checks(slides) -> dict[int, list[str]]:
             out.setdefault(i, []).append(f"only {len(charted)} of {len(body)} content slides show a chart; make this "
                                          "one plot its numeric facts (bar_takeaway, column_trend, waterfall_bridge, "
                                          "benchmark, or a grid with a chart part) and keep the point in the title")
+    seen: dict[str, int] = {}                          # a big number shown twice says nothing new the second time
+    for i, s in body:
+        if s.get("archetype") == "executive_summary":
+            continue
+        for p_ in s.get("parts") or []:
+            if not isinstance(p_, dict) or p_.get("type") != "stats":
+                continue
+            for it in p_.get("items") or []:
+                v = str((it or {}).get("value") or "").strip() if isinstance(it, dict) else ""
+                if not v:
+                    continue
+                if v in seen and seen[v] != i:
+                    out.setdefault(i, []).append(f"the big number {v} is already a big number on slide {seen[v]}; "
+                                                 "show a different measure here, or drop it")
+                seen.setdefault(v, i)
     return out
 
 

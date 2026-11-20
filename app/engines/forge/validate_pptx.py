@@ -881,6 +881,17 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
             failures.append(F("P15", "archetype_repeat", f"Slide {s['n']}: archetype '{s['archetype']}' used {run} times "
                               "in a row; pick the archetype that best proves this title.", slide=s["n"]))
 
+    # ---------------- P15 looks: two slides in a row never look alike (house style: rows of text across the page
+    # next to rows of text, or a chart with a column beside it next to another one)
+    content = [s for s in slides if s["archetype"] not in ("cover", "section_divider", "agenda", "end")]
+    for a_, b_ in zip(content, content[1:]):
+        la, lb = _look(a_), _look(b_)
+        if la and la == lb and b_["n"] == a_["n"] + 1:
+            what = {"rows": "rows of text across the page", "chart_side": "a chart with a column of text beside it",
+                    "chart_band": "a chart across the page with a row of cards under it"}[la]
+            failures.append(F("P15", "same_look", f"Slide {b_['n']}: looks like slide {a_['n']} ({what}). Show one of "
+                              "them another way: a chart, big numbers, cards, a process or a 2x2.", slide=b_["n"]))
+
     # ---------------- P16 slide count
     want = (brief or {}).get("slide_count")
     app_re = re.compile(R["slide_count"]["appendix_section_regex"])
@@ -958,6 +969,36 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
     rules_status = summarize(failures, RULES)
     return {"file": str(path), "sha256": m["sha256"], "rules": rules_status, "failures": failures, "stats": stats,
             "evidence": m["evidence"], "measurement": public(m)}
+
+
+def _look(s: dict) -> str | None:
+    """The slide's composition family when it is one that repeats badly: "rows" (a table across the page, or three or
+    more full-width bands or rules stacked in the body) or "chart_side" (a chart on the left with a column beside
+    it). None otherwise."""
+    body = [sh for sh in s["shapes"] if not sh.get("depth") and sh.get("x") is not None and sh.get("w")
+            and sh.get("y") is not None and 1.3 < sh["y"] < 6.9]
+    if any(sh["kind"] == "graphicFrame" and sh.get("role") != "chart" and sh["w"] > 10 for sh in body):
+        return "rows"
+    exhibit = any(sh.get("role") == "chart" or sh["name"].startswith(("ov_TimelineAxis", "ov_TL", "ov_Quad", "ov_M3"))
+                  for sh in body)                          # a chart, roadmap or matrix is not rows of text
+    bands = [sh for sh in body if sh["w"] > 10 and (sh.get("h") or 0) < 1.6
+             and not sh["name"].startswith(("Tab", "Heading"))
+             and (sh.get("filled") or sh.get("role") == "line" or sh["kind"] == "cxnSp")]
+    if len(bands) >= 3 and not exhibit:
+        return "rows"
+    wide = [sh for sh in body if sh.get("role") == "chart" and sh["w"] > 10]
+    if wide:
+        under = [sh for sh in body if sh.get("filled") and sh["y"] > wide[0]["y"] + (wide[0].get("h") or 0) - 0.1
+                 and (sh.get("h") or 0) > 0.8 and sh["w"] < 6.5]
+        if len(under) >= 2:
+            return "chart_band"                          # a chart across the page with a row of cards under it
+    charts = [sh for sh in body if sh.get("role") == "chart" and sh["x"] < 1.0 and 4.5 < sh["w"] < 9.5
+              and (sh.get("h") or 0) > 3.0]
+    if charts:
+        right = charts[0]["x"] + charts[0]["w"]
+        if any(sh["x"] >= right - 0.1 and (sh.get("filled") or (sh.get("text") or "").strip()) for sh in body):
+            return "chart_side"
+    return None
 
 
 def _unaligned_feet(s: dict, n: int):

@@ -71,3 +71,8 @@ Choices made where the plan left room, with the reason. Newest last.
     the body on alternate light bands; grid parts side by side share one height; a side column of points ends at
     the exhibit's foot. Where the content is too thin to fill a slide (a roadmap of one-line milestones) the
     renderer does not pad: P20 flags it and the writer is asked for the detail.
+25. **Forms are planned per deck, not per slide (user request, 2026-11-20).** The renderer decides each slide's
+    composition knowing its neighbours (`render.plan_forms`). The validator measures looks from the file (P15
+    `same_look`: rows of text across the page, a chart with a column beside it, a chart above a row of cards), so a
+    repeat that the plan cannot avoid goes back to the writer. Pixel similarity was tried and rejected: look-alike
+    pairs scored near zero on it.

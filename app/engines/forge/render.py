@@ -2270,10 +2270,36 @@ def a_cover(ctx, s, sl, n):
              "align": PP_ALIGN.RIGHT, "color": ink}])
 
 
+def _as_columns(ctx, s, sl, n, items, mode):
+    """Items drawn as columns under their markers (compose: numbered chevrons or icons), the body's full height."""
+    from .compose import _columns
+    notes = s.get("footnotes") or []
+    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    bottom = FOOT_RULE_Y - 0.06 - notes_h if notes else BODY_B
+    if notes:
+        ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
+    y = BODY_Y + 0.1
+    _columns(ctx, s, sl, n, items, mode, y, bottom - y)
+
+
 def a_closing(ctx, s, sl, n):
-    """Closing slide: the next steps as numbered rows (action, detail, owner/timing) spread over the body."""
+    """Closing slide: the next steps as numbered rows (action, detail, owner/timing) spread over the body; next to a
+    table-like slide (plan_forms), a numbered process: a chevron per step, its detail, then owner and timing."""
     _header(ctx, s, sl, n)
     steps = [st if isinstance(st, dict) else {"action": str(st)} for st in (s.get("steps") or [])][:6]
+    if s.get("_form") == "columns" and 2 <= len(steps) <= 5:
+        items = []
+        for st in steps:
+            bl = []
+            if st.get("detail"):
+                bl.append({"text": st["detail"], "prov": st.get("prov")})
+            bl += [{"text": m if isinstance(m, str) else _txt(m), "prov": st.get("prov")}
+                   for m in (st.get("milestones") or [])[:2]]
+            who = " · ".join(v for v in (st.get("owner"), st.get("timing")) if v)
+            items.append({"lead": "**" + str(st.get("action", "")).replace("**", "") + "**", "bullets": bl,
+                          "prov": st.get("prov"), "foot": who})
+        _as_columns(ctx, s, sl, n, items, "process")
+        return
     has_when = any(st.get("owner") or st.get("timing") for st in steps)
     nx = LEFT
     ax, aw = span24(1, 7)
@@ -2351,8 +2377,30 @@ def a_closing(ctx, s, sl, n):
 
 
 def a_challenge_matrix(ctx, s, sl, n):
-    """Numbered rows (serif numeral, line icon, two-weight label) x 2 columns of lead + bullets, hairlines."""
+    """Numbered rows (serif numeral, line icon, two-weight label) x 2 columns of lead + bullets, hairlines; next to a
+    table-like slide (plan_forms), one icon column per row: its label, then each lens's lead and evidence."""
     _header(ctx, s, sl, n)
+    rows_ = [r for r in s.get("rows") or [] if isinstance(r, dict)]
+    if s.get("_form") == "columns" and 2 <= len(rows_) <= 4:
+        heads = [h for h in (s.get("columns") or [])[1:3]] + ["", ""]
+        items = []
+        for r in rows_:
+            bl = []
+            for k, c in enumerate((r.get("cells") or [])[:2]):
+                c = c if isinstance(c, dict) else {"lead": str(c)}
+                head = re.sub(r"^[A-Z]\s*[-–]\s*", "", str(heads[k] or "")).strip()
+                head = head if len(head.split()) <= 3 else ""        # "Today", "Action"; a long lens name goes
+                lead_ = str(c.get("lead") or "")
+                if lead_ and not repeats(lead_, r.get("label", ""), 0.7):   # a lead that repeats the label goes
+                    bl.append({"text": (f"**{head}:** " if head else "") + lead_, "prov": c.get("prov")})
+                for b in (c.get("bullets") or [])[:1]:
+                    b = b if isinstance(b, dict) else {"text": str(b)}
+                    if not repeats(b["text"], c.get("lead", ""), 0.7):     # a line that repeats its lead goes
+                        bl.append({"text": b["text"], "prov": b.get("prov")})
+            items.append({"lead": "**" + str(r.get("label", "")).replace("**", "") + "**", "bullets": bl,
+                          "prov": r.get("prov")})
+        _as_columns(ctx, s, sl, n, items, "icons")
+        return
     lx, lw = span24(0, 5)
     ax, aw = span24(6, 14)
     bx, bw = span24(15, 23)
@@ -2435,6 +2483,7 @@ def a_challenge_matrix(ctx, s, sl, n):
 
 def a_exhibit_argument(ctx, s, sl, n):
     """Exhibit on white (left); the argument on a grey half-panel (right) ending in a navy 'so what' with an arrow."""
+    ctx.last_side = n                                   # a chart slide after it takes the other composition
     lxx, lw = span24(0, 12)
     split = colx24(13) + 0.05
     panel = _fill(sl, split, 0, 13.333 - split, 7.5, TC.BACKGROUND_2, "ov_ArgumentPanel")
@@ -2556,7 +2605,8 @@ def _point_marker(ctx, sl, n, j, icon, x, y, d, meaning):
                      "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n, (x, y, d, d), MSO_ANCHOR.MIDDLE)
 
 
-def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False, fill=True) -> float:
+def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False, fill=True,
+                layout="auto") -> float:
     """An argument column drawn as designed points, not a bullet list: 2-4 cards, each with an icon chosen by its
     meaning (numbered badges when not every point has one), a bold lead and its detail. Four short points make a 2x2
     of boxes; otherwise the cards stack and share the height. A one-block column's text is the intro line above them.
@@ -2582,8 +2632,39 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
     short = all(len(plain(it["lead"]).split()) <= 16 and sum(len(plain(b["text"]).split()) for b in it["bullets"]) <= 14
                 for it in items)
     sizes = ((ARGUMENT["intro"], ARGUMENT["bullet"]), (ARGUMENT["bullet"], ARGUMENT["bullet"]),
-             (ARGUMENT["bullet"], 11), (11, 10), (10, 10))
+             (ARGUMENT["bullet"], 13), (13, 12), (12, 12))      # never under 12 pt: detail goes to the notes first
     plan = None
+    if layout == "row":                                        # a row of cards under a full-width exhibit
+        k = len(items)
+        cw = (w - POINT_GAP * (k - 1)) / k
+        tw = cw - 2 * POINT_PAD
+        for drop in (False, True):
+            its = [dict(it, bullets=[]) for it in items] if drop else items
+            for ls, ds in sizes:
+                need = max(_need(_point_blocks(it, ls, ds), tw) for it in its) + d + 0.1 + 2 * POINT_PAD
+                if need <= room:
+                    plan = ("row", ls, ds, need, its)
+                    break
+            if plan:
+                break
+        if plan is None:
+            return 0.0
+        if dry:
+            return h
+        if ib:
+            _write(_box(sl, x, y, w, ih, "ov_PointIntro"), ib, ctx, n)
+        _, ls, ds, _, its = plan
+        if its is not items:
+            _cut_note(s, [b["text"] for it in items for b in it["bullets"]])
+        y0 = y + ih
+        for j, it in enumerate(its):
+            cx = x + j * (cw + POINT_GAP)
+            box = _fill(sl, cx, y0, cw, room, card, f"ov_PointCard{j + 1}")
+            ty = y0 + POINT_PAD + d + 0.1
+            _shape_text(box, _point_blocks(it, ls, ds), ctx, n, (cx + POINT_PAD, ty, tw, y0 + room - POINT_PAD - ty),
+                        MSO_ANCHOR.TOP)
+            _point_marker(ctx, sl, n, j, icons[j], cx + POINT_PAD, y0 + POINT_PAD, d, plain(it["lead"])[:60])
+        return h
     if len(items) == 4 and short and w >= 4.2:                 # four short points: a 2x2 of boxes
         cw, chh = (w - POINT_GAP) / 2, (room - POINT_GAP) / 2
         tw = cw - 2 * POINT_PAD
@@ -2592,12 +2673,20 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
             if need <= chh:
                 plan = ("grid", ls, ds, need)
                 break
+    dropped_detail = False
     if plan is None:                                           # stacked cards, marker on the left
         tw = w - 2 * POINT_PAD - d - 0.12
-        for ls, ds in sizes:
-            hs = [max(_need(_point_blocks(it, ls, ds), tw) + 0.22, d + 0.26) for it in items]
-            if sum(hs) + POINT_GAP * (len(items) - 1) <= room:
-                plan = ("stack", ls, ds, hs)
+        for drop in (False, True):
+            its = [dict(it, bullets=[]) for it in items] if drop else items
+            for ls, ds in sizes:
+                hs = [max(_need(_point_blocks(it, ls, ds), tw) + 0.22, d + 0.26) for it in its]
+                if sum(hs) + POINT_GAP * (len(its) - 1) <= room:
+                    plan = ("stack", ls, ds, hs)
+                    break
+            if plan:
+                if drop and not dry:
+                    _cut_note(s, [b["text"] for it in items for b in it["bullets"]])
+                items, dropped_detail = its, drop
                 break
     if plan is None:
         return 0.0
@@ -2842,7 +2931,20 @@ def a_table_focus(ctx, s, sl, n):
             if max(need, ph) < (1 - 2 * THIN) * hgt:
                 side = None
     if as_chart or side:
+        pts_ = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]
+        if as_chart and POINTS["on"] and 2 <= len(bullets) <= 4 and s.get("_form") != "side" and \
+                (s.get("_form") == "band" or ctx.last_side == n - 1):
+            row_h = 0.42 * hgt                             # after a chart-and-column slide: chart across the page,
+            if draw_points(ctx, s, sl, n, LEFT, y + hgt - row_h, RIGHT - LEFT, row_h, pts_,   # points in a row
+                           card=TC.BACKGROUND_2, dry=True, layout="row"):
+                _chart(ctx, sl, n, as_chart, LEFT, y, RIGHT - LEFT, hgt - row_h - 0.2)
+                ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
+                draw_points(ctx, s, sl, n, LEFT, y + hgt - row_h, RIGHT - LEFT, row_h, pts_, card=TC.BACKGROUND_2,
+                            layout="row")
+                ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h if notes else None
+                return
         if as_chart:                                       # a small all-number table reads better as a chart
+            ctx.last_side = n
             gf = _chart(ctx, sl, n, as_chart, tx, y, tw, hgt)
             ctx.track(n, " ".join(" ".join(map(str, r)) for r in t["rows"]), t.get("prov"))
             eh = gf.height / 914400
@@ -2917,7 +3019,18 @@ def a_chart_takeaway(ctx, s, sl, n):
     cw_ = (RIGHT - colx(4) - GUT * (1 if len(bl) >= 3 else 0)) / (2 if len(bl) >= 3 else 1)
     halves = [bl] if len(bl) < 3 else [bl[: (len(bl) + 1) // 2], bl[(len(bl) + 1) // 2:]]
     band_fits = bool(lead) and max([_need(lead, lw_)] + [_need(c, cw_) for c in halves]) + 0.04 <= 0.4 * body_h
-    vary = (s.get("layout") == "band" or ctx.last_side == n - 1) and band_fits and s.get("layout") != "side"
+    if (POINTS["on"] and 2 <= len(bullets) <= 4 and s.get("layout") != "side" and s.get("_form") != "side"
+            and (s.get("_form") == "band" or ctx.last_side == n - 1)):   # after a chart-and-column slide: the
+        row_h = 0.42 * body_h                                             # chart across the page, its points as a
+        pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]   # row of cards under it
+        if draw_points(ctx, s, sl, n, LEFT, BODY_B - row_h, RIGHT - LEFT, row_h, pts, card=TC.BACKGROUND_2,
+                       dry=True, layout="row"):
+            _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, body_h - row_h - 0.2)
+            draw_points(ctx, s, sl, n, LEFT, BODY_B - row_h, RIGHT - LEFT, row_h, pts, card=TC.BACKGROUND_2,
+                        layout="row")
+            return
+    vary = ((s.get("layout") == "band" or ctx.last_side == n - 1) and band_fits and s.get("layout") != "side"
+            and s.get("_form") != "side")
     if not vary and (not long_series or _need(lead + bl, bw) >= 0.62 * body_h or not (lead or bl)):
         ctx.last_side = n
         # The split follows the text: a narrower column for less text (the chart gains the width), then a step up
@@ -3042,18 +3155,33 @@ def a_executive_summary(ctx, s, sl, n):
             out.append((a, d, max(_need(a, lw), _need(d, dw) if d else 0) + 0.2))
         return out
     laid = rows(size)
-    while sum(h for *_, h in laid) > bottom - top and size > 11:
+    while sum(h for *_, h in laid) > bottom - top and size > 13:   # never under 13 pt (house style)
         size -= 1
+        laid = rows(size)
+    while sum(h for *_, h in laid) > bottom - top:                   # then evidence lines go to the notes, the
+        longest = max(range(len(pts)), key=lambda k: len(pts[k].get("bullets") or []))   # longest row's last first
+        bl_ = list(pts[longest].get("bullets") or [])
+        if not bl_:
+            break
+        _cut_note(s, [bl_[-1]["text"] if isinstance(bl_[-1], dict) else str(bl_[-1])])
+        pts[longest] = dict(pts[longest], bullets=bl_[:-1])
         laid = rows(size)
     if sum(h for *_, h in laid) > bottom - top:
         ctx.miss(n, "the executive summary", int((sum(h for *_, h in laid) - (bottom - top)) * 30))
     gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / len(laid))
+    from .compose import item_icons
+    icons = item_icons([{"lead": p.get("lead", ""), "bullets": []} for p in pts]) if len(pts) <= 4 else []
+    if not icons or not all(icons):
+        icons = [None] * len(pts)                                  # one look per slide: all icons or all numbers
     y = top
     for i, (a, d, h) in enumerate(laid):
         rh = h + gap
-        _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
-               [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
-                 "color": TC.ACCENT_1}])
+        if icons[i]:
+            _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
+        else:
+            _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
+                   [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_1}])
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
@@ -3584,6 +3712,99 @@ def _relabel(slides, out_path) -> int:
     return moved
 
 
+def _tabular(s: dict) -> bool:
+    """A slide whose body is rows of text across the page: a table slide, or a grid with a table part."""
+    a = s.get("archetype")
+    return a in ("table_focus", "table_highlight") or (a == "grid" and any(
+        isinstance(p, dict) and p.get("type") == "table" for p in s.get("parts") or []))
+
+
+def _flex_rows(s: dict) -> bool:
+    """A rows slide that can be drawn as columns instead: 2-4 risks or issues, or 2-4 next steps."""
+    a = s.get("archetype")
+    if a == "challenge_matrix":
+        return 2 <= len(s.get("rows") or []) <= 4
+    if a in ("closing", "next_steps"):
+        return 2 <= len(s.get("steps") or []) <= 5
+    return False
+
+
+def _chart_kind(s: dict) -> str | None:
+    """'flex' for a chart slide that can draw its points beside the chart or under it, 'side' for one that always
+    has a column beside its exhibit (exhibit_argument), None otherwise."""
+    if not isinstance(s, dict):
+        return None
+    if s.get("archetype") == "exhibit_argument":
+        return "side"
+    if s.get("archetype") in CHART_SIDE and 2 <= len(s.get("bullets") or []) <= 4:
+        return "flex"
+    if s.get("archetype") in ("table_focus", "table_highlight") and 2 <= len(s.get("bullets") or []) <= 4 \
+            and isinstance(s.get("table"), dict) and not s["table"].get("keep_table"):
+        try:                                             # a small all-number table is drawn as a chart
+            if _table_as_chart(normalize(s)["table"]):
+                return "flex"
+        except Exception:                                # noqa: BLE001 - a table the renderer will report on
+            return None
+    return None
+
+
+def plan_chart_forms(slides: list) -> list:
+    """Runs of chart slides alternate a column beside the chart ("side") and a row of cards under it ("band"), so two
+    chart slides in a row never share a composition; fixed side pages (exhibit + argument) anchor the alternation."""
+    out = list(slides)
+    i = 0
+    while i < len(out):
+        if not _chart_kind(out[i]):
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(out) and _chart_kind(out[j + 1]):
+            j += 1
+        want = None
+        for k in range(j, i - 1, -1):                    # from the end of the run back: alternate around fixed pages
+            kind = _chart_kind(out[k])
+            form = "side" if kind == "side" else ("band" if want == "side" else "side")
+            if kind == "flex":
+                out[k] = dict(out[k], _form=form)
+            want = form
+        i = j + 1
+    return out
+
+
+def plan_forms(slides: list) -> list:
+    """No two slides in a row look alike (house style): a risk matrix or next-steps slide next to a table-like slide
+    is drawn as columns (icon columns, a numbered process), banded rows are used once per deck at most, and runs of
+    chart slides alternate their composition."""
+    slides = plan_chart_forms(slides)
+    out, prev_tab, rows_used = [], False, 0
+    for i, s in enumerate(slides):
+        if not isinstance(s, dict):
+            out.append(s)
+            continue
+        nxt = slides[i + 1] if i + 1 < len(slides) and isinstance(slides[i + 1], dict) else {}
+        if _flex_rows(s):
+            if prev_tab or _tabular(nxt) or rows_used:
+                out.append(dict(s, _form="columns"))
+                prev_tab = False
+                continue
+            rows_used += 1
+            out.append(s)
+            prev_tab = True
+            continue
+        prv = slides[i - 1] if i > 0 and isinstance(slides[i - 1], dict) else {}
+        side_next = nxt.get("archetype") == "exhibit_argument" or nxt.get("_form") == "side"
+        side_prev = prv.get("archetype") == "exhibit_argument" or prv.get("_form") == "side"
+        if s.get("archetype") == "grid" and (side_next or side_prev) and any(
+                isinstance(p_, dict) and p_.get("type") == "chart" for p_ in s.get("parts") or []):
+            s = dict(s, _form="mirror")                  # a chart grid beside a chart-and-column page: chart right
+        out.append(s)
+        prev_tab = _tabular(s)
+    return out
+
+
+CHART_SIDE = ("bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge")
+
+
 def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
     _register_diagram_archetypes()
     _register_library_archetype()
@@ -3595,7 +3816,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx = Ctx({})
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
-    queue = list(slides)
+    queue = plan_forms(list(slides))
     n = 0
     from collections import Counter
     used = Counter(str(t) for s0 in slides if s0.get("archetype") not in DIVIDERS

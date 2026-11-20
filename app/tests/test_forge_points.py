@@ -72,10 +72,21 @@ def test_longer_points_stack_as_cards_and_keep_every_word(tmp_path):
 
 
 def test_a_column_too_long_for_cards_stays_text(tmp_path):
-    long = "Customer payback falls from fourteen to ten months when the install team works from regional hubs " * 2
+    long = "Customer payback falls from fourteen to ten months when the install team works from regional hubs " * 4
     blocks = [{"text": long, "bullets": [{"text": long[:150]}, {"text": long[:150]}]} for _ in range(3)]
     r, prs, _ = _render([_slide(blocks)], tmp_path)
-    assert _cards(prs.slides[0]) == []
+    assert _cards(prs.slides[0]) == []                   # even the leads do not fit as cards at 12 pt
+
+
+def test_detail_moves_to_the_notes_before_card_type_shrinks(tmp_path):
+    lead = "Customer payback falls from fourteen to ten months with regional hubs"
+    blocks = [{"text": lead, "bullets": [{"text": lead * 2}, {"text": lead * 2}]} for _ in range(3)]
+    r, prs, _ = _render([_slide(blocks)], tmp_path)
+    sl = prs.slides[0]
+    assert len(_cards(sl)) == 3
+    sizes = [r_.font.size.pt for c in _cards(sl) for p in c.text_frame.paragraphs for r_ in p.runs if r_.font.size]
+    assert sizes and min(sizes) >= 12
+    assert "regional hubsCustomer payback" in sl.notes_slide.notes_text_frame.text   # the detail is kept, in the notes
 
 
 def test_points_off_draws_the_text_column(tmp_path):

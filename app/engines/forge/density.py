@@ -63,9 +63,9 @@ def detect(text: str, option=None) -> str:
 # ------------------------------------------------------------------ type scale (pt), on top of render.T/DENSE/ARGUMENT
 SCALES = {
     "read": {"T": {}, "DENSE": {}, "ARGUMENT": {}, "bump": 0},
-    "balanced": {"T": {"body": 13, "lead": 13, "cell": 13, "head": 15},
-                 "DENSE": {"cell": 11, "lead": 11, "label": 11},
-                 "ARGUMENT": {"intro": 15, "bullet": 13, "callout": 13}, "bump": 1},
+    "balanced": {"T": {"body": 14, "lead": 14, "cell": 14, "head": 16, "label": 13},   # house style: 14 pt body
+                 "DENSE": {"cell": 13, "lead": 14, "head": 16, "label": 13},
+                 "ARGUMENT": {"intro": 16, "bullet": 14, "callout": 14}, "bump": 1},
     "present": {"T": {"body": 16, "lead": 18, "cell": 16, "head": 18, "label": 14, "num": 28},
                 "DENSE": {"cell": 14, "lead": 16, "head": 16, "num": 24, "label": 14},
                 "ARGUMENT": {"intro": 18, "bullet": 16, "callout": 16, "exhibit": 18, "unit": 13}, "bump": 4},

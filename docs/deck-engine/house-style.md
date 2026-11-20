@@ -28,7 +28,8 @@ McKinsey-style clarity method) and built into the engine. A rule lives in one of
 |---|---|
 | Every slide has an exhibit; a slide of bullets is a failed slide | prompt; a words-only grid becomes an argument with a visual per block (`parts.words_only_to_argument`) |
 | The visual follows the message: ranking -> bar, trend -> column or line, sequence -> process, plan -> roadmap, parallel items -> equal cards, results -> big numbers | storyline prompt (`VISUALS`); `story_variety` |
-| Never the same visual on two slides in a row | `story_variety` |
+| Never the same visual on two slides in a row, and never the same look | `story_variety`; the renderer plans forms across the deck (`render.plan_forms`: rows next to a table become icon columns or a numbered process, chart runs alternate a side column and a row of cards, chart grids mirror); validator P15 `same_look` |
+| A big number is shown once | `build.variety_checks` |
 | One emphasised element per exhibit, the rest muted; values labelled directly | prompt; chart renderer (`highlight_categories`) |
 | Points are drawn as cards with an icon by meaning and a 2-4 word header; four short points make a 2x2 | renderer (`render.draw_points`) |
 | Zero pictures: icons and logos are native shapes | renderer; P9 |
@@ -41,7 +42,8 @@ McKinsey-style clarity method) and built into the engine. A rule lives in one of
 | Blocks side by side share their top and bottom edges | renderer (grid parts share one height; side columns end at the exhibit's foot); validator P20 `unaligned_feet` |
 | No block of white in the body | renderer (rows of next steps and risk tables spread to the foot on alternate light bands; timelines with room get a card per milestone); validator P20 `dead_space` and `thin` |
 | One grid, one margin, one footer on every content slide | template and renderer; P7, P8 |
-| Body text 12 pt or more in exhibits, nothing under 10 pt | renderer type scale; P5 |
+| Body text 14 pt (balanced density), 12 pt at least in cards and 13 pt in the executive summary; detail moves to the notes before type shrinks | `density.SCALES`, `render.draw_points`; P5 |
+| Rows and cards that stand for things carry an icon by meaning (or numbers for the whole slide) | `compose.meaning_icon`; executive summary, cards, risk columns |
 | Every data slide has a source line; every number traces to a fact | renderer; P13 |
 
 When the content is too thin to fill a slide (a roadmap of four one-line milestones), the renderer does not pad it:

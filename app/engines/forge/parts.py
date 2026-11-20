@@ -689,10 +689,10 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     m = max(1, len(crit))
     lw = min(2.4, max(1.2, 0.34 * w))
     cw = (w - lw) / m
-    head = [[{"text": c, "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
+    head = [[{"text": c, "size": R.bump(13, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
     hh = max([R._need(b, cw - 0.08) for b in head] or [0.3]) + 0.04
     if hh > 0.75:
-        head = [[dict(b[0], size=R.bump(10, 0.5))] for b in head]
+        head = [[dict(b[0], size=R.bump(12, 0.5))] for b in head]
         hh = min(0.9, max(R._need(b, cw - 0.08) for b in head) + 0.04)
     for c_, b in enumerate(head):
         R._write(R._box(sl, x + lw + c_ * cw + 0.04, y, cw - 0.08, hh, f"ov_HvHead{i}_{c_ + 1}", MSO_ANCHOR.BOTTOM), b)
@@ -713,7 +713,7 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
         ry = body_y + r_ * rh
         if rh > 0.75 and r_ % 2 == 0 and card is None:    # tall rows: alternate light bands keep the eye on the row
             _shape(sl, MSO_SHAPE.RECTANGLE, x, ry, w, rh, f"ov_HvBand{i}_{r_ + 1}", fill=TC.BACKGROUND_2)
-        lb = [{"text": _txt(r.get("label")), "size": R.bump(12), "numbers": False, "bold": bool(r.get("highlight"))}]
+        lb = [{"text": _txt(r.get("label")), "size": R.bump(14), "numbers": False, "bold": bool(r.get("highlight"))}]
         lb = _fit_trim(lb, lw - 0.1, rh - 0.04, s, f"row {r_ + 1} of part {i}", ctx, n)
         R._write(R._box(sl, x, ry, lw - 0.1, rh, f"ov_HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
         for c_ in range(m):
@@ -1084,8 +1084,39 @@ def a_grid(ctx, s, sl, n):
     bottom = R.FOOT_RULE_Y - 0.08 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h
-    for j, box, p in compose(parts, lay, look, R.BODY_Y, bottom, s):
+    placed = compose(parts, lay, look, R.BODY_Y, bottom, s)
+    if _chart_left(placed) and (ctx.last_side == n - 1 or s.get("_form") == "mirror"):
+        alt = _mirrored(parts, lay)                       # the slide before (or after) has its chart on the left with
+        if alt:                                           # a column beside it: this one puts its chart on the right
+            placed2 = compose(alt[1], alt[0], look, R.BODY_Y, bottom, s)
+            if not _chart_left(placed2):
+                parts, placed = alt[1], placed2
+    if _chart_left(placed):
+        ctx.last_side = n
+    for j, box, p in placed:
         render_part(ctx, sl, n, p, box, look, j + 1, s)
+
+
+def _chart_left(placed) -> bool:
+    """A chart in the left part of the body with another part beside it (the chart-and-column look)."""
+    charts = [b for _, b, p in placed if p.get("type") == "chart" and b[0] < R.LEFT + 0.3 and 4.0 < b[2] < 9.5]
+    return bool(charts) and any(b[0] >= charts[0][0] + charts[0][2] - 0.1 for _, b, p in placed)
+
+
+def _mirrored(parts, lay):
+    """(layout, parts) with the chart on the right: main_side -> side_main, main_stack -> stack_main, halves with
+    its two parts swapped. None when the layout has no mirror."""
+    ci = next((k for k, p in enumerate(parts) if p.get("type") == "chart"), None)
+    if ci is None:
+        return None
+    rest = [p for k, p in enumerate(parts) if k != ci]
+    if lay == "main_side" and len(parts) == 2:
+        return "side_main", rest + [parts[ci]]
+    if lay == "main_stack" and len(parts) == 3:
+        return "stack_main", rest + [parts[ci]]
+    if lay == "halves" and len(parts) == 2:
+        return "halves", rest + [parts[ci]]
+    return None
 
 
 # ------------------------------------------------------------------ schema gate
