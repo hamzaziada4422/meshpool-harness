@@ -703,7 +703,19 @@ def _footer(ctx, s, sl, n):
         t = (src["text"] if re.match(r"(?i)^(source|note|المصدر|ملاحظة)", src["text"].strip()) else
              ("المصدر: " if _rtl(src["text"]) else "Source: ") + src["text"])
         sx, sw = span(0, 9)
-        _write(_box(sl, sx, SRC_Y, sw, 0.34, "Source"), [{"text": t, "size": T["src"], "numbers": False}])
+        sb = [{"text": t, "size": T["src"], "numbers": False}]
+        if _need(sb, sw) > 0.32:                      # a source names its documents in two lines: what will not fit
+            parts_ = re.split(r"(?<=[;,])\s+", t)    # (a writer pasting the fact list) goes to the notes, clause by
+            keep = parts_[0]                          # clause, never cut mid-word
+            for c_ in parts_[1:]:
+                if _need([dict(sb[0], text=keep + " " + c_)], sw) > 0.32:
+                    break
+                keep += " " + c_
+            rest = t[len(keep):].strip()
+            if rest:
+                s["notes"] = (s.get("notes", "") + "\n[QA] Source line shortened; the rest: " + rest).strip()
+                sb = [dict(sb[0], text=keep.rstrip(" ;,") + " and others")]
+        _write(_box(sl, sx, SRC_Y, sw, 0.34, "Source"), sb)
     edges = [colx24(i) + CW for i in range(COLS)]
     snap = lambda x: max([e for e in edges if e <= x + 1e-6] or [colx(10)])  # noqa: E731 - box edges on the grid
     right = snap(BRAND["footer_right"] - 0.1) if BRAND.get("footer_right") else RIGHT   # master artwork there
@@ -1998,7 +2010,8 @@ def stat_stack(c: dict, text: str = "") -> dict:
                    if cm and cm.group(2)
                    else "bn" if re.search(r"\$?bn|billion", ctx_, re.I)
                    else "m" if re.search(r"\$m\b|million", ctx_, re.I) else "")
-            d = dec if isinstance(dec, int) else (2 if per_share and v != int(v) else (1 if v != int(v) else 0))
+            d = (dec if isinstance(dec, int) and (v != int(v) or abs(v) < 10) else   # the chart's decimals suit its
+                 (2 if per_share and v != int(v) else (1 if v != int(v) else 0)))    # small values: $6,510, not .00
             if per_share:
                 d = 2
             num = ("-" if v < 0 else "") + cur + f"{abs(v):,.{d}f}"          # -$4.2m, not $-4.2m

@@ -169,6 +169,8 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - The last slide is the decision and the next steps, each with an owner and a date."""
 CONSULTING_BASE = CONSULTING
 
+OPENERS = ("cover", "section_divider", "end")            # title pages: only where the storyline plans them
+
 # The exhibit forms a senior partner mixes; the storyline names one per slide and the deck must vary them.
 SIDE_PANEL = {"bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge", "table_focus",
               "table_highlight", "benchmark"}
@@ -1643,12 +1645,26 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
                 + "\n".join(f"{f['id']}: {f['text']}" for f in rel), f"{task_id}-c{x.get('node')}", 6000)
         except Exception as e:
             return {"archetype": "cover", "node": x.get("node"), "title": x.get("title", ""), "notes": f"content failed: {e}"}
+    retried = []
+
+    def one_as_planned(x):
+        """The slide as the storyline planned it: a body slide that comes back as a cover or divider (a live build
+        drew a planned options table as a dark title page) is written once more, told its archetype."""
+        r = one(x)
+        planned = x.get("archetype")
+        if isinstance(r, dict) and planned not in OPENERS and r.get("archetype") in OPENERS:
+            retried.append(x.get("node"))
+            r2 = one(dict(x, needs=(x.get("needs") or "") + f" This slide MUST be archetype {planned} with its "
+                      "exhibit; it is not a cover, title or divider page."))
+            if isinstance(r2, dict) and r2.get("archetype") not in OPENERS:
+                return r2
+        return r
     if start:
         content = {"slides": [dict(x) for x in start_slides]}
     else:
         with ThreadPoolExecutor(6) as ex:
-            content = {"slides": list(ex.map(one, plan))}
-        calls += len(plan)
+            content = {"slides": list(ex.map(one_as_planned, plan))}
+        calls += len(plan) + len(retried)
     slides = [s for s in content.get("slides", []) if isinstance(s, dict)]
     if fixed:                                                  # model pages go in before the closing slide
         at = len(slides) - 1 if slides and slides[-1].get("archetype") in ("closing", "next_steps", "end") \
