@@ -1305,6 +1305,26 @@ def _no_wrap(dl) -> None:
 
 
 def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
+    c = _clean_chart(c)
+    if _small_multiples(c):                               # one chart per measure, each on its own scale
+        cats, series = [str(v) for v in c["categories"]], c["series"]
+        gap = 0.35
+        sw = (w - gap * (len(cats) - 1)) / len(cats)
+        gf = None
+        for j, cat in enumerate(cats):
+            sx = x + j * (sw + gap)
+            _write(_box(sl, sx, y, sw, 0.3, f"ov_MultipleTitle{j + 1}"),
+                   [{"text": cat, "size": T["label"], "bold": True, "numbers": False}])
+            vals = [se["values"][j] if j < len(se.get("values") or []) else None for se in series]
+            sub = {"kind": "column", "categories": [se.get("name", "") for se in series],
+                   "series": [{"name": cat, "values": vals}], "highlight_categories": [series[-1].get("name", "")],
+                   "unit": "%" if re.search(r"%|rate|share|accuracy|percent", cat, re.I) and
+                   all(isinstance(v, (int, float)) and 0 <= v <= 100 for v in vals) else "",
+                   "prov": c.get("prov")}
+            if all(isinstance(v, (int, float)) for v in vals) and len(vals) == 2 and vals[0]:
+                sub["delta"] = {"from": sub["categories"][0], "to": sub["categories"][1]}
+            gf = _chart(ctx, sl, n, sub, sx, y + 0.32, sw, h - 0.32, name=f"{name}_{j + 1}")
+        return gf
     if c.get("kind") == "range":
         return _range_chart(ctx, sl, n, c, x, y, w, h)
     if c.get("kind") == "stats":
@@ -1507,7 +1527,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if not (periods or target is not None or tcat or delta or any(desc)):
         return
     top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
-    M = top * (1.42 if periods else 1.3 if delta else 1.18)   # headroom: an arrow rides above the tallest label
+    M = top * (1.42 if periods else 1.5 if delta else 1.18)   # headroom: an arrow and its pill ride above the
+                                                              # tallest label, clear of the chart's heading
     ch = gf.chart
     va = ch.value_axis
     va.minimum_scale, va.maximum_scale = 0, M
@@ -1534,6 +1555,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         dh = min(dh, h * 0.28)
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
+    if delta and ph > 0.5:                                # a short plot needs room in inches above the tallest
+        M = max(M, top / (1 - min(0.7, 1.0 / ph)))        # label for the arrow and its pill (a fraction of the
+        va.maximum_scale = M                              # scale was not enough on a 2 in chart)
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
@@ -1577,16 +1601,26 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         side = -1 if j1 > j0 else 1                       # corner to corner: from the first bar's far top corner to
         a_ = (cx(j0) - side * bwid, yv(vals[j0]) - 0.06)  # the other bar's near one, clear of both value labels
         b_ = (cx(j1) + side * bwid, yv(vals[j1]) - 0.06)
-        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
-                                     Inches(b_[1]))
-        ln.name = "ov_DeltaArrow"
-        ln.line.color.theme_color = TC.ACCENT_1
-        ln.line.width = Pt(1.25)
-        end = ln.line._get_or_add_ln()
-        end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         bw = _need_w(lab, T["label"] + 1, True) * 1.15 + 0.4
-        mx = (a_[0] + b_[0]) / 2                          # the pill rides above both bars' value labels, never on
-        my = yv(max(vals[j0], vals[j1])) - 0.55           # them (labels sit ~0.3 in over each bar)
+        between = vals[min(j0, j1): max(j0, j1) + 1]
+        if abs(j1 - j0) > 1:                              # bars in between: an elbow above all their labels (the
+            ya = max(py + 0.25, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
+            segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
+                    ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
+            mx, my = (cx(j0) + cx(j1)) / 2, ya
+        else:
+            segs = [(a_, b_)]
+            mx = (a_[0] + b_[0]) / 2                      # the pill rides above both bars' value labels, never on
+            my = max(py + 0.2, yv(max(vals[j0], vals[j1])) - 0.55)   # them, and never above the plot
+        for k_, (p0, p1) in enumerate(segs):
+            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(p0[0]), Inches(p0[1]), Inches(p1[0]),
+                                         Inches(p1[1]))
+            ln.name = "ov_DeltaArrow" + (str(k_ + 1) if len(segs) > 1 else "")
+            ln.line.color.theme_color = TC.ACCENT_1
+            ln.line.width = Pt(1.25)
+            if k_ == len(segs) - 1:
+                end = ln.line._get_or_add_ln()
+                end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
             my = min(my, yv(target)) - 0.32                      # label: it rides above them
         box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.OVAL)
@@ -1836,9 +1870,15 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         body = [str(r[ci]) for r in rows if ci < len(r) and str(r[ci]).strip() and str(r[ci]).strip() != "n/a"]
         return bool(body) and sum(1 for v_ in body if _NUMCELL.match(_plain(v_).replace("−", "-"))) >= 0.6 * len(body)
     col_align = [PP_ALIGN.LEFT if ci == 0 or not _num_col(ci) else PP_ALIGN.RIGHT for ci in range(len(cols))]
+    hl_col = next((j for j, c in enumerate(cols) if j > 0 and re.search(r"(?i)\brecommend", _plain(c))), None) \
+        if not hl else None                               # options as columns: the recommended one is tinted
     for ci, c in enumerate(cols):
         cell = tbl.cell(hdr - 1, ci)
-        put(cell, c, True, align=col_align[ci], sz=size + (2 if not groups else 2), anchor=MSO_ANCHOR.BOTTOM)
+        if ci == hl_col:
+            cell.fill.solid()
+            cell.fill.fore_color.theme_color = TC.BACKGROUND_2
+        put(cell, c, True, align=col_align[ci], sz=size + (2 if not groups else 2), anchor=MSO_ANCHOR.BOTTOM,
+            color=TC.ACCENT_1 if ci == hl_col else TC.TEXT_1)
         _borders(cell, bottom=("accent1", 1.0))
     for r_i, row in enumerate(rows):
         ri = hdr + r_i
@@ -1872,7 +1912,11 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                     _borders(cell, bottom=("tx1", 2.0), top=("tx1", 2.0), left=("tx1", 2.0), right=("tx1", 2.0))
                 ctx.track(n, str(v), t.get("prov"))
                 continue
-            if on:                                       # the recommended row: accent text between accent rules,
+            if ci == hl_col:                             # the recommended column: a light tint, accent text
+                cell.fill.solid()
+                cell.fill.fore_color.theme_color = TC.BACKGROUND_2
+                color = TC.ACCENT_1
+            elif on:                                     # the recommended row: accent text between accent rules,
                 cell.fill.background()                   # no fill
                 color = TC.ACCENT_1
             elif ci in heat and not (total and last):
@@ -2208,9 +2252,38 @@ def range_markers(c: dict) -> list[dict]:
     return out
 
 
+def _clean_chart(c: dict) -> dict:
+    """A category with no value in any series is dropped (a site not measured yet is not a bar of zero, and it made
+    the whole chart fall back to two bare figures)."""
+    if not isinstance(c, dict) or c.get("kind") in ("bubble", "range", "stats", "waterfall"):
+        return c
+    cats, series = list(c.get("categories") or []), [se for se in c.get("series") or [] if isinstance(se, dict)]
+    keep = [j for j in range(len(cats)) if any(j < len(se.get("values") or []) and
+                                                isinstance(se["values"][j], (int, float)) for se in series)]
+    if len(keep) == len(cats) or len(keep) < 2:
+        return c
+    out = dict(c, categories=[cats[j] for j in keep],
+               series=[dict(se, values=[se["values"][j] for j in keep]) for se in series])
+    if isinstance(c.get("descriptors"), list):
+        out["descriptors"] = [c["descriptors"][j] for j in keep if j < len(c["descriptors"])]
+    return out
+
+
+MIXED_UNITS = ("mixed", "various", "multiple", "different units", "several")
+
+
+def _small_multiples(c: dict) -> bool:
+    """Measures with different units as categories of one clustered chart (picks per hour beside an accuracy %):
+    drawn as one small chart per measure, each on its own scale."""
+    u = str(c.get("unit") or "").strip().lower()
+    return (c.get("kind") in ("column", "bar", None) and len(c.get("series") or []) >= 2
+            and 2 <= len(c.get("categories") or []) <= 4 and (u in MIXED_UNITS or " and " in u))
+
+
 def chart_problems(c: dict) -> list[str]:
     """Charts that would mislead: one bar, mixed units in one series, ranks drawn as quantities, short lines."""
-    if not c or c.get("kind") == "bubble":
+    c = _clean_chart(c)
+    if not c or c.get("kind") == "bubble" or (isinstance(c, dict) and _small_multiples(c)):
         return []
     if c.get("kind") == "range":
         return range_problems(c)
@@ -2823,7 +2896,8 @@ def a_exhibit_argument(ctx, s, sl, n):
         keep_ = [b_ for b_ in co["bullets"] if not repeats(str(b_.get("text") if isinstance(b_, dict) else b_),
                                                             said, 0.75)]
         co["bullets"] = keep_
-    cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": True,
+    one_ = len(co.get("bullets") or []) == 1             # a single so-what line carries no bullet glyph
+    cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": not one_,
            "color": TC.BACKGROUND_1, "numbers": False, "space_before": 5,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in co.get("bullets") or []]
     if cb:                                             # the so-what keeps readable type (12 pt at least): a line
@@ -3490,14 +3564,15 @@ def a_executive_summary(ctx, s, sl, n):
     if not icons or not all(icons):
         icons = [None] * len(pts)                                  # one look per slide: all icons or all numbers
     y = top
+    tracker = len(pts) >= 2                               # the points are the deck's numbered sections
     for i, (a, d, h) in enumerate(laid):
         rh = h + gap
-        if icons[i]:
+        if icons[i] and not tracker:
             _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
-        else:
-            _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
-                   [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
-                     "color": TC.ACCENT_1}])
+        else:                                             # "01": the same mark as the section number on the slide
+            _write(_box(sl, LEFT, y + 0.06, 0.5, 0.5, f"role_numeral_{i + 1}"),    # that proves this point
+                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1), "size": T["num"], "bold": True,
+                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
