@@ -73,7 +73,7 @@ pptx:
     min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
     dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid,
                        risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel,
-                       library]
+                       library, cases]
                                 # diagram archetypes draw a grid part (diagrams/): their labels take the grid's floor
     overflow_tolerance_in: 0.04
   colors:                       # P6
@@ -151,6 +151,7 @@ pptx:
       hub_spoke: 110
       pyramid: 100
       funnel: 90
+      cases: 80
       library: 120              # a library layout: its slot texts plus the side column
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
       recommendations_now_next_later: 12
@@ -191,6 +192,7 @@ pptx:
           hub_spoke: 95
           pyramid: 85
           funnel: 75
+          cases: 70
           library: 100
         bullets_by_archetype:
           recommendations_now_next_later: 9
@@ -232,6 +234,7 @@ pptx:
           hub_spoke: 60
           pyramid: 55
           funnel: 50
+          cases: 45
           library: 60
         bullets_by_archetype:
           recommendations_now_next_later: 6

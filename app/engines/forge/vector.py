@@ -120,6 +120,16 @@ def parse_path(d: str) -> list[list]:
         v = float(toks[i])
         i += 1
         return v
+
+    def flag():
+        """An arc flag is one character: "011" packs two flags and a number (compact SVG, e.g. Simple Icons)."""
+        nonlocal i
+        t = toks[i]
+        if len(t) > 1 and t[0] in "01":
+            toks[i] = t[1:]
+            return int(t[0])
+        i += 1
+        return int(float(t))
     while i < len(toks):
         if re.fullmatch(r"[A-Za-z]", toks[i]):
             cmd = toks[i]
@@ -176,7 +186,7 @@ def parse_path(d: str) -> list[list]:
             last_q, last_c, pos = q, None, p
         elif C == "A":
             rx, ry, phi = num(), num(), num()
-            large, sweep = int(num()), int(num())
+            large, sweep = flag(), flag()
             p = (ox + num(), oy + num())
             for c1, c2, e in _arc(pos, rx, ry, phi, large, sweep, p):
                 cur.append(("C", c1, c2, e))
@@ -280,8 +290,18 @@ def _pt(p, box, W, H):
     return (int(round((p[0] - x) / w * W)), int(round((p[1] - y) / h * H)))
 
 
+def tight_box(d: dict) -> tuple:
+    """The drawing's own bounds (control points included), for marks drawn small inside a square canvas."""
+    pts = [q for p in d["paths"] for sub in p["subs"] for seg in sub for q in seg[1:]]
+    if not pts:
+        return d["box"]
+    x0, y0 = min(p[0] for p in pts), min(p[1] for p in pts)
+    x1, y1 = max(p[0] for p in pts), max(p[1] for p in pts)
+    return (x0, y0, max(x1 - x0, 1e-6), max(y1 - y0, 1e-6))
+
+
 def add_svg(sl, svg: str, x: float, y: float, w: float, h: float, name: str, theme_color, alt: str = "",
-            stroke_scale: float = 1.0, min_stroke_pt: float = 0.5):
+            stroke_scale: float = 1.0, min_stroke_pt: float = 0.5, tight: bool = False):
     """Draw an SVG as one native shape at (x, y, w, h) inches in a theme colour. Stroked paths keep their stroke width
     (scaled to the drawn size, times stroke_scale); filled paths are filled. Returns the shape, or None when the SVG
     has nothing drawable."""
@@ -289,7 +309,7 @@ def add_svg(sl, svg: str, x: float, y: float, w: float, h: float, name: str, the
     paths = [p for p in d["paths"] if p["fill"] or p["stroke"]]
     if not paths:
         return None
-    box = d["box"]
+    box = tight_box(d) if tight else d["box"]
     W = H = UNITS
     if box[2] != box[3]:                               # keep the aspect: the longer side gets UNITS
         W, H = (UNITS, int(UNITS * box[3] / box[2])) if box[2] > box[3] else (int(UNITS * box[2] / box[3]), UNITS)

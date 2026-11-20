@@ -68,6 +68,8 @@ ARCHETYPES = {
                 "levels [{title, text}]", ["funnel", "issue_tree"]),
     "funnel": ("diagram", "most drop out between these stages", "3-6 narrowing bars, values and conversion",
                "stages [{label, value, text}]", ["pyramid", "bar_takeaway"]),
+    "cases": ("diagram", "named companies already prove it", "a row per company: its logo, a big figure, one line",
+              "rows [{company, value, text}]", ["benchmark", "grid"]),
 }
 # labels that name a grid part or a bookend rather than an archetype note -> the note that draws it
 ALIAS = {"process_steps": "grid", "kpi_tiles": "grid", "quote": "grid", "timeline_roadmap": "gantt",

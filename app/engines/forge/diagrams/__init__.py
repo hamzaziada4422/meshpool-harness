@@ -244,3 +244,54 @@ register("matrix3x3", p_matrix3, ("items", "cells"), _matrix_check, min_h=3.0, a
 
 # ------------------------------------------------------------------ the other diagram modules register themselves
 from . import layers, radial, tree, gantt  # noqa: E402,F401
+
+
+# ------------------------------------------------------------------ cases: logo, big figure, one line per company
+def _cases_check(p, i) -> list[str]:
+    rows = p.get("rows") or []
+    errs = []
+    if not 2 <= len(rows) <= 6:
+        errs.append(f"{len(rows)} rows: give 2-6 companies")
+    bad = [j + 1 for j, r in enumerate(rows) if not isinstance(r, dict) or not r.get("company")]
+    if bad:
+        errs.append(f"rows {bad}: each needs 'company', 'value' and 'text'")
+    return errs
+
+
+def p_cases(ctx, sl, n, part, box, look, i, s, card):
+    """Company proof points: the company's mark (fetched as SVG and drawn as a vector shape, logos.py) or its name as
+    a bold wordmark, then a big figure in the accent colour and one line of text, hairlines between the rows."""
+    from .. import logos as LG
+    x, y, w, h = box
+    rows = [r for r in part.get("rows") or [] if isinstance(r, dict)][:6]
+    k = max(1, len(rows))
+    rh = h / k
+    lw = min(1.9, w * 0.32)
+    tx = x + lw + 0.2
+    for j, r in enumerate(rows):
+        ry = y + j * rh
+        company = txt(r.get("company"))
+        mark = r.get("logo") or (str(LG.fetch(company)) if LG.fetch(company) else None)
+        lh = min(0.42, rh * 0.45)
+        drawn = R.logo_shape(sl, mark, x, ry + (rh - lh) / 2, lh, lw / lh, f"ov_CaseLogo{i}_{j + 1}",
+                            f"{company} logo") if mark else 0.0
+        if drawn and drawn < lh * 1.3:                 # a square symbol (Simple Icons often has no wordmark): the
+            text_at(ctx, sl, n, s, x + drawn + 0.12, ry, lw - drawn - 0.12, rh,       # name beside it
+                    [{"text": company, "size": R.bump(13, 0.5), "bold": True, "numbers": False}],
+                    f"ov_CaseName{i}_{j + 1}", f"company {j + 1} of part {i}", MSO_ANCHOR.MIDDLE)
+        if not drawn:
+            text_at(ctx, sl, n, s, x, ry, lw, rh, [{"text": company, "size": R.bump(14, 0.5), "bold": True,
+                                                    "numbers": False}], f"ov_CaseName{i}_{j + 1}",
+                    f"company {j + 1} of part {i}", MSO_ANCHOR.MIDDLE)
+        bl = []
+        if r.get("value"):                             # the figure large in the accent colour, its line under it
+            bl.append({"text": txt(r["value"]), "size": R.bump(20, 0.5), "bold": True, "numbers": False,
+                       "color": TC.ACCENT_1, "prov": r.get("prov")})
+        bl.append({"text": txt(r.get("text")), "size": R.bump(12, 0.5), "space_before": 1, "prov": r.get("prov")})
+        text_at(ctx, sl, n, s, tx, ry + 0.04, x + w - tx, rh - 0.08, bl, f"ov_CaseText{i}_{j + 1}",
+                f"case {j + 1} of part {i}", MSO_ANCHOR.MIDDLE)
+        if j < k - 1:
+            R._rule(sl, x, ry + rh, w, TC.ACCENT_5, 0.5, f"ov_CaseRule{i}_{j + 1}")
+
+
+register("cases", p_cases, ("rows",), _cases_check, min_h=1.6, archetypes=("cases",))

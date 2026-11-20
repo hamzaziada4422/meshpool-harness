@@ -88,10 +88,13 @@ renderer applies a strict consulting design; you only fill fields.
   <= 12 leaves). org_chart: "root" {"label", "role"} and "children" [{"label", "role", "children"}] (<= 3 levels).
   cycle: "steps" [{"title", "text"}] (3-6) and an optional "center". hub_spoke: "hub" and "spokes" [{"title", "text"}]
   (3-8). pyramid: "levels" [{"title", "text"}] (3-5, top first). funnel: "stages" [{"label", "value", "text"}]
-  (3-6, widest first). Use a diagram only when its structure IS the message: risks to rank -> risk_matrix; a plan
+  (3-6, widest first). cases: "rows" [{"company": real company name, "value": the figure, "text": what it did,
+  "prov"}] (2-6; their logos are fetched and drawn as shapes, else the name is shown). Use a diagram only when its
+  structure IS the message: risks to rank -> risk_matrix; a plan
   over time with workstreams -> gantt; a metric broken into drivers or a question into sub-questions -> issue_tree;
   who reports to whom -> org_chart; a loop that feeds itself -> cycle; one centre with dependents -> hub_spoke; a
-  hierarchy of needs or layers -> pyramid; drop-off between stages -> funnel.
+  hierarchy of needs or layers -> pyramid; drop-off between stages -> funnel; named companies that prove a point
+  with one figure each -> cases.
 Choose the exhibit by the comparison (Zelazny): ranking -> bar or benchmark; change over time -> column or line;
 parts of a whole -> stacked or waterfall; a bridge from one total to another -> waterfall; ranges -> football field;
 two-way sensitivity -> heat map; qualitative scores -> grid with a harvey part. A table only when the reader needs
