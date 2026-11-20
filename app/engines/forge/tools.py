@@ -4,6 +4,7 @@ check_deck(path, slide_count?)   -> P0-P19 report with repair messages (P0: open
 check_workbook(path)             -> X0-X13 report after a headless recalculation (X0: opens in Excel without repair)
 check_document(path)             -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
 measure_office_file(path)        -> anatomy of a .pptx, .xlsx or .pdf (how it is built), with evidence IDs
+slide_layouts(message)           -> which archetypes prove a slide's message, with the reference decks' numbers
 Each returns (text, is_error). The text is short enough for a model to act on. The tools only read: they never
 write next to the user's files, so the agent can run them without asking.
 """
@@ -124,6 +125,88 @@ def qa_summary(files: list[str]) -> str:
     return "\n".join(lines)
 
 
+# What the title says -> the archetypes that prove it (the Zelazny comparison and the diagram triggers in build.py).
+LAYOUT_RULES = [
+    (r"\brisk|likelihood|probability|exposure|threat", "risk_matrix", "risks ranked by likelihood and impact"),
+    (r"priorit|value (?:vs|versus|and) effort|ease|quick win|impact (?:vs|and) effort", "matrix_3x3",
+     "items placed on two criteria, three levels each"),
+    (r"roadmap|workstream|gantt|\bplan\b|phase|by quarter|\bmonths?\b|milestone", "gantt",
+     "a plan over time by workstream"),
+    (r"driver|decompos|break(?:s)? (?:down|into)|tree|sub-?question|why ", "issue_tree",
+     "a metric broken into drivers, or a question into sub-questions"),
+    (r"reports? to|\borg\b|organi[sz]ation|span of control|layers? of management|roles?\b", "org_chart",
+     "who reports to whom"),
+    (r"cycle|loop|flywheel|reinforc|virtuous|vicious", "cycle", "a loop that feeds itself"),
+    (r"\bhub\b|platform|ecosystem|at the cent(?:re|er)|around (?:the|a|one)", "hub_spoke",
+     "one centre with the parts that depend on it"),
+    (r"funnel|conversion|drop[- ]?off|pipeline|leads? to", "funnel", "drop-off between stages"),
+    (r"pyramid|foundation|hierarchy of|build(?:s)? on", "pyramid", "layers that build on each other"),
+    (r"grew|fell|rose|declin|trend|over time|since \d{4}|cagr|a year\b|per year", "column_trend",
+     "change over time"),
+    (r"largest|smallest|rank|leads?\b|lags?\b|vs\.? peers|peer|benchmark|than", "bar_takeaway",
+     "a ranking or comparison"),
+    (r"bridge|walk|from \$?[\d.]+.* to \$?[\d.]+|because of", "waterfall_bridge", "how one total became another"),
+    (r"\bmix\b|share of|composition|split|made up of", "stacked_composition", "parts of a whole"),
+    (r"option|choose|recommend|criteria|alternative", "grid", "options against criteria (a grid with a harvey part)"),
+    (r"step|process|how (?:it|we|the)|sequence|stages?\b", "grid", "a sequence (a grid with a process part)"),
+    (r"issue|challenge|problem|barrier|pain point", "challenge_matrix", "several issues, each with its evidence"),
+]
+
+
+def suggest_layouts(message: str, limit: int = 3) -> list[dict]:
+    """Archetypes for a slide's message, best first: [{"archetype", "why"}]. Falls back to the exhibit argument."""
+    import re
+    out = []
+    for pat, arch, why in LAYOUT_RULES:
+        if re.search(pat, message or "", re.I) and all(o["archetype"] != arch or o["why"] != why for o in out):
+            out.append({"archetype": arch, "why": why})
+    if not out:
+        out.append({"archetype": "exhibit_argument", "why": "one exhibit and the argument beside it"})
+    return out[:limit]
+
+
+def slide_layouts(message: str, kind: str = "all", show_references: bool | None = None) -> tuple[str, bool]:
+    """Read-only: which layouts prove this message, and what strong slides of that kind measure (title words, body
+    words, empty space, type sizes) in the reference decks. Pictures of library slides are listed only when the
+    knowledge base is on this machine and the user turned on "show references" (MH_SHOW_REFERENCES=1)."""
+    import os
+    from . import kb
+    if not (message or "").strip():
+        return "Give the slide's message (its action title or what it must prove).", True
+    kind = kind if kind in ("all", "consulting", "financial_services") else "all"
+    show = os.environ.get("MH_SHOW_REFERENCES") == "1" if show_references is None else bool(show_references)
+    lines = [f"Layouts for: {message.strip()[:160]}"]
+    for i, sug in enumerate(suggest_layouts(message), 1):
+        pr = kb.priors(sug["archetype"], kind)
+        ref = pr["reference"]
+        def m(k, d=0):
+            v = (ref.get(k) or {}).get("median")
+            return f"{v:.{d}f}" if isinstance(v, (int, float)) else "?"
+        lines.append(f"{i}. {sug['archetype']}: {sug['why']}.")
+        lines.append(f"   Reference pages ({kind}): title {m('title_words')} words, body {m('body_words')} words, "
+                     f"largest empty block {m('empty_share', 2)} of the body, {m('n_font_sizes')} type sizes.")
+        lib = pr.get("library")
+        if lib:
+            lines.append(f"   Library: {lib['items']} items of this kind, {lib['golden']} in the golden set"
+                         + (f"; common forms: {', '.join(lib['subcategories'][:5])}" if lib.get("subcategories") else ""))
+        if show and kb.available():
+            hits = kb.search(category=(pr["categories"] or [None])[0], golden=True, limit=3)
+            for h in hits:
+                t = kb.thumbnail(h["id"])
+                if t:
+                    lines.append(f"   Reference picture (private, do not put in a deliverable): {t}")
+    try:                                                   # the layout vault (engines/forge/vault.py)
+        from . import vault
+        hits = vault.search(message, limit=4)
+    except Exception:                                      # noqa: BLE001 - a broken vault never breaks the tool
+        hits = []
+    if hits:
+        lines.append("Layout notes:")
+        lines += [f"   [{h['vault']}] {h['name']}: {h['use_when'][:110]}" for h in hits]
+    lines.append("Pick the one whose structure IS the message; write the slide in that archetype's fields.")
+    return "\n".join(lines), False
+
+
 S = {"type": "string"}
 TOOLS = {
     "check_deck": (check_deck, "Check a PowerPoint deck (.pptx) against Meshpool's 20 consulting-quality rules: opens "
@@ -147,4 +230,9 @@ TOOLS = {
                             "and tables, text density, title style, source lines (decks); formulas vs constants, links, "
                             "names, cycles, checks (workbooks). Use it to reverse-engineer a reference file.",
                             {"path": S, "pages": S}, ["path"]),
+    "slide_layouts": (slide_layouts, "Which slide layouts prove a message, and what strong slides of that kind measure "
+                      "in 130 published consulting and financial services decks (title and body words, empty space, "
+                      "type sizes). Give the slide's message (its action title). Read-only; use it while planning a "
+                      "deck's storyline or when a slide's layout does not fit its point. `kind`: all, consulting or "
+                      "financial_services.", {"message": S, "kind": S}, ["message"]),
 }

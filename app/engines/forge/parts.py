@@ -180,8 +180,8 @@ def _frame(ctx, sl, n, part, box, look, i, s):
     card = None
     if L["card"] and part.get("type") != "callout":
         card = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Card{i}")
-    if L["inset"]:
-        w, h = w - L["inset"], h - L["inset"]
+    if L["inset"]:                                   # vertical air only: a narrower part would end off the grid (P7)
+        h = h - L["inset"]
     head = _plain(part.get("heading") or "").strip()
     used = 0.0
     if head:
@@ -445,12 +445,14 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
     tw = sw - 2 * d - 0.14
     words = [wd for st in steps for wd in re.findall(r"\S+", _txt(st.get("title")) + " " + _txt(st.get("text")))]
     fits = all(R._need_w(wd, R.bump(12), True) * 1.15 <= tw for wd in words)   # else a word breaks mid-word
-    if w / k >= 1.25 and w > h * 0.9 and fits:          # wide: interlocking chevrons, text inside
-        need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},
-                                      {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
-                             for st in steps)
-        bump = next((z for z in (3, 2, 1) if need(z) <= 0.55 * h), 0)   # one type size for every step
-        ch = min(h, max(1.1, need(bump) + 0.5))           # as tall as the text needs, set a little above centre
+    need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},  # noqa: E731
+                                  {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
+                         for st in steps)
+    bump = next((z for z in (3, 2, 1) if need(z) <= 0.55 * h), 0)     # one type size for every step
+    ch = min(h, max(1.1, need(bump) + 0.5))               # chevrons as tall as their text needs
+    # chevrons only where they fill the region: in a tall region they left most of it empty (forge-kb eval, P20 on
+    # the process parts of 3 dev decks); there the stacked steps below take the height instead
+    if w / k >= 1.25 and w > h * 0.9 and fits and (ch >= 0.6 * h or w >= 1.8 * h):   # wide: chevrons, text inside
         y += (h - ch) * 0.35
         for j, st in enumerate(steps):
             sx = x + j * (sw - d + g)
@@ -728,6 +730,7 @@ def _strings(v, out):
 def render_part(ctx, sl, n, part, box, look="editorial", idx=1, s=None):
     """Draw one part inside box (x, y, w, h): the look's card and heading, then the body. A part that cannot be
     drawn is removed whole and its words are shown as plain text, so a slide is never left half-drawn."""
+    _register_diagrams()
     look = look if look in LOOKS else "editorial"
     kind = part.get("type")
     before = len(sl.shapes._spTree)
@@ -794,7 +797,7 @@ def _overhead(part, w, look) -> tuple[float, float]:
     card = L["card"] and part.get("type") != "callout"
     head = _plain(part.get("heading") or "").strip()
     used = 0.0
-    ww = w - (L["inset"] or 0)
+    ww = w                                           # the minimal look's inset is vertical only (_frame)
     if head:
         if L["heading"] == "tab":
             bl, _ = R._fit([{"text": head, "size": R.bump(13), "bold": True}], ww - 0.24, 0.62, 11)
@@ -816,6 +819,7 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
     """(min, natural, max) height of a part drawn w wide, frame included. Text, callouts, tables and quotes have one
     natural height (they never stretch); figures may grow a little; charts, processes, timelines and 2x2s are
     exhibits that take what they are given."""
+    _register_diagrams()
     oh, pad = _overhead(part, w, look)
     iw = w - 2 * pad
     t = part.get("type")
@@ -965,6 +969,7 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
     layout would overflow or leave much of the body empty, the layout that fits the content best is used instead
     (deterministic, scored on overflow and empty area). Returns [(part index, (x, y, w, h), part with its type
     step)]."""
+    _register_diagrams()
     if len(parts) > MAX_PARTS:
         _note(s, "parts left out (at most four on a slide): "
               + "; ".join(str(p.get("heading") or p.get("type")) for p in parts[MAX_PARTS:]))
@@ -1048,6 +1053,7 @@ _NEEDS = {"chart": ("chart", "categories"), "table": ("table", "rows"), "stats":
 
 
 def part_errors(p, i) -> list[str]:
+    _register_diagrams()
     if not isinstance(p, dict):
         return [f"part {i}: must be an object with a 'type'"]
     t = p.get("type")
@@ -1071,6 +1077,9 @@ def part_errors(p, i) -> list[str]:
         errs.append(f"part {i} (matrix2x2): needs exactly 4 quadrants (top-left, top-right, bottom-left, bottom-right)")
     if t == "harvey" and not p.get("criteria"):
         errs.append(f"part {i} (harvey): needs 'criteria' (the columns) and rows [{{label, scores}}]")
+    from . import diagrams as D
+    if t in D.CHECKS:
+        errs += [f"part {i} ({t}): {e}" for e in D.CHECKS[t](p, i)]
     return errs
 
 
@@ -1120,3 +1129,24 @@ def grid_fallback(s: dict) -> dict:
     s["archetype"] = "argument_only"
     s["blocks"] = [{"text": "", "bullets": [{"text": t} for t in _strings(s.get("parts") or [], [])[:8]]}]
     return s
+
+
+# ------------------------------------------------------------------ diagram parts (engines/forge/diagrams)
+_DIAGRAMS = {"on": False}
+
+
+def _register_diagrams():
+    """Diagrams (3x3 and risk matrix, trees, Gantt, cycle, hub and spoke, pyramid, funnel) are parts too: they take
+    the height they are given, like the other exhibits. Registered on first use (diagrams imports this module)."""
+    if _DIAGRAMS["on"]:
+        return
+    _DIAGRAMS["on"] = True
+    from . import diagrams as D
+    global PART_TYPES, FLEX
+    DRAW.update(D.DRAW)
+    for t, need in D.NEEDS.items():
+        _NEEDS[t] = need
+        MIN_H[t] = D.MIN_H[t]
+    PART_TYPES = tuple(dict.fromkeys(PART_TYPES + tuple(D.DRAW)))
+    FLEX = tuple(dict.fromkeys(FLEX + tuple(D.DRAW)))
+

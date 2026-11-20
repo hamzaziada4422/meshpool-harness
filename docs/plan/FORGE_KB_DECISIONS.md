@@ -42,3 +42,12 @@ Choices made where the plan left room, with the reason. Newest last.
 15. **Ingest** writes into `labels.sqlite` (table `ingested`), not into the original `components.db`, so the original
     index is never modified. One-slide files are made by dropping the other slides with python-pptx, which saves only
     the parts still reachable. The prototype scripts were read for ideas, not copied.
+16. **Zero images (user request, 2026-11-20).** Icons and SVG logos are native vector shapes; P9 fails any picture
+    (`pptx.images.allow_pictures: false`). Raster logos are left out unless a deck allows pictures. Decided pending
+    the user's answer on logos.
+17. **Band frame as an option, not the default.** The default McKinsey-style grammar is unchanged; the band frame
+    (`theme: {"frame": "band"}`) follows the user's BCG benchmark with our own colours and fonts.
+18. **Library components are local only.** They need MESHPOOL_KB and never put an item id, name or label into a deck.
+    Whether other users get them depends on licences (asked).
+19. **One pull request for steps B to G and the new look.** The changes interlock in render.py and parts.py; splitting
+    them after the fact would leave intermediate states untested. The PR lists each change with its tests.

@@ -1173,21 +1173,10 @@ def _icon(sl, el, k):
         R._alt(disc, f"circle behind the {el['meaning']} icon")
         glyph = "FFFFFF" if lum(hexes.get(el["color"], "000000")) < 0.6 else hexes.get("dk1", "0A1A2F")
         pad = d * 0.24
-    iset = R.ICON_SET.get("name")
-    if iset is None:
-        png, svg, label = R._icon_png(name, glyph), None, f"icon:lucide:{name}:{el['meaning']}"
-    else:
-        iset, nm = R.icon_ref(name, iset)
-        svg = R._icon_svg(nm, glyph, iset) if nm else None
-        png = (R._icon_png(nm, glyph) if iset == "lucide" else None) or (R._set_png(nm, glyph, iset) if svg else None)
-        label = f"icon:{iset}:{nm}:{el['meaning']}"
-    if not png:
-        return
-    pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
-    pic.name = f"ov_Icon{k}_{name}"
-    R._alt(pic, label)
-    if svg:
-        R._embed_svg(pic, svg)
+    color = R.SLOT_TC.get(el.get("color"), R.TC.TEXT_1)
+    if el.get("style") == "disc":                     # a white glyph on a dark disc, else the text colour
+        color = R.TC.BACKGROUND_1 if glyph == "FFFFFF" else R.TC.TEXT_1
+    R.draw_icon(sl, el["meaning"], x + pad, y + pad, d - 2 * pad, color, el["meaning"], f"ov_Icon{k}_{name}")
 
 
 TABLE_PAD = 0.16      # air a designed table's row may take past its text (render.TABLE_PADS; P20 allows 0.25in)

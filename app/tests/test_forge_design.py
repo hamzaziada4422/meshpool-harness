@@ -289,7 +289,7 @@ def test_rebuild_is_native_on_the_grid_with_text_inside_shapes(tmp_path):
     x, w = dark.left / 914400, dark.width / 914400
     assert min(abs(x - e) for e in D.EDGES_L) < 0.01 and min(abs(x + w - e) for e in D.EDGES_R) < 0.01
     assert abs(dark.top / 914400 - 4.4) < 0.03
-    icon = [s for s in shapes if s.name.startswith("ov_Icon") and s.shape_type == 13]
+    icon = [s for s in shapes if s.name.startswith("ov_Icon") and "Disc" not in s.name and s.shape_type != 13]  # vector, no picture
     assert icon and icon[0]._element.find(".//{*}cNvPr").get("descr").startswith("icon:lucide:")
     free = [s for s in shapes if s.shape_type == 17 and s.text_frame.text in ("$132.5B", "$28.3B")]
     assert not free                                                        # no text boxes laid over the cards (P17)

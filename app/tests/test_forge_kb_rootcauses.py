@@ -1,0 +1,86 @@
+"""Root causes found on the forge-kb eval decks (docs/results/2026-11-20-forge-kb.md, ten worst slides): each test
+pins the engine fix, not one slide."""
+from pptx import Presentation
+from pptx.util import Emu
+
+from engines.forge import render as R
+
+
+def _render(slides, tmp_path):
+    out = tmp_path / "d.pptx"
+    r = R.render(slides, str(out), carry=False, density="balanced", fix_labels=False)
+    return r, Presentation(str(out))
+
+
+def test_minimal_look_parts_end_on_the_grid(tmp_path):
+    """P7 on 10 baseline slides: the minimal look narrowed each part by its inset, so headings and callouts ended at
+    12.58 in, off the 24-column grid (right edge 12.73 in)."""
+    s = {"archetype": "grid", "id": "s", "node": "n", "title": "Two workstreams carry the plan this year",
+         "layout": "halves", "look": "minimal",
+         "parts": [{"type": "stats", "heading": "Where we stand", "items": [{"value": "5", "label": "red workstreams"},
+                                                                         {"value": "9", "label": "amber workstreams"}]},
+                   {"type": "callout", "heading": "So what", "bullets": ["Fund the recovery", "Review weekly"]}],
+         "source": {"text": "Source: integration office"}}
+    r, prs = _render([s], tmp_path)
+    assert r["errors"] == []
+    rights = [Emu(sh.left + sh.width).inches for sh in prs.slides[0].shapes
+              if sh.name.startswith(("Heading", "Callout")) and sh.width]
+    assert rights and all(abs(x - R.RIGHT) < 0.02 or x < R.RIGHT - 0.5 for x in rights), rights
+
+
+def test_short_table_never_breaks_a_word_to_grow_its_type(tmp_path):
+    """BCG benchmark slide: a short table in a tall third grew its type until "Automated" broke mid-word."""
+    from engines.forge.common import text_width_in
+    s = {"archetype": "grid", "id": "s", "node": "n", "title": "Automation cuts the cost of every claim step",
+         "layout": "thirds", "parts": [
+             {"type": "table", "heading": "Cost per task", "table": {"columns": ["Task", "Manual", "Automated"],
+              "rows": [["First notice of loss", "$12", "$1.40"], ["Fraud screening", "$9", "$0.60"],
+                       ["Settlement letter", "$6", "$0.20"]]}},
+             {"type": "stats", "items": [{"value": "-52%", "label": "handling time"}]},
+             {"type": "stats", "items": [{"value": "70%", "label": "settled same day"}]}],
+         "source": {"text": "Source: synthetic"}}
+    r, prs = _render([s], tmp_path)
+    tbl = next(sh for sh in prs.slides[0].shapes if sh.has_table).table
+    col = tbl.columns[2].width / 914400
+    run = tbl.cell(0, 2).text_frame.paragraphs[0].runs[0]
+    size = run.font.size.pt
+    assert text_width_in("Automated", size, R._font("body", True)) <= col - 0.1
+
+
+def test_process_in_a_near_square_region_stacks_and_fills(tmp_path):
+    """P20 on 3 dev decks: short chevrons in the middle of a tall region left most of it empty."""
+    from pptx import Presentation as P_
+    from engines.forge import parts as PT
+    prs = P_()
+    sl = prs.slides.add_slide(prs.slide_layouts[6])
+    part = {"type": "process", "steps": [{"title": "Name an owner", "text": "One executive per red workstream"},
+                                         {"title": "Weekly review", "text": "Steering committee tracks each item"},
+                                         {"title": "Escalate at day 60", "text": "Unresolved items go to the CEOs"}]}
+    PT.p_process(R.Ctx({}), sl, 1, part, (6.9, 1.9, 5.8, 4.4), "boxed", 1, {}, None)      # a half, near square
+    tops = sorted({round(sh.top / 914400, 2) for sh in sl.shapes if sh.name.startswith("ov_Step1_")})
+    assert len(tops) == 3                                  # stacked: one row per step, down the region
+    sl2 = prs.slides.add_slide(prs.slide_layouts[6])
+    PT.p_process(R.Ctx({}), sl2, 1, part, (0.6, 1.9, 12.1, 2.0), "boxed", 1, {}, None)     # full width, short
+    assert len({round(sh.top / 914400, 2) for sh in sl2.shapes if sh.name.startswith("ov_Step1_")}) == 1
+
+
+def test_band_frame_title_band_tracker_and_two_tone(tmp_path):
+    from engines.forge.template import default_template
+    from pptx import Presentation as P_
+    s = {"archetype": "bar_takeaway", "id": "s", "node": "n", "tracker": "2",
+         "title": "Executive summary | Margins rise with automation",
+         "chart": {"kind": "bar", "categories": ["A", "B", "C"], "series": [{"name": "x", "values": [30, 22, 14]}]},
+         "takeaway": {"text": "Margins **rise** with scale"}, "bullets": [{"text": "A leads B by **one point**"}],
+         "source": {"text": "Source: synthetic"}}
+    out = tmp_path / "b.pptx"
+    r = R.render([s], str(out), carry=False, fix_labels=False, theme={"palette": "forest", "frame": "band"})
+    assert r["errors"] == []
+    prs = P_(str(out))
+    sl = prs.slides[0]
+    assert {sh.name for sh in sl.slide_layout.shapes} >= {"Band", "BandRule"}
+    title = sl.shapes.title.text_frame.paragraphs[0].runs
+    assert title[0].text == "Executive summary | " and len(title) >= 2
+    assert any(sh.name == "ov_Tracker" and sh.text_frame.text == "2" for sh in sl.shapes)
+    plain = R.render([dict(s, tracker=None)], str(tmp_path / "p.pptx"), carry=False, fix_labels=False)
+    assert "Band" not in {sh.name for sh in P_(str(tmp_path / "p.pptx")).slides[0].slide_layout.shapes}
+    assert plain["errors"] == [] and default_template({"palette": "forest", "frame": "band"}) != default_template("forest")

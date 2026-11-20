@@ -86,6 +86,26 @@ stay.
 | 26 | `quote_voice` | stakeholders say … | ≤3 quotes with attribution | 60 |
 | 27 | `appendix_divider` | — | — | exempt |
 | 28 | `end` | — | contact / next steps | exempt |
+| 29 | `risk_matrix` | these risks matter most | 3x3 heat grid (likelihood x impact), numbered items in cells, three severity bands | 95 |
+| 30 | `matrix_3x3` | items fall into nine zones | 3x3 grid on two named criteria, optional zone names | 95 |
+| 31 | `gantt` (`gantt_plan`) | the plan runs in these workstreams | label column, period header, a bar per row, milestone diamonds, group rows | 95 |
+| 32 | `issue_tree` | the metric breaks down into these drivers | left-to-right tree, up to 3 levels and 12 leaves, elbow hairlines | 95 |
+| 33 | `org_chart` | this is who owns what | top-down tree, up to 3 levels, wide rows wrap under their parent | 85 |
+| 34 | `cycle` | each step feeds the next | 3-6 nodes on an ellipse, glued arrows, optional centre label | 85 |
+| 35 | `hub_spoke` | everything depends on one centre | hub and 3-8 spokes with glued connectors | 95 |
+| 36 | `pyramid` | each layer builds on the one below | 3-5 stacked trapezoids, text beside each band | 85 |
+| 37 | `funnel` | most drop out between these stages | 3-6 narrowing bars, values and conversion rates | 75 |
+
+Archetypes 29 to 37 are diagrams (`app/engines/forge/diagrams/`). Each is also a grid part of the same name (the 3x3
+part is `matrix3x3`), so it can fill a grid region beside a chart or text. As an archetype it draws the diagram on
+the left two thirds and the takeaway and bullets on the right third, or across the slide when there is no argument.
+Body words are the balanced caps; read and present caps are in `rules.yaml`. Their labels take the dense 10 pt floor
+(`text_fit.dense_archetypes`), like the grid's 2x2. A diagram that fails its schema keeps every part that can be
+drawn faithfully and shows the rest as text. Their proportions were studied on the golden library items and encoded
+as numbers in code; no shape, text or image was copied.
+
+The `slide_layouts` tool (engines/forge/tools.py, on the office MCP server) names the archetypes that prove a
+message, with the reference decks' numbers for them.
 
 Selection rule: the archetype is chosen to prove the title, not at random. The same archetype may appear at most 3
 times in a row (P15). Stock imagery is never used unless the user supplied it.

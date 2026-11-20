@@ -49,7 +49,8 @@ PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
             "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
             "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
-            "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon"}
+            "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon",
+            "mcp__meshpool_office__slide_layouts"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
               "ask_user"]
 BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",

@@ -168,7 +168,10 @@ def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=Fals
             else:
                 _set_font(r, size, color, bold, italic, heading, sup)
         elif st == "bold":
-            _set_font(r, size, color, True, italic, heading, sup)
+            if FRAME["band"] and not heading and color in (TC.TEXT_1, None):   # the band look marks a phrase in
+                _set_font(r, size, TC.ACCENT_1, False, italic, heading, sup)   # the accent colour, not in bold
+            else:
+                _set_font(r, size, color, True, italic, heading, sup)
         else:
             _set_font(r, size, color, bold, italic, heading, sup)
 
@@ -467,37 +470,47 @@ def _embed_svg(pic, blob: bytes) -> None:
     el.set(qn("r:embed"), rid)
 
 
+SLOT_TC = {"dk1": TC.TEXT_1, "lt1": TC.BACKGROUND_1, "dk2": TC.TEXT_2, "lt2": TC.BACKGROUND_2, "accent1": TC.ACCENT_1,
+           "accent2": TC.ACCENT_2, "accent3": TC.ACCENT_3, "accent4": TC.ACCENT_4, "accent5": TC.ACCENT_5,
+           "accent6": TC.ACCENT_6}
+
+
+def icon_svg_text(name: str, iset: str) -> str | None:
+    """The icon's SVG source (Lucide from the bundled files, other sets from engines/icons)."""
+    if iset == "lucide":
+        src = ICONS / f"{name}.svg"
+        if src.exists():
+            return src.read_text()
+    from engines import icons as IC
+    return IC.svg(name, iset)
+
+
+def draw_icon(sl, key, x, y, d, color, meaning="", shape_name=None, icon_set=None):
+    """A line icon as one native vector shape (engines/forge/vector.py) in a theme colour: no picture, editable, and
+    it recolours with the theme. Alt text icon:<set>:<name>:<meaning> (P9 counts icons by it). None when the set has
+    no such icon."""
+    from .vector import add_svg
+    chosen = icon_set if icon_set is not None else ICON_SET.get("name")
+    iset, nm = icon_ref(key, chosen)
+    text = icon_svg_text(nm, iset) if nm else None
+    if not text:
+        return None
+    label = f"icon:lucide:{key}:{meaning or key}" if chosen is None else f"icon:{iset}:{nm}:{meaning or key}"
+    return add_svg(sl, text, x, y, d, d, shape_name or f"ov_Icon_{key}", color, alt=label, stroke_scale=0.625)
+
+
 def _icon(sl, name, x, y, d, meaning="", muted=False):
-    """Thin line icon (Lucide, ISC) in a thin circle; muted draws it in the rule grey (an agenda's other sections).
-    With the deck's icon_set, that set's icon as SVG (asvg:svgBlip) with a PNG fallback."""
-    from .template import COLORS
+    """Thin line icon (Lucide, ISC; or the deck's icon set) in a thin circle, drawn as a native vector shape; muted
+    draws it in the rule grey (an agenda's other sections)."""
     circ = sl.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(y), Inches(d), Inches(d))
     circ.name = f"ov_IconRing_{name}"
     _strip_style(circ)
     circ.fill.background()
     circ.line.color.theme_color = TC.ACCENT_5 if muted else TC.TEXT_1
     circ.line.width = Pt(0.75)
-    iset = ICON_SET.get("name")
-    color = COLORS["accent5" if muted else "dk1"]
-    if iset is None:
-        png = _icon_png(name, color)
-        if png:
-            pad = d * 0.24
-            pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
-            pic.name = f"ov_Icon_{name}"
-            _alt(pic, f"icon:lucide:{name}:{meaning or name}")
-        return
-    iset, nm = icon_ref(name, iset)
-    svg = _icon_svg(nm, color, iset) if nm else None
-    png = (_icon_png(nm, color) if iset == "lucide" else None) or (_set_png(nm, color, iset) if svg else None)
-    if not png:
-        return
     pad = d * 0.24
-    pic = sl.shapes.add_picture(png, Inches(x + pad), Inches(y + pad), Inches(d - 2 * pad), Inches(d - 2 * pad))
-    pic.name = f"ov_Icon_{name}"
-    _alt(pic, f"icon:{iset}:{nm}:{meaning or name}")
-    if svg:
-        _embed_svg(pic, svg)
+    draw_icon(sl, name, x + pad, y + pad, d - 2 * pad, TC.ACCENT_5 if muted else TC.TEXT_1, meaning,
+              f"ov_Icon_{name}")
 
 
 FACE = {"head": "Segoe UI", "body": "Segoe UI"}
@@ -587,9 +600,17 @@ class Ctx:
 def _header(ctx, s, sl, n, title_w=None):
     t = sl.shapes.title
     sub = bool(s.get("subtitle"))
+    band = FRAME["band"]
+    tracker = str(s.get("tracker") or "").strip()[:3] if band else ""
+    if tracker and title_w is None:                    # the section number sits in the band's right corner
+        title_w = span24(0, 21)[1]                     # ends on a column edge (P7)
     # always write the full geometry: setting one dimension on an inherited placeholder resets the others
     t.left, t.width = Inches(LEFT), Inches(title_w or (RIGHT - LEFT))
-    t.top, t.height = (Inches(0.2), Inches(0.86)) if sub else (Inches(0.42), Inches(0.92))
+    if band:
+        from .template import BAND_H
+        t.top, t.height = Inches(0.12), Inches(BAND_H - 0.2)
+    else:
+        t.top, t.height = (Inches(0.2), Inches(0.86)) if sub else (Inches(0.42), Inches(0.92))
     tf = t.text_frame
     tf.text = ""
     title = re.sub(r"\*\*", "", s["title"])
@@ -597,7 +618,18 @@ def _header(ctx, s, sl, n, title_w=None):
     if tsize is None:
         ctx.miss(n, "the title", max(3, len(title.split()) // 4))
         tsize = 20
-    _rich(tf.paragraphs[0], title, tsize, TC.TEXT_1, True, numbers=False, heading=True)
+    if band:                                           # white on the band; "Section | message" in two tones
+        head, sep, rest = title.partition(" | ")
+        if sep and 1 <= len(head.split()) <= 4:
+            _rich(tf.paragraphs[0], head + " | ", tsize, TC.ACCENT_3, True, numbers=False, heading=True)
+            title = rest
+        _rich(tf.paragraphs[0], title, tsize, TC.BACKGROUND_1, True, numbers=False, heading=True)
+        if tracker:
+            _write(_box(sl, RIGHT - 0.6, 0.12, 0.6, 0.5, "ov_Tracker", MSO_ANCHOR.TOP),
+                   [{"text": tracker, "size": 28, "bold": True, "numbers": False, "color": TC.ACCENT_3,
+                     "align": PP_ALIGN.RIGHT}])
+    else:
+        _rich(tf.paragraphs[0], title, tsize, TC.TEXT_1, True, numbers=False, heading=True)
     ctx.track(n, s["title"], s.get("title_prov"))
     w = title_w or (RIGHT - LEFT)
     if s.get("subtitle"):                             # one line: 18 pt, stepping down to 14 pt
@@ -619,11 +651,12 @@ def _header(ctx, s, sl, n, title_w=None):
                 s["notes"] = (s.get("notes", "") + "\n[QA] subtitle shortened to one line; in full: " + sub_t).strip()
                 sub_t = head
                 ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
-        _write(_box(sl, LEFT, SUB_Y, w, 0.33, "role_subtitle_Subtitle", MSO_ANCHOR.BOTTOM),
-               [{"text": sub_t, "size": ssz, "numbers": False}])
+        _write(_box(sl, LEFT, 1.24 if band else SUB_Y, w, 0.3 if band else 0.33, "role_subtitle_Subtitle",
+                    MSO_ANCHOR.BOTTOM), [{"text": sub_t, "size": min(ssz, 16) if band else ssz, "numbers": False,
+                                         "bold": band}])
         if ssz == 14 and _need([{"text": sub_t, "size": 14}], w) > 0.35:
             ctx.miss(n, "the subtitle", max(3, len(sub_t.split()) // 3))
-    if s.get("subtitle"):            # a line under the subtitle only: never an accent line under a bare title
+    if s.get("subtitle") and not band:   # a line under the subtitle only (the band's accent rule does it there)
         _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
     x = RIGHT
     for k, tag in enumerate(reversed((s.get("tags") or [])[:2] if not sub else [])):
@@ -690,7 +723,7 @@ def _footer(ctx, s, sl, n):
         if not FRAME_TOP:
             _rule(sl, x, 0.21, tw, TC.TEXT_1, 0.75, f"ov_TagRule{k}")
         x -= 0.3 if not FRAME_TOP else 0.12
-    if FRAME_TOP:                                       # the deck's frame: a hairline across the top of every content
+    if FRAME_TOP and not FRAME["band"]:                 # the deck's frame: a hairline across the top of every content
         _rule(sl, LEFT, 0.12, snap(x - LEFT) if x < RIGHT else RIGHT - LEFT, TC.TEXT_1, 0.75, "FrameTop")
     if right - colx(10) >= 0.3:
         _write(_box(sl, colx(10), SRC_Y, right - colx(10), 0.25, "Firm"),
@@ -1410,13 +1443,26 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                         or [1])
             out.append(max(base, lines * sz * lf / 72 + pad_r))
         return out
-    while size_ > 10 and sum(row_heights(size_, row_min(size_))) + head_h(size_) > h:
+    from .common import text_width_in
+
+    def words_fit(sz):
+        """Every word of every heading (bold, sz + 2) and cell (sz) fits its column: else it breaks mid-word."""
+        for ci in range(len(cols)):
+            room = max(0.3, colw[ci] - 0.24) * 0.94          # cell margins, and LibreOffice sets wider than measured
+            heads = re.findall(r"\S+", _plain(cols[ci]))
+            if any(text_width_in(wd, sz + 2, f_bold) > room for wd in heads):
+                return False
+            cells = [wd for r in rows if ci < len(r) for wd in re.findall(r"\S+", _plain(r[ci]))]
+            if any(text_width_in(wd, sz, f_bold if ci == 0 else f_reg) > room for wd in cells):
+                return False
+        return True
+    while size_ > 10 and (sum(row_heights(size_, row_min(size_))) + head_h(size_) > h or not words_fit(size_)):
         size_ -= 1
     base_size = T["cell"]
     if not t.get("_fixed_size") and size_ >= base_size:            # a short table in a tall box: a step or two up
         while (size_ < base_size + 3 and sum(row_heights(size_ + 1, row_min(size_ + 1))) + head_h(size_ + 1)
-               + 0.18 * len(rows) <= h * 0.92):                     # the type, so the page has no empty band
-            size_ += 1
+               + 0.18 * len(rows) <= h * 0.92 and words_fit(size_ + 1)):   # the type (whole words only), so the
+            size_ += 1                                                     # page has no empty band
     t["size"] = size_
     hs = row_heights(size_, row_min(size_))
     if sum(hs) + head_h(size_) > h + 0.01 and len(rows) > 3:     # still too tall: carry rows to a continuation
@@ -1987,6 +2033,13 @@ def schema_errors(s: dict) -> list[str]:
     """Precise, fixable messages for the repair loop."""
     a = s.get("archetype")
     errs = [f"'{k}' is missing or empty (required for {a})" for k in REQUIRED.get(a, []) if not s.get(k)]
+    from .diagrams import ARCHETYPES as DA
+    if a in DA:
+        from .diagrams import schema_errors as diagram_errors
+        return errs + diagram_errors(s)
+    if a == "library":                                # a layout from the private slide library (component.py)
+        from .component import schema_errors as library_errors
+        return errs + library_errors(s)
     if a == "grid":                                   # parts library: each part is checked on its own
         from .parts import grid_errors
         return errs + grid_errors(s)
@@ -2068,6 +2121,13 @@ def fallback(s: dict) -> dict:
     if s.get("archetype") == "grid":
         from .parts import grid_fallback
         return grid_fallback(s)
+    from .diagrams import ARCHETYPES as DA
+    if s.get("archetype") in DA:
+        from .diagrams import fallback as diagram_fallback
+        return diagram_fallback(s)
+    if s.get("archetype") == "library":
+        from .component import fallback as library_fallback
+        return library_fallback(s)
     c = s.get("chart") or {}
     if c.get("kind") == "range" and chart_problems(c):
         return football_fallback(s)
@@ -2987,10 +3047,9 @@ def a_benchmark(ctx, s, sl, n):
         logo = logos.get(nm_)
         if logo and Path(logo).exists():
             d = min(0.3, band * 0.8)
-            pic = sl.shapes.add_picture(str(logo), Inches(lx), Inches(cy - d / 2), height=Inches(d))
-            pic.name = f"ov_Logo{j + 1}"
-            _alt(pic, f"{nm_} logo")
-            lx, lw_ = lx + pic.width / 914400 + 0.06, lw_ - pic.width / 914400 - 0.06
+            lw = logo_shape(sl, logo, lx, cy - d / 2, d, 1.2, f"ov_Logo{j + 1}", f"{nm_} logo")
+            if lw:
+                lx, lw_ = lx + lw + 0.06, lw_ - lw - 0.06
         is_med = j == len(names)
         hl = j in set(b.get("highlight") or [])
         blk = [{"text": nm_, "size": T["body"], "bold": is_med or hl, "numbers": False, "italic": is_med}]
@@ -3120,6 +3179,21 @@ ARCHETYPES = {"argument_only": a_argument_only, "cover": a_cover, "section_divid
 DIVIDERS = {"cover", "section_divider", "appendix_divider", "end"}
 
 
+def _register_diagram_archetypes():
+    """risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel (diagrams/).
+    Registered on first render (the diagrams package imports this module)."""
+    from .diagrams import ARCHETYPES as DA, a_diagram
+    for a in DA:
+        ARCHETYPES.setdefault(a, a_diagram)
+
+
+def _register_library_archetype():
+    """library: a layout from the private slide library drawn as native shapes (component.py). Registered on first
+    render; it needs no diagram module."""
+    from .component import a_library
+    ARCHETYPES.setdefault("library", a_library)
+
+
 FRAME_TOP = os.environ.get("FORGE_FRAME", "lines") == "lines"   # a rule on top and the source rule at the foot
 COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
 NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
@@ -3202,11 +3276,18 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     icon_set: one icon set for the whole deck ("phosphor", "material", "carbon", ... engines/icons SETS), also read
     from theme["icon_set"]; icons are then embedded as SVG with a PNG fallback. Default: Lucide as PNG."""
     from .template import theme_spec
+    try:                                                   # zero images unless the rules allow pictures (P9)
+        from .validate_pptx import load_rules
+        PICTURES["allow"] = bool(load_rules()["pptx"].get("images", {}).get("allow_pictures", False)) or \
+            os.environ.get("MH_ALLOW_PICTURES") == "1"
+    except Exception:                                      # noqa: BLE001 - unreadable rules: the strict default
+        PICTURES["allow"] = False
     _set_icons(icon_set or (theme.get("icon_set") if isinstance(theme, dict) else None))
     BRAND.update({"firm": None, "footer": None, "logo": None, "footer_right": None,
                   **{k: v for k, v in (brand or {}).items() if k in BRAND}})
     DENSITY["deck"] = set_density(density)
     spec = theme_spec(theme)
+    FRAME["band"] = spec.get("frame") == "band"
     FACE["head"], FACE["body"] = spec["fonts"]["major"], spec["fonts"]["minor"]
     template = template or default_template(theme)
     res = _render(slides, out_path, template, carry)
@@ -3225,6 +3306,33 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     return res
 
 
+FRAME = {"band": False}         # the deck's content-slide frame (template.FRAMES): "band" = dark title band
+PICTURES = {"allow": False}     # zero images (rules pptx.images.allow_pictures): raster logos are left out
+
+
+def logo_shape(sl, path, x, y, h, max_aspect, name, alt, exact_w=None) -> float:
+    """A logo at height h: an SVG logo as one native vector shape in the text colour (zero images, recolours with the
+    theme); a raster logo only when pictures are allowed. Returns the drawn width in inches (0: not drawn)."""
+    p = Path(path)
+    if p.suffix.lower() == ".svg":
+        from .vector import add_svg, parse_svg
+        try:
+            txt = p.read_text()
+            box = parse_svg(txt)["box"]
+            w = exact_w or min(h * box[2] / max(box[3], 1e-6), h * max_aspect)
+            shp = add_svg(sl, txt, x, y, w, h, name, TC.TEXT_1, alt=alt)
+            return w if shp is not None else 0.0
+        except Exception:                                  # a broken logo never breaks the deck
+            return 0.0
+    if not PICTURES["allow"]:
+        return 0.0
+    pic = sl.shapes.add_picture(str(p), Inches(x), Inches(y), height=Inches(h)) if exact_w is None else \
+        sl.shapes.add_picture(str(p), Inches(x), Inches(y), Inches(exact_w), Inches(h))
+    pic.name = name
+    _alt(pic, alt)
+    return pic.width / 914400
+
+
 def _firm_label(s) -> str:
     """The footer label: the company's footer line when it fits the label column, else its name, else the default."""
     foot = BRAND.get("footer") or ""
@@ -3234,9 +3342,13 @@ def _firm_label(s) -> str:
 
 
 def _logo_size(path: str, h: float, max_w: float) -> tuple[float, float]:
-    from PIL import Image
-    with Image.open(path) as im:
-        w0, h0 = im.size
+    if str(path).lower().endswith(".svg"):
+        from .vector import parse_svg
+        _, _, w0, h0 = parse_svg(Path(path).read_text())["box"]
+    else:
+        from PIL import Image
+        with Image.open(path) as im:
+            w0, h0 = im.size
     w = h * w0 / max(1, h0)
     if w > max_w:
         h, w = h * max_w / w, max_w
@@ -3253,10 +3365,8 @@ def _logo(sl, x_right: float, y: float, h: float, max_w: float, name: str, x_lef
     except Exception:                                      # an unreadable image never breaks the deck
         return 0.0
     x = x_left if x_left is not None else x_right - w
-    pic = sl.shapes.add_picture(str(p), Inches(x), Inches(y + (h - hh) / 2), Inches(w), Inches(hh))
-    pic.name = name
-    _alt(pic, f"{BRAND.get('firm') or 'Company'} logo")
-    return w
+    return logo_shape(sl, p, x, y + (h - hh) / 2, hh, w / max(hh, 1e-6), name,
+                      f"{BRAND.get('firm') or 'Company'} logo", exact_w=w)
 
 
 _CYCLE = ["right", "left", "above", "below"]
@@ -3301,6 +3411,8 @@ def _relabel(slides, out_path) -> int:
 
 
 def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
+    _register_diagram_archetypes()
+    _register_library_archetype()
     prs = Presentation(template or default_template())
     for sid in list(prs.slides._sldIdLst):
         prs.part.drop_rel(sid.rId)
@@ -3446,3 +3558,4 @@ def _designed(ctx, s, sl, n, spec, mode, arch) -> bool:
             s["notes"] = notes
         ctx.design[n] = {"path": "archetype", "why": f"{type(e).__name__}: {e}"[:300]}
         return False
+

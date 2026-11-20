@@ -71,7 +71,10 @@ pptx:
     wrap_safety: 0.97           # PowerPoint wraps a little earlier than raw advance widths
     line_height: 1.15           # Arial single spacing as a multiple of font size (calibrated on renders)
     min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
-    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid]
+    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid,
+                       risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel,
+                       library]
+                                # diagram archetypes draw a grid part (diagrams/): their labels take the grid's floor
     overflow_tolerance_in: 0.04
   colors:                       # P6
     srgb_exceptions: []         # hex values allowed as hardcoded colours (e.g. "FFFFFF" for knockout text)
@@ -86,6 +89,8 @@ pptx:
     overlap_min_in: 0.05
     overlap_declare_prefix: "ov_"   # shape names starting with this declare an intended overlap
     allow_panel_containment: true   # a text-free filled panel fully containing other shapes is not an overlap
+  images:                       # P9: zero images. Icons and logos are native vector shapes (vector.py), charts and
+    allow_pictures: false       # tables native; any picture part on a slide fails (a client override may allow them)
   icons:                        # P9
     max_per_slide: 4
     max_per_slide_by_archetype: {challenge_matrix: 6}
@@ -136,6 +141,17 @@ pptx:
       exhibit_argument: 170      # reference page: ~150 words of argument beside the exhibit
       table_focus: 60
       grid: 200                  # parts grid: up to four parts, each about a quarter-slide argument
+      # diagrams (engines/forge/diagrams): labels count; the side column adds a takeaway and 2-3 bullets
+      risk_matrix: 110
+      matrix_3x3: 110
+      gantt: 110
+      issue_tree: 110
+      org_chart: 100
+      cycle: 100
+      hub_spoke: 110
+      pyramid: 100
+      funnel: 90
+      library: 120              # a library layout: its slot texts plus the side column
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
       recommendations_now_next_later: 12
       timeline_roadmap: 12
@@ -166,6 +182,16 @@ pptx:
           table_focus: 60
           grid: 130
           closing: 110
+          risk_matrix: 95
+          matrix_3x3: 95
+          gantt: 95
+          issue_tree: 95
+          org_chart: 85
+          cycle: 85
+          hub_spoke: 95
+          pyramid: 85
+          funnel: 75
+          library: 100
         bullets_by_archetype:
           recommendations_now_next_later: 9
           timeline_roadmap: 9
@@ -197,6 +223,16 @@ pptx:
           grid: 80              # parts headings, stat labels, process and timeline captions included
           closing: 90           # column heads, actions, one-line details, owners and dates
           argument_only: 50
+          risk_matrix: 60
+          matrix_3x3: 60
+          gantt: 60
+          issue_tree: 60
+          org_chart: 55
+          cycle: 55
+          hub_spoke: 60
+          pyramid: 55
+          funnel: 50
+          library: 60
         bullets_by_archetype:
           recommendations_now_next_later: 6
           timeline_roadmap: 6
@@ -334,6 +370,9 @@ review:
     timeout_s: 300              # wall clock per reviewer call
     deck_models: []             # vision models first; then MH_REVIEW_MODEL, claude-sonnet-5.5, gpt-6.1-terra, kimi-k3
     text_models: []             # storyboard review and research picks: MH_STORY_REVIEW_MODEL, these, then the chain
+  references:                   # reference-guided review (review.py reference_images): golden library slides of the
+    enabled: false              # same kind sent beside each rendered slide. Off: no A/B has shown a gain yet (no model
+    per_slide: 2                # budget on 2026-11-20). Needs MESHPOOL_KB; MH_REVIEW_REFERENCES=1 turns it on
   research:                     # the reviewers' research step (engines/forge/research.py); live builds only
     enabled: true               # off with MH_RESEARCH=0, a brief that says no research, stub clients or no network
     max_questions: 6            # questions per research step
