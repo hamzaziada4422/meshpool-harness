@@ -8,6 +8,8 @@ quality doesn't depend on which model writes the content.
 |---|---|
 | [design-grammar.md](design-grammar.md) | the design system every deck gets, and what keeps it from breaking |
 | [engine-spec.md](engine-spec.md) | slide JSON schema, archetype library, renderer contract, workbook block schema, all rules (P0–P20, X0–X14) |
+| [kb.md](kb.md) | the private slide knowledge base: what it is, how to fetch it, what degrades without it, ingest, licensing |
+| [reference-measurements.md](reference-measurements.md) | 130 published decks measured: title, words, empty space, margins, type sizes, colours |
 
 ## Use it
 
@@ -26,6 +28,15 @@ python -m engines.forge.ooxml_check --install-schemas                   # once: 
 python -m engines.forge.measure_pptx deck.pptx --summary
 python -m engines.forge.measure_pdf reference.pdf [--pages 53-76]
 python -m pytest tests/test_forge.py
+```
+
+Knowledge base (optional, private; see [kb.md](kb.md)), with `MESHPOOL_KB` set:
+
+```bash
+python -m engines.forge.kb search "process flow 5 steps" --limit 5    # library items, best first
+python -m engines.forge.kb priors risk_matrix                          # what strong slides of a kind measure
+python -m engines.forge.kb ingest ~/new-templates                      # add template packs to the library
+python ../testkit/forge_kb_eval.py OUT --split dev                     # renderer-only A/B on the frozen briefs
 ```
 
 Thresholds: `app/engines/forge/rules.yaml`. Pass a client override with `--rules client.yaml`.

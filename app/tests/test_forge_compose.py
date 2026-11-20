@@ -93,7 +93,7 @@ def test_argument_slides_carry_a_visual_per_block(tmp_path):
     s2 = dict(s, blocks=[{"text": "Antitrust review could block the deal", "bullets": ["Regulators look closely"]},
                          {"text": "Debt of $47B weighs on the balance sheet", "bullets": ["Interest is $846M"]}])
     sl = _grid(tmp_path, s2)
-    icons = [sh for sh in sl.shapes if sh.shape_type == 13]
+    icons = [sh for sh in sl.shapes if sh.name.startswith("ov_Icon") and "icon:" in (sh._element.xpath(".//p:cNvPr/@descr") or [""])[0]]
     assert len(icons) == 2 and len({sh.name for sh in icons}) == 2           # one distinct icon per block
     assert any(sh.name == "Intro" for sh in sl.shapes)
 

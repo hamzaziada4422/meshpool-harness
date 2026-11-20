@@ -5,6 +5,8 @@
     POST /api/company/save     {profile, active?}   edits from the form
     POST /api/company/activate {id | null}          the profile new decks use (null: the Meshpool look)
     POST /api/company/delete   {id}
+    POST /api/company/style    {name | null}        the style pack (engines/forge/styles.py) new decks use when no
+                                                    company look is active; stored as "style" in the brand index
     POST /api/company/logo?id=&name=  <image bytes>
     POST /api/company/sample   {id}                 a three-slide sample deck in the look, no model call
     POST /api/company/open     {id}                 open that sample deck on this computer
@@ -36,7 +38,10 @@ def _view(p: dict) -> dict:
 def state() -> dict:
     from engines.forge import brand as B
     ps = B.profiles()
+    from engines.forge import styles as ST
+    style = B._index().get("style")
     return {"active": ps["active"], "profiles": [_view(p) for p in ps["profiles"]],
+            "styles": ST.listing(), "style": style if style in ST.names() else None,
             "roles": [{"key": k, "label": lb, "use": use} for k, lb, use in B.ROLES]}
 
 
@@ -100,6 +105,18 @@ def handle(method: str, u, body: bytes) -> tuple[int, dict]:
         if pid and pid not in ix.get("profiles", {}):
             raise ValueError("That company profile no longer exists.")
         ix["active"] = pid or None
+        B._write_index(ix)
+        return 200, state()
+    if path == "/api/company/style":
+        from engines.forge import styles as ST
+        name = data.get("name") or None
+        if name and name not in ST.names():
+            raise ValueError(f"Unknown style. Choose one of: {', '.join(ST.names())}.")
+        ix = B._index()
+        if name:
+            ix["style"] = name
+        else:
+            ix.pop("style", None)
         B._write_index(ix)
         return 200, state()
     if path == "/api/company/delete":

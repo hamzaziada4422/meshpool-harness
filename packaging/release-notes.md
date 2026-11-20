@@ -1,5 +1,11 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**Unreleased**
+- **Decks with zero images.** Icons and logos are drawn as native, editable vector shapes in your theme colours; a deck with a picture fails its checks.
+- **Nine new diagrams.** Risk matrix, 3x3 matrix, Gantt plan, issue tree, org chart, cycle, hub and spoke, pyramid and funnel, drawn natively and checked like every other slide.
+- **Seven style packs** from 130 published decks, chosen with `--style` or in Settings > Company, and an optional title-band look.
+- **Layout lookup.** Agents ask which layout proves a slide's message before writing it.
+
 **New in 0.0.7**
 - **A new look, built for everyday use.** Chats no longer need a folder. Projects hold their own instructions, files and memory. The sidebar has Pinned and Recents with unread dots, chats group by date, and every chat has a menu to rename, pin, move, archive or delete it. Search finds chats, projects, artifacts and scheduled tasks in one place. Settings is one window with plain sections. Streaming is smooth: no jumps, no flicker.
 - **MeshPool Auto with a stronger engine.** Coding work runs on MeshPool's new engine, built on the open-source Codex design (Apache-2.0) with MeshPool's routing, loop guard and context trimming on top. On our 52-task hard suite (same model for every agent, graded by hidden tests) it solved 47/52, the same as Codex, about twice as fast as MeshPool's previous engine. Full numbers: docs/results/v3/.

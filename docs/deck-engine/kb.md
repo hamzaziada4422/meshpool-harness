@@ -122,6 +122,17 @@ For every `.pptx` or `.potx` in the folder, ingest:
 Items land in `library/ingested/`, `thumbs/` and the `ingested` table. Vision labels can be added afterwards with the
 `labels` command. Running ingest again on the same folder adds nothing.
 
+## The layout vault and library components
+
+- `python -m engines.forge.vault private` writes one linked note per usable library item into
+  `$MESHPOOL_KB/vault/`, with its name, when to use it, its structure, its text slots and what each holds, and the
+  Forge layout that draws it. The public vault of Forge's own layouts is in `docs/deck-engine/vault/`. The
+  `slide_layouts` tool searches both.
+- A slide with `"archetype": "library", "item": "<id>", "slots": {...}` rebuilds that item as native shapes in the
+  deck's theme at render time (`engines/forge/component.py`): pictures, charts, effects and gradients are dropped,
+  colours map to theme slots, template text is cleared and the writer's text goes into the slots. No item id, name
+  or label is written into the deck. Without the knowledge base the slide's `fallback` is drawn instead.
+
 ## Library numbers (2026-11-20)
 
 The vision pass labelled 2,991 items: the `consulting_grade` and `business` tiers plus all full slides, without basic

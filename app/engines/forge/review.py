@@ -296,7 +296,50 @@ def _outline(slides: list[dict] | None, n_pages: int) -> str:
     return "\n".join(f"{i}. [{s.get('archetype', '?')}] {s.get('title', '')}" for i, s in enumerate(slides, 1))
 
 
-def build_messages(batch: list[tuple[int, Path]], slides: list[dict] | None, n_pages: int) -> list[dict]:
+REFERENCE_ASK = ("Reference slides of the same kind follow (private study material from published template packs: "
+                 "never copy their words or numbers). Compare the rendered slide with them: what is visibly weaker "
+                 "than the references in layout, spacing, hierarchy or emphasis? Add each as a complaint (scope "
+                 "\"layout\" for the drawing, \"content\" for the words); say nothing when the slide is as strong.")
+
+
+def reference_images(archetype: str | None, per_slide: int = 2) -> list[bytes]:
+    """Up to per_slide golden library thumbnails (PNG bytes) for the slide's archetype, from the private knowledge
+    base (engines/forge/kb.py). Empty when the knowledge base is off or has none of that kind."""
+    from io import BytesIO
+    from . import kb
+    if not archetype or per_slide <= 0 or not kb.available():
+        return []
+    out: list[bytes] = []
+    for cat in kb.priors(archetype).get("categories") or []:
+        for h in kb.search(category=cat, golden=True, limit=per_slide):
+            t = kb.thumbnail(h["id"])
+            if not t:
+                continue
+            try:
+                from PIL import Image
+                buf = BytesIO()
+                Image.open(t).convert("RGB").save(buf, "PNG")
+                out.append(buf.getvalue())
+            except Exception:                              # an unreadable thumbnail is skipped
+                continue
+            if len(out) >= per_slide:
+                return out
+    return out
+
+
+def references_on(rules: dict | None = None) -> tuple[bool, int]:
+    """(on, pictures per slide): rules review.references (off by default), MH_REVIEW_REFERENCES=1/0 overrides."""
+    cfg = ((rules or {}).get("review") or {}).get("references") or {}
+    on = bool(cfg.get("enabled", False))
+    env = os.environ.get("MH_REVIEW_REFERENCES")
+    if env in ("0", "1"):
+        on = env == "1"
+    return on, int(cfg.get("per_slide", 2))
+
+
+def build_messages(batch: list[tuple[int, Path]], slides: list[dict] | None, n_pages: int,
+                   references: int = 0) -> list[dict]:
+    """references: golden library pictures per slide to compare against (0: none; see references_on)."""
     parts: list[dict] = [{"type": "text", "text": f"Deck outline ({n_pages} slides):\n{_outline(slides, n_pages)}\n\n"
                           f"Review slides {', '.join(str(n) for n, _ in batch)}."}]
     for n, png in batch:
@@ -304,6 +347,10 @@ def build_messages(batch: list[tuple[int, Path]], slides: list[dict] | None, n_p
         parts.append({"type": "text", "text": f"\nSlide {n} ({(sl or {}).get('archetype', 'unknown')}). "
                       f"Writer's JSON: {_slide_context(sl)}\nRendered image of slide {n}:"})
         parts.append(image_part(png))
+        refs = reference_images((sl or {}).get("archetype"), references) if references else []
+        if refs:
+            parts.append({"type": "text", "text": f"\n{REFERENCE_ASK} References for slide {n}:"})
+            parts += [image_part(r) for r in refs]
     parts.append({"type": "text", "text": f"\nReturn the JSON for slides {', '.join(str(n) for n, _ in batch)}."
                   f"\n<run id=\"{uuid.uuid4().hex[:8]}\"/>"})
     return [{"role": "system", "content": system_prompt()}, {"role": "user", "content": parts}]
@@ -326,7 +373,8 @@ def _usage(r: dict) -> dict:
 
 def review_deck(pptx_path: str, slides: list[dict] | None = None, client=None, model: str | None = None,
                 pages=None, batch: int = 3, workers: int = 4, timeout: float = 240.0, out_dir: str | None = None,
-                pngs: list[tuple[int, Path]] | None = None, task_id: str = "forge-review") -> dict:
+                pngs: list[tuple[int, Path]] | None = None, task_id: str = "forge-review",
+                references: int = 0) -> dict:
     """Review the rendered deck. Returns
     {"status": "ok"|"partial"|"not_run", "model": ..., "slides": [{"slide", "verdict", "score", "complaints"}],
      "not_run": [slide numbers], "errors": [...], "usage": {"in", "out"}, "seconds": ...}.
@@ -359,7 +407,7 @@ def review_deck(pptx_path: str, slides: list[dict] | None = None, client=None, m
     def one(b):
         want = [n for n, _ in b]
         for m in models:
-            msgs = build_messages(b, slides, n_pages)
+            msgs = build_messages(b, slides, n_pages, references)
             try:
                 r = _with_timeout(lambda: client.chat(model=m, messages=msgs, max_tokens=4000, temperature=0.0,
                                                       task_id=task_id, role="verifier"), timeout)

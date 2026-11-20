@@ -592,6 +592,10 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                               shape=f"{a['name']} x {b['name']}", fix_scope="renderer"))
 
         # ---------------- P9 icons and decoration
+        if not R.get("images", {}).get("allow_pictures", True) and s.get("pictures"):
+            failures.append(F("P9", "pictures", f"Slide {n}: {s['pictures']} picture(s); this deck allows no images. "
+                              "Draw icons and logos as native vector shapes, charts as native charts and text as "
+                              "text.", slide=n, measured=s["pictures"], limit=0, fix_scope="renderer"))
         icons = s["icons"]
         icap = (R["icons"].get("max_per_slide_by_archetype") or {}).get(s["archetype"], R["icons"]["max_per_slide"])
         if len(icons) > icap:

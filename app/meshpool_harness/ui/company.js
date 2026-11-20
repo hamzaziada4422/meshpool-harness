@@ -37,6 +37,14 @@
 .co-prev .co-call{margin-top:6px;padding:4px 6px;color:#fff;font-weight:600}
 .co-prev .co-ft{position:absolute;left:4.5%;right:4.5%;bottom:4%;display:flex;justify-content:space-between;align-items:center;font-size:7px;border-top:1px solid #999;padding-top:3px}
 .co-prev .co-ft img{max-height:12px;max-width:70px}
+.co-styles{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:8px;margin:0 0 8px}
+.co-style{display:flex;flex-direction:column;gap:6px;text-align:left;border:1px solid var(--line);border-radius:var(--r-s);padding:8px 10px;background:var(--surface);color:var(--ink);cursor:pointer;font:inherit}
+.co-style:hover{background:var(--hover)}
+.co-style[aria-pressed=true]{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.co-style .sw{display:flex;height:18px;border-radius:3px;overflow:hidden;border:1px solid var(--line)}
+.co-style .sw i{flex:1}
+.co-style b{font-size:var(--fs-s);font-weight:500}
+.co-style small{color:var(--ink-3);font-size:var(--fs-xs);line-height:1.3}
 .co-note{font-size:var(--fs-s);color:var(--ink-2);margin:0 0 6px}
 .co-note.bad{color:var(--del)}
 `;
@@ -88,6 +96,10 @@
     const roles = D.roles;
     b.innerHTML = `${close}<h3>Company and brand</h3>
       <p class="lead">Decks are built in your company's look. Add a few of your existing decks and Meshpool learns the colours, fonts, logo, name and slide master from them. Check what it found and change anything; the deck content is still written fresh each time.</p>
+      <div class="co-h">Style</div>
+      <p class="co-note">No company decks to learn from? Pick a ready-made look for new decks. It is used when no company look below is set to be used.</p>
+      <div class="co-styles" id="coStyles">${[{name: "", label: "Meshpool default", description: "Navy and blue on white, Segoe UI.", palette: {dk2: "0A2540", accent1: "1E5BD8", accent2: "F4A582", accent3: "29B6E8", accent4: "1A73B8"}}, ...(D.styles || [])].map(s => `<button type="button" class="co-style" data-style="${esc(s.name)}" aria-pressed="${(D.style || "") === s.name}"><span class="sw">${["dk2", "accent1", "accent2", "accent3", "accent4"].map(k => `<i style="background:${hex(s.palette[k])}"></i>`).join("")}</span><b>${esc(s.label)}</b><small>${esc(s.description)}</small></button>`).join("")}</div>
+      <div class="res" id="coStyleRes"></div>
       ${ps.length ? `<div class="co-top"><select id="coSel" aria-label="Company">${ps.map(x => `<option value="${esc(x.id)}" ${x.id === CO.sel ? "selected" : ""}>${esc(x.name || "Unnamed company")}${x.id === D.active ? " (used for new decks)" : ""}</option>`).join("")}</select>
         <label class="switchrow" style="margin:0"><input type="checkbox" id="coActive" ${p && p.id === D.active ? "checked" : ""}> Use for new decks</label>
         <span style="flex:1"></span><button class="btn danger" id="coDel">Delete</button></div>` : ""}
@@ -122,6 +134,11 @@
 
   function wire(b, close) {
     const redraw = () => draw(b, close);
+    $$("[data-style]", b).forEach(btn => btn.onclick = async () => {
+      try { CO.data = await post("/api/company/style", {name: btn.dataset.style || null}); redraw();
+            toast(btn.dataset.style ? `${btn.querySelector("b").textContent} style saved` : "Style cleared"); }
+      catch (e) { RES("coStyleRes").className = "res bad"; RES("coStyleRes").textContent = e.message; }
+    });
     const drop = $("#coDrop", b), inp = $("#coFiles", b);
     const learn = async files => {
       files = [...files].filter(f => /\.(pptx|potx|pptm)$/i.test(f.name)).slice(0, 5);

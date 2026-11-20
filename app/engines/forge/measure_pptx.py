@@ -373,6 +373,10 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 rec["table_words"] += words
                 srec["role"] = "table"
                 srec["text"] = " | ".join(c.text for r in sh.table.rows for c in r.cells)
+            elif kind != "pic" and descr.startswith(R["icons"]["tag_prefix"]):   # a vector icon (native shape)
+                iset = descr.split(":")[1] if descr.count(":") >= 2 else None
+                rec["icons"].append({"shape": sh.name, "set": iset, "svg": True, "vector": True})
+                srec["role"] = "icon"
             elif kind == "pic":
                 rec["pictures"] += 1
                 svg = SVG_EXT in etree.tostring(el).decode()

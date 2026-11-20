@@ -166,7 +166,8 @@ def test_parts_gallery_renders_clean(tmp_path):
     _register()
     slides = gallery()
     types = {p["type"] for s in slides for p in s["parts"]}
-    assert types == set(PT.PART_TYPES)
+    from engines.forge import diagrams as D                          # diagram parts have their own tests
+    assert types == set(PT.PART_TYPES) - set(D.DRAW)
     assert {s["layout"] for s in slides} >= {"full", "halves", "thirds", "quarters", "main_side"}
     assert {s["look"] for s in slides} == set(PT.LOOKS)
     out = tmp_path / "parts.pptx"

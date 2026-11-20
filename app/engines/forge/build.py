@@ -78,6 +78,20 @@ renderer applies a strict consulting design; you only fill fields.
   {"name": "High", "values"}], "unit": "$", "decimals": 2, "marker": {"label": "Current price", "value"}}.
 - Sensitivity grids and other value grids: table_focus with "table": {..., "heat_grid": {"center": base value,
   "base": [row, col]}} shades every cell by its distance from the base case.
+- Diagrams (each also a grid part type of the same name, so it can fill a region beside a chart or text). Every one
+  takes "subtitle" (what is shown), "takeaway" {"text"} and 2-3 "bullets" for the side column, and "source":
+  risk_matrix: "items": [{"label", "x": likelihood 1-3 or low/medium/high, "y": impact 1-3, "prov"}] (<= 12; x_axis,
+  y_axis optional). matrix_3x3: the same with your own "x_axis"/"y_axis" ("Ease, low -> high") and optional "cells"
+  (3 rows of 3 zone names, top row first). gantt: "periods" ["Q1 26", ...] and "rows" [{"label", "start", "end"
+  (period index or name, inclusive), "group", "milestones": [{"at", "label"}], "highlight"}] (<= 14 rows).
+  issue_tree: "root" (the question or metric) and "branches" [{"label", "value", "children": [...]}] (<= 3 levels,
+  <= 12 leaves). org_chart: "root" {"label", "role"} and "children" [{"label", "role", "children"}] (<= 3 levels).
+  cycle: "steps" [{"title", "text"}] (3-6) and an optional "center". hub_spoke: "hub" and "spokes" [{"title", "text"}]
+  (3-8). pyramid: "levels" [{"title", "text"}] (3-5, top first). funnel: "stages" [{"label", "value", "text"}]
+  (3-6, widest first). Use a diagram only when its structure IS the message: risks to rank -> risk_matrix; a plan
+  over time with workstreams -> gantt; a metric broken into drivers or a question into sub-questions -> issue_tree;
+  who reports to whom -> org_chart; a loop that feeds itself -> cycle; one centre with dependents -> hub_spoke; a
+  hierarchy of needs or layers -> pyramid; drop-off between stages -> funnel.
 Choose the exhibit by the comparison (Zelazny): ranking -> bar or benchmark; change over time -> column or line;
 parts of a whole -> stacked or waterfall; a bridge from one total to another -> waterfall; ranges -> football field;
 two-way sensitivity -> heat map; qualitative scores -> grid with a harvey part. A table only when the reader needs
@@ -479,6 +493,18 @@ def _present_checks(s, a) -> list[str]:
     return msgs
 
 
+DIAGRAM_FILL = {"risk_matrix": ("items", 3), "matrix_3x3": ("items", 3), "gantt": ("rows", 3),
+                "issue_tree": ("branches", 2), "org_chart": ("children", 2), "cycle": ("steps", 3),
+                "hub_spoke": ("spokes", 3), "pyramid": ("levels", 3), "funnel": ("stages", 3)}
+
+
+def _diagram_count(s, key) -> int:
+    v = s.get(key)
+    if key == "children" and isinstance(s.get("root"), dict) and not v:
+        v = s["root"].get("children")
+    return len(v) if isinstance(v, list) else 0
+
+
 def _fill_targets(s, a, density) -> list[str]:
     """Read: today's dense targets. Balanced: the same shapes with lighter minimums."""
     light = density == "balanced"
@@ -505,6 +531,15 @@ def _fill_targets(s, a, density) -> list[str]:
         if len(s.get("blocks") or []) < 2 or _words(s.get("blocks")) < (35 if light else 60):
             msgs.append("the argument is thin: give 2-3 blocks, each an intro sentence and "
                         + ("1-2 bullets" if light else "2-3 bullets") + " with numbers, so the right half is full")
+    elif a in DIAGRAM_FILL:
+        key, least = DIAGRAM_FILL[a]
+        k = _diagram_count(s, key)
+        if k < least:
+            msgs.append(f"the {a.replace('_', ' ')} has {k} {key}: give at least {least}, or show the point with "
+                        "another archetype")
+        if not s.get("takeaway") and len(s.get("bullets") or []) < (1 if light else 2):
+            msgs.append("give a 'takeaway' and " + ("1-2" if light else "2-3") + " bullets that say what the diagram "
+                        "means for the decision; they sit beside it")
     elif a == "closing":
         if any(not st.get("detail") or (not light and not st.get("milestones"))
                for st in s.get("steps") or [] if isinstance(st, dict)):
@@ -1868,8 +1903,9 @@ choice or the number of items; never layout. Keep node and keep the point of the
         # the single generic partner review (review.personas.enabled false): content complaints go back to the
         # writer once, then the deck is reviewed again for the verdict (engines/forge/review.py)
         from engines.forge import review as RV
+        ref_on, ref_k = RV.references_on(rules)             # golden library pictures beside each slide (off)
         rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
-                            task_id=f"{task_id}-review")
+                            task_id=f"{task_id}-review", references=ref_k if ref_on else 0)
         reviews.append(rv)
         calls += 1
         asks = RV.as_failures(rv, scopes=("content",))
@@ -1882,7 +1918,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
                 rounds.append({"round": "review", "rules": res["rules"],
                                "content_failures": sum(len(v) for v in fails.values())})
                 rv = RV.review_deck(str(pptx), slides=slides, client=client, out_dir=str(out / ".review"),
-                                    task_id=f"{task_id}-review-final")
+                                    task_id=f"{task_id}-review-final", references=ref_k if ref_on else 0)
                 reviews.append(rv)
                 calls += 1
         for n, msgs in RV.as_failures(rv, severities=("high",)).items():   # what is still high goes to the notes
@@ -1935,6 +1971,14 @@ if __name__ == "__main__":
     ap.add_argument("--slides", type=int, default=12)
     ap.add_argument("--density", choices=["present", "balanced", "read"], default=None)
     ap.add_argument("--design", choices=["archetype", "image", "auto"], default=None)
+    ap.add_argument("--style", default=None, help="style pack (engines/forge/styles.py); default look when omitted")
     a = ap.parse_args()
-    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design)
+    theme = None
+    if a.style:
+        from engines.forge import styles
+        try:
+            theme = styles.theme(a.style)
+        except KeyError:
+            ap.error(f"unknown style {a.style!r}; styles: {', '.join(styles.names())}")
+    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design, theme=theme)
     print(json.dumps(r, indent=1, default=str))
