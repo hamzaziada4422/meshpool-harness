@@ -160,7 +160,7 @@ MINUS = re.compile(r"(?<![\w.\-/])-(?=\$?\d)")             # "-38%" is a minus, 
 ACCENTS_MAX = 2                                         # marked phrases per paragraph: more is a highlighter, not emphasis
 
 
-def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False):
+def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False, accent=True):
     text = MINUS.sub("\u2212", str(text))
     marked = 0
     for seg, st in _segments(text, numbers):
@@ -178,7 +178,7 @@ def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=Fals
             else:
                 _set_font(r, size, color, bold, italic, heading, sup)
         elif st == "bold":
-            if not heading and color in (TC.TEXT_1, None):   # a marked phrase is set in
+            if not heading and color in (TC.TEXT_1, None) and accent:   # a marked phrase is set in
                 _set_font(r, size, TC.ACCENT_1, False, italic, heading, sup)   # the accent colour, not in bold
             else:
                 _set_font(r, size, color, True, italic, heading, sup)
@@ -1777,8 +1777,8 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         p = cell.text_frame.paragraphs[0]
         p.alignment = align
         p.line_spacing = Pt(_pitch(sz))      # exact, as in body text: a taller face (Segoe UI) cannot grow the rows
-        _rich(p, str(text), sz, color, bold, numbers=False, italic=italic)
-        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # the end mark at 18 pt grew the rows
+        _rich(p, str(text), sz, color, bold, numbers=False, italic=italic, accent=False)   # in a table the accent
+        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # colour is the recommended row's alone
     if groups:
         ci = 1
         for g in groups:
@@ -2534,7 +2534,7 @@ def a_closing(ctx, s, sl, n):
                 bl.append({"text": st["detail"], "prov": st.get("prov")})
             bl += [{"text": m if isinstance(m, str) else _txt(m), "prov": st.get("prov")}
                    for m in (st.get("milestones") or [])[:2]]
-            who = " · ".join(v for v in (st.get("owner"), st.get("timing")) if v)
+            who = [v for v in (st.get("owner"), st.get("timing")) if v]
             items.append({"lead": str(st.get("action", "")).replace("**", ""), "bullets": bl,
                           "prov": st.get("prov"), "foot": who})
         _as_columns(ctx, s, sl, n, items, "process")
@@ -2730,6 +2730,12 @@ def a_exhibit_argument(ctx, s, sl, n):
     _header(ctx, s, sl, n, title_w=lw)
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
+    secno = s["_section"].split(" | ")[0] if (not FRAME["band"] and s.get("_section")) else ""
+    if secno:                                           # the section number in its place on every content slide
+        _write(_box(sl, RIGHT - 0.9, 0.72, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
+               [{"text": secno, "size": 26, "bold": True, "numbers": False, "color": TC.ACCENT_1,
+                 "align": PP_ALIGN.RIGHT}])
+        rw -= 1.0
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": T["head"], "bold": True, "heading": True, "color": TC.ACCENT_1,
              "numbers": False, "line_spacing": 1.0}])      # the argument's heading: clearly under the slide title
@@ -3385,6 +3391,7 @@ def a_executive_summary(ctx, s, sl, n):
     mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
     if mets:                                              # the decision's size, large in a panel beside the points
         dx, dw = span24(10, 18)
+        dw -= 0.2                                         # a clear gutter before the panel (its fill starts 0.12 early)
         mx, mw = span24(19, 23)
         _fill(sl, mx - 0.12, top - 0.05, RIGHT - mx + 0.12, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")
         mh = (bottom - top) / len(mets)

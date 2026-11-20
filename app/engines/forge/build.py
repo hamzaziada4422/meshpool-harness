@@ -512,7 +512,7 @@ _SKIP_KEYS = {"title", "subtitle", "source", "notes", "footnotes", "prov", "titl
 def _lines(v, out: list) -> list:
     """Every substantive line of a slide's content (bullets, leads, cards, cells, callouts, takeaways)."""
     if isinstance(v, str):
-        if len(re.sub(r"\*\*", "", v).split()) >= 6:
+        if len(re.sub(r"\*\*", "", v).split()) >= 5:
             out.append(v)
     elif isinstance(v, list):
         for x in v:
@@ -610,7 +610,7 @@ def drop_repeats(slides) -> int:
                     keep = []
                     for b in x:
                         tx = plain(b)
-                        long_ = isinstance(tx, str) and len(tx.replace("**", "").split()) >= 6
+                        long_ = isinstance(tx, str) and len(tx.replace("**", "").split()) >= 5
                         if long_ and any(repeats(tx, o, 0.8) for o in seen + mine):
                             continue
                         keep.append(b)
@@ -625,7 +625,7 @@ def drop_repeats(slides) -> int:
         elif isinstance(v, list):
             for x in v:
                 walk(x, mine)
-        elif isinstance(v, str) and len(v.replace("**", "").split()) >= 6:
+        elif isinstance(v, str) and len(v.replace("**", "").split()) >= 5:
             mine.append(v)
 
     for s in slides:
@@ -635,9 +635,11 @@ def drop_repeats(slides) -> int:
         mine: list[str] = []
         if s.get("archetype") != "executive_summary":
             walk(s, mine)
-        else:
-            mine = _lines(s, [])
-        seen += mine if s.get("archetype") != "executive_summary" else []
+            seen += mine
+        else:                                                # the summary: repeats within itself only
+            outer, seen = seen, []
+            walk(s, mine)
+            seen = outer
     return dropped
 
 
@@ -648,11 +650,12 @@ def repeat_checks(slides) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
     seen: list[tuple[int, str]] = []
     for i, s in enumerate(slides, 1):
-        if not isinstance(s, dict) or s.get("archetype") in ("cover", "section_divider", "agenda", "end",
-                                                             "executive_summary") or s.get("fixed"):
+        if not isinstance(s, dict) or s.get("archetype") in ("cover", "section_divider", "agenda", "end") \
+                or s.get("fixed"):
             continue
         mine = _lines(s, [])
-        sums_up = s.get("archetype") == "closing"           # the plan restates the decisions it acts on
+        summary = s.get("archetype") == "executive_summary"   # it sums up the deck: checked only within itself
+        sums_up = summary or s.get("archetype") == "closing"  # (the plan restates the decisions it acts on)
         for j, line in enumerate(mine):
             hit = None if sums_up else next((k for k, prev in seen if repeats(line, prev, 0.8)), None)
             if hit:
@@ -661,7 +664,8 @@ def repeat_checks(slides) -> dict[int, list[str]]:
             elif any(repeats(line, prev, 0.8) for prev in mine[:j]):
                 out.setdefault(i, []).append(f"\"{line.replace('**', '')[:80]}\" says again what this slide "
                                              "already says: one fact in one place; a callout adds the so-what")
-        seen += [(i, x) for x in mine]
+        if not summary:
+            seen += [(i, x) for x in mine]
     return out
 
 
