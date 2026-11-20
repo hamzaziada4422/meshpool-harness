@@ -1,0 +1,10 @@
+{
+ "density": "balanced",
+ "slides_wanted": 10,
+ "wanted_diagrams": {
+  "s5": "driver_tree (ROE decomposed into margin, cost, leverage, capital)",
+  "s9": "gantt_roadmap (workstreams by year)",
+  "s8": "risk_heatmap"
+ },
+ "has_data": true
+}

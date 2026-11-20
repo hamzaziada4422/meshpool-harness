@@ -80,6 +80,14 @@ def brand_from(task: str, files: list[str] | None = None) -> tuple[dict, dict | 
         print(f"company look skipped: {type(e).__name__}: {e}", file=sys.stderr)
         prof = None
     if not prof:
+        if not asked:                                            # Settings > Company: a style pack for new decks
+            try:
+                from engines.forge import brand as B, styles as ST
+                chosen = B._index().get("style")
+                if chosen in ST.names():
+                    return {"theme": ST.theme(chosen)}, None
+            except Exception:                                    # noqa: BLE001 - a broken index never blocks a deck
+                pass
         return {"theme": asked}, None
     look = B.render_kwargs(prof)
     if asked:

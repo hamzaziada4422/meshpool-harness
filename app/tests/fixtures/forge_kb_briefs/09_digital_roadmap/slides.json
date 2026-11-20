@@ -1,0 +1,606 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Fairhaven Water digital roadmap 2026-28",
+  "subtitle": "Programme proposal for the executive team",
+  "date": "Executive team, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Invest $64M over three years to earn $38M a year from digital",
+  "points": [
+   {
+    "lead": "Customers use digital channels less than peers",
+    "bullets": [
+     "34% self-service against a 52% peer median"
+    ],
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "lead": "Eight initiatives deliver $38M a year by 2028",
+    "bullets": [
+     "Smart meters and leak analytics provide half of the value"
+    ],
+    "prov": [
+     "F3",
+     "F5"
+    ]
+   },
+   {
+    "lead": "The data platform comes first",
+    "bullets": [
+     "It unblocks $24M of the $38M benefit"
+    ],
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "lead": "Capacity is the constraint",
+    "bullets": [
+     "The digital team of 46 needs 70 at peak in 2027"
+    ],
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve the programme and the $21M first-year portfolio.",
+  "metrics": [
+   {
+    "value": "$38M",
+    "label": "annual benefit by 2028",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "value": "$64M",
+    "label": "three-year investment",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "value": "70%",
+    "label": "self-service target",
+    "prov": [
+     "F1"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Self-service use is 18 points below the peer median",
+  "subtitle": "Customers using self-service channels, %",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "2028 target",
+    "Peer median",
+    "Fairhaven today"
+   ],
+   "series": [
+    {
+     "name": "Self-service share",
+     "values": [
+      70,
+      52,
+      34
+     ],
+     "prov": [
+      "F1"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Fairhaven today"
+   ]
+  },
+  "takeaway": {
+   "text": "Fairhaven must double self-service use to reach 70%",
+   "prov": [
+    "F1"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The contact centre takes 2.1M calls a year at $6.40 each",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "text": "App ratings of 3.1 out of 5 hold back adoption",
+    "prov": [
+     "F9"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven customer survey; utility benchmarking, 2025",
+   "prov": [
+    "F1",
+    "F2",
+    "F9"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Smart meters and leak analytics hold half of the $38M benefit",
+  "subtitle": "Initiatives by annual value, cost and duration",
+  "table": {
+   "columns": [
+    "Initiative",
+    "Value ($M a year)",
+    "Cost ($M)",
+    "Months",
+    "Value per $ of cost"
+   ],
+   "rows": [
+    [
+     "Smart meters",
+     "12.0",
+     "22",
+     "30",
+     "0.55"
+    ],
+    [
+     "Leak analytics",
+     "7.5",
+     "9",
+     "14",
+     "0.83"
+    ],
+    [
+     "Self-service app",
+     "6.0",
+     "8",
+     "12",
+     "0.75"
+    ],
+    [
+     "Billing platform",
+     "4.5",
+     "10",
+     "24",
+     "0.45"
+    ],
+    [
+     "Field mobile",
+     "3.2",
+     "4",
+     "9",
+     "0.80"
+    ],
+    [
+     "Chatbot",
+     "2.4",
+     "2",
+     "6",
+     "1.20"
+    ],
+    [
+     "Data platform",
+     "1.4",
+     "6",
+     "12",
+     "0.23"
+    ],
+    [
+     "Asset twin",
+     "1.0",
+     "3",
+     "10",
+     "0.33"
+    ]
+   ],
+   "highlight_rows": [
+    1
+   ],
+   "heat": {
+    "4": [
+     0.55,
+     0.83,
+     0.75,
+     0.45,
+     0.8,
+     1.2,
+     0.23,
+     0.33
+    ]
+   },
+   "size": 12,
+   "prov": [
+    "F5"
+   ]
+  },
+  "takeaway": {
+   "text": "The chatbot returns the most per dollar, leak analytics the most at scale",
+   "prov": [
+    "F5"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Smart meters and leak analytics add $19.5M of value",
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "text": "The data platform shows low direct value but enables others",
+    "prov": [
+     "F5",
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven digital office business cases",
+   "prov": [
+    "F5"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "grid",
+  "title": "Five initiatives deliver value fast and form the first-year portfolio",
+  "layout": "halves",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "matrix2x2",
+    "heading": "Value against delivery time",
+    "x_axis": "Time to deliver",
+    "y_axis": "Annual value",
+    "quadrants": [
+     {
+      "title": "Start now",
+      "items": [
+       "Self-service app",
+       "Leak analytics",
+       "Chatbot"
+      ]
+     },
+     {
+      "title": "Plan carefully",
+      "items": [
+       "Smart meters",
+       "Billing platform"
+      ]
+     },
+     {
+      "title": "Quick fill-ins",
+      "items": [
+       "Field mobile",
+       "Data platform"
+      ]
+     },
+     {
+      "title": "Defer",
+      "items": [
+       "Asset twin"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "text",
+    "heading": "First-year portfolio",
+    "lead": "Five initiatives cost $21M in 2026",
+    "bullets": [
+     "**Data platform** unblocks $24M of benefit",
+     "**Self-service app** and chatbot lift digital use",
+     "**Leak analytics** cuts non-revenue water from 21% to 17%"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven digital office",
+   "prov": [
+    "F5",
+    "F6",
+    "F7",
+    "F10"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Investment peaks at $27M in 2027 and falls to $16M in 2028",
+  "subtitle": "Programme investment, USD million",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "2026",
+    "2027",
+    "2028"
+   ],
+   "series": [
+    {
+     "name": "Investment",
+     "values": [
+      21,
+      27,
+      16
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "2027"
+   ]
+  },
+  "takeaway": {
+   "text": "Total investment is $64M, with 42% spent in 2027",
+   "prov": [
+    "F3",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "2026 funds the data platform and the quick wins",
+    "prov": [
+     "F4",
+     "F10"
+    ]
+   },
+   {
+    "text": "Smart meters drive the 2027 peak",
+    "prov": [
+     "F4",
+     "F5"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven digital office",
+   "prov": [
+    "F3",
+    "F4"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Three constraints decide whether the roadmap delivers",
+  "columns": [
+   "Constraint",
+   "Today",
+   "Response"
+  ],
+  "rows": [
+   {
+    "icon": "people",
+    "label": "**Capacity** of the team",
+    "cells": [
+     {
+      "lead": "The team is too small for 2027",
+      "bullets": [
+       {
+        "text": "46 people today, 70 needed at peak",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Hire 14 and add partners",
+      "bullets": [
+       {
+        "text": "Close the 24-person gap before the 2027 peak",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "safety",
+    "label": "**Data** foundation",
+    "cells": [
+     {
+      "lead": "Three initiatives wait on one platform",
+      "bullets": [
+       {
+        "text": "The platform unblocks $24M of the $38M benefit",
+        "prov": [
+         "F7"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Build it first",
+      "bullets": [
+       {
+        "text": "Start in 2026 with a 12-month delivery",
+        "prov": [
+         "F5",
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Customer** adoption",
+    "cells": [
+     {
+      "lead": "The app rates 3.1 of 5",
+      "bullets": [
+       {
+        "text": "Self-service is only 34% of contacts",
+        "prov": [
+         "F1",
+         "F9"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Redesign before promoting",
+      "bullets": [
+       {
+        "text": "Lift the rating to 4.2",
+        "prov": [
+         "F9"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven digital office; HR",
+   "prov": [
+    "F1",
+    "F5",
+    "F7",
+    "F8",
+    "F9"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "grid",
+  "title": "Foundations come first and customer features follow in 2027",
+  "layout": "main_side",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Roadmap by year",
+    "milestones": [
+     {
+      "date": "2026",
+      "label": "Data platform, self-service app, chatbot, leak analytics, field mobile"
+     },
+     {
+      "date": "2027",
+      "label": "Smart meter rollout and billing platform design"
+     },
+     {
+      "date": "2028",
+      "label": "Billing platform live; asset twin decision"
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Targets for 2028",
+    "items": [
+     {
+      "value": "70%",
+      "label": "self-service use",
+      "prov": [
+       "F1"
+      ]
+     },
+     {
+      "value": "4.2",
+      "label": "app rating",
+      "prov": [
+       "F9"
+      ]
+     },
+     {
+      "value": "17%",
+      "label": "non-revenue water",
+      "prov": [
+       "F6"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Fairhaven digital office",
+   "prov": [
+    "F1",
+    "F6",
+    "F9",
+    "F10"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the programme and release $21M for the first-year portfolio",
+  "steps": [
+   {
+    "action": "Approve $64M over three years",
+    "detail": "Commit to the programme that earns $38M a year by 2028.",
+    "milestones": [
+     "Approval at this meeting"
+    ],
+    "owner": "CEO",
+    "timing": "November 2026",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "action": "Release $21M for 2026",
+    "detail": "Fund the data platform and the four first-year initiatives.",
+    "milestones": [
+     "Data platform contract by February"
+    ],
+    "owner": "CIO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F4",
+     "F10"
+    ]
+   },
+   {
+    "action": "Close the capacity gap",
+    "detail": "Hire to bridge the 24-person gap before the 2027 peak.",
+    "milestones": [
+     "First 14 hires by Q3"
+    ],
+    "owner": "CHRO",
+    "timing": "Q3 2027",
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

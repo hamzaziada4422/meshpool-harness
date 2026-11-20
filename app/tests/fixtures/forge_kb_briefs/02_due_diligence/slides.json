@@ -1,0 +1,641 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Project Marlow: due diligence findings",
+  "subtitle": "Recommendation to the investment committee",
+  "date": "Investment committee, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Bid for Marlow up to $240M and keep the seller's $270M out of reach",
+  "points": [
+   {
+    "lead": "The business earns what the seller says, after adjustments",
+    "bullets": [
+     "Adjusted 2025 EBITDA is $29.6M at a 20.8% margin"
+    ],
+    "prov": [
+     "F2",
+     "F3"
+    ]
+   },
+   {
+    "lead": "The seller's price is above every peer benchmark",
+    "bullets": [
+     "$270M is 9.1x against a 7.85x peer median"
+    ],
+    "prov": [
+     "F5",
+     "F6"
+    ]
+   },
+   {
+    "lead": "Concentration and expiring patents are the main risks",
+    "bullets": [
+     "Three customers are 52% of revenue; 22% of revenue loses patents in 2028"
+    ],
+    "prov": [
+     "F4",
+     "F10"
+    ]
+   },
+   {
+    "lead": "Synergies and capex roughly offset",
+    "bullets": [
+     "$5.0M a year of synergies against $12M of line 2 capex"
+    ],
+    "prov": [
+     "F9",
+     "F12"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve a binding bid with a ceiling of $240M.",
+  "metrics": [
+   {
+    "value": "$29.6M",
+    "label": "adjusted 2025 EBITDA",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "8.1x",
+    "label": "multiple at our ceiling",
+    "prov": [
+     "F13"
+    ]
+   },
+   {
+    "value": "52%",
+    "label": "revenue from top 3 customers",
+    "prov": [
+     "F4"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Marlow grew revenue 9.7% a year and lifted its margin",
+  "subtitle": "Revenue, USD million, 2023-2025",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "2023",
+    "2024",
+    "2025"
+   ],
+   "series": [
+    {
+     "name": "Revenue",
+     "values": [
+      118,
+      131,
+      142
+     ],
+     "prov": [
+      "F1"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "2025"
+   ]
+  },
+  "takeaway": {
+   "text": "Adjusted EBITDA rose from $21.2M to $29.6M in two years",
+   "prov": [
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Revenue grew from $118M to $142M, a 9.7% annual rate",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "text": "The adjusted EBITDA margin widened from 18.0% to 20.8%",
+    "prov": [
+     "F1",
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Marlow management accounts; Kestrel analysis",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Two adjustments reduce reported EBITDA by $2.8M",
+  "subtitle": "2025 EBITDA, USD million",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "Reported EBITDA",
+    "Capitalised R&D",
+    "Rebate release",
+    "Adjusted EBITDA"
+   ],
+   "series": [
+    {
+     "name": "EBITDA",
+     "values": [
+      32.4,
+      -1.8,
+      -1.0,
+      29.6
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 1
+  },
+  "takeaway": {
+   "text": "Adjusted EBITDA is 8.6% below the reported figure",
+   "prov": [
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "R&D costs of $1.8M were capitalised and belong in operating costs",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "A $1.0M rebate release will not repeat",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Quality of earnings report, Kestrel and advisers",
+   "prov": [
+    "F3"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Three customers carry 52% of Marlow revenue",
+  "subtitle": "Cumulative share of 2025 revenue by customer rank, %",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Largest customer",
+    "Top 3",
+    "Top 10"
+   ],
+   "series": [
+    {
+     "name": "Share of revenue",
+     "values": [
+      31,
+      52,
+      78
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Top 3"
+   ]
+  },
+  "takeaway": {
+   "text": "Losing the largest customer would remove 31% of revenue",
+   "prov": [
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The top ten customers hold 78% of sales",
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "text": "Contracts for the top three run to 2027 without price protection",
+    "prov": [
+     "F4"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Marlow customer ledger, 2025",
+   "prov": [
+    "F4"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "benchmark",
+  "title": "The seller's price sits above every peer multiple",
+  "benchmark": {
+   "companies": [
+    "Aster",
+    "Brandt",
+    "Corvid",
+    "Delmar",
+    "Ember",
+    "Fallow",
+    "Marlow at ask",
+    "Marlow at ceiling"
+   ],
+   "panels": [
+    {
+     "title": "EV / EBITDA (x)",
+     "unit": "x",
+     "values": [
+      7.2,
+      8.9,
+      9.4,
+      6.8,
+      8.1,
+      7.6,
+      9.1,
+      8.1
+     ],
+     "median": 7.85
+    }
+   ],
+   "highlight": [
+    6,
+    7
+   ]
+  },
+  "takeaway": {
+   "text": "$270M is 9.1x, above five of six peers",
+   "prov": [
+    "F5",
+    "F6"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Our $240M ceiling is 8.1x, close to the 7.85x peer median",
+    "prov": [
+     "F5",
+     "F13"
+    ]
+   },
+   {
+    "text": "Only Corvid trades above the seller's ask, at 9.4x",
+    "prov": [
+     "F5"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Public filings; Kestrel analysis, 2025",
+   "prov": [
+    "F5",
+    "F6"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "football_field",
+  "title": "Three methods put value between $215M and $255M at the centre",
+  "subtitle": "Implied enterprise value, USD million",
+  "chart": {
+   "kind": "range",
+   "categories": [
+    "Trading comparables",
+    "Precedent transactions",
+    "Discounted cash flow"
+   ],
+   "series": [
+    {
+     "name": "Low",
+     "values": [
+      201,
+      222,
+      215
+     ]
+    },
+    {
+     "name": "High",
+     "values": [
+      278,
+      252,
+      255
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "marker": {
+    "label": "Seller ask $270M",
+    "value": 270
+   },
+   "prov": [
+    "F7"
+   ]
+  },
+  "takeaway": {
+   "text": "The seller's ask is above the precedent and DCF ranges",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Precedent transactions top out at $252M",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "text": "Our $240M ceiling sits inside all three ranges",
+    "prov": [
+     "F7",
+     "F13"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Kestrel valuation model",
+   "prov": [
+    "F7"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Four findings need a price or contract protection",
+  "columns": [
+   "Finding",
+   "What we found",
+   "Protection"
+  ],
+  "rows": [
+   {
+    "icon": "people",
+    "label": "**Customer** concentration",
+    "cells": [
+     {
+      "lead": "Three customers hold 52% of sales",
+      "bullets": [
+       {
+        "text": "The largest alone is 31% of revenue",
+        "prov": [
+         "F4"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Tie part of the price to retention",
+      "bullets": [
+       {
+        "text": "Defer part of the price against 2027 renewals",
+        "prov": [
+         "F4"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "safety",
+    "label": "**Patent** expiry",
+    "cells": [
+     {
+      "lead": "Protection ends in 2028",
+      "bullets": [
+       {
+        "text": "Two patents cover 22% of revenue",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Price in a post-2028 margin step-down",
+      "bullets": [
+       {
+        "text": "Model lower margins on this revenue from 2028",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "money",
+    "label": "**Capex** and debt",
+    "cells": [
+     {
+      "lead": "Line 2 needs replacing",
+      "bullets": [
+       {
+        "text": "$12M over two years at 74% plant utilisation",
+        "prov": [
+         "F9"
+        ]
+       },
+       {
+        "text": "Net debt of $41M and a $7M pension deficit",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Treat debt-like items as price",
+      "bullets": [
+       {
+        "text": "Deduct $48M of debt and pension from equity value",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "risk",
+    "label": "**Environmental** claim",
+    "cells": [
+     {
+      "lead": "One claim is open",
+      "bullets": [
+       {
+        "text": "Estimated cost of $2.5M",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Seek a seller indemnity",
+      "bullets": [
+       {
+        "text": "Cover the full $2.5M in the purchase agreement",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Legal, financial and operational diligence reports",
+   "prov": [
+    "F4",
+    "F8",
+    "F9",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "grid",
+  "title": "Synergies of $5.0M a year do not justify paying above $240M",
+  "layout": "main_side",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Run-rate synergies by year 3, $M",
+    "chart": {
+     "kind": "column",
+     "categories": [
+      "Procurement",
+      "Cross-sell",
+      "Total"
+     ],
+     "series": [
+      {
+       "name": "Synergies",
+       "values": [
+        3.1,
+        1.9,
+        5.0
+       ],
+       "prov": [
+        "F12"
+       ]
+      }
+     ],
+     "unit": "$M",
+     "decimals": 1,
+     "highlight_categories": [
+      "Total"
+     ]
+    }
+   },
+   {
+    "type": "callout",
+    "heading": "So what",
+    "bullets": [
+     "**$5.0M** of synergies adds about 0.17x to our multiple",
+     "**Capex** of $12M absorbs most of the first two years",
+     "**Price discipline** is the lever we control"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Kestrel synergy case",
+   "prov": [
+    "F9",
+    "F12",
+    "F13"
+   ]
+  },
+  "id": "s9",
+  "node": "n9"
+ },
+ {
+  "archetype": "closing",
+  "title": "Submit a binding bid of up to $240M with three protections",
+  "steps": [
+   {
+    "action": "Submit the binding bid",
+    "detail": "Offer $240M, 8.1x adjusted EBITDA, with the deferred payment tied to customer renewals.",
+    "milestones": [
+     "Bid letter issued within two weeks"
+    ],
+    "owner": "Deal lead",
+    "timing": "December 2026",
+    "prov": [
+     "F13"
+    ]
+   },
+   {
+    "action": "Negotiate the protections",
+    "detail": "Seek a $2.5M environmental indemnity and customer-retention earn-out on the three largest accounts.",
+    "milestones": [
+     "Heads of terms agreed"
+    ],
+    "owner": "Legal counsel",
+    "timing": "January 2027",
+    "prov": [
+     "F4",
+     "F11"
+    ]
+   },
+   {
+    "action": "Prepare the line 2 plan",
+    "detail": "Scope the $12M line 2 replacement so capex is funded in the first two years.",
+    "milestones": [
+     "Capex plan before signing"
+    ],
+    "owner": "Operations partner",
+    "timing": "Q1 2027",
+    "prov": [
+     "F9"
+    ]
+   }
+  ],
+  "id": "s10",
+  "node": "n10"
+ }
+]

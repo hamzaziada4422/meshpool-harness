@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s5": "cohort_retention_curves (retention by customer cohort)",
+  "s8": "risk_matrix (likelihood vs impact)"
+ },
+ "has_data": true
+}

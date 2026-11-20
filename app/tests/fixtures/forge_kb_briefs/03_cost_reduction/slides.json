@@ -1,0 +1,560 @@
+[
+ {
+  "archetype": "cover",
+  "title": "A $43M cost programme for Pinnacle Retail Group",
+  "subtitle": "Cost reduction plan for the executive board",
+  "date": "Executive board, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Launch a $43M programme that closes most of the gap to the best peer",
+  "points": [
+   {
+    "lead": "Pinnacle spends more than its peers to run the business",
+    "bullets": [
+     "Operating cost is 24.8% of sales against a 22.9% peer median"
+    ],
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "lead": "Six categories hold $43M of savings",
+    "bullets": [
+     "Store labour and logistics provide $23.5M of the total"
+    ],
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "lead": "The programme pays back in about six months",
+    "bullets": [
+     "$21M of one-time cost buys $43M a year of run-rate savings"
+    ],
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "lead": "Service levels are the guardrail",
+    "bullets": [
+     "Customer satisfaction must stay above 82"
+    ],
+    "prov": [
+     "F11"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve $21M of one-time spend and name a programme owner.",
+  "metrics": [
+   {
+    "value": "$43M",
+    "label": "run-rate savings by FY28",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "2.6%",
+    "label": "of sales",
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "value": "$21M",
+    "label": "one-time cost",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "benchmark",
+  "title": "Pinnacle spends 1.9 points of sales more than the peer median",
+  "benchmark": {
+   "companies": [
+    "Peer A",
+    "Peer B",
+    "Peer C",
+    "Peer D",
+    "Pinnacle"
+   ],
+   "panels": [
+    {
+     "title": "Operating cost (% of sales)",
+     "unit": "%",
+     "values": [
+      21.6,
+      22.4,
+      23.4,
+      24.1,
+      24.8
+     ],
+     "median": 22.9
+    }
+   ],
+   "highlight": [
+    4
+   ]
+  },
+  "takeaway": {
+   "text": "Pinnacle has the highest cost base of five retailers at 24.8%",
+   "prov": [
+    "F3",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Reaching the median would release about $32M a year",
+    "prov": [
+     "F3",
+     "F5"
+    ]
+   },
+   {
+    "text": "Reaching the best peer at 21.6% would release about $53M",
+    "prov": [
+     "F3",
+     "F5"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Company reports, 2025; Pinnacle finance",
+   "prov": [
+    "F3",
+    "F4",
+    "F5"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Store labour is 41% of the $412M cost base",
+  "subtitle": "Addressable operating cost by category, USD million, 2025",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Store labour",
+    "Logistics",
+    "Marketing",
+    "IT",
+    "Indirect procurement",
+    "Real estate"
+   ],
+   "series": [
+    {
+     "name": "Spend",
+     "values": [
+      168,
+      74,
+      52,
+      41,
+      39,
+      38
+     ],
+     "prov": [
+      "F1"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "Store labour"
+   ]
+  },
+  "takeaway": {
+   "text": "Store labour and logistics together are 59% of addressable cost",
+   "prov": [
+    "F1"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The top two categories hold $242M of the $412M base",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "text": "Each of the other four is below $55M, so savings there are smaller",
+    "prov": [
+     "F1"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Pinnacle general ledger, FY25",
+   "prov": [
+    "F1"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Six levers cut the cost base from $412M to $369M",
+  "subtitle": "Addressable operating cost, USD million, run-rate FY28",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "Cost base 2025",
+    "Store labour",
+    "Logistics",
+    "Marketing",
+    "IT",
+    "Real estate",
+    "Procurement",
+    "Cost base FY28"
+   ],
+   "series": [
+    {
+     "name": "Cost",
+     "values": [
+      412,
+      -14.0,
+      -9.5,
+      -6.2,
+      -5.3,
+      -2.5,
+      -5.5,
+      369
+     ],
+     "prov": [
+      "F1",
+      "F2"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 1
+  },
+  "takeaway": {
+   "text": "Savings of $43M take the cost base down 10.4%",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Store labour and logistics provide $23.5M of the $43M",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "text": "Marketing and procurement are low effort and give $11.7M",
+    "prov": [
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Pinnacle cost programme model",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "grid",
+  "title": "Quick wins in marketing and procurement fund the harder levers",
+  "layout": "halves",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "matrix2x2",
+    "heading": "Savings levers by effort and size",
+    "x_axis": "Effort",
+    "y_axis": "Savings",
+    "quadrants": [
+     {
+      "title": "Quick wins",
+      "items": [
+       "Marketing $6.2M",
+       "Procurement $5.5M"
+      ]
+     },
+     {
+      "title": "Core programme",
+      "items": [
+       "Store labour $14.0M",
+       "Logistics $9.5M"
+      ]
+     },
+     {
+      "title": "Fill-ins",
+      "items": [
+       "Real estate $2.5M"
+      ]
+     },
+     {
+      "title": "Long projects",
+      "items": [
+       "IT $5.3M"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "text",
+    "heading": "What drives each lever",
+    "lead": "Each lever rests on a measured waste",
+    "bullets": [
+     "**9%** of store hours are idle, and 41% of stores run one roster all week",
+     "**38%** of trucks leave under 70% full",
+     "**27%** of promotional spend has no measured return"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Pinnacle operating data, FY25",
+   "prov": [
+    "F2",
+    "F8",
+    "F9",
+    "F10"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Store labour and logistics need the most careful sequencing",
+  "subtitle": "Savings and effort by lever, USD million",
+  "table": {
+   "columns": [
+    "Lever",
+    "Spend 2025",
+    "Savings",
+    "Savings % of spend",
+    "Effort"
+   ],
+   "rows": [
+    [
+     "Store labour",
+     "168",
+     "14.0",
+     "8.3%",
+     "Medium"
+    ],
+    [
+     "Logistics",
+     "74",
+     "9.5",
+     "12.8%",
+     "Medium"
+    ],
+    [
+     "Marketing",
+     "52",
+     "6.2",
+     "11.9%",
+     "Low"
+    ],
+    [
+     "Indirect procurement",
+     "39",
+     "5.5",
+     "14.1%",
+     "Low"
+    ],
+    [
+     "IT",
+     "41",
+     "5.3",
+     "12.9%",
+     "High"
+    ],
+    [
+     "Real estate",
+     "38",
+     "2.5",
+     "6.6%",
+     "High"
+    ],
+    [
+     "Total",
+     "412",
+     "43.0",
+     "10.4%",
+     ""
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "total_row": true,
+   "heat": {
+    "3": [
+     8.3,
+     12.8,
+     11.9,
+     14.1,
+     12.9,
+     6.6
+    ]
+   },
+   "size": 12,
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "takeaway": {
+   "text": "Procurement delivers the highest return, 14.1% of its spend",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Store labour is the largest saving but carries the service-level risk",
+    "prov": [
+     "F2",
+     "F11"
+    ]
+   },
+   {
+    "text": "Real estate saves least because leases lock in cost",
+    "prov": [
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Pinnacle cost programme model",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Savings reach $43M by FY28, with most arriving in FY27",
+  "subtitle": "Run-rate savings, USD million",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "FY26",
+    "FY27",
+    "FY28"
+   ],
+   "series": [
+    {
+     "name": "Run-rate savings",
+     "values": [
+      12,
+      31,
+      43
+     ],
+     "prov": [
+      "F7"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "FY28"
+   ]
+  },
+  "takeaway": {
+   "text": "The programme pays back its $21M in about six months at full run-rate",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "FY26 delivers $12M from the quick wins",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "text": "Store labour and logistics lift savings by $19M in FY27",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Pinnacle cost programme model",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the programme and start the two quick wins in January",
+  "steps": [
+   {
+    "action": "Approve $21M one-time spend",
+    "detail": "Funds all six levers; savings reach $43M a year by FY28 and pay back in about six months.",
+    "milestones": [
+     "Approval at this meeting"
+    ],
+    "owner": "CFO",
+    "timing": "November 2026",
+    "prov": [
+     "F2",
+     "F6"
+    ]
+   },
+   {
+    "action": "Start marketing and procurement",
+    "detail": "Launch the two low-effort levers, worth $11.7M, to deliver most of the $12M FY26 savings.",
+    "milestones": [
+     "First $12M run-rate by FY26 year-end"
+    ],
+    "owner": "CMO and CPO",
+    "timing": "January 2027",
+    "prov": [
+     "F2",
+     "F7"
+    ]
+   },
+   {
+    "action": "Set the service guardrail",
+    "detail": "Track customer satisfaction monthly and pause labour changes if it falls below 82.",
+    "milestones": [
+     "Dashboard live before store pilots"
+    ],
+    "owner": "COO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F11"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

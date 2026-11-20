@@ -13,4 +13,5 @@ SAFE_MCP = frozenset({
     "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
     "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
     "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon",
+    "mcp__meshpool_office__slide_layouts",
 })

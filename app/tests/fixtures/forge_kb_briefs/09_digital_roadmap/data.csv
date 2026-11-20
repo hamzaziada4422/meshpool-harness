@@ -1,0 +1,9 @@
+initiative,annual_value_usd_m,cost_usd_m,duration_months,needs_data_platform
+Smart meters,12.0,22,30,yes
+Leak analytics,7.5,9,14,yes
+Self-service app,6.0,8,12,no
+Billing platform,4.5,10,24,yes
+Field mobile,3.2,4,9,no
+Chatbot,2.4,2,6,no
+Data platform,1.4,6,12,no
+Asset twin,1.0,3,10,no

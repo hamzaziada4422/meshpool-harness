@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s4": "issue_tree (cost base decomposed into drivers and levers)",
+  "s6": "prioritisation_matrix_bubble (levers sized by savings)"
+ },
+ "has_data": true
+}

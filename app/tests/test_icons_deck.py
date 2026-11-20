@@ -1,5 +1,6 @@
-"""Decks drawn with one icon set: icon_set on render() (or theme["icon_set"]) embeds that set's icons as SVG with a
-PNG fallback, the file still opens without repair (P0) and passes the deck rules; the default deck stays Lucide PNG."""
+"""Decks drawn with one icon set: icon_set on render() (or theme["icon_set"]) draws that set's icons as native vector
+shapes (zero images: no picture parts, no SVG or PNG media), the file still opens without repair (P0) and passes the
+deck rules; the default deck stays Lucide."""
 import re
 import sys
 import warnings
@@ -32,16 +33,15 @@ def _icons(path):
 
 
 @pytest.mark.parametrize("icon_set", ["phosphor", "material-rounded", "carbon"])
-def test_deck_with_icon_set_embeds_svg_and_passes_p0(tmp_path, icon_set):
+def test_deck_with_icon_set_draws_vector_icons_and_passes_p0(tmp_path, icon_set):
     from engines.forge.render import render
     out = tmp_path / "d.pptx"
     render(_slides(), str(out), fix_labels=False, icon_set=icon_set)
     xml, media, ct = _icons(out)
     tags = re.findall(r'descr="icon:([^:"]+):', xml)
     assert tags and set(tags) == {icon_set}                                  # one set for the whole deck
-    assert xml.count("asvg:svgBlip") == len(tags) and "{96DAC541-7B7A-43D3-8B79-37D633B846F1}" in xml
-    assert any(m.endswith(".svg") for m in media) and any(m.endswith(".png") for m in media)
-    assert "image/svg+xml" in ct
+    assert "svgBlip" not in xml and "<p:pic>" not in xml and not media      # zero images
+    assert xml.count("<a:custGeom>") >= len(tags)                            # each icon is native geometry
     r = OX.check(str(out))
     assert r["ok"], r["problems"]
     if HAS_XSD:
@@ -52,18 +52,17 @@ def test_deck_with_icon_set_embeds_svg_and_passes_p0(tmp_path, icon_set):
         [f for f in v["failures"] if f["rule"] in ("P0", "P9", "P17")]
 
 
-def test_icon_set_from_theme_and_reused_svg_parts(tmp_path):
+def test_icon_set_from_theme(tmp_path):
     from engines.forge.render import render
     out = tmp_path / "t.pptx"
     slides = _slides()
     render(slides + slides, str(out), fix_labels=False, theme={"palette": "ocean", "icon_set": "heroicons"})
     xml, media, _ = _icons(out)
     assert set(re.findall(r'descr="icon:([^:"]+):', xml)) == {"heroicons"}
-    n_icons = len(re.findall(r'descr="icon:', xml))
-    assert len([m for m in media if m.endswith(".svg")]) <= n_icons // 2      # the same SVG is stored once
+    assert not media                                                          # no image parts at all
 
 
-def test_default_deck_is_unchanged_lucide_png(tmp_path):
+def test_default_deck_is_lucide(tmp_path):
     from engines.forge.render import ICON_SET, render
     render(_slides(), str(tmp_path / "x.pptx"), fix_labels=False, icon_set="phosphor")
     out = tmp_path / "d.pptx"
@@ -71,7 +70,7 @@ def test_default_deck_is_unchanged_lucide_png(tmp_path):
     assert ICON_SET["name"] is None
     xml, media, ct = _icons(out)
     assert set(re.findall(r'descr="icon:([^:"]+):', xml)) == {"lucide"}
-    assert "svgBlip" not in xml and not any(m.endswith(".svg") for m in media) and "svg+xml" not in ct
+    assert "svgBlip" not in xml and not media and "svg+xml" not in ct
     assert re.findall(r'descr="icon:lucide:([^:"]+):', xml)[:2] == ["money", "people"]    # alt text as before
 
 
@@ -95,7 +94,8 @@ def test_meanings_resolve_in_every_set():
 
 
 def test_png_fallback_needs_no_cairo(tmp_path, monkeypatch):
-    """The PNG beside the SVG is drawn with Pillow (Cairo is missing on most Mac and Windows installs)."""
+    """Icons need no Cairo: decks draw them as vector shapes, and the Pillow rasteriser (still used for previews) works
+    without it (Cairo is missing on most Mac and Windows installs)."""
     import io
     from PIL import Image
     from engines.forge import render as R
@@ -107,8 +107,7 @@ def test_png_fallback_needs_no_cairo(tmp_path, monkeypatch):
     out = tmp_path / "d.pptx"
     R.render(_slides(), str(out), fix_labels=False, icon_set="material")
     xml, media, _ = _icons(out)
-    assert xml.count("asvg:svgBlip") == len(re.findall(r'descr="icon:', xml)) > 0
-    assert any(m.endswith(".png") for m in media)
+    assert len(re.findall(r'descr="icon:', xml)) > 0 and not media
     for name, s in (("bank", "phosphor"), ("warning", "material"), ("money", "carbon"), ("users", "heroicons")):
         im = Image.open(io.BytesIO(png_bytes(IC.svg(name, s), "FF0000", 96)))
         a = im.getchannel("A")

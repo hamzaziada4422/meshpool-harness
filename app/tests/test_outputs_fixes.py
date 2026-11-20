@@ -152,3 +152,11 @@ def test_memory_keeps_facts_not_work_items_and_no_dashes(tmp_path, monkeypatch):
     assert A.remember("Runs a consulting firm — mostly banks") == "Saved to memory."
     assert "Runs a consulting firm, mostly banks" in A.memory()
     assert A.PLAIN in A.context_block()
+
+
+def test_every_harness_gets_the_no_ai_look_writing_rule():
+    """The user's standing request: no AI look anywhere. The rule rides in the context every harness receives."""
+    from meshpool_harness import assistant as A
+    block = A.context_block()
+    for marker in ("not a chatbot", "delve", "No emoji", "professional's work"):
+        assert marker in block

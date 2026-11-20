@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s5": "materiality_matrix (issues by stakeholder concern and business impact)",
+  "s8": "cycle (plan, act, measure, report loop for ESG governance)"
+ },
+ "has_data": true
+}

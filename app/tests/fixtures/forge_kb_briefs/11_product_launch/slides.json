@@ -1,0 +1,632 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Launching the Lumen sleep band",
+  "subtitle": "Launch plan for the leadership team",
+  "date": "Leadership team, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Launch Lumen at $149 to sell 120,000 units and break even at 78,000",
+  "points": [
+   {
+    "lead": "The price sits inside the competitor range",
+    "bullets": [
+     "$149 against $129 to $199 for three competitors"
+    ],
+    "prov": [
+     "F1",
+     "F2"
+    ]
+   },
+   {
+    "lead": "The product earns a 61% gross margin",
+    "bullets": [
+     "Unit cost is $58"
+    ],
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "lead": "Direct sales lead the first year",
+    "bullets": [
+     "54k of 120k units come from direct online sales"
+    ],
+    "prov": [
+     "F3",
+     "F5"
+    ]
+   },
+   {
+    "lead": "A $9.5M budget reaches break-even by Q3",
+    "bullets": [
+     "Break-even at 78k units, 65% of the target"
+    ],
+    "prov": [
+     "F6",
+     "F7"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve the launch plan and the $9.5M budget.",
+  "metrics": [
+   {
+    "value": "120k",
+    "label": "year-1 unit target",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "value": "61%",
+    "label": "gross margin",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "value": "$9.5M",
+    "label": "launch budget",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "At $149 Lumen undercuts two of three competitors",
+  "subtitle": "Retail price, USD",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Competitor A",
+    "Competitor C",
+    "Lumen",
+    "Competitor B"
+   ],
+   "series": [
+    {
+     "name": "Price",
+     "values": [
+      199,
+      169,
+      149,
+      129
+     ],
+     "prov": [
+      "F1",
+      "F2"
+     ]
+    }
+   ],
+   "unit": "$",
+   "decimals": 0,
+   "highlight_categories": [
+    "Lumen"
+   ]
+  },
+  "takeaway": {
+   "text": "Lumen is $50 below the premium competitor and $20 above the cheapest",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "29% of target users would pay $149 or more",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "text": "The 61% gross margin leaves room for launch spend",
+    "prov": [
+     "F1"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Competitor price survey; Brightwell consumer research",
+   "prov": [
+    "F1",
+    "F2",
+    "F8"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Quarterly units grow from 18k to 42k through the first year",
+  "subtitle": "Units sold, thousand, year 1",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4"
+   ],
+   "series": [
+    {
+     "name": "Units",
+     "values": [
+      18,
+      27,
+      33,
+      42
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "thousand units",
+   "decimals": 0,
+   "highlight_categories": [
+    "Q4"
+   ]
+  },
+  "takeaway": {
+   "text": "Cumulative sales reach the 78k break-even at the end of Q3",
+   "prov": [
+    "F4",
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Q1 to Q3 deliver 78k units, exactly the break-even point",
+    "prov": [
+     "F4",
+     "F7"
+    ]
+   },
+   {
+    "text": "Q4 adds 42k units after retail and partners start",
+    "prov": [
+     "F4",
+     "F10"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Brightwell launch model",
+   "prov": [
+    "F4",
+    "F7",
+    "F10"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "grid",
+  "title": "The direct funnel converts 9% of visits into 54k purchases",
+  "layout": "main_side",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Direct online funnel, thousand",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Site visits",
+      "Product page views",
+      "Carts",
+      "Purchases"
+     ],
+     "series": [
+      {
+       "name": "Count",
+       "values": [
+        600,
+        240,
+        72,
+        54
+       ],
+       "prov": [
+        "F5"
+       ]
+      }
+     ],
+     "unit": "thousand",
+     "decimals": 0,
+     "highlight_categories": [
+      "Purchases"
+     ]
+    }
+   },
+   {
+    "type": "stats",
+    "heading": "Conversion",
+    "items": [
+     {
+      "value": "40%",
+      "label": "visit to product page",
+      "prov": [
+       "F5"
+      ]
+     },
+     {
+      "value": "30%",
+      "label": "page to cart",
+      "prov": [
+       "F5"
+      ]
+     },
+     {
+      "value": "75%",
+      "label": "cart to purchase",
+      "prov": [
+       "F5"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Brightwell launch model; pilot data",
+   "prov": [
+    "F5"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "exhibit_argument",
+  "title": "Direct sales reach 45% of units in the first year",
+  "title_right": "Retail and partners add scale later",
+  "exhibit": {
+   "title": "Year-1 units by channel",
+   "unit": "% of 120k units"
+  },
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Direct",
+    "Retail",
+    "Partners"
+   ],
+   "series": [
+    {
+     "name": "Share of units",
+     "values": [
+      45,
+      35,
+      20
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Direct"
+   ]
+  },
+  "blocks": [
+   {
+    "text": "**Direct** sells 54k units and keeps the margin",
+    "bullets": [
+     "**62%** of pilot customers stay on subscription after six months"
+    ]
+   },
+   {
+    "text": "**Retail** starts in month 4 and **partners** in month 6",
+    "bullets": [
+     "Together they bring **66k** units"
+    ]
+   }
+  ],
+  "callout": {
+   "bullets": [
+    "**Open** pre-orders in month 0",
+    "**Ship** from month 2",
+    "**Add** retail at month 4"
+   ]
+  },
+  "source": {
+   "text": "Brightwell launch model; subscription pilot",
+   "prov": [
+    "F3",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Media takes 44% of the $9.5M launch budget",
+  "subtitle": "Launch budget by area, USD million",
+  "table": {
+   "columns": [
+    "Area",
+    "Budget ($M)",
+    "Share"
+   ],
+   "rows": [
+    [
+     "Media",
+     "4.2",
+     "44%"
+    ],
+    [
+     "Retail trade support",
+     "2.3",
+     "24%"
+    ],
+    [
+     "Content and creators",
+     "1.5",
+     "16%"
+    ],
+    [
+     "Public relations",
+     "0.6",
+     "6%"
+    ],
+    [
+     "Contingency",
+     "0.9",
+     "9%"
+    ],
+    [
+     "Total",
+     "9.5",
+     "100%"
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "total_row": true,
+   "size": 12,
+   "prov": [
+    "F6"
+   ]
+  },
+  "takeaway": {
+   "text": "Media and trade support take two thirds of the budget",
+   "prov": [
+    "F6"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Contingency of $0.9M covers the supplier delay risk",
+    "prov": [
+     "F6",
+     "F9"
+    ]
+   },
+   {
+    "text": "Break-even at 78k units sets the payback target",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Brightwell finance",
+   "prov": [
+    "F6",
+    "F7",
+    "F9"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Supply and adoption risks can slow the launch",
+  "columns": [
+   "Risk",
+   "Exposure",
+   "Response"
+  ],
+  "rows": [
+   {
+    "icon": "time",
+    "label": "**Supplier** delay",
+    "cells": [
+     {
+      "lead": "A late supplier hits Q1",
+      "bullets": [
+       {
+        "text": "An 8-week delay cuts Q1 units by about 40%",
+        "prov": [
+         "F9"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Hold safety stock",
+      "bullets": [
+       {
+        "text": "Use the $0.9M contingency",
+        "prov": [
+         "F6",
+         "F9"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Price** acceptance",
+    "cells": [
+     {
+      "lead": "Few users pay $149 or more",
+      "bullets": [
+       {
+        "text": "29% would pay $149 or more",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Test a bundle",
+      "bullets": [
+       {
+        "text": "Offer a subscription to lower first cost",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "money",
+    "label": "**Break-even** timing",
+    "cells": [
+     {
+      "lead": "The margin needs volume",
+      "bullets": [
+       {
+        "text": "78k units break even; Q1 to Q3 plan gives 78k",
+        "prov": [
+         "F4",
+         "F7"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Review monthly",
+      "bullets": [
+       {
+        "text": "Cut media if the funnel falls below plan",
+        "prov": [
+         "F5",
+         "F6"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Brightwell launch team",
+   "prov": [
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "grid",
+  "title": "The launch rolls out over six months in three steps",
+  "layout": "full",
+  "look": "minimal",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Launch plan",
+    "milestones": [
+     {
+      "date": "Month 0",
+      "label": "Pre-orders open"
+     },
+     {
+      "date": "Month 2",
+      "label": "Shipping starts"
+     },
+     {
+      "date": "Month 4",
+      "label": "Retail launch"
+     },
+     {
+      "date": "Month 6",
+      "label": "Partner programmes start"
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Brightwell launch team",
+   "prov": [
+    "F10"
+   ]
+  },
+  "id": "s9",
+  "node": "n9"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the launch and open pre-orders next month",
+  "steps": [
+   {
+    "action": "Approve the $9.5M budget",
+    "detail": "Fund media, trade support and creators to reach 120k units in year 1.",
+    "milestones": [
+     "Budget released this week"
+    ],
+    "owner": "CFO",
+    "timing": "November 2026",
+    "prov": [
+     "F3",
+     "F6"
+    ]
+   },
+   {
+    "action": "Secure supplier stock",
+    "detail": "Hold safety stock to avoid a delay that would cut Q1 units by about 40%.",
+    "milestones": [
+     "Stock confirmed before pre-orders"
+    ],
+    "owner": "Head of supply chain",
+    "timing": "December 2026",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "action": "Open pre-orders",
+    "detail": "Start direct sales at $149 and track the funnel weekly against 54k purchases.",
+    "milestones": [
+     "Weekly funnel review from week 1"
+    ],
+    "owner": "Head of ecommerce",
+    "timing": "January 2027",
+    "prov": [
+     "F1",
+     "F5"
+    ]
+   }
+  ],
+  "id": "s10",
+  "node": "n10"
+ }
+]

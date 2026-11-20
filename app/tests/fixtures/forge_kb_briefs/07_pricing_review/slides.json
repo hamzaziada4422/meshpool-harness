@@ -1,0 +1,508 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Closing the price leakage at Meridian Tools",
+  "subtitle": "Pricing review for the commercial leadership team",
+  "date": "Leadership team, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Reset discount governance to recover $11.4M of EBIT within three years",
+  "points": [
+   {
+    "lead": "Meridian gives away 14.2% of list price",
+    "bullets": [
+     "Only 85.8 of every 100 of list price reaches the pocket"
+    ],
+    "prov": [
+     "F1",
+     "F2"
+    ]
+   },
+   {
+    "lead": "Discounts vary by deal, not by value",
+    "bullets": [
+     "15% of deals exceed a 20% discount, and few have approval"
+    ],
+    "prov": [
+     "F5",
+     "F9"
+    ]
+   },
+   {
+    "lead": "Customers tolerate higher prices",
+    "bullets": [
+     "A 3% rise lost only 0.9% of volume"
+    ],
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "lead": "Governance, not list price, is the lever",
+    "bullets": [
+     "Tighter corridors and approvals add 2.1% of revenue"
+    ],
+    "prov": [
+     "F8",
+     "F11"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve price corridors and the discount approval ladder from January.",
+  "metrics": [
+   {
+    "value": "$11.4M",
+    "label": "EBIT opportunity by year 3",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "value": "14.2%",
+    "label": "average discount",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "value": "-0.3",
+    "label": "price elasticity",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Discounts, rebates and freight take 14.2 points off list price",
+  "subtitle": "Price waterfall, index (list price = 100)",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "List price",
+    "On-invoice discount",
+    "Rebates",
+    "Freight absorbed",
+    "Pocket price"
+   ],
+   "series": [
+    {
+     "name": "Price index",
+     "values": [
+      100,
+      -9.6,
+      -3.1,
+      -1.5,
+      85.8
+     ],
+     "prov": [
+      "F2"
+     ]
+    }
+   ],
+   "unit": "index",
+   "decimals": 1
+  },
+  "takeaway": {
+   "text": "On-invoice discounts are two thirds of the leakage",
+   "prov": [
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Rebates take 3.1 points and are rarely tied to volume",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "text": "Freight absorbed takes another 1.5 points",
+    "prov": [
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Meridian billing data, last 12 months",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Distributors receive discounts twice as deep as retail",
+  "subtitle": "Average discount from list price by segment, %",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Distributors",
+    "Contractors",
+    "Retail"
+   ],
+   "series": [
+    {
+     "name": "Average discount",
+     "values": [
+      18.5,
+      12.1,
+      9.4
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 1,
+   "highlight_categories": [
+    "Distributors"
+   ]
+  },
+  "takeaway": {
+   "text": "Distributors are 43% of revenue and take the deepest discounts",
+   "prov": [
+    "F3",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The distributor discount is 9.1 points above retail",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "Contractors sit in the middle at 12.1%",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Meridian billing data, last 12 months",
+   "prov": [
+    "F3",
+    "F4"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "exhibit_argument",
+  "title": "One deal in seven gets a discount above 20%",
+  "title_right": "The spread is not explained by volume",
+  "exhibit": {
+   "title": "Share of deals by discount band",
+   "unit": "% of deals"
+  },
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Under 5%",
+    "5-10%",
+    "10-15%",
+    "15-20%",
+    "Over 20%"
+   ],
+   "series": [
+    {
+     "name": "Share of deals",
+     "values": [
+      8,
+      22,
+      31,
+      24,
+      15
+     ],
+     "prov": [
+      "F5"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Over 20%"
+   ]
+  },
+  "blocks": [
+   {
+    "text": "**39%** of deals carry a discount above 15%",
+    "bullets": [
+     "Only **12%** of them have a documented approval"
+    ]
+   },
+   {
+    "text": "The **15%** of deals above 20% drive the leakage",
+    "bullets": [
+     "Halving that tail adds **$11.4M** of EBIT"
+    ]
+   }
+  ],
+  "callout": {
+   "bullets": [
+    "**Set** corridors per segment",
+    "**Require** approval above 15%",
+    "**Review** pocket price monthly"
+   ]
+  },
+  "source": {
+   "text": "Meridian deal desk records",
+   "prov": [
+    "F5",
+    "F8",
+    "F9"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "grid",
+  "title": "Customers would accept a modest price rise, and competitors are close",
+  "layout": "halves",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Competitor price index (Meridian = 100)",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Competitor B",
+      "Meridian",
+      "Competitor C",
+      "Competitor A"
+     ],
+     "series": [
+      {
+       "name": "Price index",
+       "values": [
+        103,
+        100,
+        99,
+        97
+       ],
+       "prov": [
+        "F7"
+       ]
+      }
+     ],
+     "unit": "index",
+     "decimals": 0,
+     "highlight_categories": [
+      "Meridian"
+     ]
+    }
+   },
+   {
+    "type": "stats",
+    "heading": "Price test on 40 products",
+    "items": [
+     {
+      "value": "+3%",
+      "label": "price rise",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "-0.9%",
+      "label": "volume lost",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "-0.3",
+      "label": "elasticity",
+      "prov": [
+       "F6"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Meridian price test; competitor shelf survey",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "grid",
+  "title": "A three-part governance reset replaces case-by-case discounting",
+  "layout": "thirds",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "text",
+    "heading": "Price corridors",
+    "lead": "A floor and ceiling per segment",
+    "bullets": [
+     "Set corridors by segment and product family",
+     "Anchor to the 14.2% average discount"
+    ]
+   },
+   {
+    "type": "process",
+    "heading": "Approval ladder",
+    "steps": [
+     {
+      "title": "Under 15%",
+      "text": "Sales representative"
+     },
+     {
+      "title": "15 to 20%",
+      "text": "Regional manager"
+     },
+     {
+      "title": "Over 20%",
+      "text": "Commercial director"
+     }
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "Monthly review",
+    "bullets": [
+     "**Pocket price** by segment",
+     "**Outliers** by deal",
+     "**Actions** to the leadership team"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Meridian commercial excellence team",
+   "prov": [
+    "F9",
+    "F11"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "The opportunity builds to $11.4M of EBIT in year 3",
+  "subtitle": "Incremental EBIT, USD million",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Year 1",
+    "Year 2",
+    "Year 3"
+   ],
+   "series": [
+    {
+     "name": "Incremental EBIT",
+     "values": [
+      4.5,
+      9.0,
+      11.4
+     ],
+     "prov": [
+      "F10"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 1,
+   "highlight_categories": [
+    "Year 3"
+   ]
+  },
+  "takeaway": {
+   "text": "Year 3 equals 2.1% of revenue",
+   "prov": [
+    "F8",
+    "F10"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Year 1 delivers $4.5M from the approval ladder alone",
+    "prov": [
+     "F10"
+    ]
+   },
+   {
+    "text": "Corridors by segment lift the run-rate to $9.0M in year 2",
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Meridian pricing model",
+   "prov": [
+    "F8",
+    "F10"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the governance reset and train the deal desk before January",
+  "steps": [
+   {
+    "action": "Approve price corridors",
+    "detail": "Set a floor and ceiling by segment so deep discounts need a reason.",
+    "milestones": [
+     "Corridors signed off in December"
+    ],
+    "owner": "Commercial director",
+    "timing": "December 2026",
+    "prov": [
+     "F11"
+    ]
+   },
+   {
+    "action": "Launch the approval ladder",
+    "detail": "Require approval above 15% discount, where only 12% of deals have it today.",
+    "milestones": [
+     "Ladder live on 1 January"
+    ],
+    "owner": "Head of sales operations",
+    "timing": "January 2027",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "action": "Start the monthly pocket-price review",
+    "detail": "Track pocket price by segment against the $11.4M target.",
+    "milestones": [
+     "First review in February"
+    ],
+    "owner": "CFO",
+    "timing": "February 2027",
+    "prov": [
+     "F8",
+     "F11"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]
