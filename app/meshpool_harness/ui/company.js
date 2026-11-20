@@ -204,3 +204,26 @@
     if (!b.dataset.coClose) { b.dataset.coClose = "1"; b.addEventListener("click", e => { if (e.target.closest(".mclose")) $(".scrim")?.remove(); }); }
   };
 })();
+
+// Settings pages load their data, then draw. A page left before it finished (Settings closed, or another page
+// opened) still drew afterwards: into a closed window, where wiring its buttons threw "Cannot set properties of null"
+// (seen by testkit/ux_v3_flows.js), or over the newer page while the newer page's tab was selected. The outermost
+// renderSection (this file loads last) drops errors from such a stale page, and when a stale page finishes after the
+// newer one it draws the newer one again. Errors from the current page still show.
+(() => {
+  const inner = renderSection;
+  let gen = 0, latest = null, latestDone = false;
+  // eslint-disable-next-line no-global-assign
+  renderSection = function (sec) {
+    const my = ++gen, body = $("#mbody");
+    latest = sec; latestDone = false;
+    const open = () => !!body && body.isConnected && $("#mbody") === body;   // the same Settings window is still up
+    const finish = () => {
+      if (my === gen) { latestDone = true; return; }
+      if (latestDone && open()) renderSection(latest);                    // it may have drawn over the newer page
+    };
+    let run;
+    try { run = Promise.resolve(inner(sec)); } catch (e) { run = Promise.reject(e); }
+    return run.then(r => { finish(); return r; }, e => { const stale = my !== gen || !open(); finish(); if (!stale) throw e; });
+  };
+})();
