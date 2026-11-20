@@ -287,7 +287,10 @@ def condense(s: dict, mode: str) -> dict:
         s["rows"] = rows
     arg = a == "exhibit_argument" and mode == "present"     # two short points and one so-what beside the exhibit
     if isinstance(s.get("blocks"), list):
-        blocks = _cap(s["blocks"], 2 if arg else lim["blocks"], notes)
+        four_short = (a == "exhibit_argument" and not arg and len(s["blocks"]) == 4 and all(
+            isinstance(b, dict) and not b.get("bullets") and len(str(b.get("text") or "").split()) <= 14
+            for b in s["blocks"]))                       # four one-line points: drawn as a 2x2 of boxes
+        blocks = _cap(s["blocks"], 2 if arg else 4 if four_short else lim["blocks"], notes)
         nb = lim["block_bullets"] if a == "exhibit_argument" else lim["bullets"]
         out = []
         for b in blocks:

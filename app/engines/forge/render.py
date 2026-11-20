@@ -1739,7 +1739,7 @@ def _table_gaps(t: dict, s: dict) -> dict:
         for ci in range(1, len(cols)):
             col = [r[ci] if ci < len(r) else "" for r in rows]
             k = sum(1 for c in col if na(c))
-            if k >= 2 and k / len(col) > 0.5 and len(cols) - len(drop) > 2:
+            if k >= 2 and k / len(col) >= 0.5 and len(cols) - len(drop) > 2:   # half or more N/A: the column goes
                 drop.append(ci)
                 have = [(re.sub(r"\*\*", "", str(r[0])), r[ci]) for r in rows if ci < len(r) and not na(r[ci])]
                 feet.append(f"{cols[ci]}: " + ("; ".join(f"{b} for {a}" for a, b in have[:3]) + "; " if have else "")
@@ -1776,6 +1776,10 @@ def normalize(s: dict) -> dict:
     t = s.get("table")
     if isinstance(t, dict):
         t = dict(t)
+        cell_prov = [p for r in t.get("rows") or [] if isinstance(r, list) for c in r if isinstance(c, dict)
+                     for p in (c.get("prov") or []) if isinstance(c.get("prov"), list)]
+        if cell_prov:                                     # sources the model put on cells stay the table's sources
+            t["prov"] = list(dict.fromkeys(list(t.get("prov") or []) + cell_prov))
         t["columns"] = [_txt(c) for c in t.get("columns") or []]
         t["rows"] = [[_cell(c) for c in (r if isinstance(r, list) else [r])] for r in t.get("rows") or []]
         s["table"] = _table_gaps(t, s)
@@ -2462,6 +2466,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     ch = (_need(cb, rw - 0.3) + 0.28) if cb else 0
     cy = BODY_B - foot - ch
     space = cy - BODY_Y - 0.12
+    fits_points = bool(draw_points(ctx, s, sl, n, rx, BODY_Y - 0.05, rw, cy - 0.15 - (BODY_Y - 0.05),
+                                   s.get("blocks"), dry=True))
     blocks, ok = _fit(blocks, rw - 0.1, space, 10)
     if not ok:
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
@@ -2476,13 +2482,130 @@ def a_exhibit_argument(ctx, s, sl, n):
         cy = BODY_B - foot - ch
     if not ok:
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
-    _shape_text(panel, blocks, ctx, n, (rx, BODY_Y - 0.05, rw, space))       # the argument lives in the panel
+    if not (POINTS["on"] and fits_points and
+            draw_points(ctx, s, sl, n, rx, BODY_Y - 0.05, rw, cy - 0.15 - (BODY_Y - 0.05), s.get("blocks"))):
+        _shape_text(panel, blocks, ctx, n, (rx, BODY_Y - 0.05, rw, space))   # the argument lives in the panel
     if cb:
         aw_ = max(0.35, rx - split + 0.03)               # the arrow lives in the gutter: never over the chart's labels
         arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
         arr.rotation = 180
         box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
+
+
+POINT_PAD, POINT_GAP, POINT_MARK = 0.15, 0.12, 0.42
+
+
+def point_items(blocks) -> tuple[str, list[dict]]:
+    """(intro, points) of an argument column: one point per block (its text the lead, its bullets the detail); a
+    single block with 2+ bullets makes its text the intro and each bullet a point."""
+    norm = lambda b: b if isinstance(b, dict) else {"text": str(b)}  # noqa: E731
+    blocks = [norm(b) for b in blocks or [] if b]
+    blocks = [b for b in blocks if (b.get("text") or "").strip() or b.get("bullets")]
+    if len(blocks) == 1 and len(blocks[0].get("bullets") or []) >= 2:
+        return blocks[0].get("text") or "", [{"lead": norm(x)["text"], "bullets": [], "prov": norm(x).get("prov"),
+                                              "label": norm(x).get("label") or ""} for x in blocks[0]["bullets"]]
+    out = []
+    for b in blocks:
+        bl = [norm(x) for x in b.get("bullets") or []]
+        lead = b.get("text") or (bl.pop(0)["text"] if bl else "")
+        out.append({"lead": lead, "bullets": bl, "prov": b.get("prov"), "label": (b.get("label") or "").strip()})
+    return "", out
+
+
+def _point_blocks(it, lead_size, det_size):
+    """A point's paragraphs: its header (when it has one) in the accent colour, then the lead (bold without a
+    header), then the detail lines."""
+    out = []
+    if it.get("label"):
+        out.append({"text": it["label"], "size": lead_size, "bold": True, "numbers": False, "color": TC.ACCENT_1})
+    head = not it.get("label") and bool(it["bullets"])         # a lead over detail lines is the point's header
+    out.append({"text": it["lead"], "size": lead_size if head else det_size, "bold": head, "numbers": False,
+                "prov": it.get("prov"), "space_before": 2 if it.get("label") else 0})
+    for b in it["bullets"]:
+        out.append({"text": b["text"], "size": det_size, "bullet": True, "space_before": 3, "prov": b.get("prov")})
+    return out
+
+
+def _point_marker(ctx, sl, n, j, icon, x, y, d, meaning):
+    if icon:
+        _icon(sl, icon, x, y, d, meaning)
+        return
+    b = _fill(sl, x, y, d, d, TC.ACCENT_1, f"ov_PointBadge{j + 1}", MSO_SHAPE.OVAL)
+    _shape_text(b, [{"text": str(j + 1), "size": T["body"], "bold": True, "numbers": False,
+                     "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n, (x, y, d, d), MSO_ANCHOR.MIDDLE)
+
+
+def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False) -> float:
+    """An argument column drawn as designed points, not a bullet list: 2-4 cards, each with an icon chosen by its
+    meaning (numbered badges when not every point has one), a bold lead and its detail. Four short points make a 2x2
+    of boxes; otherwise the cards stack and share the height. A one-block column's text is the intro line above them.
+    Returns the height used, or 0 when the points do not fit at the 10 pt floor or there are not 2-4 of them (the
+    caller then writes the column as text). Nothing is cut."""
+    from .compose import MAX_ICONS, item_icons, plain
+    intro, items = point_items(blocks)
+    if not 2 <= len(items) <= 4 or w < 2.6:
+        return 0.0
+    icons = item_icons([dict(it, lead=f"{it.get('label', '')} {it['lead']}") for it in items])
+    if not all(icons) or len(items) > MAX_ICONS:
+        icons = [None] * len(items)
+    ib, ih = [], 0.0
+    if intro:
+        ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": True, "numbers": False}]
+        ih = _need(ib, w) + 0.1
+    room = h - ih
+    d = POINT_MARK
+    short = all(len(plain(it["lead"]).split()) <= 16 and sum(len(plain(b["text"]).split()) for b in it["bullets"]) <= 14
+                for it in items)
+    sizes = ((ARGUMENT["intro"], ARGUMENT["bullet"]), (ARGUMENT["bullet"], ARGUMENT["bullet"]),
+             (ARGUMENT["bullet"], 11), (11, 10), (10, 10))
+    plan = None
+    if len(items) == 4 and short and w >= 4.2:                 # four short points: a 2x2 of boxes
+        cw, chh = (w - POINT_GAP) / 2, (room - POINT_GAP) / 2
+        tw = cw - 2 * POINT_PAD
+        for ls, ds in sizes:
+            need = max(_need(_point_blocks(it, ls, ds), tw) for it in items) + d + 0.1 + 2 * POINT_PAD
+            if need <= chh:
+                plan = ("grid", ls, ds, need)
+                break
+    if plan is None:                                           # stacked cards, marker on the left
+        tw = w - 2 * POINT_PAD - d - 0.12
+        for ls, ds in sizes:
+            hs = [max(_need(_point_blocks(it, ls, ds), tw) + 0.22, d + 0.26) for it in items]
+            if sum(hs) + POINT_GAP * (len(items) - 1) <= room:
+                plan = ("stack", ls, ds, hs)
+                break
+    if plan is None:
+        return 0.0
+    if dry:
+        return h
+    if ib:
+        _write(_box(sl, x, y, w, ih, "ov_PointIntro"), ib, ctx, n)
+    y0 = y + ih
+    kind, ls, ds = plan[0], plan[1], plan[2]
+    if kind == "grid":
+        cw, chh = (w - POINT_GAP) / 2, (room - POINT_GAP) / 2
+        for j, it in enumerate(items):
+            cx, cy = x + (j % 2) * (cw + POINT_GAP), y0 + (j // 2) * (chh + POINT_GAP)
+            _fill(sl, cx, cy, cw, chh, card, f"ov_PointCard{j + 1}")
+            _point_marker(ctx, sl, n, j, icons[j], cx + POINT_PAD, cy + POINT_PAD, d, plain(it["lead"])[:60])
+            ty = cy + POINT_PAD + d + 0.1
+            _write(_box(sl, cx + POINT_PAD, ty, cw - 2 * POINT_PAD, cy + chh - POINT_PAD - ty, f"ov_PointText{j + 1}"),
+                   _point_blocks(it, ls, ds), ctx, n)
+        return ih + room
+    hs = plan[3]
+    spare = room - sum(hs) - POINT_GAP * (len(items) - 1)
+    grow = min(spare / len(items), 0.6)                        # cards share the height, up to 0.6in more each
+    cy = y0
+    for j, (it, hh) in enumerate(zip(items, hs)):
+        hh += grow
+        _fill(sl, x, cy, w, hh, card, f"ov_PointCard{j + 1}")
+        _point_marker(ctx, sl, n, j, icons[j], x + POINT_PAD, cy + (hh - d) / 2, d, plain(it["lead"])[:60])
+        tx = x + POINT_PAD + d + 0.12
+        _write(_box(sl, tx, cy + 0.08, x + w - POINT_PAD - tx, hh - 0.16, f"ov_PointText{j + 1}", MSO_ANCHOR.MIDDLE),
+               _point_blocks(it, ls, ds), ctx, n)
+        cy += hh + POINT_GAP
+    return cy - POINT_GAP - y
 
 
 _NUMCELL = re.compile(r"^\s*([+\-−]?)\s*([$€£]?)\s*(\d[\d,]*(?:\.\d+)?)\s*(%|pp|x|[KMBT]|bn|m)?\s*$", re.I)
@@ -3324,6 +3447,7 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
 
 
 FRAME = {"band": False}         # the deck's content-slide frame (template.FRAMES): "band" = dark title band
+POINTS = {"on": True}      # argument columns as designed points (icon cards); off: the text column as before
 PICTURES = {"allow": False}     # zero images (rules pptx.images.allow_pictures): raster logos are left out
 
 

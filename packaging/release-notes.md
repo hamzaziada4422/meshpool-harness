@@ -5,7 +5,8 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Nine new diagrams.** Risk matrix, 3x3 matrix, Gantt plan, issue tree, org chart, cycle, hub and spoke, pyramid and funnel, drawn natively and checked like every other slide.
 - **Seven style packs** from 130 published decks, chosen with `--style` or in Settings > Company, and an optional title-band look.
 - **Layout lookup.** Agents ask which layout proves a slide's message before writing it.
-- **91 built-in slide layouts** ship with the app as compact specs; the storyline picks one per slide and the writer fills its slots.
+- **Points, not bullet lists.** The argument beside a chart or diagram is drawn as cards, each with an icon that fits its meaning and a short header; four short points become a 2x2 of icon boxes.
+- **91 built-in slide layouts** ship with the app as compact specs (the 50 that render clean are offered); the storyline picks one per slide and the writer fills its slots.
 
 **New in 0.0.7**
 - **A new look, built for everyday use.** Chats no longer need a folder. Projects hold their own instructions, files and memory. The sidebar has Pinned and Recents with unread dots, chats group by date, and every chat has a menu to rename, pin, move, archive or delete it. Search finds chats, projects, artifacts and scheduled tasks in one place. Settings is one window with plain sections. Streaming is smooth: no jumps, no flicker.

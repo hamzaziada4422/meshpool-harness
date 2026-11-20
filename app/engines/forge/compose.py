@@ -24,7 +24,13 @@ from . import render as R
 # meaning -> a Lucide icon that exists in the bundled set; the first family whose words appear in the text wins
 MEANINGS = (
     (r"\brisks?\b|threat|downside|exposure|conflict|critic|break the case", "triangle-alert"),
-    (r"antitrust|regulat|clearance|approval|legal|lawsuit|compliance|governance", "scale"),
+    (r"fraud|secur|protect|safety|cyber|privacy", "shield-check"),
+    (r"take rate|pricing|\bfees?\b|charges?\b|tariff|discount|price war|price cut", "tag"),
+    (r"cross-border|global|international|countr|abroad|geograph|regions?\b|worldwide", "globe"),
+    (r"payment|card|checkout|transaction|payout|wallet", "credit-card"),
+    (r"volume|throughput|processed|transfers?\b", "chart-column"),
+    (r"market share|\bshare of\b|mix\b|split\b", "chart-pie"),
+    (r"antitrust|regulat|clearance|approval|legal|lawsuit|compliance|governance", "gavel"),
     (r"\beps\b|accreti|dilut|earnings per share", "chart-line"),
     (r"synerg", "combine"),
     (r"valuation|multiple|\bdcf\b|comps?\b|precedent|ev\s*/|premium|price per share|\bprice\b|offer", "gauge"),
@@ -33,14 +39,24 @@ MEANINGS = (
     (r"revenue|sales|backlog|bookings|pipeline|demand", "trending-up"),
     (r"decline|fall|drop|loss|shrink|dilutive", "trending-down"),
     (r"cost|margin|expense|spend", "receipt"),
-    (r"customer|client|hyperscaler|user|tenant", "users"),
+    (r"customer|client|hyperscaler|user|tenant|shopper|consumer|buyer", "users"),
     (r"partner|deal\b|acqui|merger|takeover|buy\b|stake|ownership|shares", "handshake"),
     (r"integrat|combine|structure|licen", "puzzle"),
     (r"\bgw\b|power|energy|capacity|data cent|compute|gpu|chip|infrastructure", "zap"),
     (r"\btime|timing|week|month|quarter|year|date|deadline|schedule|by \d", "clock"),
     (r"confirm|verify|diligence|check|review|test", "search-check"),
-    (r"plan|next step|action|roadmap|prepare|run\b", "list-checks"),
-    (r"growth|scale|expand|grow", "trending-up"),
+    (r"\bplans?\b|planning|planned|next step|action|roadmap|prepare|\brun\b", "list-checks"),
+    (r"growth|scale|expand|grow|grew|rising|rose\b|up \d", "trending-up"),
+    (r"supply|logistic|freight|shipping|deliver|warehouse|fleet", "truck"),
+    (r"factory|\bplants?\b(?!-based)|manufactur|production|assembly", "factory"),
+    (r"retention|\bretain|loyal|churn|repeat|renewal|satisf", "repeat"),
+    (r"brand|marketing|campaign|awareness|advertis", "megaphone"),
+    (r"launch|new product|innovat|idea|pilot", "lightbulb"),
+    (r"sustainab|carbon|\besg\b|emission|climate|green", "leaf"),
+    (r"health|patient|clinic|hospital|nurs|care\b", "heart-pulse"),
+    (r"data\b|analytics|insight|dashboard|measure", "database"),
+    (r"speed|faster|slower|install time|cycle time|lead time|hours?\b|days?\b", "timer"),
+    (r"quality|award|best[- ]in|winner", "award"),
     (r"people|team|talent|hire|workforce|staff", "users"),
     (r"goal|target|aim|objective|recommend|decision|approve", "target"),
     (r"market|competit|rival|peer", "store"),
@@ -59,9 +75,15 @@ def meaning_icon(text: str, taken=()) -> str | None:
     """The icon for a block's meaning, or None when nothing in the text names one (no meaningless dots). Icons
     already used on the slide (`taken`) are skipped, so each block gets its own."""
     t = plain(text).lower()
-    for pat, name in MEANINGS:
-        if re.search(pat, t) and R.icon_name(name) not in taken:
-            return R.icon_name(name)
+    hits = []
+    for k, (pat, name) in enumerate(MEANINGS):            # the meaning named first in the text wins (a point about
+        m = re.search(pat, t)                              # growth that mentions prices is about growth)
+        if m:
+            hits.append((m.start(), k, name))
+    for _, _, name in sorted(hits):
+        ic = R.icon_name(name)
+        if ic not in taken:
+            return ic
     return None
 
 

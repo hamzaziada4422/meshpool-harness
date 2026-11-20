@@ -140,3 +140,22 @@ def test_p7_accepts_content_padded_inside_a_card_only(tmp_path):
     deck(tmp_path / "p7.pptx", (inner[0], inner[len(inner) // 2]))
     msgs = [f["message"] for f in validate(str(tmp_path / "p7.pptx"), rules, render=False)["failures"] if f["rule"] == "P7"]
     assert not any("Text1" in m for m in msgs) and any("Text2" in m for m in msgs), msgs
+
+
+def test_object_cells_and_half_missing_columns_keep_a_real_table():
+    """Live build b5: cells written as {"lead", "prov"} and a Growth column half N/A pushed the table past 30% missing,
+    so it was drawn as a numbered list of "N/A"s. Half-missing columns now go (footnoted) and cell sources stay."""
+    from engines.forge import render as R
+    cell = lambda v, p=("F1",): {"lead": v, "prov": list(p)}  # noqa: E731
+    rows = [[cell("Visa"), cell("233bn"), cell("N/A", ()), cell("N/A", ())],
+            [cell("Stripe"), cell("$1.4T"), cell("+38%"), cell("N/A", ())],
+            [cell("Adyen"), cell("EUR 1.29T"), cell("+33%"), cell("N/A", ())],
+            [cell("Wise"), cell("GBP 145B"), cell("N/A", ()), cell("0.53%", ("F2",))],
+            [cell("Corridor"), cell("N/A", ()), cell("N/A", ()), cell("0.9%", ("F3",))],
+            [cell("Mastercard"), cell("$28.2B"), cell("+12%"), cell("N/A", ())]]
+    s = R.normalize({"archetype": "table_focus", "id": "s", "node": "1", "title": "Wise earns 0.53% on GBP 145B",
+                     "table": {"columns": ["Player", "Volume", "Growth", "Take rate"], "rows": rows}})
+    assert s["table"]["columns"] == ["Player", "Volume"]
+    assert set(s["table"]["prov"]) == {"F1", "F2", "F3"}
+    assert not [e for e in R.schema_errors(s) if "missing" in e]
+    assert "+38% for Stripe" in " ".join(s.get("footnotes") or []) or "+38%" in s.get("notes", "")

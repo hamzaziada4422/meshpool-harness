@@ -406,6 +406,13 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
     bl = _text_blocks(part)
     if not bl:
         return
+    bullets = [b if isinstance(b, dict) else {"text": str(b)} for b in part.get("bullets") or []]
+    if (card is None and R.POINTS["on"] and not part.get("text") and 2 <= len(bullets) <= 4 and h >= 2.4
+            and not any(int(b.get("level", 0) or 0) for b in bullets)):
+        lead = _txt(part.get("lead") or part.get("title") or "")   # a tall column of points: designed points (icon
+        pts = [{"text": lead, "bullets": [dict(b, text=_txt(b)) for b in bullets], "prov": part.get("prov")}]
+        if R.draw_points(ctx, s, sl, n, x, y, w, h, pts, card=TC.BACKGROUND_2):   # cards), not a bullet list
+            return
     room = max(0, MAX_BUMP.get(R.DENSITY["mode"], 3) - int(part.get("_bump") or 0))   # never past the mode's limit
     bl = _fit_trim(R._grow(bl, w, h, min(room, 6 if R.DENSITY["mode"] == "present" else 2)), w, h, s,
                    f"the text of part {i}", ctx, n)     # presenting: short text steps well up the scale

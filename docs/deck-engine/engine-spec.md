@@ -110,6 +110,11 @@ as numbers in code; no shape, text or image was copied.
 The `slide_layouts` tool (engines/forge/tools.py, on the office MCP server) names the archetypes that prove a
 message, with the reference decks' numbers for them.
 
+An argument column (exhibit_argument's right panel, a diagram's or a layout's side column) of 2-4 points is drawn
+as point cards (`render.draw_points`): an icon chosen by meaning or a numbered badge, the point's `label` as its
+header, its text and detail lines; four one-line points make a 2x2 of boxes. A column that does not fit as cards at
+10 pt is written as text.
+
 Archetypes 38 to 40 are composite. `cases` fetches each company's logo once from the internet (full-colour CC0
 logos from gilbarbara/logos, else the Simple Icons mark in the brand's own colour) and draws it as a group of native
 shapes; shapes marked `logo:` keep their own colours and are not counted by P6. With no network or no mark, the

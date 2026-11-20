@@ -58,8 +58,10 @@ renderer applies a strict consulting design; you only fill fields.
 - exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, a complete sentence,
   never ending in "…"), "title_right" (<= 9 words, a complete sentence: the implication or the counter-point), "exhibit": {"title": what is shown,
   "unit": measure and period}, "chart" (bar/column/line, or bubble with points[{x,y,size,label,focus}],
-  x_range, y_range, x_major, y_major, x_cross, y_cross, x_title), "blocks": 2-3 of {"text": intro sentence with
-  **bold key phrases**, "bullets": 1-3 lines with the numbers as **bold phrases**}, "callout": {"bullets": 2-3
+  x_range, y_range, x_major, y_major, x_cross, y_cross, x_title), "blocks": 2-3 of {"label": a 2-4 word header
+  naming the point (e.g. "Scale beats price"), "text": intro sentence with **bold key phrases**, "bullets": 1-3
+  lines with the numbers as **bold phrases**}, or 4 short ones (a label and one line of <= 14 words, no bullets),
+  drawn as a 2x2 of boxes (each block is drawn as a card with an icon and its header), "callout": {"bullets": 2-3
   one-line 'so what' points with **bold** lead words}.
 - table_focus: a ranked/benchmark table with ONE highlighted row. "subtitle": measure, source table, year;
   "table": {"groups": optional [{"label","span"}] over value columns, "columns": [...], "rows": [[...]],
