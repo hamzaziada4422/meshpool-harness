@@ -1659,7 +1659,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
 
     def col_head_h(sz):
         """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
-        lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
+        lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.22), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
                     or [1])
         return lines * (sz + 2) * (lf + 0.10) / 72 + 0.08
     head_h = lambda sz: col_head_h(sz) + ((2 if any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
@@ -1671,7 +1671,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         out = []
         for i, r in enumerate(rows):
             f = f_bold if i in bold_rows else f_reg
-            lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
+            lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.22), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
                         or [1])
             out.append(max(base, lines * sz * lf / 72 + pad_r))
         return out
@@ -1680,7 +1680,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     def words_fit(sz):
         """Every word of every heading (bold, sz + 2) and cell (sz) fits its column: else it breaks mid-word."""
         for ci in range(len(cols)):
-            room = max(0.3, colw[ci] - 0.24) * 0.94          # cell margins, and LibreOffice sets wider than measured
+            room = max(0.3, colw[ci] - 0.3) * 0.94          # cell margins, and LibreOffice sets wider than measured
             heads = re.findall(r"\S+", _plain(cols[ci]))
             if any(text_width_in(wd, sz + 2, f_bold) > room for wd in heads):
                 return False
@@ -1771,7 +1771,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     size = size_
 
     def put(cell, text, bold=False, italic=False, align=PP_ALIGN.CENTER, color=TC.TEXT_1, sz=size, anchor=MSO_ANCHOR.MIDDLE):
-        cell.margin_left = cell.margin_right = Inches(0.05)
+        cell.margin_left = cell.margin_right = Inches(0.1)   # a 0.2 in gutter
         cell.margin_top = cell.margin_bottom = Inches(0.0)
         cell.vertical_anchor = anchor
         p = cell.text_frame.paragraphs[0]
@@ -2250,6 +2250,10 @@ def stat_stack(c: dict, text: str = "") -> dict:
             if per_share:
                 d = 2
             num = ("-" if v < 0 else "") + cur + f"{abs(v):,.{d}f}"          # -$4.2m, not $-4.2m
+            if not mag and not pct and not per_share and abs(v) >= 100_000:  # a big figure reads $9.2M, never
+                q, sfx = (abs(v) / 1e9, "B") if abs(v) >= 1e9 else (abs(v) / 1e6, "M") if abs(v) >= 1e6 \
+                    else (abs(v) / 1e3, "K")                                  # $9,200,000 (it wraps in a tile)
+                num = ("-" if v < 0 else "") + cur + re.sub(r"\.0$", "", f"{q:.1f}" if q < 100 else f"{q:.0f}") + sfx
             tail = ("/sh" if per_share else "") + (usfx or "") + other
             lab = re.sub(r"^\s*\d+[.)]\s*", "", re.sub(r"\s*\([^)]*\)", "", cat)).strip()
             if len(c.get("series") or []) > 1:

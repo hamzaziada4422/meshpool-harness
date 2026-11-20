@@ -258,6 +258,14 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             grid.append((lead_b, mid_b, foot_b))
         lead_h = max(R._need(g[0], w) for g, (_, w) in zip(grid, cols)) if grid else 0.0
         foot_h = max((R._need(g[2], w) for g, (_, w) in zip(grid, cols) if g[2]), default=0.0)
+        room = avail - mark_h
+        fixed = lead_h + (0.12 if foot_h else 0) + foot_h + 0.08
+        mid_need = lambda: max((R._need(g[1], w) for g, (_, w) in zip(grid, cols) if g[1]), default=0.0)  # noqa: E731
+        if fixed + mid_need() > room:                     # the rhythm never costs a line: drop the extra spacing
+            for g in grid:                                # before any detail would be cut
+                for b_ in g[1][1:]:
+                    b_["space_before"] = 4
+        body_h = min(room, max(body_h, fixed + mid_need() + 0.04))   # the bands hold what the leads grew to
     for j, (it, (x, w)) in enumerate(zip(items, cols)):
         if mode == "figures":
             val, cap = figs[j]

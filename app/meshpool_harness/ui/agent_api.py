@@ -205,6 +205,21 @@ def mark_shared(root: str):
             o._turn_shared = True
 
 
+
+def _last_reply(agent) -> str:
+    """The agent's last answer as text, for the learning loop's context ("" when the harness does not expose it)."""
+    try:
+        for m in reversed(getattr(agent, "messages", None) or []):
+            if isinstance(m, dict) and m.get("role") == "assistant":
+                c = m.get("content")
+                if isinstance(c, list):
+                    c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+                if isinstance(c, str) and c.strip():
+                    return c[:2000]
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
 class Session:
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
@@ -610,6 +625,13 @@ class Session:
                             write_meta(self.id, project_ctx=pid)
                     except Exception:  # noqa: BLE001
                         pass
+                try:                                    # preferences learned after the last turn apply now
+                    from meshpool_harness import learn as LRN
+                    pend = LRN.pending(self.id)
+                    if pend:
+                        body += "\n\n\u200b" + pend
+                except Exception:  # noqa: BLE001
+                    pass
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
                     self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
@@ -623,6 +645,12 @@ class Session:
                     from meshpool_harness.hrouter import outcomes as OUT
                     OUT.log_turn(self, getattr(self, "_turn_route", None), u0)
                 except Exception:  # noqa: BLE001
+                    pass
+                try:                                    # the learning loop: what the user taught goes to memory,
+                    from meshpool_harness import learn as LRN   # for this chat's next turn and every new chat
+                    LRN.after_turn_async(self.id, text, _last_reply(self.agent), on_learned=lambda got: self.emit(
+                        {"type": "status", "text": "Noted for next time: " + "; ".join(got)}))
+                except Exception:  # noqa: BLE001 - learning never touches the turn
                     pass
             finally:
                 with _ACTIVE_LOCK:

@@ -530,6 +530,16 @@ def _today():
     return _dt.date.fromisoformat(v) if v else _dt.date.today()
 
 
+def _user_prefs() -> str:
+    """The user's standing preferences, learned by the harness from their feedback (meshpool_harness.learn)."""
+    try:
+        from meshpool_harness import learn as LRN
+        p = LRN.preferences()
+        return "\n\n" + p if p else ""
+    except Exception:  # noqa: BLE001 - installed without the harness: no preferences
+        return ""
+
+
 def today_line() -> str:
     d = _today()
     return (f"- Today is {d:%-d %B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
@@ -1656,7 +1666,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
     from engines.forge.playbooks import playbook_for   # every writer prompt of this build (storyline, slides,
     from engines.review import memory as _MEM          # and the partner's and MD's masterclass, every model
     CONSULTING = CONSULTING_BASE + ("\n" + playbook_for(brief) if playbook_for(brief) else "") + \
-        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "") + "\n" + today_line()
+        ("\n\n" + _MEM.load("slides") if _MEM.load("slides") else "") + "\n" + today_line() + _user_prefs()
     from meshpool_harness.core.client import LiveClient
     client = client or LiveClient("forge_build")
     rules = rules or load_rules()
