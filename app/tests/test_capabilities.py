@@ -96,7 +96,7 @@ def chat(tmp_path, monkeypatch):
     sessions = tmp_path / "mh" / "runs" / "sessions"
     monkeypatch.setitem(A.Agent.__init__.__globals__, "SESSIONS", sessions)
     monkeypatch.setattr(A, "SESSIONS", sessions)
-    monkeypatch.setattr(A.Session, "_start_mcp", lambda self: None)
+    monkeypatch.setattr(A.Session, "_start_mcp", lambda self: self._mcp_ready.set())
     C.write({"MESHPOOL_API_KEY": "mk-123456789"})
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -182,3 +182,20 @@ def test_meshpools_servers_keep_proxy_and_settings_under_a_filtering_agent(monke
     assert hermes_env["HTTPS_PROXY"] == "http://proxy.corp:3128" and hermes_env["SSL_CERT_FILE"] == "/etc/corp-ca.pem"
     assert hermes_env["MH_MODEL"] == "deepseek-v4.1-flash" and "UNRELATED_TOKEN" not in hermes_env
     assert own["MESHPOOL_PROJECT"] == str(tmp_path.resolve())    # the server's own settings win
+
+
+def test_a_deck_request_waits_for_the_office_tools_to_start(chat, monkeypatch):
+    """The office tools come from an MCP server that starts with the chat; a first message asking for a deck ran
+    before it was up, so the agent had no make_deck and built the deck by hand in the shell (158 calls)."""
+    import threading
+    import time
+    A, proj = chat
+    monkeypatch.setattr(A.Session, "_start_mcp", lambda self: None)       # the servers are still starting
+    s = A.Session(workdir=str(proj), harness="meshpool-code", kind="code")
+    threading.Timer(0.4, s._mcp_ready.set).start()
+    t0 = time.time()
+    assert s._capability_turn("make a powerpoint about our architecture") == ["presentation"]
+    assert 0.3 < time.time() - t0 < 5 and s.agent.office_on
+    assert any(e.get("text") == "Starting the office tools..." for e in s.events)
+    t0 = time.time()
+    assert s._capability_turn("fix the failing test") == [] and time.time() - t0 < 0.2   # other messages never wait

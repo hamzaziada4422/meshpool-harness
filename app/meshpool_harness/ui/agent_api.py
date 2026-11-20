@@ -220,6 +220,7 @@ class Session:
         self.scheduled: dict | None = None           # the scheduled task that started this thread
         self.pendings: dict = {}                     # open approvals by id: harnesses may ask several at once
         self.mcp = None
+        self._mcp_ready = threading.Event()          # set once _start_mcp has finished (connected or not)
         self.agent = None
         self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
         if mode not in MODES and resume_id:
@@ -326,6 +327,12 @@ class Session:
             threading.Thread(target=self._start_mcp, daemon=True).start()
 
     def _start_mcp(self):
+        try:
+            self._start_mcp_servers()
+        finally:
+            self._mcp_ready.set()
+
+    def _start_mcp_servers(self):
         self.emit({"type": "status", "text": "Starting MCP servers..."})
         try:
             # Meshpool Work and Meshpool Code get the office server Hermes and Pi get: decks (make_deck), Word
@@ -543,6 +550,13 @@ class Session:
             self.emit({"type": "status", "text": f"Could not check which agent can do this: {e}"})
         if self.harness.get("type") not in ("acp", "pi"):
             self.agent.office_on = True              # Meshpool's agents: the office tools from this message on
+            ready = getattr(self, "_mcp_ready", None)
+            if ready is not None and not ready.is_set():
+                # The office tools come from the office MCP server, which starts with the chat. A first message that
+                # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
+                # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
+                self.emit({"type": "status", "text": "Starting the office tools..."})
+                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
         return caps
 
     def switch_harness(self, hid: str) -> None:
@@ -606,6 +620,7 @@ class Session:
         elif self.mcp:
             a.mcp = self.mcp
         else:
+            self._mcp_ready.clear()
             threading.Thread(target=self._start_mcp, daemon=True).start()
         a.save()
         write_meta(self.id, routed=hid, handoff=hid)
