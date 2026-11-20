@@ -1644,7 +1644,29 @@ def _cellnum(v) -> float:
     return -num if neg else num
 
 
+_NA_CELL = re.compile(r"(?i)^\s*(?:(?:n/?a|nm|none)\b|[-—]\s*$|\[gap[^\]]*\]|not (?:stated|available|given|known|"
+                      r"measured)\b)")
+
+
+def _drop_na_columns(t: dict) -> dict:
+    """A column most of whose cells say nothing (N/A, not stated) is dropped: a grid of N/A reads as machine filler
+    (BCG never shows one). The first column and a column the highlighted row fills stay."""
+    cols, rows = t.get("columns") or [], [r for r in t.get("rows") or [] if isinstance(r, list)]
+    if len(cols) < 3 or len(rows) < 2 or t.get("groups") or t.get("col_widths"):
+        return t
+    hl = set(t.get("highlight_rows") or [])
+    drop = [j for j in range(1, len(cols))
+            if sum(bool(_NA_CELL.match(str(r[j]))) for r in rows if j < len(r)) * 2 > len(rows)
+            and not any(j < len(rows[i]) and not _NA_CELL.match(str(rows[i][j])) for i in hl if i < len(rows))]
+    if not drop or len(cols) - len(drop) < 2:
+        return t
+    keep = [j for j in range(len(cols)) if j not in drop]
+    return dict(t, columns=[cols[j] for j in keep], rows=[[r[j] for j in keep if j < len(r)] for r in rows],
+                _dropped_cols=[cols[j] for j in drop])
+
+
 def _table(ctx, sl, n, t, x, y, w, h, dry=False):
+    t = _drop_na_columns(t)
     groups = t.get("groups")
     cols, rows = t["columns"], t["rows"]
     hdr = 2 if groups else 1
@@ -2784,8 +2806,9 @@ def a_exhibit_argument(ctx, s, sl, n):
     cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": True,
            "color": TC.BACKGROUND_1, "numbers": False, "space_before": 5,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in co.get("bullets") or []]
-    if cb:
-        cb, _ = _fit(cb, rw - 0.3, 1.3, 10)
+    if cb:                                             # the so-what keeps readable type (12 pt at least): a line
+        cb, cut_ = _trim_to_fit(cb, rw - 0.3, 1.3, 12)  # that does not fit goes to the notes
+        _cut_note(s, cut_)
     ch = (_need(cb, rw - 0.3) + 0.28) if cb else 0
     cy = BODY_B - foot - ch
     space = cy - BODY_Y - 0.12
@@ -2798,8 +2821,9 @@ def a_exhibit_argument(ctx, s, sl, n):
         _cut_note(s, dropped)
         ok = True
     fitted = min((b["size"] for b in blocks if b.get("bullet")), default=ARGUMENT["bullet"])
-    for b in cb:
-        b["size"] = min(b["size"], fitted)
+    if not fits_points:                                # the text column shrank: the callout follows, never under 12
+        for b in cb:
+            b["size"] = max(12, min(b["size"], fitted))
     if cb:                                             # callout shrinks with the argument: re-measure and re-seat it
         ch = _need(cb, rw - 0.3) + 0.28
         cy = BODY_B - foot - ch
@@ -3391,6 +3415,10 @@ def a_executive_summary(ctx, s, sl, n):
     lx, lw = span24(1, 9)
     dx, dw = span24(10, 23)
     mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
+    said_ = " ".join(_plain(_txt(x)) for p_ in s.get("points") or [] if isinstance(p_, dict)
+                     for x in [p_.get("lead") or ""] + list(p_.get("bullets") or []))
+    fresh = [m for m in mets if _plain(str(m["value"])).strip() not in said_]
+    mets = fresh if len(fresh) >= 2 else []           # a panel that repeats the points says it twice: leave it out
     if mets:                                              # the decision's size, large in a panel beside the points
         dx, dw = span24(10, 18)
         mx, mw = span24(19, 23)
