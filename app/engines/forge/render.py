@@ -1369,6 +1369,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         ch.legend.include_in_layout = False
     try:
         plot.gap_width = _gap_for(kind, len(cats), len(series), w, h)
+        c["_gap"] = plot.gap_width / 100                  # the annotations need each bar's real width
         va = ch.value_axis
         va.has_major_gridlines = False
         va.visible = False
@@ -1471,8 +1472,11 @@ def _delta_pair(d, cats, vals):
 def _delta_label(a: float, b: float, unit: str, dec) -> str:
     """The difference the way a consultant says it: a multiple from 2x, else the change in points or units."""
     r = b / a
-    if r >= 2 or r <= 0.5:
-        return f"{r:.0f}x" if r >= 10 else f"{r:.1f}x".replace(".0x", "x")
+    mult = lambda q: f"{q:.0f}x" if q >= 10 else re.sub(r"\.0x$", "x", f"{q:.1f}x")   # noqa: E731
+    if r >= 2:
+        return mult(r)
+    if 0 < r <= 0.5:
+        return mult(1 / r) + " lower"
     dv = b - a
     sign = "+" if dv >= 0 else "\u2212"
     if (unit or "").strip() == "%":
@@ -1561,7 +1565,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if delta:                                             # think-cell's difference arrow: from one bar's top to the
         j0, j1, lab = delta                               # other's, the multiple or the gap in a pill on the line
         lab = lab or _delta_label(vals[j0], vals[j1], unit, dec)
-        bwid = band * (1 - min(0.7, max(0.3, (c.get("_gap") or 0.6) / (1 + (c.get("_gap") or 0.6))))) / 2
+        bwid = band / (1 + (c.get("_gap") if c.get("_gap") is not None else 0.6)) / 2   # half a bar
         lo, hi = (j0, j1) if vals[j1] >= vals[j0] else (j1, j0)
         a_ = (cx(j0), yv(vals[j0]) - 0.34)                # from above the first bar's label ...
         side = -1 if j1 > j0 else 1                       # ... to the near top corner of the other bar, clear of its

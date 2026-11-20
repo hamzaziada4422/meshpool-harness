@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT))
 
 from engines.forge.common import load_rules  # noqa: E402
 from engines.forge.density import DEFAULT as DEFAULT_DENSITY, FILL, STORY, WRITE, normalize as _density  # noqa: E402
-from engines.forge.render import ARCHETYPES, render  # noqa: E402
+from engines.forge.render import _PERIOD, ARCHETYPES, render  # noqa: E402
 from engines.forge.common import SCALE as _SCALE, numbers as _numbers  # noqa: E402
 from engines.forge.validate_pptx import validate  # noqa: E402
 
@@ -554,7 +554,7 @@ def _words(v) -> int:
     return len(str(v).split()) if isinstance(v, str) else 0
 
 
-EXHIBIT_PARTS = ("chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey")
+EXHIBIT_PARTS = ("chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey", "shift", "evidence")
 
 
 def _lists(s) -> list[list]:
@@ -589,7 +589,7 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
             if (isinstance(ch, dict) and ch.get("kind") == "column" and 2 <= len(ch.get("categories") or []) <= 4
                     and len(ch.get("series") or []) == 1 and not ch.get("delta") and ch.get("target") is None
                     and not (len(ch.get("categories") or []) >= 3
-                             and all(re.match(r"\s*(19|20)\d\d", str(x)) for x in ch.get("categories") or []))):
+                             and all(_PERIOD.match(str(x)) for x in ch.get("categories") or []))):
                 msgs.append("a short column chart must show its point on the chart: add \"delta\" {from, to} so the "
                             "multiple or gap is drawn as an arrow, or \"target\" for the goal line, and "
                             "\"descriptors\" saying what each category is")
