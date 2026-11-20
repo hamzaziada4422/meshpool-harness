@@ -81,7 +81,7 @@ LIMITS = {
                 "table_rows": 6, "steps": 4, "milestones": 0, "parts": 3, "footnotes": 1, "words": 12,
                 "part_bullets": 3, "quadrant_items": 2, "stats": 4},
 }
-EXHIBIT_PARTS = {"chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey"}
+EXHIBIT_PARTS = {"chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey", "shift", "evidence"}
 
 
 def _plain(t) -> str:

@@ -121,3 +121,15 @@ def test_a_callout_that_restates_the_cards_is_flagged():
 
 def test_minus_signs_and_highlights():
     assert R.MINUS.sub("−", "-38% in 2021-2025") == "−38% in 2021-2025"
+
+
+def test_a_steep_fall_reads_as_times_lower_and_period_charts_keep_their_cagr():
+    assert R._delta_label(100, 4, "x", 1) == "25x lower"
+    assert R._delta_label(10, 4, "", 0) == "2.5x lower"
+    s = {"archetype": "column_trend", "title": "Sales grew", "chart": {
+        "kind": "column", "categories": ["FY2022", "FY2023", "FY2024"], "series": [{"name": "S", "values": [1, 2, 3]}]}}
+    assert not any("must show its point" in m for m in B.fill_checks([s], "balanced").get(1, []))
+
+
+def test_a_from_to_slide_counts_as_an_exhibit():
+    assert "shift" in B.EXHIBIT_PARTS and "evidence" in B.EXHIBIT_PARTS
