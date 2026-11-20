@@ -1,0 +1,563 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Solstice Software third quarter 2025 update",
+  "subtitle": "Growth, retention and raised guidance",
+  "date": "Shareholder update, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Growth of 24% and rising retention support our raised full-year guidance",
+  "points": [
+   {
+    "lead": "ARR grew 24% to $186M",
+    "bullets": [
+     "ARR rose in every quarter, from $150M a year ago"
+    ],
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "lead": "Customers spend more each year",
+    "bullets": [
+     "Net retention reached 112%, up 8 points in a year"
+    ],
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "lead": "Churn is falling",
+    "bullets": [
+     "Gross churn fell from 7.4% to 6.1%"
+    ],
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "lead": "Guidance goes up",
+    "bullets": [
+     "2025 revenue is now $226M to $230M"
+    ],
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "metrics": [
+   {
+    "value": "$186M",
+    "label": "annual recurring revenue",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "value": "112%",
+    "label": "net revenue retention",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "value": "$9M",
+    "label": "free cash flow in the quarter",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "ARR has grown every quarter and reached $186M",
+  "subtitle": "Annual recurring revenue, USD million, quarter end",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Q3 2024",
+    "Q4 2024",
+    "Q1 2025",
+    "Q2 2025",
+    "Q3 2025"
+   ],
+   "series": [
+    {
+     "name": "ARR",
+     "values": [
+      150,
+      158,
+      167,
+      176,
+      186
+     ],
+     "prov": [
+      "F1"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "Q3 2025"
+   ]
+  },
+  "takeaway": {
+   "text": "ARR added $36M in a year, 24% growth",
+   "prov": [
+    "F1"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Each quarter added between $8M and $10M",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "text": "Currency cost about 2 points of reported growth",
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Solstice financial statements, Q3 2025",
+   "prov": [
+    "F1",
+    "F10"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "New customers and expansion added $47M and outweighed $11M of losses",
+  "subtitle": "ARR bridge, USD million, Q3 2024 to Q3 2025",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "ARR Q3 2024",
+    "New customers",
+    "Expansion",
+    "Churn",
+    "Contraction",
+    "ARR Q3 2025"
+   ],
+   "series": [
+    {
+     "name": "ARR",
+     "values": [
+      150,
+      28,
+      19,
+      -8,
+      -3,
+      186
+     ],
+     "prov": [
+      "F5"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0
+  },
+  "takeaway": {
+   "text": "Expansion of $19M came from existing customers",
+   "prov": [
+    "F5"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "New customers added $28M of ARR",
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "text": "Churn and contraction took away $11M",
+    "prov": [
+     "F5"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Solstice financial statements, Q3 2025",
+   "prov": [
+    "F5"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "line_trend",
+  "title": "Net revenue retention has risen two points every quarter",
+  "subtitle": "Net revenue retention, %, quarter end",
+  "chart": {
+   "kind": "line",
+   "categories": [
+    "Q3 2024",
+    "Q4 2024",
+    "Q1 2025",
+    "Q2 2025",
+    "Q3 2025"
+   ],
+   "series": [
+    {
+     "name": "Net revenue retention",
+     "values": [
+      104,
+      106,
+      108,
+      110,
+      112
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0
+  },
+  "takeaway": {
+   "text": "Customers now expand by 12% a year net of losses",
+   "prov": [
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Gross churn improved from 7.4% to 6.1%",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "text": "Expansion is the main driver of the improvement",
+    "prov": [
+     "F5",
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Solstice financial statements, Q3 2025",
+   "prov": [
+    "F3",
+    "F7"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "exhibit_argument",
+  "title": "Enterprise retains best while small business trails",
+  "title_right": "Small business is the one segment to fix",
+  "exhibit": {
+   "title": "Net revenue retention by segment",
+   "unit": "%, Q3 2025"
+  },
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Enterprise",
+    "Mid-market",
+    "Small business"
+   ],
+   "series": [
+    {
+     "name": "Net revenue retention",
+     "values": [
+      118,
+      111,
+      98
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Small business"
+   ]
+  },
+  "blocks": [
+   {
+    "text": "**Enterprise** retains 118% and holds $61M of ARR",
+    "bullets": [
+     "Mid-market adds **$98M** of ARR at 111% retention"
+    ]
+   },
+   {
+    "text": "**Small business** is 15% of ARR but retains only 98%",
+    "bullets": [
+     "Its **$27M** shrinks without new sales"
+    ]
+   }
+  ],
+  "callout": {
+   "bullets": [
+    "**Fix** onboarding for small business",
+    "**Target** retention above 100% by Q4",
+    "**Shift** growth spend to enterprise"
+   ]
+  },
+  "source": {
+   "text": "Solstice financial statements, Q3 2025",
+   "prov": [
+    "F2",
+    "F4",
+    "F9"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Guidance for 2025 revenue rises by $6M at both ends",
+  "subtitle": "Full-year 2025 revenue, USD million",
+  "table": {
+   "columns": [
+    "Measure",
+    "Previous",
+    "Updated",
+    "Change"
+   ],
+   "rows": [
+    [
+     "Revenue low end",
+     "220",
+     "226",
+     "+6"
+    ],
+    [
+     "Revenue high end",
+     "224",
+     "230",
+     "+6"
+    ],
+    [
+     "Gross margin",
+     "78%",
+     "78%",
+     "0"
+    ],
+    [
+     "Customers",
+     "",
+     "2,140",
+     ""
+    ]
+   ],
+   "highlight_rows": [
+    0,
+    1
+   ],
+   "size": 12,
+   "prov": [
+    "F6",
+    "F8"
+   ]
+  },
+  "takeaway": {
+   "text": "The new range of $226M to $230M is 2.7% above the old midpoint",
+   "prov": [
+    "F8"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The raise reflects four quarters of rising net retention",
+    "prov": [
+     "F3",
+     "F8"
+    ]
+   },
+   {
+    "text": "Gross margin holds at 78% on 2,140 customers",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Solstice management guidance, November 2025",
+   "prov": [
+    "F6",
+    "F8"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Three risks could slow growth, and each has an action",
+  "columns": [
+   "Risk",
+   "Evidence",
+   "Response"
+  ],
+  "rows": [
+   {
+    "icon": "people",
+    "label": "**Small business** churn",
+    "cells": [
+     {
+      "lead": "Retention is below 100%",
+      "bullets": [
+       {
+        "text": "98% net retention on $27M of ARR",
+        "prov": [
+         "F4"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Rebuild onboarding",
+      "bullets": [
+       {
+        "text": "Target above 100% by Q4",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "money",
+    "label": "**Currency** drag",
+    "cells": [
+     {
+      "lead": "Reported growth is understated",
+      "bullets": [
+       {
+        "text": "About 2 points lost to currency",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Report constant currency",
+      "bullets": [
+       {
+        "text": "Show both measures each quarter",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Enterprise** capacity",
+    "cells": [
+     {
+      "lead": "Demand outpaces sellers",
+      "bullets": [
+       {
+        "text": "Enterprise retains 118% on $61M of ARR",
+        "prov": [
+         "F2",
+         "F4"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Hire 40 sales staff",
+      "bullets": [
+       {
+        "text": "Complete hiring in Q4",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Solstice management",
+   "prov": [
+    "F2",
+    "F4",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Three priorities for the fourth quarter",
+  "steps": [
+   {
+    "action": "Launch the analytics module",
+    "detail": "Bring the new module to enterprise customers to keep net retention rising from 112%.",
+    "milestones": [
+     "General availability in Q4"
+    ],
+    "owner": "Chief product officer",
+    "timing": "Q4 2025",
+    "prov": [
+     "F3",
+     "F11"
+    ]
+   },
+   {
+    "action": "Hire 40 enterprise sellers",
+    "detail": "Add capacity in the segment that retains 118% of revenue.",
+    "milestones": [
+     "Offers out in Q4"
+    ],
+    "owner": "Chief revenue officer",
+    "timing": "Q4 2025",
+    "prov": [
+     "F4",
+     "F11"
+    ]
+   },
+   {
+    "action": "Lift small business retention",
+    "detail": "Move small business net retention from 98% to above 100%.",
+    "milestones": [
+     "Onboarding relaunch in November"
+    ],
+    "owner": "Head of customer success",
+    "timing": "Q4 2025",
+    "prov": [
+     "F4",
+     "F11"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

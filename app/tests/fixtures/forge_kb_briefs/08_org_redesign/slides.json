@@ -1,0 +1,546 @@
+[
+ {
+  "archetype": "cover",
+  "title": "A flatter organisation for Tidewater Insurance",
+  "subtitle": "Organisation redesign for the executive committee",
+  "date": "Executive committee, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Remove two management layers and 232 manager roles to save $17M a year",
+  "points": [
+   {
+    "lead": "The organisation is too deep and too narrow",
+    "bullets": [
+     "7 layers and an average span of 4.2 against a target of 8"
+    ],
+    "prov": [
+     "F1",
+     "F2"
+    ]
+   },
+   {
+    "lead": "Duplication slows decisions",
+    "bullets": [
+     "11 functions repeat across four regional units; large claims take 21 days"
+    ],
+    "prov": [
+     "F4",
+     "F5"
+    ]
+   },
+   {
+    "lead": "A hybrid structure fits best",
+    "bullets": [
+     "Functional claims and underwriting; regional distribution"
+    ],
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "lead": "Savings are $17M a year for $11M of one-time cost",
+    "bullets": [
+     "Manager roles fall from 612 to 380"
+    ],
+    "prov": [
+     "F7",
+     "F8"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve the hybrid structure and the Q1 design phase.",
+  "metrics": [
+   {
+    "value": "$17M",
+    "label": "annual savings",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "value": "7 to 5",
+    "label": "management layers",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "value": "380",
+    "label": "manager roles in target",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Every unit runs spans below five direct reports against a target of eight",
+  "subtitle": "Average span of control by unit, direct reports",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Underwriting",
+    "Corporate",
+    "Distribution",
+    "Claims"
+   ],
+   "series": [
+    {
+     "name": "Average span",
+     "values": [
+      4.6,
+      4.5,
+      4.1,
+      3.8
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "direct reports",
+   "decimals": 1,
+   "highlight_categories": [
+    "Claims"
+   ]
+  },
+  "takeaway": {
+   "text": "Claims is narrowest at 3.8, against a company average of 4.2",
+   "prov": [
+    "F2",
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Even the widest unit, underwriting, manages 4.6 reports per manager",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "A span of 8 is common for work with standard processes",
+    "prov": [
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Tidewater HR system, October 2026",
+   "prov": [
+    "F2",
+    "F3"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Claims and distribution carry the most layers and the most managers",
+  "subtitle": "Layers, span and managers by unit",
+  "table": {
+   "columns": [
+    "Unit",
+    "Layers",
+    "Average span",
+    "Managers"
+   ],
+   "rows": [
+    [
+     "Claims",
+     "7",
+     "3.8",
+     "214"
+    ],
+    [
+     "Distribution",
+     "7",
+     "4.1",
+     "176"
+    ],
+    [
+     "Underwriting",
+     "6",
+     "4.6",
+     "128"
+    ],
+    [
+     "Corporate",
+     "6",
+     "4.5",
+     "94"
+    ],
+    [
+     "Total",
+     "7",
+     "4.2",
+     "612"
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "total_row": true,
+   "size": 12,
+   "prov": [
+    "F1",
+    "F3"
+   ]
+  },
+  "takeaway": {
+   "text": "Claims and distribution hold 64% of all managers",
+   "prov": [
+    "F1",
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Two units still run seven layers",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "Corporate and underwriting run six layers",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Tidewater HR system, October 2026",
+   "prov": [
+    "F1",
+    "F3"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Depth and duplication slow claims decisions and raise cost",
+  "columns": [
+   "Issue",
+   "Evidence",
+   "Effect"
+  ],
+  "rows": [
+   {
+    "icon": "time",
+    "label": "**Slow** large claims",
+    "cells": [
+     {
+      "lead": "Large claims wait for several sign-offs",
+      "bullets": [
+       {
+        "text": "21 days to decide claims above $50k",
+        "prov": [
+         "F5"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Peers decide in 14 days",
+      "bullets": [
+       {
+        "text": "A 7-day gap hurts customers and retention",
+        "prov": [
+         "F5"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "money",
+    "label": "**Duplicated** functions",
+    "cells": [
+     {
+      "lead": "Regions repeat support work",
+      "bullets": [
+       {
+        "text": "11 functions in four regional units",
+        "prov": [
+         "F4"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Savings of $17M are available",
+      "bullets": [
+       {
+        "text": "Duplicated functions and spans account for most of it",
+        "prov": [
+         "F7",
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "people",
+    "label": "**Low** engagement",
+    "cells": [
+     {
+      "lead": "Staff see slow decisions",
+      "bullets": [
+       {
+        "text": "58% favourable on decision speed",
+        "prov": [
+         "F6"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Wider spans give more autonomy",
+      "bullets": [
+       {
+        "text": "A span of 8 moves decisions closer to the work",
+        "prov": [
+         "F2"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Tidewater claims data; employee survey",
+   "prov": [
+    "F2",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "grid",
+  "title": "The hybrid model scores highest across speed, cost and customer fit",
+  "layout": "main_side",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "harvey",
+    "heading": "Structure options against criteria (4 = best)",
+    "criteria": [
+     "Decision speed",
+     "Cost",
+     "Local service",
+     "Disruption"
+    ],
+    "rows": [
+     {
+      "label": "Keep regional units",
+      "scores": [
+       0,
+       0,
+       4,
+       4
+      ]
+     },
+     {
+      "label": "Functional model",
+      "scores": [
+       4,
+       4,
+       1,
+       1
+      ]
+     },
+     {
+      "label": "Hybrid",
+      "scores": [
+       3,
+       3,
+       3,
+       3
+      ]
+     }
+    ]
+   },
+   {
+    "type": "text",
+    "heading": "The hybrid design",
+    "lead": "Functional where scale matters, regional where customers are",
+    "bullets": [
+     "Claims and underwriting run as national functions",
+     "Distribution stays regional"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Tidewater organisation design team",
+   "prov": [
+    "F9"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Three moves take manager roles from 612 to 380",
+  "subtitle": "Manager roles, number",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "Managers today",
+    "Span consolidation",
+    "Duplicated functions",
+    "Natural attrition",
+    "Target"
+   ],
+   "series": [
+    {
+     "name": "Managers",
+     "values": [
+      612,
+      -150,
+      -52,
+      -30,
+      380
+     ],
+     "prov": [
+      "F7"
+     ]
+    }
+   ],
+   "unit": "roles",
+   "decimals": 0
+  },
+  "takeaway": {
+   "text": "Wider spans account for 65% of the 232 roles removed",
+   "prov": [
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Span consolidation removes 150 roles",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "text": "Merging duplicated functions removes 52 more",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Tidewater organisation design team",
+   "prov": [
+    "F7"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "grid",
+  "title": "The new structure is complete by the end of 2027",
+  "layout": "halves_v",
+  "look": "minimal",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Rollout",
+    "milestones": [
+     {
+      "date": "Q1 2027",
+      "label": "Design the structure and retention plan"
+     },
+     {
+      "date": "Q2-Q3 2027",
+      "label": "Remove two layers unit by unit"
+     },
+     {
+      "date": "Q4 2027",
+      "label": "Complete the new structure"
+     }
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "Main risk",
+    "text": "24 critical roles hold knowledge of large claims. Secure their retention before any announcement."
+   }
+  ],
+  "source": {
+   "text": "Tidewater organisation design team",
+   "prov": [
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the hybrid structure and start the design phase in January",
+  "steps": [
+   {
+    "action": "Approve the hybrid model",
+    "detail": "Adopt national claims and underwriting functions with regional distribution.",
+    "milestones": [
+     "Decision today"
+    ],
+    "owner": "CEO",
+    "timing": "November 2026",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "action": "Secure the 24 critical roles",
+    "detail": "Agree retention before any announcement about layers or roles.",
+    "milestones": [
+     "Retention plan agreed in December"
+    ],
+    "owner": "CHRO",
+    "timing": "December 2026",
+    "prov": [
+     "F11"
+    ]
+   },
+   {
+    "action": "Run the Q1 design phase",
+    "detail": "Set new spans and roles to deliver $17M of savings for $11M of one-time cost.",
+    "milestones": [
+     "Design complete by March"
+    ],
+    "owner": "COO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F8",
+     "F10"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

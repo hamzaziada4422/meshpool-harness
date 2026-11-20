@@ -1,0 +1,608 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Ironbridge Holdings third quarter board pack",
+  "subtitle": "Results, risks and two decisions",
+  "date": "Board meeting, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Q3 results are ahead of last year, and two decisions need your approval",
+  "points": [
+   {
+    "lead": "Revenue grew 6.8% and margins improved",
+    "bullets": [
+     "Revenue $312M; EBITDA margin 18.7% against 17.8%"
+    ],
+    "prov": [
+     "F1",
+     "F2"
+    ]
+   },
+   {
+    "lead": "The balance sheet has room",
+    "bullets": [
+     "Leverage is 1.8x and capex ran $7M below plan"
+    ],
+    "prov": [
+     "F5",
+     "F6"
+    ]
+   },
+   {
+    "lead": "Plant 3 earns a 19% return",
+    "bullets": [
+     "A $22M expansion adds 14% capacity"
+    ],
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "lead": "A $64M customer renewal is the main risk",
+    "bullets": [
+     "It is the largest of four tracked risks"
+    ],
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve the $22M Plant 3 expansion and a $0.18 quarterly dividend.",
+  "metrics": [
+   {
+    "value": "$312M",
+    "label": "Q3 revenue",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "value": "18.7%",
+    "label": "EBITDA margin",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "1.8x",
+    "label": "net debt to EBITDA",
+    "prov": [
+     "F5"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "All three segments grew, and Services grew fastest at 13.6%",
+  "subtitle": "Q3 revenue by segment, USD million",
+  "table": {
+   "columns": [
+    "Segment",
+    "Q3 this year",
+    "Q3 last year",
+    "Growth"
+   ],
+   "rows": [
+    [
+     "Services",
+     "67",
+     "59",
+     "13.6%"
+    ],
+    [
+     "Industrial",
+     "148",
+     "141",
+     "5.0%"
+    ],
+    [
+     "Energy",
+     "97",
+     "92",
+     "5.4%"
+    ],
+    [
+     "Total",
+     "312",
+     "292",
+     "6.8%"
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "total_row": true,
+   "size": 12,
+   "prov": [
+    "F1",
+    "F3"
+   ]
+  },
+  "takeaway": {
+   "text": "Industrial still provides 47% of revenue",
+   "prov": [
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Services is 21% of revenue against a 25% target",
+    "prov": [
+     "F11"
+    ]
+   },
+   {
+    "text": "Order backlog of $540M covers 1.7 quarters of revenue",
+    "prov": [
+     "F12"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Ironbridge management accounts, Q3",
+   "prov": [
+    "F1",
+    "F3",
+    "F11",
+    "F12"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Volume and price added $7.3M of EBITDA and outweighed cost inflation",
+  "subtitle": "EBITDA, USD million, Q3 last year to Q3",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "Q3 last year",
+    "Volume",
+    "Price",
+    "Cost inflation",
+    "Productivity",
+    "Q3"
+   ],
+   "series": [
+    {
+     "name": "EBITDA",
+     "values": [
+      52.1,
+      4.2,
+      3.1,
+      -2.4,
+      1.4,
+      58.4
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 1
+  },
+  "takeaway": {
+   "text": "EBITDA rose 12.1% to $58.4M",
+   "prov": [
+    "F2",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Cost inflation took away $2.4M",
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "text": "Productivity returned $1.4M",
+    "prov": [
+     "F4"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Ironbridge management accounts, Q3",
+   "prov": [
+    "F2",
+    "F4"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "grid",
+  "title": "Cash and safety are on target",
+  "layout": "quarters",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "stats",
+    "heading": "Balance sheet",
+    "items": [
+     {
+      "value": "$410M",
+      "label": "net debt",
+      "prov": [
+       "F5"
+      ]
+     },
+     {
+      "value": "1.8x",
+      "label": "leverage",
+      "prov": [
+       "F5"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Capex",
+    "items": [
+     {
+      "value": "$41M",
+      "label": "Q3 capex",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "$48M",
+      "label": "plan",
+      "prov": [
+       "F6"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Safety",
+    "items": [
+     {
+      "value": "0.9",
+      "label": "injury rate",
+      "prov": [
+       "F7"
+      ]
+     },
+     {
+      "value": "1.1",
+      "label": "target",
+      "prov": [
+       "F7"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Orders",
+    "items": [
+     {
+      "value": "$540M",
+      "label": "backlog",
+      "prov": [
+       "F12"
+      ]
+     },
+     {
+      "value": "1.7x",
+      "label": "quarterly revenue",
+      "prov": [
+       "F12"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Ironbridge management accounts, Q3",
+   "prov": [
+    "F5",
+    "F6",
+    "F7",
+    "F12"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "exhibit_argument",
+  "title": "Plant 3 earns a 19% return on $22M",
+  "title_right": "Capacity, not demand, limits Industrial",
+  "exhibit": {
+   "title": "Plant 3 expansion economics",
+   "unit": "capacity index, today = 100"
+  },
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Today",
+    "After expansion"
+   ],
+   "series": [
+    {
+     "name": "Plant 3 capacity",
+     "values": [
+      100,
+      114
+     ],
+     "prov": [
+      "F8"
+     ]
+    }
+   ],
+   "unit": "index",
+   "decimals": 0,
+   "highlight_categories": [
+    "After expansion"
+   ]
+  },
+  "blocks": [
+   {
+    "text": "The expansion adds **14%** capacity for **$22M**",
+    "bullets": [
+     "It returns **19%** with payback in **4.6 years**"
+    ]
+   },
+   {
+    "text": "Industrial has a **$540M** backlog behind it",
+    "bullets": [
+     "Backlog is **1.7x** quarterly revenue"
+    ]
+   }
+  ],
+  "callout": {
+   "bullets": [
+    "**Approve** $22M for Plant 3",
+    "**Watch** permitting delay risk",
+    "**Report** progress each quarter"
+   ]
+  },
+  "source": {
+   "text": "Ironbridge investment case",
+   "prov": [
+    "F8",
+    "F10",
+    "F12"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Four risks need board visibility, and the customer renewal ranks first",
+  "columns": [
+   "Risk",
+   "Exposure",
+   "Mitigation"
+  ],
+  "rows": [
+   {
+    "icon": "money",
+    "label": "**Customer** renewal",
+    "cells": [
+     {
+      "lead": "A large contract is up",
+      "bullets": [
+       {
+        "text": "$64M a year of revenue is up for renewal",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "CEO leads the negotiation",
+      "bullets": [
+       {
+        "text": "Report progress at each meeting",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Raw material** costs",
+    "cells": [
+     {
+      "lead": "Inflation took $2.4M in Q3",
+      "bullets": [
+       {
+        "text": "Pricing recovered $3.1M",
+        "prov": [
+         "F4"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Pass through costs by contract",
+      "bullets": [
+       {
+        "text": "Extend indexation clauses",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "safety",
+    "label": "**Cyber** incident",
+    "cells": [
+     {
+      "lead": "Plant systems are exposed",
+      "bullets": [
+       {
+        "text": "Listed as a top-four risk",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Test the response plan",
+      "bullets": [
+       {
+        "text": "Run an exercise before year-end",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "time",
+    "label": "**Permitting** delay",
+    "cells": [
+     {
+      "lead": "Plant 3 needs a permit",
+      "bullets": [
+       {
+        "text": "A delay would postpone the 14% capacity gain",
+        "prov": [
+         "F8",
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Start filing now",
+      "bullets": [
+       {
+        "text": "Condition spend on the permit",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Ironbridge risk register, Q3",
+   "prov": [
+    "F4",
+    "F8",
+    "F10"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "grid",
+  "title": "Strategy delivery is on track in Energy and behind in Services",
+  "layout": "halves",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Strategic milestones",
+    "milestones": [
+     {
+      "date": "Q4 2026",
+      "label": "Plant 3 permit filed"
+     },
+     {
+      "date": "2027",
+      "label": "Plant 3 construction and Services acquisition review"
+     },
+     {
+      "date": "2028",
+      "label": "Energy reaches $400M revenue"
+     }
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "Gaps to target",
+    "bullets": [
+     "**Services** is 21% of revenue against 25%",
+     "**Energy** revenue is $97M a quarter, on the path to $400M",
+     "**Dividend** payout is 31% of free cash flow"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Ironbridge strategy office",
+   "prov": [
+    "F9",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve the Plant 3 expansion and the dividend",
+  "steps": [
+   {
+    "action": "Approve the $22M expansion",
+    "detail": "Add 14% capacity at a 19% return, subject to the permit.",
+    "milestones": [
+     "Permit filed in Q4"
+    ],
+    "owner": "Board",
+    "timing": "November 2026",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "action": "Declare the dividend",
+    "detail": "Pay $0.18 a share, 31% of free cash flow.",
+    "milestones": [
+     "Payment in December"
+    ],
+    "owner": "Board",
+    "timing": "November 2026",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "action": "Track the $64M renewal",
+    "detail": "CEO reports on contract renewal at every meeting until signature.",
+    "milestones": [
+     "First update in February"
+    ],
+    "owner": "CEO",
+    "timing": "February 2027",
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

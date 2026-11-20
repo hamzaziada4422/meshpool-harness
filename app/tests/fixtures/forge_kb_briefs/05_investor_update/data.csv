@@ -1,0 +1,11 @@
+quarter,arr_usd_m,nrr_pct
+Q3 2024,150,104
+Q4 2024,158,106
+Q1 2025,167,108
+Q2 2025,176,110
+Q3 2025,186,112
+
+segment,arr_usd_m,nrr_pct
+Mid-market,98,111
+Enterprise,61,118
+Small business,27,98

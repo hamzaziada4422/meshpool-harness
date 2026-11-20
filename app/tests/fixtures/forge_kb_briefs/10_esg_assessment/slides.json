@@ -1,0 +1,587 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Granite Mining ESG assessment",
+  "subtitle": "Position, gaps and a 2030 emissions pathway",
+  "date": "Sustainability committee, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Adopt a $310M abatement plan to close the 109 kt emissions gap by 2030",
+  "points": [
+   {
+    "lead": "Emissions are falling, but too slowly",
+    "bullets": [
+     "763 kt in 2025; the current pace leaves a 109 kt gap to the 488 kt target"
+    ],
+    "prov": [
+     "F1",
+     "F2",
+     "F3"
+    ]
+   },
+   {
+    "lead": "Four levers close the gap",
+    "bullets": [
+     "Renewables and haul truck electrification provide 75% of the 275 kt needed"
+    ],
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "lead": "Safety and diversity trail peers",
+    "bullets": [
+     "Injury rate 1.9 against 1.2; women hold 19% of leadership roles"
+    ],
+    "prov": [
+     "F6",
+     "F7"
+    ]
+   },
+   {
+    "lead": "Ratings reflect the gaps",
+    "bullets": [
+     "Granite scores 54 against a peer median of 62"
+    ],
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "decision": "Decision today: adopt the 2030 pathway and release $310M over five years.",
+  "metrics": [
+   {
+    "value": "-42%",
+    "label": "2030 emissions target vs 2023",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "$310M",
+    "label": "abatement cost, five years",
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "value": "109 kt",
+    "label": "gap at current pace",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Emissions fell 9% in two years but must fall 36% more by 2030",
+  "subtitle": "Scope 1 and 2 emissions, ktCO2e",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "2023",
+    "2024",
+    "2025",
+    "2030 target"
+   ],
+   "series": [
+    {
+     "name": "Emissions",
+     "values": [
+      842,
+      801,
+      763,
+      488
+     ],
+     "prov": [
+      "F1",
+      "F2"
+     ]
+    }
+   ],
+   "unit": "ktCO2e",
+   "decimals": 0,
+   "highlight_categories": [
+    "2030 target"
+   ]
+  },
+  "takeaway": {
+   "text": "Emissions need to fall by 275 kt from 2025 to reach target",
+   "prov": [
+    "F2",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The 2025 level is 763 kt, 79 kt below 2023",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "text": "At 4.8% a year, 2030 would reach about 597 kt",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Granite sustainability report; internal inventory",
+   "prov": [
+    "F1",
+    "F2",
+    "F3",
+    "F4"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "benchmark",
+  "title": "Granite's injury rate is 58% above the peer average",
+  "benchmark": {
+   "companies": [
+    "Peer A",
+    "Peer B",
+    "Peer C",
+    "Peer D",
+    "Granite"
+   ],
+   "panels": [
+    {
+     "title": "Injuries per million hours",
+     "unit": "",
+     "values": [
+      0.9,
+      1.1,
+      1.3,
+      1.5,
+      1.9
+     ],
+     "median": 1.2
+    }
+   ],
+   "highlight": [
+    4
+   ]
+  },
+  "takeaway": {
+   "text": "Granite records 1.9 injuries per million hours against a peer median of 1.2",
+   "prov": [
+    "F6",
+    "F12"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Closing the gap means cutting the rate by about 0.7",
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "text": "The rate has fallen from 2.3 in 2023",
+    "prov": [
+     "F6"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Company sustainability reports, 2025",
+   "prov": [
+    "F6",
+    "F12"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Social metrics are red, while environment and governance are amber",
+  "subtitle": "ESG scorecard against peers",
+  "table": {
+   "columns": [
+    "Area",
+    "Metric",
+    "Granite",
+    "Peers",
+    "Status"
+   ],
+   "rows": [
+    [
+     "Environment",
+     "Emissions vs 2023 base",
+     "-9%",
+     "",
+     "Amber"
+    ],
+    [
+     "Environment",
+     "Water intensity change",
+     "-6%",
+     "",
+     "Amber"
+    ],
+    [
+     "Social",
+     "Injury rate",
+     "1.9",
+     "1.2",
+     "Red"
+    ],
+    [
+     "Social",
+     "Women in leadership",
+     "19%",
+     "27%",
+     "Red"
+    ],
+    [
+     "Governance",
+     "Independent directors",
+     "62%",
+     "66%",
+     "Amber"
+    ],
+    [
+     "Ratings",
+     "Score (0-100)",
+     "54",
+     "62",
+     "Red"
+    ]
+   ],
+   "highlight_rows": [
+    2,
+    3
+   ],
+   "size": 12,
+   "prov": [
+    "F1",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11"
+   ]
+  },
+  "takeaway": {
+   "text": "Two social measures drive the weak rating score of 54",
+   "prov": [
+    "F6",
+    "F7",
+    "F10"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Water intensity fell 6% in 2025 to 1.9 cubic metres per tonne",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "text": "Board independence of 62% is 4 points below the 66% target",
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Granite sustainability report; rating agencies",
+   "prov": [
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Four levers reduce emissions from 763 kt to 488 kt by 2030",
+  "subtitle": "Scope 1 and 2 emissions, ktCO2e, 2025 to 2030",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "2025 emissions",
+    "Renewable power",
+    "Haul truck electrification",
+    "Energy efficiency",
+    "Fuel switching",
+    "2030 target"
+   ],
+   "series": [
+    {
+     "name": "Emissions",
+     "values": [
+      763,
+      -120,
+      -85,
+      -45,
+      -25,
+      488
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "ktCO2e",
+   "decimals": 0
+  },
+  "takeaway": {
+   "text": "Renewable power and electrification deliver 75% of the abatement",
+   "prov": [
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Renewable contracts remove 120 kt",
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "text": "Haul truck electrification removes 85 kt",
+    "prov": [
+     "F4"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Granite abatement model",
+   "prov": [
+    "F4"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "grid",
+  "title": "Renewables abate cheapest while electrification costs the most",
+  "layout": "main_side",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Abatement cost, $M, five years",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Electrification",
+      "Renewable power",
+      "Energy efficiency",
+      "Fuel switching"
+     ],
+     "series": [
+      {
+       "name": "Cost",
+       "values": [
+        170,
+        60,
+        50,
+        30
+       ],
+       "prov": [
+        "F5"
+       ]
+      }
+     ],
+     "unit": "$M",
+     "decimals": 0,
+     "highlight_categories": [
+      "Electrification"
+     ]
+    }
+   },
+   {
+    "type": "callout",
+    "heading": "Cost per kt",
+    "bullets": [
+     "**Renewables** cost $0.5M per kt",
+     "**Electrification** costs $2.0M per kt",
+     "**Efficiency** costs $1.1M per kt"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Granite abatement model",
+   "prov": [
+    "F4",
+    "F5"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Social and governance gaps need targets as firm as the emissions plan",
+  "columns": [
+   "Area",
+   "Gap",
+   "Action"
+  ],
+  "rows": [
+   {
+    "icon": "safety",
+    "label": "**Safety** performance",
+    "cells": [
+     {
+      "lead": "Injury rate is above peers",
+      "bullets": [
+       {
+        "text": "1.9 against a peer median of 1.2",
+        "prov": [
+         "F6"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Set a target of 1.2 by 2030",
+      "bullets": [
+       {
+        "text": "Focus on haul and maintenance work",
+        "prov": [
+         "F6"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "people",
+    "label": "**Diversity** in leadership",
+    "cells": [
+     {
+      "lead": "Women hold 19% of leadership roles",
+      "bullets": [
+       {
+        "text": "Peers average 27%",
+        "prov": [
+         "F7"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Reach 27% by 2030",
+      "bullets": [
+       {
+        "text": "Set targets by business unit",
+        "prov": [
+         "F7"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Board** independence",
+    "cells": [
+     {
+      "lead": "Independence is 62%",
+      "bullets": [
+       {
+        "text": "The governance code target is 66%",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Appoint two independent directors",
+      "bullets": [
+       {
+        "text": "Complete within the next two annual meetings",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Granite sustainability report",
+   "prov": [
+    "F6",
+    "F7",
+    "F8"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Adopt the pathway and set safety and diversity targets this quarter",
+  "steps": [
+   {
+    "action": "Adopt the 2030 pathway",
+    "detail": "Commit to 488 kt by 2030 with four abatement levers costing $310M.",
+    "milestones": [
+     "Committee resolution today"
+    ],
+    "owner": "Committee chair",
+    "timing": "November 2026",
+    "prov": [
+     "F2",
+     "F5"
+    ]
+   },
+   {
+    "action": "Sign renewable power contracts",
+    "detail": "Start with the lever that removes 120 kt at $60M.",
+    "milestones": [
+     "First contract by Q2 2027"
+    ],
+    "owner": "Chief operating officer",
+    "timing": "Q2 2027",
+    "prov": [
+     "F4",
+     "F5"
+    ]
+   },
+   {
+    "action": "Set social and governance targets",
+    "detail": "Adopt a 1.2 injury rate, 27% women in leadership and 66% independent directors.",
+    "milestones": [
+     "Targets in the 2027 report"
+    ],
+    "owner": "Board secretary",
+    "timing": "Q1 2027",
+    "prov": [
+     "F6",
+     "F7",
+     "F8"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

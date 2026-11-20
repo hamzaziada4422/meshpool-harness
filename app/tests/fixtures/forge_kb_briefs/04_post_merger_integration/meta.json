@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s8": "governance_org_chart (integration management office and workstream leads)",
+  "s7": "gantt_swimlanes (100-day plan by function)"
+ },
+ "has_data": true
+}

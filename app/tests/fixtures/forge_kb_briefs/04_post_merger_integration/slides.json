@@ -1,0 +1,557 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Integrating Corran Plastics: day 45 status and the way to $48M",
+  "subtitle": "Steering committee update",
+  "date": "Steering committee, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Integration is mostly on track, but five red workstreams put $48M of synergies at risk",
+  "points": [
+   {
+    "lead": "Two thirds of the work is on track",
+    "bullets": [
+     "26 of 40 workstreams are green; 5 are red"
+    ],
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "lead": "The synergy case is intact",
+    "bullets": [
+     "$48M run-rate by year 3, with $14M in year 1"
+    ],
+    "prov": [
+     "F2",
+     "F4"
+    ]
+   },
+   {
+    "lead": "People and customers are the exposure",
+    "bullets": [
+     "Corran attrition is 8.4%; $31M of revenue shows risk"
+    ],
+    "prov": [
+     "F8",
+     "F9"
+    ]
+   },
+   {
+    "lead": "IT is the weakest function",
+    "bullets": [
+     "Two of eight IT workstreams are red while three ERPs still run"
+    ],
+    "prov": [
+     "F7",
+     "F10"
+    ]
+   }
+  ],
+  "decision": "Decision today: confirm the 100-day plan and fund recovery for the red workstreams.",
+  "metrics": [
+   {
+    "value": "$48M",
+    "label": "run-rate synergy target",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "26 / 40",
+    "label": "workstreams on track",
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "value": "$52M",
+    "label": "one-time integration cost",
+    "prov": [
+     "F5"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Procurement and footprint deliver 56% of the $48M synergy target",
+  "subtitle": "Run-rate synergies by source, USD million",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Procurement",
+    "Footprint",
+    "Revenue synergies",
+    "SG&A"
+   ],
+   "series": [
+    {
+     "name": "Run-rate synergies",
+     "values": [
+      15,
+      12,
+      12,
+      9
+     ],
+     "prov": [
+      "F3"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "Procurement"
+   ]
+  },
+  "takeaway": {
+   "text": "Cost synergies are $36M, three quarters of the target",
+   "prov": [
+    "F2",
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Procurement is the single largest source at $15M",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "Revenue synergies of $12M depend on the 22% of shared customers",
+    "prov": [
+     "F3",
+     "F9"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix integration office, day 45",
+   "prov": [
+    "F2",
+    "F3",
+    "F9"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "stacked_composition",
+  "title": "IT has the weakest status with two of eight workstreams red",
+  "subtitle": "Workstreams by status and function, number, day 45",
+  "chart": {
+   "kind": "stacked_bar",
+   "categories": [
+    "Finance",
+    "Commercial",
+    "Operations",
+    "IT",
+    "HR"
+   ],
+   "series": [
+    {
+     "name": "Green",
+     "values": [
+      6,
+      4,
+      7,
+      4,
+      5
+     ],
+     "prov": [
+      "F7"
+     ]
+    },
+    {
+     "name": "Amber",
+     "values": [
+      2,
+      2,
+      2,
+      2,
+      1
+     ],
+     "prov": [
+      "F7"
+     ]
+    },
+    {
+     "name": "Red",
+     "values": [
+      0,
+      1,
+      1,
+      2,
+      1
+     ],
+     "prov": [
+      "F7"
+     ]
+    }
+   ],
+   "unit": "workstreams",
+   "decimals": 0
+  },
+  "takeaway": {
+   "text": "Finance is clear; IT and HR need recovery plans",
+   "prov": [
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Five red workstreams sit in four functions",
+    "prov": [
+     "F6",
+     "F7"
+    ]
+   },
+   {
+    "text": "IT has two reds and two ambers across eight workstreams",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix integration office, day 45",
+   "prov": [
+    "F6",
+    "F7"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Synergies must ramp from $14M to $48M across three years",
+  "subtitle": "Run-rate synergies, USD million",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "Year 1",
+    "Year 2",
+    "Year 3"
+   ],
+   "series": [
+    {
+     "name": "Run-rate synergies",
+     "values": [
+      14,
+      33,
+      48
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "Year 3"
+   ]
+  },
+  "takeaway": {
+   "text": "The year 2 step of $19M depends on procurement contracts and the first plant move",
+   "prov": [
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Year 1 delivers $14M, 29% of the target",
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "text": "One-time cost of $52M is spent mostly in years 1 and 2",
+    "prov": [
+     "F5"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix integration office, synergy tracker",
+   "prov": [
+    "F4",
+    "F5"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "People, customers and systems carry the integration risk",
+  "columns": [
+   "Area",
+   "Today",
+   "Action"
+  ],
+  "rows": [
+   {
+    "icon": "people",
+    "label": "**Talent** retention",
+    "cells": [
+     {
+      "lead": "Corran people are leaving faster",
+      "bullets": [
+       {
+        "text": "8.4% attrition against 5.1% at Helix",
+        "prov": [
+         "F8"
+        ]
+       },
+       {
+        "text": "14 of 60 key people flagged at risk",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Sign retention packages by day 60",
+      "bullets": [
+       {
+        "text": "Prioritise the 14 flagged people",
+        "prov": [
+         "F8",
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Customer** accounts",
+    "cells": [
+     {
+      "lead": "Shared customers show unease",
+      "bullets": [
+       {
+        "text": "Three accounts worth $31M show risk",
+        "prov": [
+         "F9"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Agree one account plan by day 90",
+      "bullets": [
+       {
+        "text": "Name a joint owner for each of the three accounts",
+        "prov": [
+         "F9",
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "safety",
+    "label": "**Systems** and data",
+    "cells": [
+     {
+      "lead": "Three ERPs still run",
+      "bullets": [
+       {
+        "text": "Two IT workstreams are red",
+        "prov": [
+         "F7",
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Freeze the ERP design at day 100",
+      "bullets": [
+       {
+        "text": "Move to one ERP by month 18",
+        "prov": [
+         "F10",
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix HR, commercial and IT leads, day 45",
+   "prov": [
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "grid",
+  "title": "Four gates in 100 days keep the integration on schedule",
+  "layout": "full",
+  "look": "minimal",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "100-day plan",
+    "milestones": [
+     {
+      "date": "Day 30",
+      "label": "Governance live"
+     },
+     {
+      "date": "Day 60",
+      "label": "Retention packages signed"
+     },
+     {
+      "date": "Day 90",
+      "label": "Customer plan agreed"
+     },
+     {
+      "date": "Day 100",
+      "label": "ERP design frozen"
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix integration office",
+   "prov": [
+    "F11"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "grid",
+  "title": "Recovering the red workstreams needs owners, not new money",
+  "layout": "halves",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "stats",
+    "heading": "Where we stand",
+    "items": [
+     {
+      "value": "5",
+      "label": "red workstreams",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "9",
+      "label": "amber workstreams",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "22%",
+      "label": "customers in both books",
+      "prov": [
+       "F9"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "process",
+    "heading": "Recovery steps",
+    "steps": [
+     {
+      "title": "Name an owner",
+      "text": "One executive per red workstream"
+     },
+     {
+      "title": "Weekly review",
+      "text": "Steering committee tracks each red item"
+     },
+     {
+      "title": "Escalate at day 60",
+      "text": "Unresolved items go to the CEOs"
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Helix integration office, day 45",
+   "prov": [
+    "F6",
+    "F9"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "closing",
+  "title": "Confirm the 100-day plan and assign owners to the five red workstreams",
+  "steps": [
+   {
+    "action": "Name recovery owners",
+    "detail": "Assign one executive to each of five red workstreams, with a weekly steering review.",
+    "milestones": [
+     "Owners named within one week"
+    ],
+    "owner": "Integration lead",
+    "timing": "This week",
+    "prov": [
+     "F6"
+    ]
+   },
+   {
+    "action": "Sign retention packages",
+    "detail": "Cover the 14 key people at risk at Corran before day 60.",
+    "milestones": [
+     "Packages signed by day 60"
+    ],
+    "owner": "CHRO",
+    "timing": "By day 60",
+    "prov": [
+     "F8",
+     "F11"
+    ]
+   },
+   {
+    "action": "Agree the customer plan",
+    "detail": "Protect $31M of at-risk revenue with joint account owners by day 90.",
+    "milestones": [
+     "Plan agreed at day 90"
+    ],
+    "owner": "Chief commercial officer",
+    "timing": "By day 90",
+    "prov": [
+     "F9",
+     "F11"
+    ]
+   }
+  ],
+  "id": "s9",
+  "node": "n9"
+ }
+]

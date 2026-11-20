@@ -1,0 +1,10 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s8": "gantt_roadmap (initiatives over 36 months)",
+  "s7": "dependency_network (initiatives that depend on the data platform)",
+  "s5": "bubble_value_effort (initiatives sized by cost)"
+ },
+ "has_data": true
+}
