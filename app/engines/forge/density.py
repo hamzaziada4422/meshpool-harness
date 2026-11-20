@@ -90,6 +90,8 @@ def _plain(t) -> str:
 
 def _balance(t: str) -> str:
     t = t.rstrip(" ,;:–—-")
+    while t.count("(") > t.count(")"):                  # never leave a bracket open: the aside goes whole
+        t = t[:t.rfind("(")].rstrip(" ,;:–—-")
     if t.count("**") % 2:
         t += "**"
     return t
@@ -116,6 +118,8 @@ def headline(text: str, max_words: int) -> str:
     for sep in (r";\s", r"\s[–—]\s", r"\s-\s", r":\s", r",\s", r"\s(?:because|as|while|which|after|since|with)\s"):
         for m in re.finditer(sep, t):
             head = t[:m.start()]
+            if head.count("(") > head.count(")"):         # a break inside a bracketed aside is not a clause end
+                continue
             k = len(_plain(head).split())
             if 4 <= k <= max_words and _is_clause(head):
                 return _balance(head)
