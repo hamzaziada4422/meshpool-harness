@@ -287,7 +287,9 @@ STAT_GROW = 1.3            # a tile may be this much taller than its content (ce
 
 
 def _stat_items(part):
-    return [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []][:6]
+    raw = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
+    real = [it for it in raw if _plain(R._GAP_RE.sub("", str(it.get("value") or ""))).strip()]
+    return (real or raw)[:6]
 
 
 def _stat_rest(it, size_label):
@@ -345,6 +347,10 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
     """Figures as tiles sized to their content (at most STAT_GROW taller), figures aligned across a row."""
     x, y, w, h = box
     raw = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
+    gaps = [it for it in raw if not _plain(R._GAP_RE.sub("", str(it.get("value") or ""))).strip()]
+    if gaps and len(gaps) < len(raw):                      # a figure the facts do not give is not a tile
+        _note(s, f"part {i}: figures without a value left out: " + "; ".join(_txt(it.get("label")) for it in gaps))
+        raw = [it for it in raw if it not in gaps]
     if len(raw) > 6:
         _note(s, f"part {i}: {len(raw) - 6} figures left out: " + "; ".join(_txt(v) for v in raw[6:]))
     items = raw[:6]

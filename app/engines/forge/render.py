@@ -682,7 +682,8 @@ def _header(ctx, s, sl, n, title_w=None):
         ssz = next((z for z in (T["sub"], 16, 15, 14) if one(sub_t, z)), 14)
         if not one(sub_t, ssz):                       # two lines would run up into the title: keep the head of the
             head = None                               # label (the unit): at a colon or dash first, then a comma
-            for pat in (r"\s*(?::|;|\s[–—-]\s)", r"\s*(?:,|\s\()"):
+            for pat in (r"\.\s", r"\s*(?::|;|\s[–—-]\s)", r"\s*(?:(?<!\d),|,(?!\d)|\s\()"):   # sentence first;
+                # never inside a number ($7,500)
                 for c in reversed([m.start() for m in re.finditer(pat, sub_t)]):
                     h_ = sub_t[:c].rstrip(" ,;:")
                     if h_.count("(") == h_.count(")") and one(h_, 14):
@@ -3407,7 +3408,8 @@ def a_executive_summary(ctx, s, sl, n):
     _header(ctx, s, sl, n)
     pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
     ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""
-    if ask and repeats(ask, s.get("title", "")):           # the title already is the answer: a band saying it again
+    if ask and repeats(re.sub(r"(?i)^\s*decision today:\s*", "", ask), s.get("title", ""), 0.55):   # the title
+        # already is the answer: a band saying it again
         s["notes"] = (s.get("notes", "") + "\n[QA] decision band left out: it repeats the title: " + ask).strip()
         ask = ""
     top, bottom = BODY_Y + 0.1, BODY_B
@@ -4083,8 +4085,10 @@ def plan_forms(slides: list) -> list:
     slides = plan_chart_forms(slides)
     secs: dict = {}
     for k_, s in enumerate(slides):                       # "01 | Section" over every content slide's title
-        if isinstance(s, dict) and s.get("archetype") not in ("cover", "section_divider", "agenda", "end") \
+        if isinstance(s, dict) and s.get("archetype") not in ("cover", "section_divider", "agenda", "end",
+                                                              "executive_summary") \
                 and str(s.get("section") or "").strip() and str(s.get("section")).strip().lower() != "cover":
+            # (the summary carries no number: its numbered points ARE the sections that follow)
             name = re.sub(r"\s+", " ", str(s["section"]).strip())
             secs.setdefault(name.lower(), len(secs) + 1)
             slides[k_] = dict(s, _section=f"{secs[name.lower()]:02d} | {name[:1].upper() + name[1:]}")

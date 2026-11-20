@@ -107,7 +107,8 @@ pptx:
   language:                     # P21: words that mark a slide as machine-written, linted on every text frame
     # finance terms stay legal: "synergies" (merger maths) and "leverage" as debt ("net leverage 3.0x"); "re:" entries
     # are regular expressions, so only the verb "leverage our/the/its..." is flagged
-    banned_phrases: ["in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
+    banned_phrases: ["in the brief", "the brief's", "is not supported by", "as provided", "facts supplied",
+                     "in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
                      "leveraging", "unlock", "unlocking",
                      "game-changer", "game changer", "delve", "robust", "seamless", "seamlessly", "key takeaways",
                      "it's important to note", "it is important to note", "holistic", "cutting-edge",
