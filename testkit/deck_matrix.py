@@ -72,6 +72,10 @@ def spend(base_url: str, model: str) -> float | None:
 
 # ---------- the app ----------------------------------------------------------------------------------------------
 
+def a_app() -> Path:
+    return Path(os.environ.get("DECK_MATRIX_APP") or APP)
+
+
 def free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -93,7 +97,7 @@ class App:
                    PYTHONPYCACHEPREFIX=str(root.parent / ".pycache"))
         self.log = open(root / "app.log", "w")
         self.p = subprocess.Popen([python, "-m", "meshpool_harness", "ui", "--port", str(self.port), "--no-browser"],
-                                  cwd=str(APP), env=env, stdout=self.log, stderr=subprocess.STDOUT,
+                                  cwd=str(a_app()), env=env, stdout=self.log, stderr=subprocess.STDOUT,
                                   start_new_session=True)
         self.base = f"http://127.0.0.1:{self.port}"
         end, page = time.time() + 120, ""
@@ -135,12 +139,19 @@ class App:
 
 # ---------- one run ----------------------------------------------------------------------------------------------
 
-def wait_turn(app: App, sid: str, n0: int, limit: float, rec: dict) -> dict:
+def wait_turn(app: App, sid: str, n0: int, limit: float, rec: dict, grace: float = 0, watch: list | None = None) -> dict:
     """Poll until this turn ends: idle twice in a row with a turn_end/assistant/error event after index n0.
-    Answers approvals with yes and ask_user questions with "go ahead"; both are recorded."""
-    end, v, idle_seen = time.time() + limit, {}, 0
+    Answers approvals with yes and ask_user questions with "go ahead"; both are recorded. Past `limit` the run counts
+    as timed out, but the turn may go on for `grace` more seconds (a deck job still building) before it is stopped;
+    meanwhile the folders in `watch` are checked for the first .pptx, and when it appeared is recorded."""
+    t0 = time.time()
+    end, v, idle_seen = t0 + limit + grace, {}, 0
     answered = set()
     while time.time() < end:
+        if watch and rec.get("first_pptx_s") is None and any(any(Path(w).rglob("*.pptx")) for w in watch if Path(w).exists()):
+            rec["first_pptx_s"] = round(time.time() - t0, 1)
+        if time.time() - t0 > limit:
+            rec["timed_out"] = True
         time.sleep(2)
         v = app.api(f"/api/agent/{sid}?since=0")
         evs = v.get("events") or []
@@ -158,8 +169,11 @@ def wait_turn(app: App, sid: str, n0: int, limit: float, rec: dict) -> dict:
                    for e in evs)
         idle_seen = idle_seen + 1 if (v.get("state") == "idle" and done) else 0
         if idle_seen >= 2:
+            if rec["timed_out"]:
+                rec["finished_after_s"] = round(time.time() - t0, 1)
             return v
     rec["timed_out"] = True
+    rec["stopped"] = True
     app.api(f"/api/agent/{sid}/stop", {})
     time.sleep(3)
     return app.api(f"/api/agent/{sid}?since=0")
@@ -197,6 +211,7 @@ def run_one(spec: dict, out: Path, a, guard: dict) -> dict:
     work = root / "work"
     work.mkdir(parents=True)
     rec = {"name": spec["name"], "harness": spec["harness"], "kind_requested": spec["kind"], "messages": spec["messages"],
+           "limit": a.limit, "first_pptx_s": None,
            "approvals": [], "questions": [], "timed_out": False, "turns": []}
     if guard.get("stop"):
         rec["skipped"] = guard["stop"]
@@ -232,7 +247,9 @@ def run_one(spec: dict, out: Path, a, guard: dict) -> dict:
             t0 = time.time()
             app.api(f"/api/agent/{sid}/send", {"text": msg, "since": 10**9})
             mcp_at_send = app.api(f"/api/agent/{sid}?since=0").get("mcp")
-            v = wait_turn(app, sid, n0, a.limit, rec)
+            last = msg is spec["messages"][-1]
+            v = wait_turn(app, sid, n0, a.limit, rec, grace=a.grace if last else 0,
+                          watch=[str(work), str(app.home)] if last else None)
             rec["turns"].append({"text": msg, "seconds": round(time.time() - t0, 1), "mcp_at_send": mcp_at_send,
                                  "events_from": n0})
             if rec["timed_out"]:
@@ -257,7 +274,8 @@ def run_one(spec: dict, out: Path, a, guard: dict) -> dict:
         rec["refusal_sentences"] = sorted({m.group(0).strip() for m in REFUSAL.finditer(deck_turn_text)})
         rec["pptx_mentioned"] = sorted({m.group(0) for m in PPTX_REF.finditer(" ".join(assistant + rec["tool_outputs"]))})
         rec["decks"] = find_decks([work, app.home, app.fakehome], t_start)
-        rec["decks_elsewhere"] = [d for d in find_decks([Path("/tmp")], t_start) if not d["path"].startswith(str(out))]
+        rec["decks_elsewhere"] = [d for d in find_decks([Path("/tmp")], t_start)
+                                  if not d["path"].startswith((str(out), "/tmp/pytest-of-", "/tmp/claude-"))]
         rec["events"] = evs
     finally:
         app.close()
@@ -275,7 +293,7 @@ def mock_tools(out: Path, a) -> dict:
     mp = subprocess.Popen([sys.executable, str(REPO / "testkit" / "mock_llm.py"), str(mport), str(log)],
                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     a.config = f"MESHPOOL_BASE_URL=http://127.0.0.1:{mport}/v1\nMESHPOOL_API_KEY=test-key-1234\nMH_MODEL={a.model}\n"
-    a.limit = 60
+    a.limit, a.grace = 60, 0
     res = {}
     try:
         for h, k in (("meshpool-code", "code"), ("meshpool-code", "cowork"), ("meshpool-work", "cowork")):
@@ -306,16 +324,19 @@ def table(recs: list[dict]) -> str:
         used = r.get("harness_used")
         h = r["harness"] + (f" -> {used}" if used and used != r["harness"] else "")
         decks = r.get("decks") or []
+        fp = r.get("first_pptx_s")
+        late = bool(decks) and r.get("timed_out") and (fp is None or fp > r.get("limit", 360))
         tools = {}
         for t in r.get("tools") or []:
             tools[t["name"]] = tools.get(t["name"], 0) + 1
         ts = ", ".join(f"{n}x{c}" if c > 1 else str(n) for n, c in tools.items()) or "none"
         u = r.get("usage") or {}
         refused = "y" if r.get("refusal_sentences") else "n"
-        sec = f"{r.get('seconds', 0):.0f}" + (" (timeout)" if r.get("timed_out") else "")
+        sec = f"{r.get('seconds', 0):.0f}" + (" (timed out at 6 min" + (", stopped)" if r.get("stopped") else
+                                                                          ", ended later)") if r.get("timed_out") else "")
         msg = " / ".join(m[:40] for m in r["messages"])
         rows.append(f"| {r['name']} | {h} | {r.get('kind') or r['kind_requested']} | {msg} | "
-                    f"{'y' if decks else 'n'} | {', '.join(str(d['slides']) for d in decks) or '-'} | {refused} | "
+                    f"{('late (' + str(fp) + ' s)') if late else ('y' if decks else 'n')} | {', '.join(str(d['slides']) for d in decks) or '-'} | {refused} | "
                     f"{ts} | {sec} | {u.get('in', 0)}/{u.get('out', 0)} |")
     return "\n".join(rows)
 
@@ -327,6 +348,8 @@ def main():
     ap.add_argument("--base-url", default="https://llm.meshpool.ai/v1")
     ap.add_argument("--model", default="deepseek-v4.1-flash")
     ap.add_argument("--limit", type=float, default=360, help="seconds to wait per message")
+    ap.add_argument("--app", default=str(APP), help="the app folder to run (e.g. a worktree of an older commit)")
+    ap.add_argument("--grace", type=float, default=300, help="extra seconds a timed-out deck turn may run before it is stopped")
     ap.add_argument("--budget", type=float, default=2.5, help="stop starting runs past this gateway spend (USD)")
     ap.add_argument("--parallel", type=int, default=3)
     ap.add_argument("--only", default="", help="comma-separated run names")
@@ -334,6 +357,8 @@ def main():
     a = ap.parse_args()
     out = Path(a.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
+    os.environ["DECK_MATRIX_APP"] = str(Path(a.app).resolve())
+    print(f"app code: {a_app()}", flush=True)
     if a.mock:
         print(json.dumps(mock_tools(out, a), indent=1))
         return
