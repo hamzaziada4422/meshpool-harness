@@ -282,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -357,6 +357,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/api/preview":                  # a file's preview: JSON, or one page as PNG (an <img> cannot send the header)
+            q = parse_qs(u.query)
+            if q.get("t", [""])[0] != TOKEN and self.headers.get("X-Meshpool-Token") != TOKEN:
+                return self._send(403, {"error": "forbidden"})
+            from meshpool_harness.ui import previews as PV
+            try:
+                if "page" in q:
+                    png = PV.page_png(q.get("root", [""])[0], q.get("path", [""])[0], int(q["page"][0] or 0),
+                                      int(q.get("w", [PV.MAX_WIDTH])[0] or PV.MAX_WIDTH))
+                    return self._send(200, png, "image/png")
+                return self._send(200, PV.meta(q.get("root", [""])[0], q.get("path", [""])[0]))
+            except (ValueError, OSError, KeyError) as e:
+                return self._send(400, {"error": str(e).strip("'\"") or "Could not preview this file."})
+            except (BrokenPipeError, ConnectionResetError):
+                return None
+            except Exception as e:  # noqa: BLE001 - a damaged file must not take the app down
+                return self._send(500, {"error": f"Could not preview this file ({type(e).__name__}: {str(e)[:200]})."})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks

@@ -27,8 +27,20 @@ RULE = '''    if "stream long" in u and "stopped your previous request" not in u
             + "\\n\\n1. First step: " + para + "\\n2. Second step: " + para + "\\n3. Third step: " + para + "\\n\\n## Next steps\\n\\n" + para * 4
         return ("text", body)
 '''
+# "make previews": copies a deck, a workbook and a PDF from $MOCK_PREVIEW_DIR into the project, writes page.html, and
+# answers with an html and an svg code block (testkit/ux_previews.js drives the in-app previews with it).
+RULE2 = '''    if "make previews" in u and "stopped your previous request" not in u:
+        wf = "write_file" if "write_file" in names else ("write" if "write" in names else None)
+        sh = "bash" if "bash" in names else ("terminal" if "terminal" in names else None)
+        d = os.environ.get("MOCK_PREVIEW_DIR", "")
+        if step == 0 and sh and d:
+            return ("tool", sh, {"command": "cp " + d + "/deck.pptx " + d + "/model.xlsx " + d + "/report.pdf . && echo copied"})
+        if step == 1 and wf:
+            return ("tool", wf, {"path": "page.html", "content": "<h1>Made page</h1>"})
+        return ("text", "Made the files.\\n\\n```html\\n<h1 style=\\"font-family:sans-serif\\">Snippet page</h1><button onclick=\\"this.textContent='ran'\\">Go</button>\\n```\\n\\n```svg\\n<svg xmlns=\\"http://www.w3.org/2000/svg\\" width=\\"160\\" height=\\"90\\"><rect width=\\"160\\" height=\\"90\\" fill=\\"#1F6FD0\\"/></svg>\\n```\\n")
+'''
 anchor = '    if "the goal of this chat" in u and "goal test" in u:'
 assert anchor in src
-src = src.replace(anchor, RULE + anchor, 1)
+src = src.replace(anchor, RULE + RULE2 + anchor, 1)
 src = src.replace("time.sleep(0.01)", "time.sleep(float(os.environ.get('MOCK_WORD_DELAY', '0.02')))", 1)
 exec(compile(src, os.path.join(HERE, "mock_llm.py"), "exec"), {"os": os, "__name__": "__main__", "__file__": os.path.join(HERE, "mock_llm.py")})
