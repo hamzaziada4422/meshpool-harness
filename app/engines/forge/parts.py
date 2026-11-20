@@ -1282,7 +1282,7 @@ def a_grid(ctx, s, sl, n):
     if len(parts) > LAYOUTS[lay]:
         _note(s, f"layout '{lay}' has {LAYOUTS[lay]} regions for {len(parts)} parts; the extra parts were stacked")
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
     bottom = R.FOOT_RULE_Y - 0.08 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h
