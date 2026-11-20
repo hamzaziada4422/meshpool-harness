@@ -1,6 +1,15 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
-**Unreleased**
+**New in 0.0.9**
+- **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.
+- **Charts that show the point.** A short column chart carries its insight on the chart:
+  - the multiple or gap as an arrow ("25-35x", "+7 days");
+  - the goal as a dashed target line;
+  - a short line under each bar saying what it is.
+- **Say it once.** A point made on one slide is not repeated on later slides, and a callout never restates the cards beside it. The writer is sent back when it repeats itself.
+- **A clean white top, in Segoe UI.** There is no label over the title. The section number sits top right.
+- **Ask any chat for a PowerPoint.** It now produces one on every agent: 14 of 14 test runs made a deck, up from 10 of 14. A chat whose agent cannot make the file moves, with its history, to one that can.
+- **Auto prefers MeshPool's own agents on a tie.** Free web search is bundled in the apps.
 - **Decks with zero images.** Icons are native, editable vector shapes in your theme colours. Company logos are fetched from the internet and drawn as native shapes in their own brand colours. A deck with a picture fails its checks.
 - **Nine new diagrams.** Risk matrix, 3x3 matrix, Gantt plan, issue tree, org chart, cycle, hub and spoke, pyramid and funnel, drawn natively and checked like every other slide.
 - **Seven style packs** from 130 published decks, chosen with `--style` or in Settings > Company, and an optional title-band look.
