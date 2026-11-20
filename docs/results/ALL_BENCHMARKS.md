@@ -385,7 +385,7 @@ After: the 0.0.8 branch (599b316). One run per cell.
 | Harness | Chat: before | Chat: after | Code: before | Code: after |
 |---|---|---|---|---|
 | Meshpool Work | deck (278 s) | deck (turn 349 s) | deck, late (537 s) | deck (turn 447 s) |
-| Meshpool Code | deck only by working around the missing tool (found the app source, called it from the shell) | deck (make_deck 5 times), turn did not end | **refused** ("office tools ... are not available in this session") | deck, but the first message ran before the office tools had started; fixed in 2559090, re-run below |
+| Meshpool Code | deck only by working around the missing tool (found the app source, called it from the shell) | deck (make_deck 5 times), turn did not end | **refused** ("office tools ... are not available in this session") | deck, but the first message ran before the office tools had started (158 shell calls); fixed in 2559090 |
 | Pi | deck (76 s) | deck (turn 533 s) | deck (86 s) | deck (turn 435 s) |
 | Hermes | **no deck**: make_deck failed in about 2 s every time | deck (turn 239 s) | **no deck**, same | deck (turn 561 s) |
 | Auto (picked Meshpool Work) | deck | deck | deck | deck |
@@ -408,6 +408,12 @@ What changed between the two runs:
 | Agents asked about the brief and stopped, or rebuilt a finished deck twice | The note with a file request: recommended defaults, at most one question, at most one rebuild (c0be1e9) |
 | Web search had no ddgs in the bundled runtime (the after run had it installed, as 0.0.8 will) | ddgs bundled (599b316) |
 | The first message of a new Code chat ran before its office tools had started | Office requests wait for them (2559090) |
+
+**Re-run of Meshpool Code after 2559090: not done.** Both chats waited for the office tools as intended
+("Starting the office tools...", then meshpool-office with 14 tools), but every model call was refused: the test key's
+budget is used up (HTTP 429 "Budget has been exceeded ... Current cost: 23.10, Max budget: 0.0"). The fix is covered by
+a unit test (`tests/test_capabilities.py::test_a_deck_request_waits_for_the_office_tools_to_start`); the real-model
+re-run needs the key's budget raised.
 
 **Caveats.**
 - One run per cell, and 3 chats ran at once on one key, so times vary run to run. The deck engine takes about 2.5
