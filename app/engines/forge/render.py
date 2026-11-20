@@ -3083,10 +3083,17 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
     spare = room - sum(hs) - POINT_GAP * (len(items) - 1)
     grow = spare / len(items) if fill else min(spare / len(items), 0.6)   # the cards share the column's height:
                                                                           # the column ends where its neighbour does
+    k_ = getattr(ctx, "_point_slides", 0)                  # the deck alternates its point columns: boxed cards,
+    ctx._point_slides = k_ + 1                             # then open rows between hairlines (BCG varies the two;
+    open_ = k_ % 2 == 1                                    # cards on every slide read as one template)
     cy = y0
     for j, (it, hh) in enumerate(zip(items, hs)):
         hh += grow
         box = _fill(sl, x, cy, w, hh, card, f"ov_PointCard{j + 1}")
+        if open_:
+            box.fill.background()
+            if j < len(items) - 1:
+                _rule(sl, x, cy + hh + POINT_GAP / 2, w, TC.ACCENT_5, 0.75, f"ov_PointRule{j + 1}")
         tx = x + POINT_PAD + d + 0.12                          # the text is written into the card itself (P17)
         _shape_text(box, _point_blocks(it, ls, ds), ctx, n, (tx, cy + 0.08, x + w - POINT_PAD - tx, hh - 0.16),
                     MSO_ANCHOR.MIDDLE)
