@@ -1394,8 +1394,99 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
                     dl.font.bold = j == nums[-1][0]
         else:
             s.data_labels.font.color.theme_color = TC.BACKGROUND_1
+    if kind == "column" and not multi and allv and min(allv) >= 0 and 2 <= len(cats) <= 12:
+        try:
+            _annotate_columns(ctx, sl, n, gf, c, cats, series[0], x, y, w, h, dec, u)
+        except Exception:                                 # noqa: BLE001 - an annotation never breaks the chart
+            pass
     _alt(gf, c.get("alt") or f"{kind} chart of {', '.join(se['name'] for se in series)} ({c.get('unit', '')})")
     return gf
+
+
+_PERIOD = re.compile(r"(?i)^\s*(?:(?:19|20)\d{2}|fy\s?\d{2,4}|q[1-4]|h[12])\b")
+_TARGET_CAT = re.compile(r"(?i)\b(target|goal|plan|budget)\b")
+PLOT_FR = (0.02, 0.03, 0.96, 0.85)                       # x, y, w, h of an annotated column chart's plot area
+
+
+def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
+    """think-cell's grammar on a single-series column chart, drawn as native shapes over it: a CAGR arrow over a run of
+    periods, a dashed target line (chart "target"), and a target category drawn as a dashed outline, not a solid bar.
+    The plot area is fixed so each bar's place is known."""
+    vals = [float(v) if isinstance(v, (int, float)) else None for v in se["values"]]
+    if any(v is None for v in vals):
+        return
+    k = len(vals)
+    periods = k >= 3 and all(_PERIOD.match(cv) for cv in cats) and vals[0] > 0 and vals[-1] > 0 \
+        and c.get("cagr", True) is not False
+    target = c.get("target") if isinstance(c.get("target"), (int, float)) else None
+    tcat = [j for j, cv in enumerate(cats) if _TARGET_CAT.search(cv)]
+    if not (periods or target is not None or tcat):
+        return
+    top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
+    M = top * (1.42 if periods else 1.18)                 # headroom: the arrow rides above the tallest label
+    ch = gf.chart
+    va = ch.value_axis
+    va.minimum_scale, va.maximum_scale = 0, M
+    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+    lay = pa.find(qn("c:layout"))
+    if lay is None:
+        lay = pa.makeelement(qn("c:layout"), {})
+        pa.insert(0, lay)
+    for e in list(lay):
+        lay.remove(e)
+    ml = lay.makeelement(qn("c:manualLayout"), {})
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", PLOT_FR[0]),
+                     ("c:y", PLOT_FR[1]), ("c:w", PLOT_FR[2]), ("c:h", PLOT_FR[3])):
+        ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
+    lay.append(ml)
+    px, py, pw, ph = x + w * PLOT_FR[0], y + h * PLOT_FR[1], w * PLOT_FR[2], h * PLOT_FR[3]
+    band = pw / k
+    cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
+    yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
+    prov = c.get("prov")
+    for j in tcat:                                        # a target is a dashed outline, not a bar of fact
+        f = ch.plots[0].series[0].points[j].format
+        f.fill.background()
+        f.line.color.theme_color = TC.ACCENT_1
+        f.line.width = Pt(1.25)
+        f.line.dash_style = 4                             # MSO_LINE.DASH
+    if periods:
+        n_years = k - 1
+        g = (vals[-1] / vals[0]) ** (1 / n_years) - 1
+        lab = f"CAGR {'+' if g >= 0 else ''}{g * 100:.1f}%"
+        ya = yv(top) - 0.5
+        x0, x1 = cx(0), cx(k - 1)
+        for i_, (a_, b_) in enumerate((((x0, yv(vals[0]) - 0.36), (x0, ya)), ((x0, ya), (x1, ya)),
+                                       ((x1, ya), (x1, yv(vals[-1]) - 0.4)))):      # stops above the value label
+            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
+                                         Inches(b_[1]))
+            ln.name = f"ov_CagrArrow{i_ + 1}"
+            ln.line.color.theme_color = TC.TEXT_2
+            ln.line.width = Pt(1)
+            if i_ == 2:
+                end = ln.line._get_or_add_ln()
+                end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+        bw = _need_w(lab, T["label"], True) + 0.24
+        box = _fill(sl, (x0 + x1) / 2 - bw / 2, ya - 0.15, bw, 0.3, TC.BACKGROUND_1, "ov_CagrLabel",
+                    MSO_SHAPE.ROUNDED_RECTANGLE)
+        box.line.color.theme_color = TC.TEXT_2
+        box.line.width = Pt(0.75)
+        _shape_text(box, [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.TEXT_2,
+                           "align": PP_ALIGN.CENTER}], ctx, n, ((x0 + x1) / 2 - bw / 2, ya - 0.15, bw, 0.3),
+                    MSO_ANCHOR.MIDDLE)
+        ctx.track(n, lab, prov)
+    if target is not None:
+        yt = yv(target)
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(px), Inches(yt), Inches(px + pw), Inches(yt))
+        ln.name = "ov_TargetLine"
+        ln.line.color.theme_color = TC.ACCENT_1
+        ln.line.width = Pt(1.25)
+        ln.line.dash_style = 4
+        lab = "Target " + fmt_value(target, unit, dec)
+        lw_ = _need_w(lab, T["label"], True) + 0.1
+        _write(_box(sl, px, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),   # at the line's start
+               [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.ACCENT_1}], ctx, n)
+        ctx.track(n, lab, prov)
 
 
 # ------------------------------------------------------------------ tables (hairline grammar)
@@ -2613,7 +2704,8 @@ def _point_blocks(it, lead_size, det_size):
     if it.get("label"):
         out.append({"text": it["label"], "size": lead_size, "bold": True, "numbers": False, "color": TC.ACCENT_1})
     head = not it.get("label") and bool(it["bullets"])         # a lead over detail lines is the point's header
-    out.append({"text": it["lead"], "size": lead_size if head else det_size, "bold": head, "numbers": False,
+    alone = not it.get("label") and not it["bullets"]          # a one-line point reads at the lead size
+    out.append({"text": it["lead"], "size": lead_size if head or alone else det_size, "bold": head, "numbers": False,
                 "prov": it.get("prov"), "space_before": 2 if it.get("label") else 0})
     for b in it["bullets"]:
         out.append({"text": b["text"], "size": det_size, "bullet": True, "space_before": 3, "prov": b.get("prov")})
@@ -3045,8 +3137,10 @@ def a_chart_takeaway(ctx, s, sl, n):
     band_fits = bool(lead) and max([_need(lead, lw_)] + [_need(c, cw_) for c in halves]) + 0.04 <= 0.4 * body_h
     if (POINTS["on"] and 2 <= len(bullets) <= 4 and s.get("layout") != "side" and s.get("_form") != "side"
             and (s.get("_form") == "band" or ctx.last_side == n - 1)):   # after a chart-and-column slide: the
-        row_h = 0.42 * body_h                                             # chart across the page, its points as a
-        pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]   # row of cards under it
+        pts = [{"text": tk.get("text", ""), "bullets": bullets, "prov": tk.get("prov")}]   # row of cards under it,
+        row_h = next((f * body_h for f in (0.26, 0.32, 0.38, 0.44)                       # only as tall as needed
+                      if draw_points(ctx, s, sl, n, LEFT, BODY_B - f * body_h, RIGHT - LEFT, f * body_h, pts,
+                                     card=TC.BACKGROUND_2, dry=True, layout="row")), 0.44 * body_h)
         if draw_points(ctx, s, sl, n, LEFT, BODY_B - row_h, RIGHT - LEFT, row_h, pts, card=TC.BACKGROUND_2,
                        dry=True, layout="row"):
             _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, body_h - row_h - 0.2)

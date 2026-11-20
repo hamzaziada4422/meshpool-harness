@@ -182,3 +182,17 @@ def test_small_multiples_share_one_scale():
     mixed = [mk([1, 2]), dict(mk([3, 4]), chart=dict(mk([3, 4])["chart"], unit="%"))]
     P._share_scale(mixed)
     assert not any("_shared_max" in p["chart"] for p in mixed)   # different units: each its own scale
+
+
+def test_column_charts_carry_think_cell_annotations(tmp_path):
+    """A run of periods gets a CAGR arrow; a target value a dashed line; a target category a dashed outline."""
+    s = {"archetype": "column_trend", "id": "t", "node": "1", "title": "Revenue grew 41% in three years",
+         "chart": {"kind": "column", "categories": ["2022", "2023", "2024", "2025"],
+                   "series": [{"name": "Revenue", "values": [410, 452, 489, 577]}], "unit": "$M", "target": 600},
+         "source": SRC}
+    r, prs, _ = _render([s], tmp_path)
+    sl = prs.slides[0]
+    names = {sh.name for sh in sl.shapes}
+    assert r["errors"] == [] and {"ov_CagrLabel", "ov_TargetLine", "ov_TargetLabel"} <= names
+    lab = next(sh for sh in sl.shapes if sh.name == "ov_CagrLabel").text_frame.text
+    assert lab == "CAGR +12.1%"                                   # (577/410)^(1/3) - 1
