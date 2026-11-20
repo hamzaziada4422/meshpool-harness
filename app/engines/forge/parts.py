@@ -451,6 +451,13 @@ def p_callout(ctx, sl, n, part, box, look, i, s, card):
         R._fill(sl, x, y, 0.07, h, TC.ACCENT_1, f"ov_CalloutBar{i}")
         R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
         return
+    if not R.sowhat_dark(ctx):                             # the deck alternates its so-what boxes
+        for b_ in bl:
+            b_["color"] = TC.TEXT_1
+        shp = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Callout{i}")
+        R._fill(sl, x, y, 0.07, h, TC.ACCENT_1, f"ov_CalloutBar{i}")
+        R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
+        return
     shp = R._fill(sl, x, y, w, h, TC.TEXT_2, f"Callout{i}")
     R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
 
