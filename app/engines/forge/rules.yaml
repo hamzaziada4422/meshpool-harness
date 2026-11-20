@@ -17,7 +17,9 @@ pptx:
     timeout_s: 240
     box_tolerance_in: 0.08      # a rendered text span may sit this far outside its shape box
   whitespace:                   # P20: dead space, measured on the render
-    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12
+    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12.
+                                # 130 reference decks (2026-11-20): median 0.10, p90 0.27; 16.7% of pages exceed 0.20.
+                                # Kept: a quality floor, not the reference median
     body_top: 0.20              # body band as fractions of page height (below the title block, above the source)
     body_bottom: 0.90
     exempt_archetypes: [cover, section_divider, agenda, appendix_divider, end]
@@ -118,7 +120,9 @@ pptx:
     max_body_words: 80          # default for narrative archetypes
     max_bullets: 5
     max_bullet_levels: 2
-    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words)
+    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words).
+                                # Rechecked 2026-11-20 on 130 decks, 3655 pages (reference_stats.json): median 84,
+                                # p90 250 body words; 50% of pages over 80, 20% over 160. Caps unchanged.
       executive_summary: 120
       text_matrix: 160
       case_example: 110
@@ -205,7 +209,8 @@ pptx:
           exhibit_argument: 3   # two points beside the exhibit, each with one short bullet, and one so-what
           grid: 8               # up to 4 parts of 2 bullets
           closing: 4
-  titles:                       # P11
+  titles:                       # P11. 130 reference decks: title words median 6, p90 18 (consulting p90 24); 4.2% of
+                                # titles run past 2 lines; 61% of English titles carry a verb. Kept as is.
     max_words: 15
     max_lines: 2
     require_verb: true

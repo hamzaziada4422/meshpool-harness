@@ -57,6 +57,18 @@ absorb retire buy repurchase cover add accrete dilute carry convert free back st
 distribute trim boost dent squeeze ease tighten loosen halt resume close beat lower overshoot undercut outlast cushion
 fuel underpin anchor justify warrant favour favor outweigh exceed deserve cost risk threaten justify limit cap free
 unlock lock idle shrink compress expand tilt skew depend rely""".split())
+
+# Verbs that count only as written or with -s/-es (imperative and present tense: "Approve the programme ...",
+# "Distributors receive discounts ..."), never as -ed or -ing forms, which are mostly adjectives in topic labels
+# ("Operating division trends", "Clearly defined hurdles"). Added 2026-11-20 (forge-kb calibration): 7 of 8 P11
+# failures on the frozen eval briefs were sentences the lexicon missed. Words that double as nouns in topic labels
+# ("review", "update", "report", "track", "measure", "design", "select", "phase", "guide", "release") are left out
+# on purpose.
+_VERBS_FINITE = set("""approve endorse submit receive land choose decide agree sign confirm commit assign appoint introduce accept adapt
+address ask advance aim attract carry clarify combine complete consider define demonstrate develop emerge engage
+ensure evolve extend finish gather grant handle identify implement maintain manage migrate operate outline prepare
+prove publish rebuild recommend recruit refine reinforce remove reset resolve retain serve settle solve strengthen
+succeed tackle translate unify validate""".split())
 _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", "would", "can", "could", "should",
         "must", "may", "might", "does", "do", "did"}
 
@@ -64,6 +76,9 @@ _AUX = {"is", "are", "was", "were", "be", "been", "has", "have", "had", "will", 
 def _has_verb(title: str) -> bool:
     for w in re.findall(r"[A-Za-z']+", title.lower()):
         if w in _AUX or w in _VERBS:
+            return True
+        if w in _VERBS_FINITE or (w.endswith("s") and (w[:-1] in _VERBS_FINITE or w[:-2] in _VERBS_FINITE
+                                                       or w[:-3] + "y" in _VERBS_FINITE)):
             return True
         for suf, cut in (("ies", "y"), ("es", ""), ("s", ""), ("ed", ""), ("ed", "e"), ("ing", ""), ("ing", "e"),
                          ("led", "l"), ("ped", "p"), ("ted", "t"), ("ned", "n"), ("ged", "g"), ("ped", "")):

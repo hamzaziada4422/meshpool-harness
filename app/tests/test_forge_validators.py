@@ -150,3 +150,17 @@ def test_corrupt_workbook_is_x0_not_a_crash(tmp_path):
 
 def test_r1c1_leaves_names_alone():
     assert VX._r1c1("=C19*dso/365", 37, 3) == VX._r1c1("=D19*dso/365", 37, 4)
+
+
+def test_titles_with_imperative_or_present_verbs_are_sentences():
+    """forge-kb calibration: 7 of 8 P11 failures on the frozen eval briefs were sentences the lexicon missed."""
+    from engines.forge.validate_pptx import _has_verb
+    for t in ("Approve the programme and release $21M for the first-year portfolio",
+              "Endorse the strategy and release the first investment tranche",
+              "Submit a binding bid of up to $240M with three protections",
+              "Distributors receive discounts twice as deep as retail",
+              "Clients choose the brand for its acceptance"):
+        assert _has_verb(t), t
+    for t in ("Three priorities for the fourth quarter", "Operating division trends", "Recovery effort phases",
+              "Clearly defined M&A hurdles", "An action guide", "Strategy update"):
+        assert not _has_verb(t), t
