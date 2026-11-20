@@ -1496,6 +1496,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         and c.get("cagr", True) is not False
     target = c.get("target") if isinstance(c.get("target"), (int, float)) else None
     tcat = [j for j, cv in enumerate(cats) if _TARGET_CAT.search(cv)]
+    if tcat and target is not None:                       # a target bar already shows the goal: no second, dashed
+        target = None                                     # line through the labels
     delta = _delta_pair(c.get("delta"), cats, vals)
     desc = [_txt(d) for d in (c.get("descriptors") or [])][:k] if isinstance(c.get("descriptors"), list) else []
     if delta and periods:
@@ -3391,9 +3393,9 @@ def a_executive_summary(ctx, s, sl, n):
     mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
     if mets:                                              # the decision's size, large in a panel beside the points
         dx, dw = span24(10, 18)
-        dw -= 0.2                                         # a clear gutter before the panel (its fill starts 0.12 early)
         mx, mw = span24(19, 23)
-        _fill(sl, mx - 0.12, top - 0.05, RIGHT - mx + 0.12, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")
+        _fill(sl, mx, top - 0.05, RIGHT - mx, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")   # on the
+        mx, mw = mx + 0.14, mw - 0.14                     # grid, a full gutter from the points; its figures inset
         mh = (bottom - top) / len(mets)
         for i, m in enumerate(mets):
             my = top + i * mh
