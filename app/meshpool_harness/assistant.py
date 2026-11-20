@@ -39,9 +39,17 @@ from pathlib import Path
 
 from meshpool_harness import config as C
 
-# House writing rule for every agent and every file Meshpool writes: no dashes as punctuation.
+# House writing rule for every agent and every file Meshpool writes: it reads as written by a careful professional,
+# never as machine output (the user's standing request: no AI look anywhere in the harness).
 PLAIN = ("Write in plain sentences. Never use an em dash or an en dash as punctuation; use a comma, a colon, "
-         "brackets or a full stop instead.")
+         "brackets or a full stop instead. Write like a senior colleague, not a chatbot: the answer first, no "
+         "preamble (\"Great question\", \"Certainly\", \"I'd be happy to\") and no closing offers or summaries of "
+         "what you just said. Avoid the words that mark machine text: delve, leverage, robust, seamless, crucial, "
+         "pivotal, tapestry, landscape, realm, embark, elevate, unlock, streamline, game-changer, cutting-edge, "
+         "\"in today's fast-paced world\", \"it's important to note\". No emoji. Use headings, bold and bullet lists "
+         "only where they help the reader; prose is the default and one idea per paragraph. Files you make (documents, "
+         "slides, sheets) look like a professional's work: one consistent style, restrained colour, no decoration, "
+         "no filler.")
 
 
 def dashless(text: str) -> str:
