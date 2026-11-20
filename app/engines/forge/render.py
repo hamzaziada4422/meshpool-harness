@@ -2839,6 +2839,13 @@ def a_challenge_matrix(ctx, s, sl, n):
             _rule(sl, lx + 0.85, y, RIGHT - lx - 0.85, TC.ACCENT_5, 0.5, f"RowRule{i + 1}")
 
 
+def sowhat_dark(ctx) -> bool:
+    """The deck's so-what boxes alternate: navy, then light with an accent bar (BCG keeps its dark box rare)."""
+    k = getattr(ctx, "_sowhats", 0)
+    ctx._sowhats = k + 1
+    return k % 2 == 0
+
+
 def a_exhibit_argument(ctx, s, sl, n):
     """Exhibit on white (left); the argument on a grey half-panel (right) ending in a navy 'so what' with an arrow."""
     ctx.last_side = n                                   # a chart slide after it takes the other composition
@@ -2928,9 +2935,16 @@ def a_exhibit_argument(ctx, s, sl, n):
         _shape_text(panel, blocks, ctx, n, (rx, pt_y, rw, space - 0.13))   # the argument lives in the panel
     if cb:
         aw_ = max(0.35, rx - split + 0.03)               # the arrow lives in the gutter: never over the chart's labels
-        arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
-        arr.rotation = 180
-        box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
+        if sowhat_dark(ctx):
+            arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow",
+                        MSO_SHAPE.PENTAGON)
+            arr.rotation = 180
+            box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
+        else:                                            # every other so-what: a white box with an accent bar and
+            for b_ in cb:                                # dark text (a navy box on every slide reads as one template)
+                b_["color"] = TC.TEXT_1
+            box = _fill(sl, rx, cy, rw, ch, TC.BACKGROUND_1, "ov_SoWhat")
+            _fill(sl, rx, cy, 0.07, ch, TC.ACCENT_1, "ov_SoWhatBar")
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
 
 
