@@ -156,3 +156,17 @@ def test_a_big_number_shown_twice_goes_back_to_the_writer():
               {"archetype": "grid", "title": "c", "parts": [st("$6,510"), {"type": "chart", "chart": {}}]}]
     msgs = variety_checks(slides)
     assert any("already a big number on slide 1" in m for m in msgs.get(3, []))
+
+
+def test_never_an_eyebrow_over_the_title(tmp_path):
+    """The user's standing rule: no small label (eyebrow) over a slide title, ever. The section shows only as its
+    number in the top right corner."""
+    s = dict(_chart_slide("1"), section="What to do next")
+    _, prs, _ = _render([s, dict(_chart_slide("2"), section="What to do next")], tmp_path)
+    for sl in prs.slides:
+        title = sl.shapes.title
+        above = [sh for sh in sl.shapes if sh.has_text_frame and sh is not title and sh.text_frame.text.strip()
+                 and sh.top + sh.height <= title.top + title.height * 0.5 and sh.left < 3 * IN
+                 and not sh.name.startswith(("ov_Tag", "ov_SectionNo"))]
+        assert not above, [(sh.name, sh.text_frame.text) for sh in above]
+        assert "ov_SectionNo" in {sh.name for sh in sl.shapes}

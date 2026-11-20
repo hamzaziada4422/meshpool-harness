@@ -162,8 +162,9 @@ SIZES = ((0, 0), (3, 2), (3, 5), (5, 5))         # (lead, bullet) steps over the
 def _col_blocks(it, z, figure):
     lead = it["lead"]
     out = []
-    if lead:
-        out.append({"text": lead, "size": R.ARGUMENT["intro"] + SIZES[z][0], "numbers": False, "prov": it.get("prov")})
+    if lead:                                              # the column's lead: bold, the one weight step
+        out.append({"text": lead, "size": R.ARGUMENT["intro"] + SIZES[z][0], "bold": True, "numbers": False,
+                    "prov": it.get("prov")})
     for b in it["bullets"]:
         out.append({"text": b["text"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bullet": True,
                     "space_before": 4, "prov": b.get("prov")})
@@ -241,6 +242,22 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
     if left > 0.4 and lines_ > 1:
         extra_pt = min(left * 0.85 / (lines_ - 1), 0.32) * 72
         body_h = min(avail - mark_h, need + extra_pt / 72 * (lines_ - 1) + 0.05)
+    grid, lead_h, foot_h = None, 0.0, 0.0
+    if mode != "figures" and all(it.get("lead") for it in items):   # shared bands across the columns
+        grid = []
+        for it, f in zip(items, figs):
+            bl_ = _col_blocks(it, z, f)
+            foot_b = bl_[-1:] if it.get("foot") and len(bl_) > 1 else []
+            mid_b = bl_[1:len(bl_) - len(foot_b)]
+            det = max([b_["size"] for b_ in mid_b] or [R.ARGUMENT["bullet"]])
+            lead_b = [dict(bl_[0], size=min(det + 2, R.T["head"] + 2))] if bl_ else []   # the lead: one step over
+                                                                                          # its detail, never under
+            if extra_pt:
+                for b_ in mid_b[1:]:
+                    b_["space_before"] = (b_.get("space_before") or 0) + extra_pt
+            grid.append((lead_b, mid_b, foot_b))
+        lead_h = max(R._need(g[0], w) for g, (_, w) in zip(grid, cols)) if grid else 0.0
+        foot_h = max((R._need(g[2], w) for g, (_, w) in zip(grid, cols) if g[2]), default=0.0)
     for j, (it, (x, w)) in enumerate(zip(items, cols)):
         if mode == "figures":
             val, cap = figs[j]
@@ -269,6 +286,20 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
                           (x, y + 0.03, d, d), MSO_ANCHOR.MIDDLE)
         R._rule(sl, x, y + mark_h - 0.1, w, TC.ACCENT_1, 0.75, f"ov_ColumnRule{j + 1}")
+        if grid:                                          # shared bands: leads, then the detail from one line, then
+            lead_b, mid_b, foot_b = grid[j]               # who and when on one bottom line in every column
+            top_ = y + mark_h
+            if lead_b:
+                R._write(R._box(sl, x, top_, w, lead_h + 0.04, f"Column{j + 1}"), lead_b, ctx, n)
+            mid_h = body_h - lead_h - foot_h - (0.12 if foot_h else 0) - 0.08
+            if mid_b:
+                bl, dropped = R._trim_to_fit(mid_b, w, mid_h + 0.02, 11)
+                R._cut_note(s, dropped)
+                R._write(R._box(sl, x, top_ + lead_h + 0.08, w, mid_h + 0.05, f"ColumnDetail{j + 1}"), bl, ctx, n)
+            if foot_b:
+                R._write(R._box(sl, x, top_ + body_h - foot_h, w, foot_h + 0.04, f"ColumnFoot{j + 1}"), foot_b,
+                         ctx, n)
+            continue
         blocks = _col_blocks(it, z, figs[j])
         if extra_pt:
             for b in blocks[1:]:

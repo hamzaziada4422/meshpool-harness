@@ -168,7 +168,7 @@ def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=Fals
             else:
                 _set_font(r, size, color, bold, italic, heading, sup)
         elif st == "bold":
-            if FRAME["band"] and not heading and color in (TC.TEXT_1, None):   # the band look marks a phrase in
+            if not heading and color in (TC.TEXT_1, None):   # a marked phrase is set in
                 _set_font(r, size, TC.ACCENT_1, False, italic, heading, sup)   # the accent colour, not in bold
             else:
                 _set_font(r, size, color, True, italic, heading, sup)
@@ -597,7 +597,8 @@ def _header(ctx, s, sl, n, title_w=None):
     sub = bool(s.get("subtitle"))
     band = FRAME["band"]
     tracker = str(s.get("tracker") or "").strip()[:3] if band else ""
-    if tracker and title_w is None:                    # the section number sits in the band's right corner
+    secno = s["_section"].split(" | ")[0] if (not band and s.get("_section") and title_w is None) else ""
+    if (tracker or secno) and title_w is None:         # the section number sits in the top right corner
         title_w = span24(0, 21)[1]                     # ends on a column edge (P7)
     # always write the full geometry: setting one dimension on an inherited placeholder resets the others
     t.left, t.width = Inches(LEFT), Inches(title_w or (RIGHT - LEFT))
@@ -608,6 +609,8 @@ def _header(ctx, s, sl, n, title_w=None):
         t.top, t.height = (Inches(0.2), Inches(0.86)) if sub else (Inches(0.42), Inches(0.92))
     tf = t.text_frame
     tf.text = ""
+    if not band:                                       # the title starts on the body's left edge, not inset from it
+        tf.margin_left = 0                             # (the right inset stays: a wide face sets past it)
     title = re.sub(r"\*\*", "", s["title"])
     tsize = _title_size(title, title_w or (RIGHT - LEFT))
     if tsize is None:
@@ -625,14 +628,12 @@ def _header(ctx, s, sl, n, title_w=None):
                      "align": PP_ALIGN.RIGHT}])
     else:
         _rich(tf.paragraphs[0], title, tsize, TC.TEXT_1, True, numbers=False, heading=True)
-        if s.get("_section"):                          # the white frame: "01 | Section" in the accent colour, just
-            from .common import wrap_lines             # over the title's first line (the title sits on its rule)
-            lines = max(1, wrap_lines(title, (title_w or (RIGHT - LEFT)) - 0.2, tsize, _font("head", True), 0.97))
-            text_top = (t.top + t.height) / 914400 - 0.06 - lines * tsize * 1.12 / 72
-            _write(_box(sl, LEFT, max(0.06, text_top - 0.3), title_w or (RIGHT - LEFT), 0.26, "ov_Section",
-                        MSO_ANCHOR.BOTTOM),
-                   [{"text": s["_section"], "size": T["tag"] + 2, "bold": True, "numbers": False,
-                     "color": TC.ACCENT_1}])
+        # never an eyebrow (a small label over the title): the user's standing rule. The section shows as its
+        # number in the top right corner only.
+        if secno:                                       # the section number, large, in the top right corner
+            _write(_box(sl, RIGHT - 0.9, 0.3, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.TOP),
+                   [{"text": secno, "size": 26, "bold": False, "numbers": False, "color": TC.ACCENT_1,
+                     "align": PP_ALIGN.RIGHT, "heading": True}])
     ctx.track(n, s["title"], s.get("title_prov"))
     w = title_w or (RIGHT - LEFT)
     if s.get("subtitle"):                             # one line: 18 pt, stepping down to 14 pt
@@ -659,9 +660,10 @@ def _header(ctx, s, sl, n, title_w=None):
                                          "bold": band}])
         if ssz == 14 and _need([{"text": sub_t, "size": 14}], w) > 0.35:
             ctx.miss(n, "the subtitle", max(3, len(sub_t.split()) // 3))
-    if not band:                         # the white frame: a thin accent rule under the title (or its subtitle)
-        _rule(sl, LEFT, TITLE_RULE_Y, w, TC.ACCENT_1, 1.0, "TitleRule")
-    x = RIGHT
+    if not band:                         # the white frame: an accent rule under the title (or its subtitle)
+        _rule(sl, LEFT, TITLE_RULE_Y, (RIGHT - LEFT) if title_w is None or secno else w, TC.ACCENT_1, 1.5,
+              "TitleRule")
+    x = RIGHT - (1.0 if secno else 0.0)                 # tags sit left of the section number
     for k, tag in enumerate(reversed((s.get("tags") or [])[:2] if not sub else [])):
         tw = 0.1 + 0.083 * len(tag)
         x -= tw
@@ -783,7 +785,7 @@ def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
     for i, p in enumerate(pts):
         pt = ser.points[i]
         pt.format.fill.solid()
-        pt.format.fill.fore_color.theme_color = TC.ACCENT_3 if p.get("focus") else (TC.ACCENT_5 if p.get("muted") else TC.TEXT_2)
+        pt.format.fill.fore_color.theme_color = TC.ACCENT_1 if p.get("focus") else (TC.ACCENT_5 if p.get("muted") else TC.TEXT_2)
         pt.format.line.color.theme_color = TC.BACKGROUND_1
         pt.format.line.width = Pt(0.75)
     xm, ym = c.get("x_major", (x1 - x0) / 7), c.get("y_major", (y1 - y0) / 7)
@@ -880,7 +882,7 @@ def _bubble_drawn(ctx, sl, n, c, x, y, w, h):
         if __import__("os").environ.get("FORGE_LABEL_DEBUG"):
             print("LABEL", p["label"][:26], pos, size, round(bx, 2), round(by, 2), "score", round(best_score, 1))
         inside = pos == "c"
-        color = TC.ACCENT_3 if focus else (TC.BACKGROUND_1 if inside else TC.TEXT_1)
+        color = TC.ACCENT_1 if focus else (TC.BACKGROUND_1 if inside else TC.TEXT_1)
         lsize = size - (2 if inside else 0)
         words, lines_, cur = p["label"].split(), [], ""
         for wd in words:                                   # the solver's line breaks, kept in the native label
@@ -1040,7 +1042,7 @@ def _gap_for(kind, ncat, nser, w, h):
     clustered = kind in ("bar", "column")
     dim = (h if kind in ("bar", "stacked_bar") else w) * 0.85
     slot = dim / max(1, ncat)
-    cap = 0.45 if kind in ("bar", "stacked_bar") else 0.95
+    cap = 0.38 if kind in ("bar", "stacked_bar") else 0.7       # slim bars, as in a hand-made exhibit
     group = cap * (max(1, nser) if clustered else 1)
     return int(max(50, min(400, (slot / group - 1) * 100)))
 
@@ -1170,11 +1172,11 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
         lx = min(max(mx - tw / 2, x), x + w - tw)
         _write(_box(sl, lx, ly, tw, 0.2, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False,
-                 "color": TC.ACCENT_3 if k == len(marks) - 1 else TC.TEXT_1}], ctx, n)
+                 "color": TC.ACCENT_1 if k == len(marks) - 1 else TC.TEXT_1}], ctx, n)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(ly + 0.21), Inches(mx),
                                      Inches(top + ph + 0.02))
         ln.name = f"{pre}Marker{k + 1}"
-        ln.line.color.theme_color = TC.ACCENT_3 if k == len(marks) - 1 else TC.TEXT_1
+        ln.line.color.theme_color = TC.ACCENT_1 if k == len(marks) - 1 else TC.TEXT_1
         ln.line.width = Pt(1.5)
         ln.line.dash_style = 4                                 # dash
 
@@ -1341,7 +1343,7 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     except Exception:
         pass
     hl = {str(v) for v in c.get("highlight_categories") or []}
-    palette = [TC.TEXT_2, TC.ACCENT_4, TC.ACCENT_3, TC.ACCENT_5]
+    palette = [TC.TEXT_2, TC.ACCENT_1, TC.ACCENT_5, TC.ACCENT_4]   # navy, the accent, grey: never three blues
     if kind == "waterfall":
         _waterfall_style(plot, vals, spans, dec, usfx)
         _alt(gf, c.get("alt") or f"waterfall chart of {series[0]['name']} ({c.get('unit', '')})")
@@ -1355,15 +1357,17 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
         else:
             s.format.fill.solid()
             s.format.fill.fore_color.theme_color = palette[k % 4]
+            if not multi and hl:                          # one accent bar, the context in light grey
+                s.format.fill.fore_color.theme_color = TC.ACCENT_5
             if not multi:
                 vals_k = series[k]["values"]
                 for j, cat in enumerate(cats):
                     neg = j < len(vals_k) and isinstance(vals_k[j], (int, float)) and vals_k[j] < 0
                     if cat in hl or neg:
-                        # the focus point in cyan; a fall in coral, so best and worst never share a colour
+                        # the focus point in the accent; a fall in the pale highlight
                         f = s.points[j].format
                         f.fill.solid()
-                        f.fill.fore_color.theme_color = TC.ACCENT_2 if neg else TC.ACCENT_3
+                        f.fill.fore_color.theme_color = TC.ACCENT_2 if neg and cat not in hl else TC.ACCENT_1
         s.data_labels.show_value = True
         s.data_labels.number_format = fmt
         s.data_labels.number_format_is_linked = False
@@ -1575,11 +1579,14 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                 _borders(tbl.cell(0, k), bottom=("tx1", 0.75) if g.get("label") else None)
             ci += sp
         _borders(tbl.cell(0, 0))
+    def _num_col(ci):                                  # a column of numbers aligns right, words align left
+        body = [str(r[ci]) for r in rows if ci < len(r) and str(r[ci]).strip() and str(r[ci]).strip() != "n/a"]
+        return bool(body) and sum(1 for v_ in body if _NUMCELL.match(_plain(v_).replace("−", "-"))) >= 0.6 * len(body)
+    col_align = [PP_ALIGN.LEFT if ci == 0 or not _num_col(ci) else PP_ALIGN.RIGHT for ci in range(len(cols))]
     for ci, c in enumerate(cols):
         cell = tbl.cell(hdr - 1, ci)
-        put(cell, c, True, align=PP_ALIGN.LEFT if ci == 0 else PP_ALIGN.CENTER, sz=size + (2 if not groups else 2),
-            anchor=MSO_ANCHOR.BOTTOM)
-        _borders(cell, bottom=("tx1", 0.75))
+        put(cell, c, True, align=col_align[ci], sz=size + (2 if not groups else 2), anchor=MSO_ANCHOR.BOTTOM)
+        _borders(cell, bottom=("accent1", 1.0))
     for r_i, row in enumerate(rows):
         ri = hdr + r_i
         last = r_i == len(rows) - 1
@@ -1612,9 +1619,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                     _borders(cell, bottom=("tx1", 2.0), top=("tx1", 2.0), left=("tx1", 2.0), right=("tx1", 2.0))
                 ctx.track(n, str(v), t.get("prov"))
                 continue
-            if on:
-                cell.fill.solid()
-                cell.fill.fore_color.theme_color = TC.ACCENT_2
+            if on:                                       # the recommended row: accent text between accent rules,
+                cell.fill.background()                   # no fill
+                color = TC.ACCENT_1
             elif ci in heat and not (total and last):
                 vals = sorted(heat[ci])
                 try:
@@ -1631,10 +1638,12 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                     cell.fill.background()
             else:
                 cell.fill.background()
-            put(cell, v, on or (total and last), r_i in it, PP_ALIGN.LEFT if ci == 0 else PP_ALIGN.CENTER, color)
+            put(cell, v, on or (total and last), r_i in it, col_align[ci], color)
             if ci in heat and not on:
                 # white gutters between heat cells, like separate bars
                 _borders(cell, bottom=("bg1", 2.0), top=("bg1", 2.0), left=("bg1", 3.0), right=("bg1", 3.0))
+            elif on:
+                _borders(cell, top=("accent1", 1.5), bottom=("accent1", 1.5))
             else:
                 _borders(cell, bottom=("tx1", 0.75) if last else ("accent5", 0.5))
             ctx.track(n, str(v), t.get("prov"))
@@ -1650,8 +1659,18 @@ def _txt(v):
     return "" if v is None else str(v)
 
 
+_META_CELL = re.compile(r"(?i)^\s*(?:not stated(?: in the (?:sources|facts|evidence))?|not (?:available|given|"
+                        r"provided|disclosed|reported)(?: in the (?:sources|facts))?|no data|unknown|tbd)\s*\.?\s*$")
+
+
 def _cell(v):
-    """A table cell the model wrote as {lead, bullets}: keep the detail, not just the lead."""
+    """A table cell the model wrote as {lead, bullets}: keep the detail, not just the lead. A cell that only says the
+    sources are silent ("Not stated") reads n/a: commentary about the evidence belongs in the notes, not the page."""
+    t = _cell_text(v)
+    return "n/a" if _META_CELL.match(t) else t
+
+
+def _cell_text(v):
     if isinstance(v, dict) and v.get("bullets"):
         detail = "; ".join(_txt(b) if isinstance(b, dict) else str(b) for b in v["bullets"])
         lead = _txt(v)
@@ -2299,7 +2318,7 @@ def a_closing(ctx, s, sl, n):
             bl += [{"text": m if isinstance(m, str) else _txt(m), "prov": st.get("prov")}
                    for m in (st.get("milestones") or [])[:2]]
             who = " · ".join(v for v in (st.get("owner"), st.get("timing")) if v)
-            items.append({"lead": "**" + str(st.get("action", "")).replace("**", "") + "**", "bullets": bl,
+            items.append({"lead": str(st.get("action", "")).replace("**", ""), "bullets": bl,
                           "prov": st.get("prov"), "foot": who})
         _as_columns(ctx, s, sl, n, items, "process")
         return
@@ -2400,7 +2419,7 @@ def a_challenge_matrix(ctx, s, sl, n):
                     b = b if isinstance(b, dict) else {"text": str(b)}
                     if not repeats(b["text"], c.get("lead", ""), 0.7):     # a line that repeats its lead goes
                         bl.append({"text": b["text"], "prov": b.get("prov")})
-            items.append({"lead": "**" + str(r.get("label", "")).replace("**", "") + "**", "bullets": bl,
+            items.append({"lead": str(r.get("label", "")).replace("**", ""), "bullets": bl,
                           "prov": r.get("prov")})
         _as_columns(ctx, s, sl, n, items, "icons")
         return
@@ -2495,8 +2514,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
-           [{"text": tr, "size": min(_title_size(tr, rw) or 20, T["head"] + 4), "bold": True, "heading": True,
-             "numbers": False, "line_spacing": 1.0}])      # the argument's lead, a step under the slide title
+           [{"text": tr, "size": T["head"], "bold": True, "heading": True, "color": TC.ACCENT_1,
+             "numbers": False, "line_spacing": 1.0}])      # the argument's heading: clearly under the slide title
     ex = s.get("exhibit") or {}
     y = BODY_Y - 0.05
     if ex.get("title"):
@@ -3284,7 +3303,7 @@ def _bench_panel(ctx, sl, n, c, x, y, w, h, rows_n, name):
         if j == len(vals) or j in hl:                     # the Median bar and the subject company stand out
             f = se.points[j].format
             f.fill.solid()
-            f.fill.fore_color.theme_color = TC.TEXT_2 if j == len(vals) else TC.ACCENT_3
+            f.fill.fore_color.theme_color = TC.TEXT_2 if j == len(vals) else TC.ACCENT_1
         if j < len(vals) and vals[j] is None:             # not meaningful: no bar, no number, an NM note
             dls = se._element.find(qn("c:dLbls"))
             d_ = dls.makeelement(qn("c:dLbl"), {})

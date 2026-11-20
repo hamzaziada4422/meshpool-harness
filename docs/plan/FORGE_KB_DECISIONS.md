@@ -77,6 +77,8 @@ Choices made where the plan left room, with the reason. Newest last.
     repeat that the plan cannot avoid goes back to the writer. Pixel similarity was tried and rejected: look-alike
     pairs scored near zero on it.
 26. **White top by default (user choice, 2026-11-20).** Content slides keep a white top in the SlideWorks manner: the
-    section ("01 | Section", numbered in order of first appearance) in the accent colour sits on the title, a thin
-    accent rule under the title, no hairline across the top, and the exhibit + argument panel starts under the
-    title. The dark band stays an option (`theme: {"frame": "band"}`). Segoe UI stays the default face.
+    section number (in order of first appearance) large in the accent colour in the top right corner, an accent
+    rule under the title, no hairline across the top, and the exhibit + argument panel starts under the title. The
+    dark band stays an option (`theme: {"frame": "band"}`). Segoe UI stays the default face.
+27. **Never an eyebrow (user rule, 2026-11-20).** No small label over a slide title, ever ("What to do next" above
+    the title was tried and rejected). Tested in `test_forge_house_style.py`.

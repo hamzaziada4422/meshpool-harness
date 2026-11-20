@@ -76,7 +76,7 @@ LIMITS = {
     "read": None,
     "balanced": {"bullets": 4, "cell_bullets": 1, "block_bullets": 2, "blocks": 3, "callout": 3, "rows": 5,
                  "table_rows": 12, "steps": 5, "milestones": 1, "parts": 4, "footnotes": 3, "words": 20,
-                 "part_bullets": 4, "quadrant_items": 3, "stats": 6},
+                 "part_bullets": 4, "quadrant_items": 3, "stats": 4},
     "present": {"bullets": 3, "cell_bullets": 0, "block_bullets": 1, "blocks": 3, "callout": 2, "rows": 4,
                 "table_rows": 6, "steps": 4, "milestones": 0, "parts": 3, "footnotes": 1, "words": 12,
                 "part_bullets": 3, "quadrant_items": 2, "stats": 4},

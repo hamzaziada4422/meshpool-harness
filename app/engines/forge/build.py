@@ -166,7 +166,10 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - One exhibit across the page with its so-what under it is the norm. Put an argument beside the exhibit only when it
   has 3-4 points of its own; give each point a 2-4 word header. Blocks side by side share their top and bottom
   edges: never a column that stops short of the one beside it.
-- The last slide is the decision and the next steps, each with an owner and a date."""
+- The last slide is the decision and the next steps, each with an owner and a date.
+- Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
+  a table is N/A; what a number rests on goes in one short footnote or in the notes.
+- At most four big numbers on a slide, one of them the hero; the rest support it."""
 CONSULTING_BASE = CONSULTING
 
 OPENERS = ("cover", "section_divider", "end")            # title pages: only where the storyline plans them
