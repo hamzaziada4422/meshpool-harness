@@ -1746,10 +1746,14 @@ points in one unit. If the facts are thin on a point, merge it into another slid
 make the same point. Titles: one sentence with a verb, <= 15 words, stating the takeaway with a number where a fact
 supports it. Choose varied archetypes that prove each title.
 {help_}"""
+    from engines.forge.frame import frame_block, frame_brief   # the deck's shape, fixed before any model plans it
+    frame = frame_brief(brief, slides_wanted)
+    frame_txt = frame_block(frame)
+    (out / "frame.json").write_text(json.dumps(frame, indent=1))
     story, why = (start_story if start else {}), ""
     for budget in (() if start else (8000, 16000)):   # once more with room when a reasoning model ran out of tokens
         try:
-            story = _call(client, STORY_MODEL, story_sys, f"Brief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
+            story = _call(client, STORY_MODEL, story_sys, f"{frame_txt}\n\nBrief:\n{brief[:14000]}\n\nFacts (cite by id):\n{fact_txt}"
                           + (f"\n\n{findings}" if findings else ""), task_id + "-story", budget)
         except (RuntimeError, ValueError) as e:
             why = str(e)
