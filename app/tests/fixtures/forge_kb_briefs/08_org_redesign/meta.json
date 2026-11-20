@@ -1,0 +1,10 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s3": "org_chart (current seven-layer structure)",
+  "s6": "org_chart (target five-layer hybrid structure)",
+  "s7": "layers_pyramid (management layers before and after)"
+ },
+ "has_data": true
+}

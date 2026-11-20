@@ -1,0 +1,650 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Crestline Bank strategy 2026-28",
+  "subtitle": "Strategy refresh for the board of directors",
+  "date": "Board meeting, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Endorse a strategy that lifts ROE from 9.1% to 12.7% by 2028",
+  "points": [
+   {
+    "lead": "Crestline earns less than every one of its five peers",
+    "bullets": [
+     "ROE of 9.1% against an 11.4% median"
+    ],
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "lead": "Costs explain most of the gap",
+    "bullets": [
+     "Cost-to-income is 63% against 55% at the median peer"
+    ],
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "lead": "Efficiency and SME growth close the gap",
+    "bullets": [
+     "They add 2.3 of the 3.6 points of ROE gained"
+    ],
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "lead": "The plan needs $140M and leaves capital above the floor",
+    "bullets": [
+     "CET1 is 13.2% against a 12.0% floor"
+    ],
+    "prov": [
+     "F9",
+     "F10"
+    ]
+   }
+  ],
+  "decision": "Decision today: endorse the 2026-28 strategy and the $140M investment envelope.",
+  "metrics": [
+   {
+    "value": "12.7%",
+    "label": "target ROE in 2028",
+    "prov": [
+     "F7"
+    ]
+   },
+   {
+    "value": "$140M",
+    "label": "three-year investment",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "value": "55%",
+    "label": "target cost-to-income",
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "benchmark",
+  "title": "Crestline trails the peer median on returns and costs",
+  "benchmark": {
+   "companies": [
+    "Harbor",
+    "Ridgeway",
+    "Summit",
+    "Oakfield",
+    "Delta",
+    "Crestline"
+   ],
+   "panels": [
+    {
+     "title": "ROE (%)",
+     "unit": "%",
+     "values": [
+      12.8,
+      11.9,
+      11.4,
+      10.6,
+      9.8,
+      9.1
+     ],
+     "median": 11.4
+    },
+    {
+     "title": "Cost-to-income (%)",
+     "unit": "%",
+     "values": [
+      52,
+      54,
+      55,
+      58,
+      60,
+      63
+     ],
+     "median": 55
+    }
+   ],
+   "highlight": [
+    5
+   ]
+  },
+  "takeaway": {
+   "text": "Crestline ranks last of six on ROE and on cost-to-income",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The ROE gap to the median is 2.3 points",
+    "prov": [
+     "F1"
+    ]
+   },
+   {
+    "text": "The cost-to-income gap is 8 points",
+    "prov": [
+     "F2"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Annual reports of Crestline and five regional peers, 2025",
+   "prov": [
+    "F1",
+    "F2"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "grid",
+  "title": "Crestline is behind on digital reach and SME share, not on margin",
+  "layout": "main_stack",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "chart",
+    "heading": "Digitally active retail customers, %",
+    "chart": {
+     "kind": "bar",
+     "categories": [
+      "Peers",
+      "Crestline"
+     ],
+     "series": [
+      {
+       "name": "Digitally active",
+       "values": [
+        58,
+        41
+       ],
+       "prov": [
+        "F5"
+       ]
+      }
+     ],
+     "unit": "%",
+     "decimals": 0,
+     "highlight_categories": [
+      "Crestline"
+     ]
+    }
+   },
+   {
+    "type": "stats",
+    "heading": "SME share of loans",
+    "items": [
+     {
+      "value": "22%",
+      "label": "Crestline",
+      "prov": [
+       "F6"
+      ]
+     },
+     {
+      "value": "31%",
+      "label": "peer average",
+      "prov": [
+       "F6"
+      ]
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Net interest margin",
+    "items": [
+     {
+      "value": "2.9%",
+      "label": "Crestline",
+      "prov": [
+       "F3"
+      ]
+     },
+     {
+      "value": "3.1%",
+      "label": "peer median",
+      "prov": [
+       "F3"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Annual reports; Crestline customer analytics, 2025",
+   "prov": [
+    "F3",
+    "F5",
+    "F6"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "waterfall_bridge",
+  "title": "Four levers raise ROE by 3.6 points to 12.7% by 2028",
+  "subtitle": "Return on equity, %, 2025 to 2028",
+  "chart": {
+   "kind": "waterfall",
+   "categories": [
+    "ROE 2025",
+    "Cost efficiency",
+    "SME growth",
+    "Fee income",
+    "Digital deposit mix",
+    "ROE 2028 target"
+   ],
+   "series": [
+    {
+     "name": "ROE",
+     "values": [
+      9.1,
+      1.4,
+      0.9,
+      0.8,
+      0.5,
+      12.7
+     ],
+     "prov": [
+      "F7"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 1
+  },
+  "takeaway": {
+   "text": "Cost efficiency alone provides 1.4 points, 39% of the gain",
+   "prov": [
+    "F7"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "The 2028 target of 12.7% sits above the 11.4% peer median",
+    "prov": [
+     "F1",
+     "F7"
+    ]
+   },
+   {
+    "text": "SME growth and fee income add 1.7 points together",
+    "prov": [
+     "F7"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Crestline strategy model",
+   "prov": [
+    "F1",
+    "F7"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "grid",
+  "title": "SME focus plus efficiency scores highest of four strategic options",
+  "layout": "main_side",
+  "look": "boxed",
+  "parts": [
+   {
+    "type": "harvey",
+    "heading": "Options against criteria (4 = best)",
+    "criteria": [
+     "Return uplift",
+     "Execution risk",
+     "Capital use",
+     "Customer fit"
+    ],
+    "rows": [
+     {
+      "label": "Stay the course",
+      "scores": [
+       0,
+       4,
+       4,
+       1
+      ]
+     },
+     {
+      "label": "Digital-led retail",
+      "scores": [
+       2,
+       2,
+       2,
+       3
+      ]
+     },
+     {
+      "label": "SME focus plus efficiency",
+      "scores": [
+       4,
+       3,
+       3,
+       3
+      ]
+     },
+     {
+      "label": "Merger",
+      "scores": [
+       3,
+       0,
+       1,
+       2
+      ]
+     }
+    ]
+   },
+   {
+    "type": "callout",
+    "heading": "Why option three",
+    "bullets": [
+     "**Highest** return uplift to 12.7%",
+     "**Moderate** risk with proven levers",
+     "**Leaves** CET1 at 13.2%"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Crestline strategy model",
+   "prov": [
+    "F7",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Technology and SME build-out take 75% of the $140M investment",
+  "subtitle": "Three-year investment by area, USD million",
+  "table": {
+   "columns": [
+    "Area",
+    "Investment ($M)",
+    "Share",
+    "Main outcome"
+   ],
+   "rows": [
+    [
+     "Technology",
+     "70",
+     "50%",
+     "Automate 40% of back office"
+    ],
+    [
+     "SME build-out",
+     "35",
+     "25%",
+     "Lift SME share of loans"
+    ],
+    [
+     "Branch transformation",
+     "25",
+     "18%",
+     "Close 38 of 210 branches"
+    ],
+    [
+     "Risk and compliance",
+     "10",
+     "7%",
+     "Meet new standards"
+    ],
+    [
+     "Total",
+     "140",
+     "100%",
+     ""
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "total_row": true,
+   "size": 12,
+   "prov": [
+    "F8",
+    "F9"
+   ]
+  },
+  "takeaway": {
+   "text": "Half of the envelope goes to technology",
+   "prov": [
+    "F9"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Branch closures cut 18% of the network",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "text": "CET1 stays above the 12.0% floor throughout",
+    "prov": [
+     "F10"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Crestline strategy model",
+   "prov": [
+    "F8",
+    "F9",
+    "F10"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Three execution risks need board attention in the first year",
+  "columns": [
+   "Risk",
+   "Exposure",
+   "Control"
+  ],
+  "rows": [
+   {
+    "icon": "money",
+    "label": "**Cost** programme slip",
+    "cells": [
+     {
+      "lead": "Branch closures take time",
+      "bullets": [
+       {
+        "text": "38 of 210 branches close by 2028",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Report quarterly to the board",
+      "bullets": [
+       {
+        "text": "Track cost-to-income against the 55% target",
+        "prov": [
+         "F8"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**SME** credit quality",
+    "cells": [
+     {
+      "lead": "A faster build-out adds risk",
+      "bullets": [
+       {
+        "text": "SME share must rise from 22% towards 31%",
+        "prov": [
+         "F6"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Set a risk appetite limit",
+      "bullets": [
+       {
+        "text": "Cap new SME lending growth by quality score",
+        "prov": [
+         "F6"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "safety",
+    "label": "**Capital** headroom",
+    "cells": [
+     {
+      "lead": "The buffer is 1.2 points",
+      "bullets": [
+       {
+        "text": "CET1 is 13.2% against a 12.0% floor",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Stage the investment",
+      "bullets": [
+       {
+        "text": "Release $140M in three yearly tranches",
+        "prov": [
+         "F9"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Crestline risk and finance functions",
+   "prov": [
+    "F6",
+    "F8",
+    "F9",
+    "F10"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "grid",
+  "title": "The strategy lands in three phases between 2026 and 2028",
+  "layout": "full",
+  "look": "minimal",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Strategy roadmap",
+    "milestones": [
+     {
+      "date": "2026",
+      "label": "Launch SME unit and start automation"
+     },
+     {
+      "date": "2027",
+      "label": "Close first 20 branches and launch digital deposits"
+     },
+     {
+      "date": "2028",
+      "label": "Reach 55% cost-to-income and 12.7% ROE"
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Crestline strategy office",
+   "prov": [
+    "F7",
+    "F8"
+   ]
+  },
+  "id": "s9",
+  "node": "n9"
+ },
+ {
+  "archetype": "closing",
+  "title": "Endorse the strategy and release the first investment tranche",
+  "steps": [
+   {
+    "action": "Endorse the 2026-28 strategy",
+    "detail": "Adopt the 12.7% ROE target and the 55% cost-to-income goal.",
+    "milestones": [
+     "Board resolution today"
+    ],
+    "owner": "Board chair",
+    "timing": "November 2026",
+    "prov": [
+     "F7",
+     "F8"
+    ]
+   },
+   {
+    "action": "Release the first tranche",
+    "detail": "Fund technology and the SME unit from the $140M envelope in stages.",
+    "milestones": [
+     "Tranche one approved by the finance committee"
+    ],
+    "owner": "CFO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F9"
+    ]
+   },
+   {
+    "action": "Set board reporting",
+    "detail": "Report ROE, cost-to-income and CET1 against targets every quarter.",
+    "milestones": [
+     "First report in Q2 2027"
+    ],
+    "owner": "Board secretary",
+    "timing": "Q2 2027",
+    "prov": [
+     "F8",
+     "F10"
+    ]
+   }
+  ],
+  "id": "s10",
+  "node": "n10"
+ }
+]

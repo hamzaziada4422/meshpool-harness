@@ -1,0 +1,18 @@
+{
+ "dev": [
+  "01_market_entry",
+  "02_due_diligence",
+  "03_cost_reduction",
+  "04_post_merger_integration",
+  "06_bank_strategy_refresh",
+  "07_pricing_review",
+  "09_digital_roadmap",
+  "11_product_launch"
+ ],
+ "test": [
+  "05_investor_update",
+  "08_org_redesign",
+  "10_esg_assessment",
+  "12_board_pack"
+ ]
+}

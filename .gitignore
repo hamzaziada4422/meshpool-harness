@@ -38,3 +38,7 @@ runs-v2/
 dist-src/
 deps/
 .claude/worktrees/
+# the slide knowledge base is private study material: it lives outside the repo (MESHPOOL_KB), never in it
+.env.kb
+/meshpool_kb/
+/slide_engine_kb/
