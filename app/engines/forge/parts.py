@@ -1089,8 +1089,8 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
             tb["size"] = R.T["cell"] + bump
         from types import SimpleNamespace
         ctx = SimpleNamespace(carry_rows=None)
-        need = R._table(ctx, None, 0, dict(tb), 0, 0, iw, 20.0, dry=True) * 1.06 + 0.1   # rendered rows run a little
-        return oh + need, oh + need, oh + need                                           # taller than measured
+        need = R._table(ctx, None, 0, dict(tb), 0, 0, iw, 20.0, dry=True) + 0.06   # the dry run already measures
+        return oh + need, oh + need, oh + need                                     # wrapped cells generously
     if t == "harvey":
         k = len(part.get("rows") or [])
         nat = 0.5 + 0.5 * k
@@ -1172,13 +1172,14 @@ def _compose_one(parts, lay, look, top, bottom):
                     over -= take
             if over > 0.01:
                 over_all += over
-                last = max(slots, key=lambda j: hs[j])
-                hs[last] = max(0.6, hs[last] - over)       # the part fits what it can and notes the rest
+                words_ = [j for j in slots if parts[j].get("type") in ("text", "quote", "callout")]
+                last = max(words_ or slots, key=lambda j: hs[j])   # words give way first (their extra lines go to
+                hs[last] = max(0.6, hs[last] - over)       # the notes): a table never loses a row of its comparison
         gap = GAP
         if len(slots) > 1 and slack > 0.01:                # what is left: a larger, equal rhythm between the parts
             gap = GAP + min(slack / (len(slots) - 1), RHYTHM_MAX - GAP)
         left = H - (sum(hs.values()) + gap * (len(slots) - 1))
-        if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout":
+        if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout" and len(cols) > 1:
             hs[slots[-1]] += left                          # a column ending in a callout runs it to the foot, level
                                                            # with the column beside it
         y = top

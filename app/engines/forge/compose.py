@@ -57,7 +57,7 @@ MEANINGS = (
     (r"data\b|analytics|insight|dashboard|measure", "database"),
     (r"speed|faster|slower|install time|cycle time|lead time|hours?\b|days?\b", "timer"),
     (r"quality|award|best[- ]in|winner", "award"),
-    (r"people|team|talent|hire|workforce|staff", "users"),
+    (r"people|team|talent|hire|hiring|recruit|clinicians?|headcount|workforce|staff", "users"),
     (r"goal|target|aim|objective|recommend|decision|approve", "target"),
     (r"market|competit|rival|peer", "store"),
     (r"technology|software|platform|\bai\b|model", "cpu"),
@@ -168,9 +168,14 @@ def _col_blocks(it, z, figure):
     for b in it["bullets"]:
         out.append({"text": b["text"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bullet": True,
                     "space_before": 4, "prov": b.get("prov")})
-    if it.get("foot"):                                    # who and when: an accent line at the foot of the column
-        out.append({"text": it["foot"], "size": max(11, R.ARGUMENT["bullet"] + SIZES[z][1] - 2), "bold": False,
-                    "numbers": False, "color": TC.TEXT_2, "space_before": 8})   # lighter and smaller than the step
+    foot = it.get("foot")
+    if foot:                                              # who and when, in a band at the foot of the column: the
+        fz = max(11, R.ARGUMENT["bullet"] + SIZES[z][1] - 2)   # owner in bold, the timing under it, both smaller
+        parts = foot if isinstance(foot, list) else [foot]      # and lighter than the step
+        for k_, f_ in enumerate(p_ for p_ in parts if p_):
+            out.append({"text": f_, "size": fz, "bold": k_ == 0 and len(parts) > 1, "numbers": False,
+                        "color": TC.TEXT_1 if k_ == 0 and len(parts) > 1 else TC.TEXT_2,
+                        "space_before": 8 if k_ == 0 else 1})
     return out
 
 
@@ -247,7 +252,8 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
         grid = []
         for it, f in zip(items, figs):
             bl_ = _col_blocks(it, z, f)
-            foot_b = bl_[-1:] if it.get("foot") and len(bl_) > 1 else []
+            nf = len([f_ for f_ in it["foot"] if f_]) if isinstance(it.get("foot"), list) else 1
+            foot_b = bl_[-nf:] if it.get("foot") and len(bl_) > nf else []
             mid_b = bl_[1:len(bl_) - len(foot_b)]
             det = max([b_["size"] for b_ in mid_b] or [R.ARGUMENT["bullet"]])
             lead_b = [dict(bl_[0], size=min(det + 2, R.T["head"] + 2))] if bl_ else []   # the lead: one step over
@@ -258,6 +264,14 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             grid.append((lead_b, mid_b, foot_b))
         lead_h = max(R._need(g[0], w) for g, (_, w) in zip(grid, cols)) if grid else 0.0
         foot_h = max((R._need(g[2], w) for g, (_, w) in zip(grid, cols) if g[2]), default=0.0)
+        room = avail - mark_h
+        fixed = lead_h + (0.12 if foot_h else 0) + foot_h + 0.08
+        mid_need = lambda: max((R._need(g[1], w) for g, (_, w) in zip(grid, cols) if g[1]), default=0.0)  # noqa: E731
+        if fixed + mid_need() > room:                     # the rhythm never costs a line: drop the extra spacing
+            for g in grid:                                # before any detail would be cut
+                for b_ in g[1][1:]:
+                    b_["space_before"] = 4
+        body_h = min(room, max(body_h, fixed + mid_need() + 0.04))   # the bands hold what the leads grew to
     for j, (it, (x, w)) in enumerate(zip(items, cols)):
         if mode == "figures":
             val, cap = figs[j]
@@ -297,6 +311,7 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                 R._cut_note(s, dropped)
                 R._write(R._box(sl, x, top_ + lead_h + 0.08, w, mid_h + 0.05, f"ColumnDetail{j + 1}"), bl, ctx, n)
             if foot_b:
+                R._rule(sl, x, top_ + body_h - foot_h - 0.07, w, TC.ACCENT_5, 0.75, f"ov_FootRule{j + 1}")
                 R._write(R._box(sl, x, top_ + body_h - foot_h, w, foot_h + 0.04, f"ColumnFoot{j + 1}"), foot_b,
                          ctx, n)
             continue

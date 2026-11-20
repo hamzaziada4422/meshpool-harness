@@ -160,7 +160,7 @@ MINUS = re.compile(r"(?<![\w.\-/])-(?=\$?\d)")             # "-38%" is a minus, 
 ACCENTS_MAX = 2                                         # marked phrases per paragraph: more is a highlighter, not emphasis
 
 
-def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False):
+def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=False, italic=False, accent=True):
     text = MINUS.sub("\u2212", str(text))
     marked = 0
     for seg, st in _segments(text, numbers):
@@ -178,7 +178,7 @@ def _rich(p, text, size, color=TC.TEXT_1, bold=False, numbers=True, heading=Fals
             else:
                 _set_font(r, size, color, bold, italic, heading, sup)
         elif st == "bold":
-            if not heading and color in (TC.TEXT_1, None):   # a marked phrase is set in
+            if not heading and color in (TC.TEXT_1, None) and accent:   # a marked phrase is set in
                 _set_font(r, size, TC.ACCENT_1, False, italic, heading, sup)   # the accent colour, not in bold
             else:
                 _set_font(r, size, color, True, italic, heading, sup)
@@ -756,11 +756,11 @@ def _footer(ctx, s, sl, n):
              ("المصدر: " if _rtl(src["text"]) else "Source: ") + src["text"])
         sx, sw = span(0, 9)
         sb = [{"text": t, "size": T["src"], "numbers": False}]
-        if _need(sb, sw) > 0.32:                      # a source names its documents in two lines: what will not fit
+        if _need(sb, sw) > 0.2:                       # a source is one line (BCG): what will not fit
             parts_ = re.split(r"(?<=[;,])\s+", t)    # (a writer pasting the fact list) goes to the notes, clause by
             keep = parts_[0]                          # clause, never cut mid-word
             for c_ in parts_[1:]:
-                if _need([dict(sb[0], text=keep + " " + c_)], sw) > 0.32:
+                if _need([dict(sb[0], text=keep + " " + c_ + " and others")], sw) > 0.2:
                     break
                 keep += " " + c_
             rest = t[len(keep):].strip()
@@ -1496,6 +1496,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         and c.get("cagr", True) is not False
     target = c.get("target") if isinstance(c.get("target"), (int, float)) else None
     tcat = [j for j, cv in enumerate(cats) if _TARGET_CAT.search(cv)]
+    if tcat and target is not None:                       # a target bar already shows the goal: no second, dashed
+        target = None                                     # line through the labels
     delta = _delta_pair(c.get("delta"), cats, vals)
     desc = [_txt(d) for d in (c.get("descriptors") or [])][:k] if isinstance(c.get("descriptors"), list) else []
     if delta and periods:
@@ -1659,7 +1661,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
 
     def col_head_h(sz):
         """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
-        lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
+        lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.22), sz + 2, f_bold, 0.97) for ci, c in enumerate(cols)]
                     or [1])
         return lines * (sz + 2) * (lf + 0.10) / 72 + 0.08
     head_h = lambda sz: col_head_h(sz) + ((2 if any(len(g.get("label", "")) > 14 * g.get("span", 1) for g in groups)
@@ -1671,7 +1673,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         out = []
         for i, r in enumerate(rows):
             f = f_bold if i in bold_rows else f_reg
-            lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.12), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
+            lines = max([wrap_lines(_plain(c), max(0.3, colw[ci] - 0.22), sz, f, 0.97) for ci, c in enumerate(r[:len(cols)])]
                         or [1])
             out.append(max(base, lines * sz * lf / 72 + pad_r))
         return out
@@ -1680,7 +1682,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     def words_fit(sz):
         """Every word of every heading (bold, sz + 2) and cell (sz) fits its column: else it breaks mid-word."""
         for ci in range(len(cols)):
-            room = max(0.3, colw[ci] - 0.24) * 0.94          # cell margins, and LibreOffice sets wider than measured
+            room = max(0.3, colw[ci] - 0.3) * 0.94          # cell margins, and LibreOffice sets wider than measured
             heads = re.findall(r"\S+", _plain(cols[ci]))
             if any(text_width_in(wd, sz + 2, f_bold) > room for wd in heads):
                 return False
@@ -1771,14 +1773,14 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     size = size_
 
     def put(cell, text, bold=False, italic=False, align=PP_ALIGN.CENTER, color=TC.TEXT_1, sz=size, anchor=MSO_ANCHOR.MIDDLE):
-        cell.margin_left = cell.margin_right = Inches(0.05)
+        cell.margin_left = cell.margin_right = Inches(0.1)   # a 0.2 in gutter
         cell.margin_top = cell.margin_bottom = Inches(0.0)
         cell.vertical_anchor = anchor
         p = cell.text_frame.paragraphs[0]
         p.alignment = align
         p.line_spacing = Pt(_pitch(sz))      # exact, as in body text: a taller face (Segoe UI) cannot grow the rows
-        _rich(p, str(text), sz, color, bold, numbers=False, italic=italic)
-        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # the end mark at 18 pt grew the rows
+        _rich(p, str(text), sz, color, bold, numbers=False, italic=italic, accent=False)   # in a table the accent
+        p._p.get_or_add_endParaRPr().set("sz", str(int(sz * 100)))   # colour is the recommended row's alone
     if groups:
         ci = 1
         for g in groups:
@@ -2250,6 +2252,10 @@ def stat_stack(c: dict, text: str = "") -> dict:
             if per_share:
                 d = 2
             num = ("-" if v < 0 else "") + cur + f"{abs(v):,.{d}f}"          # -$4.2m, not $-4.2m
+            if not mag and not pct and not per_share and abs(v) >= 100_000:  # a big figure reads $9.2M, never
+                q, sfx = (abs(v) / 1e9, "B") if abs(v) >= 1e9 else (abs(v) / 1e6, "M") if abs(v) >= 1e6 \
+                    else (abs(v) / 1e3, "K")                                  # $9,200,000 (it wraps in a tile)
+                num = ("-" if v < 0 else "") + cur + re.sub(r"\.0$", "", f"{q:.1f}" if q < 100 else f"{q:.0f}") + sfx
             tail = ("/sh" if per_share else "") + (usfx or "") + other
             lab = re.sub(r"^\s*\d+[.)]\s*", "", re.sub(r"\s*\([^)]*\)", "", cat)).strip()
             if len(c.get("series") or []) > 1:
@@ -2530,7 +2536,7 @@ def a_closing(ctx, s, sl, n):
                 bl.append({"text": st["detail"], "prov": st.get("prov")})
             bl += [{"text": m if isinstance(m, str) else _txt(m), "prov": st.get("prov")}
                    for m in (st.get("milestones") or [])[:2]]
-            who = " · ".join(v for v in (st.get("owner"), st.get("timing")) if v)
+            who = [v for v in (st.get("owner"), st.get("timing")) if v]
             items.append({"lead": str(st.get("action", "")).replace("**", ""), "bullets": bl,
                           "prov": st.get("prov"), "foot": who})
         _as_columns(ctx, s, sl, n, items, "process")
@@ -2726,6 +2732,12 @@ def a_exhibit_argument(ctx, s, sl, n):
     _header(ctx, s, sl, n, title_w=lw)
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
+    secno = s["_section"].split(" | ")[0] if (not FRAME["band"] and s.get("_section")) else ""
+    if secno:                                           # the section number in its place on every content slide
+        _write(_box(sl, RIGHT - 0.9, 0.72, 0.9, 0.6, "ov_SectionNo", MSO_ANCHOR.BOTTOM),
+               [{"text": secno, "size": 26, "bold": True, "numbers": False, "color": TC.ACCENT_1,
+                 "align": PP_ALIGN.RIGHT}])
+        rw -= 1.0
     _write(_box(sl, rx, 0.42, rw, 0.92, "role_subtitle_Right", MSO_ANCHOR.BOTTOM),
            [{"text": tr, "size": T["head"], "bold": True, "heading": True, "color": TC.ACCENT_1,
              "numbers": False, "line_spacing": 1.0}])      # the argument's heading: clearly under the slide title
@@ -3382,7 +3394,8 @@ def a_executive_summary(ctx, s, sl, n):
     if mets:                                              # the decision's size, large in a panel beside the points
         dx, dw = span24(10, 18)
         mx, mw = span24(19, 23)
-        _fill(sl, mx - 0.12, top - 0.05, RIGHT - mx + 0.12, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")
+        _fill(sl, mx, top - 0.05, RIGHT - mx, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")   # on the
+        mx, mw = mx + 0.14, mw - 0.14                     # grid, a full gutter from the points; its figures inset
         mh = (bottom - top) / len(mets)
         for i, m in enumerate(mets):
             my = top + i * mh

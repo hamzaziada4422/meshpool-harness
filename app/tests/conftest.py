@@ -3,6 +3,7 @@ import os
 
 os.environ.setdefault("MH_FAILURES_LOG", "off")
 os.environ.setdefault("MH_RECOVER_MIN", "0")        # an outage in a test fails at once instead of waiting 30 min
+os.environ.setdefault("MH_LEARN", "0")             # the learning loop calls a model after a turn: off in tests
 
 import pytest  # noqa: E402
 
