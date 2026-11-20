@@ -163,3 +163,16 @@ def test_repeated_bullets_are_cut_and_a_block_keeps_its_lead():
     assert slides[0]["blocks"][0]["bullets"] == [] and slides[0]["blocks"][0]["text"]
     assert [b["text"] for b in slides[1]["blocks"][0]["bullets"]] == [
         "Grid upgrades take nine months from order to power on site"]
+
+
+def test_the_summary_points_are_the_sections():
+    slides = [{"archetype": "executive_summary", "title": "x", "section": "Answer",
+               "points": [{"lead": "a"}, {"lead": "b"}, {"lead": "c"}]},
+              {"archetype": "exhibit_argument", "title": "a", "section": "Where we stand"},
+              {"archetype": "exhibit_argument", "title": "b", "section": "Where we stand"},
+              {"archetype": "table_focus", "title": "c", "section": "The options"},
+              {"archetype": "closing", "title": "d", "section": "The plan"}]
+    assert B.tracker_checks(slides) == {}
+    assert B.tracker_checks([dict(slides[0], points=slides[0]["points"][:2])] + slides[1:])
+    nums = [s.get("_section", "").split(" | ")[0] for s in R.plan_forms([dict(s) for s in slides])]
+    assert nums == ["", "01", "01", "02", "03"]

@@ -52,7 +52,9 @@ renderer applies a strict consulting design; you only fill fields.
   same measure for 3-4 groups is small multiples ("thirds" or "quarters"), one chart part per group, same kind and
   unit (they share one scale). The title still states ONE message that the charts prove together.
 - executive_summary: the answer first, right after the cover. "title": the governing thought (the recommendation or
-  answer, with a verb); "points": 3-5 of {"lead": the claim one section of the deck proves (<= 12 words), "bullets":
+  answer, with a verb); "points": one per section of the deck, in the sections' order (point k is section k, so the
+  section number on every later slide points back to it; 3-5 sections), each {"lead": the claim that section proves
+  (<= 12 words), "bullets":
   1-2 evidence lines with their numbers, "prov"}; "decision": optional one line, the decision being requested
   today, written "Decision today: <approve / choose / fund what, by when>"; it must NOT restate the title (the title
   is the answer, the decision line is the ask) - leave it out when there is no decision to take; "metrics": 2-3 of
@@ -641,6 +643,22 @@ def drop_repeats(slides) -> int:
             walk(s, mine)
             seen = outer
     return dropped
+
+
+def tracker_checks(slides) -> dict[int, list[str]]:
+    """The executive summary's numbered points are the deck's sections, in order (the section number on each later
+    slide refers back to its point): a summary whose point count differs from the number of sections goes back."""
+    for i, s in enumerate(slides, 1):
+        if isinstance(s, dict) and s.get("archetype") == "executive_summary":
+            secs = list(dict.fromkeys(str(x.get("section") or "").strip().lower() for x in slides[i:]
+                                      if isinstance(x, dict) and x.get("section")
+                                      and x.get("archetype") not in ("cover", "agenda", "section_divider", "end")))
+            pts = [p_ for p_ in s.get("points") or [] if isinstance(p_, dict)]
+            if len(secs) >= 2 and pts and len(pts) != len(secs):
+                return {i: [f"the summary has {len(pts)} points for {len(secs)} sections: give one point per section, "
+                            "in the sections' order, so the section numbers on later slides refer back to them"]}
+            return {}
+    return {}
 
 
 def repeat_checks(slides) -> dict[int, list[str]]:
@@ -1734,7 +1752,8 @@ before any slide exists. Return JSON: {{"governing_thought": str, "structure": "
 "slides": [{{"node": "1.1", "section": str, "section_no": "1", "section_icon": "one-word meaning", "title": str,
 "archetype": str, "visual": str, "evidence": [fact ids], "needs": "what the slide must show"}}]}}.
 Section names are 2-5 plain words in sentence case ("Where the market is going"); they label the agenda. Do NOT
-plan an agenda slide: the engine adds it from your sections.
+plan an agenda slide: the engine adds it from your sections. The executive summary has one point per section, in the
+same order: the section numbers on the later slides refer back to its numbered points (the BCG tracker).
 Exactly {narrative_n} slides: {opening}then the argument in 3-4 sections; {closing} Use the archetypes below.{fixed_txt}
 {STORY[density]}
 {CONSULTING}
@@ -1946,6 +1965,8 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             fails.setdefault(n, []).extend(f"[repeat] {m}" for m in msgs)
         for n, msgs in date_checks(slides).items():
             fails.setdefault(n, []).extend(f"[date] {m}" for m in msgs)
+        for n, msgs in tracker_checks(slides).items():
+            fails.setdefault(n, []).extend(f"[tracker] {m}" for m in msgs)
         for n, msgs in tie_checks(slides).items():
             fails.setdefault(n, []).extend(f"[tie] {m}" for m in msgs)
         for n, msgs in arith_checks(slides).items():

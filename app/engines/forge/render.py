@@ -4083,8 +4083,10 @@ def plan_forms(slides: list) -> list:
     slides = plan_chart_forms(slides)
     secs: dict = {}
     for k_, s in enumerate(slides):                       # "01 | Section" over every content slide's title
-        if isinstance(s, dict) and s.get("archetype") not in ("cover", "section_divider", "agenda", "end") \
+        if isinstance(s, dict) and s.get("archetype") not in ("cover", "section_divider", "agenda", "end",
+                                                              "executive_summary") \
                 and str(s.get("section") or "").strip() and str(s.get("section")).strip().lower() != "cover":
+            # (the summary carries no number: its numbered points ARE the sections that follow)
             name = re.sub(r"\s+", " ", str(s["section"]).strip())
             secs.setdefault(name.lower(), len(secs) + 1)
             slides[k_] = dict(s, _section=f"{secs[name.lower()]:02d} | {name[:1].upper() + name[1:]}")
