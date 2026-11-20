@@ -1836,9 +1836,15 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
         body = [str(r[ci]) for r in rows if ci < len(r) and str(r[ci]).strip() and str(r[ci]).strip() != "n/a"]
         return bool(body) and sum(1 for v_ in body if _NUMCELL.match(_plain(v_).replace("−", "-"))) >= 0.6 * len(body)
     col_align = [PP_ALIGN.LEFT if ci == 0 or not _num_col(ci) else PP_ALIGN.RIGHT for ci in range(len(cols))]
+    hl_col = next((j for j, c in enumerate(cols) if j > 0 and re.search(r"(?i)\brecommend", _plain(c))), None) \
+        if not hl else None                               # options as columns: the recommended one is tinted
     for ci, c in enumerate(cols):
         cell = tbl.cell(hdr - 1, ci)
-        put(cell, c, True, align=col_align[ci], sz=size + (2 if not groups else 2), anchor=MSO_ANCHOR.BOTTOM)
+        if ci == hl_col:
+            cell.fill.solid()
+            cell.fill.fore_color.theme_color = TC.BACKGROUND_2
+        put(cell, c, True, align=col_align[ci], sz=size + (2 if not groups else 2), anchor=MSO_ANCHOR.BOTTOM,
+            color=TC.ACCENT_1 if ci == hl_col else TC.TEXT_1)
         _borders(cell, bottom=("accent1", 1.0))
     for r_i, row in enumerate(rows):
         ri = hdr + r_i
@@ -1872,7 +1878,11 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                     _borders(cell, bottom=("tx1", 2.0), top=("tx1", 2.0), left=("tx1", 2.0), right=("tx1", 2.0))
                 ctx.track(n, str(v), t.get("prov"))
                 continue
-            if on:                                       # the recommended row: accent text between accent rules,
+            if ci == hl_col:                             # the recommended column: a light tint, accent text
+                cell.fill.solid()
+                cell.fill.fore_color.theme_color = TC.BACKGROUND_2
+                color = TC.ACCENT_1
+            elif on:                                     # the recommended row: accent text between accent rules,
                 cell.fill.background()                   # no fill
                 color = TC.ACCENT_1
             elif ci in heat and not (total and last):
@@ -2823,7 +2833,8 @@ def a_exhibit_argument(ctx, s, sl, n):
         keep_ = [b_ for b_ in co["bullets"] if not repeats(str(b_.get("text") if isinstance(b_, dict) else b_),
                                                             said, 0.75)]
         co["bullets"] = keep_
-    cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": True,
+    one_ = len(co.get("bullets") or []) == 1             # a single so-what line carries no bullet glyph
+    cb = [{"text": b["text"] if isinstance(b, dict) else b, "size": ARGUMENT["callout"], "bullet": not one_,
            "color": TC.BACKGROUND_1, "numbers": False, "space_before": 5,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in co.get("bullets") or []]
     if cb:                                             # the so-what keeps readable type (12 pt at least): a line
@@ -3490,14 +3501,15 @@ def a_executive_summary(ctx, s, sl, n):
     if not icons or not all(icons):
         icons = [None] * len(pts)                                  # one look per slide: all icons or all numbers
     y = top
+    tracker = len(pts) >= 2                               # the points are the deck's numbered sections
     for i, (a, d, h) in enumerate(laid):
         rh = h + gap
-        if icons[i]:
+        if icons[i] and not tracker:
             _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
-        else:
-            _write(_box(sl, LEFT, y + 0.06, 0.45, 0.5, f"role_numeral_{i + 1}"),
-                   [{"text": str(i + 1), "size": T["num"], "bold": True, "heading": True, "numbers": False,
-                     "color": TC.ACCENT_1}])
+        else:                                             # "01": the same mark as the section number on the slide
+            _write(_box(sl, LEFT, y + 0.06, 0.5, 0.5, f"role_numeral_{i + 1}"),    # that proves this point
+                   [{"text": f"{i + 1:02d}" if tracker else str(i + 1), "size": T["num"], "bold": True,
+                     "heading": True, "numbers": False, "color": TC.ACCENT_1}])
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)

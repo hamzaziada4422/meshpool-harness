@@ -444,6 +444,13 @@ def p_callout(ctx, sl, n, part, box, look, i, s, card):
     iw, ih = w - 0.5, h - 0.3
     near_table = any(isinstance(p_, dict) and p_.get("type") == "table" for p_ in (s or {}).get("parts") or [])
     bl = _fit_trim(R._grow(bl, iw, ih, 1 if near_table else 6), iw, ih, s, f"the callout of part {i}", ctx, n)
+    if h > 1.6 * (R._need(bl, iw) + 0.3) and h > 1.4:     # a box far taller than its words: a light panel with an
+        for b_ in bl:                                     # accent bar reads as a designed panel; a tall navy slab
+            b_["color"] = TC.TEXT_1                       # around three lines reads as dead space
+        shp = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Callout{i}")
+        R._fill(sl, x, y, 0.07, h, TC.ACCENT_1, f"ov_CalloutBar{i}")
+        R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
+        return
     shp = R._fill(sl, x, y, w, h, TC.TEXT_2, f"Callout{i}")
     R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
 
