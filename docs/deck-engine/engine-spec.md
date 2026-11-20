@@ -53,7 +53,8 @@ renderer writes `provenance.json` next to the deck, and the validator reads it b
 Each archetype maps to a layout in the client template (the template loader finds it by placeholder signature,
 falling back to the forge default template). Word caps are body text outside tables and charts (P10,
 `density.by_archetype`). They were calibrated on 16 English reference decks: median 114 body words per content page,
-p90 185, chart labels included.
+p90 185, chart labels included. A recheck on 130 decks (3,655 pages, 2026-11-20) gives median 84 and p90 250; the caps
+stay.
 
 | # | Archetype | Use when the title says… | Elements | Body words |
 |---|---|---|---|---|

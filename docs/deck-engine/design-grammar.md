@@ -84,6 +84,11 @@ balanced), and an explicit `density` option or "density: present|balanced|read" 
 
 ## Evidence
 
+- Rechecked on 130 public consulting and financial services decks (3,655 content pages, numbers in
+  `docs/deck-engine/reference-measurements.md`). The 25 pt title matches consulting (median 25 pt on a 13.33 in
+  slide); text sits 0.5 in from the left edge (Forge 0.6 in); the largest empty block has a median of 10% of the body
+  (p90 27%), so the 20% cap is a quality floor that 83% of reference pages meet. No rule changed.
+
 - Exact rebuilds of the four reference pages (kept out of the repo because they reproduce the reference text)
   pass every render check.
 - Content-only builds from a text brief, on two unrelated topics, pass the render check with zero overlap or
