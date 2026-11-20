@@ -7,6 +7,9 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   - the goal as a dashed target line;
   - a short line under each bar saying what it is.
 - **Say it once.** A point made on one slide is not repeated on later slides, and a callout never restates the cards beside it. The writer is sent back when it repeats itself.
+- **Meshpool learns your preferences.** When you correct its work or state a preference ("never put a label over the title", "always use Segoe UI"), Meshpool saves it to your memory. It follows it from the next message, in every chat and with every agent, and the deck writer follows it too. You see "Noted for next time" when it learns something. Turning memory off in Settings stops it.
+- **The same deck shape every time.** Before any model plans a deck, the brief is read for the kind of deck, the audience, the question and the options. It is then given a fixed consulting skeleton: the answer and the ask, where we stand, the options on the same measures, the economics and the plan. Different models start from the same plan.
+- **Dated correctly.** The writer knows today's date. Plans never schedule work in the past.
 - **A clean white top, in Segoe UI.** There is no label over the title. The section number sits top right.
 - **Ask any chat for a PowerPoint.** It now produces one on every agent: 14 of 14 test runs made a deck, up from 10 of 14. A chat whose agent cannot make the file moves, with its history, to one that can.
 - **Auto prefers MeshPool's own agents on a tie.** Free web search is bundled in the apps.
