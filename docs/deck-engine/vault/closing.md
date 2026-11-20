@@ -13,7 +13,7 @@ Built as: numbered steps with action, detail, owner and timing.
 
 Fields: steps [{action, detail, milestones, owner, timing}].
 
-Body words (balanced): up to 110.
+Body words (balanced): up to 170.
 
 Related: [[gantt]], [[executive_summary]]
 

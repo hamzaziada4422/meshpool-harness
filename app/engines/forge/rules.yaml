@@ -107,7 +107,8 @@ pptx:
   language:                     # P21: words that mark a slide as machine-written, linted on every text frame
     # finance terms stay legal: "synergies" (merger maths) and "leverage" as debt ("net leverage 3.0x"); "re:" entries
     # are regular expressions, so only the verb "leverage our/the/its..." is flagged
-    banned_phrases: ["in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
+    banned_phrases: ["in the brief", "the brief's", "is not supported by", "as provided", "facts supplied",
+                     "in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
                      "leveraging", "unlock", "unlocking",
                      "game-changer", "game changer", "delve", "robust", "seamless", "seamlessly", "key takeaways",
                      "it's important to note", "it is important to note", "holistic", "cutting-edge",
@@ -154,6 +155,7 @@ pptx:
       cases: 80
       library: 120              # a library layout: its slot texts plus the side column
       layout: 120               # a built-in layout: its slot texts plus the side column
+      closing: 200              # the next steps with detail, milestones, owner and timing
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
       layout: 12
       recommendations_now_next_later: 12
@@ -184,7 +186,8 @@ pptx:
           exhibit_argument: 120
           table_focus: 60
           grid: 130
-          closing: 110
+          closing: 170          # four steps, each with its detail, two milestones and an owner (the columns
+                                # form spreads them over the page; at 110 the detail was cut and the page left empty)
           risk_matrix: 95
           matrix_3x3: 95
           gantt: 95

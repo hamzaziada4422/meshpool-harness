@@ -57,7 +57,28 @@ Choices made where the plan left room, with the reason. Newest last.
     skips those shapes. With no network or no mark the company's name is shown. Tests set `MH_FETCH_LOGOS=0`.
 21. **Built-in layouts are abstract and gated.** `data/layouts.json` keeps preset names, boxes in 1/200 units, theme
     roles and slot descriptions only. A layout is offered to the model only when it passes P1, P5, P7, P8, P17 and P20
-    with filled slots and no cut text (`testkit/forge_layout_gate.py`, 39 of 91). A deck that names a held-back layout
+    with filled slots and no cut text (`testkit/forge_layout_gate.py`, 50 of 91). A deck that names a held-back layout
     still renders it.
 22. **The brief's count and bookends win over the model's plan.** The narrative floor is 1 slide, not 3, and a cover
     the model plans is dropped when the brief says there is none. A silent brief keeps the default cover.
+23. **Points are drawn, not listed (user request, 2026-11-20).** The renderer, not the model, turns an argument
+    column of 2-4 points into cards (`render.draw_points`): an icon per point from the meaning named first in its
+    text, a header (`label`, 2-4 words, asked of the writer for exhibit_argument), and four one-line points as a 2x2.
+    Cards are overlays (`ov_PointCard`) inside the panel; their text is checked like any text (fit, provenance).
+    When the points do not fit at 10 pt the column stays text. `render.POINTS["on"] = False` turns it off.
+24. **No gaps, splits are the exception (user request, 2026-11-20).** A short table no longer sits beside a shorter
+    panel: it runs full width with its so-what under it (`render.SPLIT_TABLES` off). Next steps and risk rows share
+    the body on alternate light bands; grid parts side by side share one height; a side column of points ends at
+    the exhibit's foot. Where the content is too thin to fill a slide (a roadmap of one-line milestones) the
+    renderer does not pad: P20 flags it and the writer is asked for the detail.
+25. **Forms are planned per deck, not per slide (user request, 2026-11-20).** The renderer decides each slide's
+    composition knowing its neighbours (`render.plan_forms`). The validator measures looks from the file (P15
+    `same_look`: rows of text across the page, a chart with a column beside it, a chart above a row of cards), so a
+    repeat that the plan cannot avoid goes back to the writer. Pixel similarity was tried and rejected: look-alike
+    pairs scored near zero on it.
+26. **White top by default (user choice, 2026-11-20).** Content slides keep a white top in the SlideWorks manner: the
+    section number (in order of first appearance) large in the accent colour in the top right corner, an accent
+    rule under the title, no hairline across the top, and the exhibit + argument panel starts under the title. The
+    dark band stays an option (`theme: {"frame": "band"}`). Segoe UI stays the default face.
+27. **Never an eyebrow (user rule, 2026-11-20).** No small label over a slide title, ever ("What to do next" above
+    the title was tried and rejected). Tested in `test_forge_house_style.py`.

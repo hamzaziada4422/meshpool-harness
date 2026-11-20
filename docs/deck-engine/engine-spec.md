@@ -110,6 +110,11 @@ as numbers in code; no shape, text or image was copied.
 The `slide_layouts` tool (engines/forge/tools.py, on the office MCP server) names the archetypes that prove a
 message, with the reference decks' numbers for them.
 
+An argument column (exhibit_argument's right panel, a diagram's or a layout's side column) of 2-4 points is drawn
+as point cards (`render.draw_points`): an icon chosen by meaning or a numbered badge, the point's `label` as its
+header, its text and detail lines; four one-line points make a 2x2 of boxes. A column that does not fit as cards at
+10 pt is written as text.
+
 Archetypes 38 to 40 are composite. `cases` fetches each company's logo once from the internet (full-colour CC0
 logos from gilbarbara/logos, else the Simple Icons mark in the brand's own colour) and draws it as a group of native
 shapes; shapes marked `logo:` keep their own colours and are not counted by P6. With no network or no mark, the
@@ -186,7 +191,7 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | P17 | not editable | group depth ≤1; no forbidden locks |
 | P18 | inaccessible | alt text on pictures/charts (a file name doesn't count); reading order |
 | P19 | inconsistent fonts and placement | title box, title size and face, body face, content margin, source line, chart label size identical across content slides |
-| P20 | big or disguised empty space ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`; chart plot areas count as content; McKinsey content pages median 6%, p90 12%). From the file: table rows ≤0.25in taller than their text (`max_row_air_in`); bars ≤0.6in and columns ≤1.2in thick (`max_bar_in`, `max_column_in`). Before render: fill targets per archetype (`build.fill_checks`) |
+| P20 | big or disguised empty space ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`; chart plot areas count as content; McKinsey content pages median 6%, p90 12%). From the file: table rows ≤0.25in taller than their text (`max_row_air_in`); bars ≤0.6in and columns ≤1.2in thick (`max_bar_in`, `max_column_in`). Before render: fill targets per archetype (`build.fill_checks`). From the file: blocks side by side (tables, charts, panels, cards) that start together end within 0.45in of each other unless another part continues the shorter column (`unaligned_feet`) |
 
 **Excel (validate_xlsx.py)**: recalculates headless in LibreOffice first.
 

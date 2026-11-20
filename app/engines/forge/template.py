@@ -26,10 +26,10 @@ FONTS = {"major": "Segoe UI", "minor": "Segoe UI"}     # clean and modern; title
 FONT_PAIRS = {"segoe": {"major": "Segoe UI", "minor": "Segoe UI"}, "serif": {"major": "Georgia", "minor": "Arial"}, "sans": {"major": "Arial", "minor": "Arial"},
               "calibri": {"major": "Calibri", "minor": "Calibri"}, "cambria": {"major": "Cambria", "minor": "Calibri"}}
 # roles: dk1 text and title, dk2 navy (callouts, darkest heat), lt2 grey half-panel, accent1 emphasis blue (numbers),
-# accent2 coral (the one highlighted row), accent3 cyan (the focus item in a chart), accent4 mid blue (heat),
+# accent2 a pale accent tint (the one highlighted row, dark text on it), accent3 cyan (the focus item in a chart), accent4 mid blue (heat),
 # accent5 rule grey, accent6 muted text. Our own palette; roles follow the reference grammar.
-COLORS = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "ECECEC", "accent1": "1E5BD8",
-          "accent2": "F4A582", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF", "accent6": "6B6B6B",
+COLORS = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "EEF3FA", "accent1": "1E5BD8",
+          "accent2": "D6E3F8", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF", "accent6": "6B6B6B",
           "hlink": "1E5BD8", "folHlink": "6B6B6B"}
 # Named palettes (our own values). Slot roles are the same in every palette, so the renderer never changes:
 # dk1 text, dk2 darkest brand tone (callouts, bands), lt2 panel grey, accent1 emphasis, accent2 the one highlight,

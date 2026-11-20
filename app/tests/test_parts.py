@@ -64,6 +64,17 @@ TEXT = {"type": "text", "heading": "Why it matters", "lead": "Growth is real, bu
 
 def gallery() -> list[dict]:
     return [
+        {"archetype": "grid", "layout": "halves", "look": "editorial", "source": SRC,
+         "title": "Pricing tools cut the cost of a quote and peers already show the gain",
+         "parts": [{"type": "shift", "heading": "While the cost of a quote falls...", "from_head": "Today",
+                    "to_head": "With pricing tools", "rows": [
+                        {"label": "Quote preparation", "from": {"text": "Analyst builds each quote", "value": "4 hrs"},
+                         "to": {"text": "Tool drafts it from rules", "value": "20 mins"}},
+                        {"label": "Discount approval", "from": {"text": "Manager signs every deal", "value": "2 days"},
+                         "to": {"text": "Only deals outside corridors", "value": "Same day"}}]},
+                   {"type": "evidence", "heading": "... peers already capture the margin", "items": [
+                       {"name": "North region", "text": "Margin up 3 points after corridors"},
+                       {"name": "South region", "text": "Win rate held at 31% with fewer discounts"}]}]},
         {"archetype": "grid", "layout": "full", "look": "editorial", "source": SRC,
          "title": "The pricing programme runs for one year, from diagnostic to national roll-out",
          "parts": [{"type": "timeline", "heading": "Programme milestones", "highlight": 2, "milestones": [

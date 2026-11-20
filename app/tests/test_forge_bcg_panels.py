@@ -1,0 +1,179 @@
+"""The BCG panel grammar: from-to shift rows, evidence lists, think-cell difference arrows and category descriptors on
+column charts, and the deck-wide 'say it once' check."""
+from pptx import Presentation
+
+from engines.forge import build as B
+from engines.forge import parts as PT
+from engines.forge import render as R
+from engines.forge import validate_pptx as VP
+
+SRC = {"text": "Source: company accounts"}
+SHIFT = {"type": "shift", "heading": "While cost drivers are falling...", "rows": [
+    {"label": "High-value task delivery", "from": {"text": "High-skill employee research", "value": ">$100K/yr"},
+     "to": {"text": "AI agent-powered task delivery", "value": "~$2-3K/yr"}},
+    {"label": "Advisory costs", "from": {"text": "In-person advice per interaction", "value": "~$5"},
+     "to": {"text": "AI-enabled advice per conversation", "value": "$0.20-0.30"}},
+    {"label": "Time to access knowledge", "from": {"text": "Manual analysis of market data", "value": "3 hrs"},
+     "to": {"text": "AI gathers and synthesises data", "value": "5 mins"}}]}
+CHART = {"type": "chart", "heading": "... revenue potential is rising", "chart": {
+    "kind": "column", "categories": ["Traditional", "Digitally enhanced", "AI-first"],
+    "series": [{"name": "Index", "values": [1, 5, 30]}], "unit": "x", "decimals": 0,
+    "delta": {"from": "Traditional", "to": "AI-first", "label": "25-35x"},
+    "descriptors": ["IT as support function", "Digital processes, no redesign", "Redesigned around AI"]}}
+EVIDENCE = {"type": "evidence", "heading": "Firms set up early capture the most", "items": [
+    {"name": "Lemonade", "text": "Customer acquisition costs cut by 90%"},
+    {"name": "Klarna", "text": "50% smaller workforce and 73% more revenue per FTE"},
+    {"name": "Electrolux", "text": "60% of support calls resolved without a human agent"}]}
+
+
+def _deck(slides, tmp_path):
+    out = tmp_path / "deck.pptx"
+    r = R.render(slides, str(out), carry=False, density="balanced", fix_labels=False)
+    return r, Presentation(str(out)), str(out)
+
+
+def _names(sl):
+    return [sh.name for sh in sl.shapes]
+
+
+def test_three_panel_story_draws_shift_chart_and_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_FETCH_LOGOS", "0")
+    s = {"archetype": "grid", "id": "s1", "node": "1", "layout": "thirds",
+         "title": "Low costs and high revenues give AI-first firms the edge",
+         "parts": [SHIFT, CHART, EVIDENCE, {"type": "callout", "text": "Set up now to capture the margin"}],
+         "source": SRC}
+    r, prs, out = _deck([s], tmp_path)
+    assert r["errors"] == []
+    sl = prs.slides[0]
+    nm = _names(sl)
+    assert sum(n.startswith("ov_ShiftTile") for n in nm) == 3
+    assert sum(n.startswith("ov_ShiftArrow") for n in nm) == 3
+    assert any(x.startswith("ov_DeltaArrow") for x in nm) and "ov_DeltaLabel" in nm
+    assert sum(x.startswith("ov_DeltaArrow") for x in nm) == 3       # bars in between: an elbow over them
+    assert sum(n.startswith("ov_CatNote") for n in nm) == 3
+    assert sum(n.startswith("ov_EvText") for n in nm) == 3
+    text = " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame)
+    for word in ("25-35x", ">$100K/yr", "5 mins", "Klarna", "Redesigned around AI"):
+        assert word in text
+    v = VP.validate(out, VP.load_rules(), render=False, density="balanced")
+    for rule in ("P5", "P7", "P8", "P9", "P17"):
+        assert v["rules"][rule] == "pass", [f for f in v["failures"] if f["rule"] == rule]
+
+
+def test_shift_type_never_breaks_a_word():
+    narrow = PT._shift_plan(SHIFT, 3.6, up=3)
+    for r, lab, fb, tb, need in narrow["rows"]:
+        for wd in lab[0]["text"].split():
+            assert R._need_w(wd, lab[0]["size"], True) <= narrow["lw"] - 0.2
+        for b in fb + tb:
+            if b.get("bold"):
+                assert R._need_w(b["text"], b["size"], True) <= narrow["fw"] - 0.04
+
+
+def test_part_schema_for_shift_and_evidence():
+    assert PT.part_errors(SHIFT, 1) == [] and PT.part_errors(EVIDENCE, 2) == []
+    assert PT.part_errors({"type": "shift", "rows": [{"label": "x", "from": {"value": "1"}}]}, 1)
+    assert PT.part_errors({"type": "evidence", "items": [{"text": "no name"}]}, 1)
+
+
+def test_delta_label_reads_as_a_multiple_or_a_gap():
+    assert R._delta_label(1, 30, "x", 0) == "30x"
+    assert R._delta_label(12, 19, "days", 0) == "+7 days"
+    assert R._delta_label(10, 25, "", 0) == "2.5x"
+    assert R._delta_label(18, 11, "%", 0) == "−7 pts"
+
+
+def test_a_stated_multiple_is_not_a_mixed_measure():
+    c = dict(CHART["chart"])
+    assert R.chart_problems(c) == []
+    c.pop("delta")
+    assert R.chart_problems(c)
+
+
+def test_short_column_chart_without_its_point_goes_back_to_the_writer():
+    s = {"archetype": "column_trend", "title": "Waits grew", "chart": {
+        "kind": "column", "categories": ["2023", "Today"], "series": [{"name": "Wait", "values": [12, 19]}]}}
+    msgs = B.fill_checks([s], "balanced").get(1, [])
+    assert any("delta" in m for m in msgs)
+    s["chart"]["target"] = 10
+    assert not any("must show its point" in m for m in B.fill_checks([s], "balanced").get(1, []))
+
+
+def test_a_point_is_made_once_in_the_deck():
+    slides = [{"archetype": "cover", "title": "x"},
+              {"archetype": "executive_summary", "points": [{"lead": "No-shows cost the clinics $3.1M a year today"}]},
+              {"archetype": "exhibit_argument", "title": "a",
+               "blocks": [{"text": "No-shows cost the clinics $3.1M a year today in lost visits"}]},
+              {"archetype": "exhibit_argument", "title": "b",
+               "blocks": [{"text": "No-shows cost the clinics $3.1M a year today in lost visits"},
+                          {"text": "Evening hours cut waits to 8 days at three pilot clinics"}]}]
+    out = B.repeat_checks(slides)
+    assert 2 not in out and 3 not in out                 # the summary sums up by design; slide 3 says it first
+    assert any("repeats slide 3" in m for m in out[4])
+
+
+def test_a_callout_that_restates_the_cards_is_flagged():
+    s = {"archetype": "exhibit_argument", "title": "a",
+         "blocks": [{"text": "Reminders cut no-shows from 18% to 11% across five clinics"}],
+         "callout": {"bullets": ["Reminders cut no-shows from 18% to 11% across five clinics"]}}
+    s2 = dict(s, callout={"bullets": ["Rolling reminders out first is the cheapest lever we have"]})
+    assert B.repeat_checks([s]) and not B.repeat_checks([s2])
+
+
+def test_minus_signs_and_highlights():
+    assert R.MINUS.sub("−", "-38% in 2021-2025") == "−38% in 2021-2025"
+
+
+def test_a_steep_fall_reads_as_times_lower_and_period_charts_keep_their_cagr():
+    assert R._delta_label(100, 4, "x", 1) == "25x lower"
+    assert R._delta_label(10, 4, "", 0) == "2.5x lower"
+    s = {"archetype": "column_trend", "title": "Sales grew", "chart": {
+        "kind": "column", "categories": ["FY2022", "FY2023", "FY2024"], "series": [{"name": "S", "values": [1, 2, 3]}]}}
+    assert not any("must show its point" in m for m in B.fill_checks([s], "balanced").get(1, []))
+
+
+def test_a_from_to_slide_counts_as_an_exhibit():
+    assert "shift" in B.EXHIBIT_PARTS and "evidence" in B.EXHIBIT_PARTS
+
+
+def test_a_plan_never_schedules_work_in_the_past():
+    import datetime
+    s = {"archetype": "closing", "title": "Approve the pilot", "steps": [
+        {"action": "Select depots", "detail": "Pick the two depots by end of January 2026", "timing": "Q1 2026"},
+        {"action": "Launch", "detail": "Vans on the road", "timing": "Q2 2027"}]}
+    out = B.date_checks([s], datetime.date(2026, 11, 20))
+    assert any("Q1 2026" in m for m in out[1]) and any("January 2026" in m for m in out[1])
+    assert not any("2027" in m for m in out[1])
+    assert B.date_checks([dict(s, archetype="exhibit_argument")], datetime.date(2026, 11, 20)) == {}
+
+
+def test_the_writer_is_told_today(monkeypatch):
+    monkeypatch.setenv("MH_TODAY", "2026-11-20")
+    assert "20 November 2026" in B.today_line() and "after today" in B.today_line()
+
+
+def test_repeated_bullets_are_cut_and_a_block_keeps_its_lead():
+    slides = [{"archetype": "exhibit_argument", "title": "a", "blocks": [
+                  {"text": "Electric vans save $0.21 on every mile driven at current power prices",
+                   "bullets": [{"text": "$0.21 saved on every mile driven at current power prices"}]}]},
+              {"archetype": "exhibit_argument", "title": "b", "blocks": [
+                  {"text": "Depot charging costs $1.4M per city across both pilot cities",
+                   "bullets": [{"text": "Electric vans save $0.21 on every mile driven at current power prices"},
+                               {"text": "Grid upgrades take nine months from order to power on site"}]}]}]
+    assert B.drop_repeats(slides) == 2
+    assert slides[0]["blocks"][0]["bullets"] == [] and slides[0]["blocks"][0]["text"]
+    assert [b["text"] for b in slides[1]["blocks"][0]["bullets"]] == [
+        "Grid upgrades take nine months from order to power on site"]
+
+
+def test_the_summary_points_are_the_sections():
+    slides = [{"archetype": "executive_summary", "title": "x", "section": "Answer",
+               "points": [{"lead": "a"}, {"lead": "b"}, {"lead": "c"}]},
+              {"archetype": "exhibit_argument", "title": "a", "section": "Where we stand"},
+              {"archetype": "exhibit_argument", "title": "b", "section": "Where we stand"},
+              {"archetype": "table_focus", "title": "c", "section": "The options"},
+              {"archetype": "closing", "title": "d", "section": "The plan"}]
+    assert B.tracker_checks(slides) == {}
+    assert B.tracker_checks([dict(slides[0], points=slides[0]["points"][:2])] + slides[1:])
+    nums = [s.get("_section", "").split(" | ")[0] for s in R.plan_forms([dict(s) for s in slides])]
+    assert nums == ["", "01", "01", "02", "03"]

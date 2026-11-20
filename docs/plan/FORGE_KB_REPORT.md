@@ -22,8 +22,15 @@
   - The `slide_layouts` tool searches both, and the deck skills use it.
 - **Library components (local only).** A golden library slide is rebuilt as native, editable shapes in the deck's theme, with the writer's text in its slots, and checked by every rule.
 - **Built-in layouts.** 91 layouts ship as abstract specs (geometry and slot roles, no template text, colours,
-  fonts or names). 39 of them render clean and are offered to the storyline, which picks one per slide; the writer
+  fonts or names). 50 of them render clean and are offered to the storyline, which picks one per slide; the writer
   fills its slots.
+- **Points, not bullet lists.** An argument column beside a chart or a diagram is drawn as designed points: one
+  card per point with an icon chosen by its meaning (numbered badges when not every point has one) and a short
+  header the writer gives it; four short points make a 2x2 of icon boxes. Text that would not fit as cards stays a
+  text column, so nothing is cut.
+- **House style.** The rules of two consulting deck skills are built in (`docs/deck-engine/house-style.md`): in
+  the writer's prompt, in the renderer (aligned feet, rows that use the body, full-width tables with the so-what
+  under them) and in the validator (P20 `unaligned_feet`).
 - **Storyline.** The brief's slide count is kept (a two-page memo is two slides), and "no cover" means no cover.
 - **Reference-guided review**, behind a flag and off.
 - **Engine fixes** found by looking:
@@ -34,8 +41,8 @@
 ## Measured gains and costs
 
 Renderer-only A/B on frozen content (`docs/results/2026-11-20-forge-kb.md`):
-- Dev failures went from 92 to 78.
-- Test failures went from 45 to 40.
+- Dev failures went from 92 to 59.
+- Test failures went from 45 to 26.
 
 Live builds on the Meshpool gateway (DeepSeek V4.1 Flash) of six short briefs found five engine defects, fixed with
 tests. After the fixes, a two-slide investor memo passes every rule and the other reruns end with P13 or P14 only:
@@ -54,7 +61,7 @@ Every deck opens cleanly and has no overflow, no placeholders and no pictures. N
 ## Remaining weaknesses
 
 - Number discipline in live builds: P13 and P14 survive four repair rounds on the flash model.
-- 52 of the 91 built-in layouts are held back (mostly P20 on wide layouts).
+- 41 of the 91 built-in layouts are held back (mostly P20 on wide layouts).
 - Dollars per deck and the polish score are unmeasured: the gateway does not expose spend to the key.
 - Thin timelines and words-only grids leave empty space. That is content the repair loop must fill, plus one renderer gap (item 7 of the worst slides).
 - Library items whose text sits in group children cannot have those slots filled.
@@ -63,5 +70,5 @@ Every deck opens cleanly and has no overflow, no placeholders and no pictures. N
 
 1. Run the 12 briefs live on the baseline and on this branch, and the D A/B, with a key whose spend is readable.
 2. Move numbers the chart does not plot into footnotes in the renderer (P14), instead of asking the writer.
-3. Raise the offered layouts past 39: lay out wide layouts with the argument below them, and label group children
+3. Raise the offered layouts past 50: lay out wide layouts with the argument below them, and label group children
    in library items.

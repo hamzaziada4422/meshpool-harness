@@ -63,9 +63,9 @@ def detect(text: str, option=None) -> str:
 # ------------------------------------------------------------------ type scale (pt), on top of render.T/DENSE/ARGUMENT
 SCALES = {
     "read": {"T": {}, "DENSE": {}, "ARGUMENT": {}, "bump": 0},
-    "balanced": {"T": {"body": 13, "lead": 13, "cell": 13, "head": 15},
-                 "DENSE": {"cell": 11, "lead": 11, "label": 11},
-                 "ARGUMENT": {"intro": 15, "bullet": 13, "callout": 13}, "bump": 1},
+    "balanced": {"T": {"body": 14, "lead": 14, "cell": 14, "head": 16, "label": 13},   # house style: 14 pt body
+                 "DENSE": {"cell": 13, "lead": 14, "head": 16, "label": 13},
+                 "ARGUMENT": {"intro": 16, "bullet": 14, "callout": 14}, "bump": 1},
     "present": {"T": {"body": 16, "lead": 18, "cell": 16, "head": 18, "label": 14, "num": 28},
                 "DENSE": {"cell": 14, "lead": 16, "head": 16, "num": 24, "label": 14},
                 "ARGUMENT": {"intro": 18, "bullet": 16, "callout": 16, "exhibit": 18, "unit": 13}, "bump": 4},
@@ -75,13 +75,13 @@ SCALES = {
 LIMITS = {
     "read": None,
     "balanced": {"bullets": 4, "cell_bullets": 1, "block_bullets": 2, "blocks": 3, "callout": 3, "rows": 5,
-                 "table_rows": 12, "steps": 5, "milestones": 1, "parts": 4, "footnotes": 3, "words": 20,
-                 "part_bullets": 4, "quadrant_items": 3, "stats": 6},
+                 "table_rows": 12, "steps": 5, "milestones": 2, "parts": 4, "footnotes": 3, "words": 20,
+                 "part_bullets": 4, "quadrant_items": 3, "stats": 4},
     "present": {"bullets": 3, "cell_bullets": 0, "block_bullets": 1, "blocks": 3, "callout": 2, "rows": 4,
                 "table_rows": 6, "steps": 4, "milestones": 0, "parts": 3, "footnotes": 1, "words": 12,
                 "part_bullets": 3, "quadrant_items": 2, "stats": 4},
 }
-EXHIBIT_PARTS = {"chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey"}
+EXHIBIT_PARTS = {"chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey", "shift", "evidence"}
 
 
 def _plain(t) -> str:
@@ -90,6 +90,8 @@ def _plain(t) -> str:
 
 def _balance(t: str) -> str:
     t = t.rstrip(" ,;:–—-")
+    while t.count("(") > t.count(")"):                  # never leave a bracket open: the aside goes whole
+        t = t[:t.rfind("(")].rstrip(" ,;:–—-")
     if t.count("**") % 2:
         t += "**"
     return t
@@ -116,6 +118,8 @@ def headline(text: str, max_words: int) -> str:
     for sep in (r";\s", r"\s[–—]\s", r"\s-\s", r":\s", r",\s", r"\s(?:because|as|while|which|after|since|with)\s"):
         for m in re.finditer(sep, t):
             head = t[:m.start()]
+            if head.count("(") > head.count(")"):         # a break inside a bracketed aside is not a clause end
+                continue
             k = len(_plain(head).split())
             if 4 <= k <= max_words and _is_clause(head):
                 return _balance(head)
@@ -287,7 +291,10 @@ def condense(s: dict, mode: str) -> dict:
         s["rows"] = rows
     arg = a == "exhibit_argument" and mode == "present"     # two short points and one so-what beside the exhibit
     if isinstance(s.get("blocks"), list):
-        blocks = _cap(s["blocks"], 2 if arg else lim["blocks"], notes)
+        four_short = (a == "exhibit_argument" and not arg and len(s["blocks"]) == 4 and all(
+            isinstance(b, dict) and not b.get("bullets") and len(str(b.get("text") or "").split()) <= 14
+            for b in s["blocks"]))                       # four one-line points: drawn as a 2x2 of boxes
+        blocks = _cap(s["blocks"], 2 if arg else 4 if four_short else lim["blocks"], notes)
         nb = lim["block_bullets"] if a == "exhibit_argument" else lim["bullets"]
         out = []
         for b in blocks:
