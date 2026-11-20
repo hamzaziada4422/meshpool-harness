@@ -756,11 +756,11 @@ def _footer(ctx, s, sl, n):
              ("المصدر: " if _rtl(src["text"]) else "Source: ") + src["text"])
         sx, sw = span(0, 9)
         sb = [{"text": t, "size": T["src"], "numbers": False}]
-        if _need(sb, sw) > 0.32:                      # a source names its documents in two lines: what will not fit
+        if _need(sb, sw) > 0.2:                       # a source is one line (BCG): what will not fit
             parts_ = re.split(r"(?<=[;,])\s+", t)    # (a writer pasting the fact list) goes to the notes, clause by
             keep = parts_[0]                          # clause, never cut mid-word
             for c_ in parts_[1:]:
-                if _need([dict(sb[0], text=keep + " " + c_)], sw) > 0.32:
+                if _need([dict(sb[0], text=keep + " " + c_ + " and others")], sw) > 0.2:
                     break
                 keep += " " + c_
             rest = t[len(keep):].strip()
