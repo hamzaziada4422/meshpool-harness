@@ -48,7 +48,8 @@ def test_three_panel_story_draws_shift_chart_and_evidence(tmp_path, monkeypatch)
     nm = _names(sl)
     assert sum(n.startswith("ov_ShiftTile") for n in nm) == 3
     assert sum(n.startswith("ov_ShiftArrow") for n in nm) == 3
-    assert "ov_DeltaArrow" in nm and "ov_DeltaLabel" in nm
+    assert any(x.startswith("ov_DeltaArrow") for x in nm) and "ov_DeltaLabel" in nm
+    assert sum(x.startswith("ov_DeltaArrow") for x in nm) == 3       # bars in between: an elbow over them
     assert sum(n.startswith("ov_CatNote") for n in nm) == 3
     assert sum(n.startswith("ov_EvText") for n in nm) == 3
     text = " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame)
