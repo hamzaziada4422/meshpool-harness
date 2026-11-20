@@ -584,7 +584,7 @@ def test_long_decks_get_an_agenda_and_section_tracker_built_from_the_storyline(t
     assert any(k.startswith("ov_Icon_") and k != "ov_Icon_circle-dot" for k in ag)
     tracker = names(prs.slides[4])
     assert "ov_Current2" in tracker and "ov_Current1" not in tracker      # the divider lights its own section
-    assert all("TitleRule" not in names(sl) for sl in list(prs.slides)[1:2])  # no line under a title with no subtitle
+    assert all("TitleRule" in names(sl) for sl in list(prs.slides)[1:2])  # the white frame: a rule under every title
 
 
 def test_storyboard_variety_is_sent_back_like_a_partner_would():

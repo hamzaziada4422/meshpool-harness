@@ -42,6 +42,7 @@ McKinsey-style clarity method) and built into the engine. A rule lives in one of
 | Blocks side by side share their top and bottom edges | renderer (grid parts share one height; side columns end at the exhibit's foot); validator P20 `unaligned_feet` |
 | No block of white in the body | renderer (rows of next steps and risk tables spread to the foot on alternate light bands; timelines with room get a card per milestone); validator P20 `dead_space` and `thin` |
 | One grid, one margin, one footer on every content slide | template and renderer; P7, P8 |
+| A white top: the section label in the accent colour on the title, a thin accent rule under it, Segoe UI | renderer `_header` (the dark band only with `frame: band`) |
 | Body text 14 pt (balanced density), 12 pt at least in cards and 13 pt in the executive summary; detail moves to the notes before type shrinks | `density.SCALES`, `render.draw_points`; P5 |
 | Rows and cards that stand for things carry an icon by meaning (or numbers for the whole slide) | `compose.meaning_icon`; executive summary, cards, risk columns |
 | Every data slide has a source line; every number traces to a fact | renderer; P13 |

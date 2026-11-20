@@ -76,3 +76,7 @@ Choices made where the plan left room, with the reason. Newest last.
     `same_look`: rows of text across the page, a chart with a column beside it, a chart above a row of cards), so a
     repeat that the plan cannot avoid goes back to the writer. Pixel similarity was tried and rejected: look-alike
     pairs scored near zero on it.
+26. **White top by default (user choice, 2026-11-20).** Content slides keep a white top in the SlideWorks manner: the
+    section ("01 | Section", numbered in order of first appearance) in the accent colour sits on the title, a thin
+    accent rule under the title, no hairline across the top, and the exhibit + argument panel starts under the
+    title. The dark band stays an option (`theme: {"frame": "band"}`). Segoe UI stays the default face.

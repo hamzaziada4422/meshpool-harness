@@ -630,6 +630,14 @@ def _header(ctx, s, sl, n, title_w=None):
                      "align": PP_ALIGN.RIGHT}])
     else:
         _rich(tf.paragraphs[0], title, tsize, TC.TEXT_1, True, numbers=False, heading=True)
+        if s.get("_section"):                          # the white frame: "01 | Section" in the accent colour, just
+            from .common import wrap_lines             # over the title's first line (the title sits on its rule)
+            lines = max(1, wrap_lines(title, (title_w or (RIGHT - LEFT)) - 0.2, tsize, _font("head", True), 0.97))
+            text_top = (t.top + t.height) / 914400 - 0.06 - lines * tsize * 1.12 / 72
+            _write(_box(sl, LEFT, max(0.06, text_top - 0.3), title_w or (RIGHT - LEFT), 0.26, "ov_Section",
+                        MSO_ANCHOR.BOTTOM),
+                   [{"text": s["_section"], "size": T["tag"] + 2, "bold": True, "numbers": False,
+                     "color": TC.ACCENT_1}])
     ctx.track(n, s["title"], s.get("title_prov"))
     w = title_w or (RIGHT - LEFT)
     if s.get("subtitle"):                             # one line: 18 pt, stepping down to 14 pt
@@ -656,8 +664,8 @@ def _header(ctx, s, sl, n, title_w=None):
                                          "bold": band}])
         if ssz == 14 and _need([{"text": sub_t, "size": 14}], w) > 0.35:
             ctx.miss(n, "the subtitle", max(3, len(sub_t.split()) // 3))
-    if s.get("subtitle") and not band:   # a line under the subtitle only (the band's accent rule does it there)
-        _rule(sl, LEFT, TITLE_RULE_Y, w, TC.TEXT_1, 0.75, "TitleRule")
+    if not band:                         # the white frame: a thin accent rule under the title (or its subtitle)
+        _rule(sl, LEFT, TITLE_RULE_Y, w, TC.ACCENT_1, 1.0, "TitleRule")
     x = RIGHT
     for k, tag in enumerate(reversed((s.get("tags") or [])[:2] if not sub else [])):
         tw = 0.1 + 0.083 * len(tag)
@@ -2486,7 +2494,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     ctx.last_side = n                                   # a chart slide after it takes the other composition
     lxx, lw = span24(0, 12)
     split = colx24(13) + 0.05
-    panel = _fill(sl, split, 0, 13.333 - split, 7.5, TC.BACKGROUND_2, "ov_ArgumentPanel")
+    panel = _fill(sl, split, TITLE_RULE_Y + 0.02, 13.333 - split, FOOT_RULE_Y - 0.08 - TITLE_RULE_Y,   # under the
+                  TC.BACKGROUND_2, "ov_ArgumentPanel")                                              # white top
     _header(ctx, s, sl, n, title_w=lw)
     rx, rw = span24(14, 23)
     tr = s.get("title_right", "")
@@ -2535,7 +2544,7 @@ def a_exhibit_argument(ctx, s, sl, n):
     ch = (_need(cb, rw - 0.3) + 0.28) if cb else 0
     cy = BODY_B - foot - ch
     space = cy - BODY_Y - 0.12
-    fits_points = bool(draw_points(ctx, s, sl, n, rx, BODY_Y - 0.05, rw, cy - 0.15 - (BODY_Y - 0.05),
+    fits_points = bool(draw_points(ctx, s, sl, n, rx, BODY_Y + 0.08, rw, cy - 0.15 - (BODY_Y + 0.08),
                                    s.get("blocks"), dry=True))
     blocks, ok = _fit(blocks, rw - 0.1, space, 10)
     if not ok:
@@ -2552,8 +2561,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     if not ok:
         ctx.miss(n, "the argument column", max(5, int(sum(len(b["text"].split()) for b in blocks) * 0.15)))
     if not (POINTS["on"] and fits_points and
-            draw_points(ctx, s, sl, n, rx, BODY_Y - 0.05, rw, cy - 0.15 - (BODY_Y - 0.05), s.get("blocks"))):
-        _shape_text(panel, blocks, ctx, n, (rx, BODY_Y - 0.05, rw, space))   # the argument lives in the panel
+            draw_points(ctx, s, sl, n, rx, BODY_Y + 0.08, rw, cy - 0.15 - (BODY_Y + 0.08), s.get("blocks"))):
+        _shape_text(panel, blocks, ctx, n, (rx, BODY_Y + 0.08, rw, space - 0.13))   # the argument lives in the panel
     if cb:
         aw_ = max(0.35, rx - split + 0.03)               # the arrow lives in the gutter: never over the chart's labels
         arr = _fill(sl, rx - aw_ + 0.03, cy + ch / 2 - 0.3, aw_, 0.6, TC.TEXT_2, "ov_SoWhatArrow", MSO_SHAPE.PENTAGON)
@@ -3492,7 +3501,7 @@ def _register_layout_archetype():
     ARCHETYPES.setdefault("layout", a_layout)
 
 
-FRAME_TOP = os.environ.get("FORGE_FRAME", "lines") == "lines"   # a rule on top and the source rule at the foot
+FRAME_TOP = os.environ.get("FORGE_FRAME", "white") == "lines"   # default: a white top (no hairline across it)
 COVER_DARK = os.environ.get("FORGE_COVER", "dark") == "dark"      # "light": the white cover
 NUMBER_ACCENT = os.environ.get("FORGE_NUMBER_ACCENT", "0") == "1"   # legacy: every number in accent blue
 RTL_FONT = "Arial"           # the complex-script face: ships Arabic glyphs on Windows and macOS
@@ -3776,6 +3785,13 @@ def plan_forms(slides: list) -> list:
     is drawn as columns (icon columns, a numbered process), banded rows are used once per deck at most, and runs of
     chart slides alternate their composition."""
     slides = plan_chart_forms(slides)
+    secs: dict = {}
+    for k_, s in enumerate(slides):                       # "01 | Section" over every content slide's title
+        if isinstance(s, dict) and s.get("archetype") not in ("cover", "section_divider", "agenda", "end") \
+                and str(s.get("section") or "").strip() and str(s.get("section")).strip().lower() != "cover":
+            name = re.sub(r"\s+", " ", str(s["section"]).strip())
+            secs.setdefault(name.lower(), len(secs) + 1)
+            slides[k_] = dict(s, _section=f"{secs[name.lower()]:02d} | {name[:1].upper() + name[1:]}")
     out, prev_tab, rows_used = [], False, 0
     for i, s in enumerate(slides):
         if not isinstance(s, dict):
