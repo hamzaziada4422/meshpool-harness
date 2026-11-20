@@ -7,14 +7,14 @@
 // Navigation: [page, label, icon, [the sections it holds]]. A page with several sections gets tabs under the header.
 const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
-  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "import"]], ["caps", "Capabilities", "tool", ["caps", "web"]],
+  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
   [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
-const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", caps: "Features", personal: "Instructions and memory", web: "Web search",
+const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
   about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options"};
@@ -179,6 +179,57 @@ async function providerPage(b, close) {
     st.ok = false; st.models = null; $("#pvModels", b).hidden = true; $("#pvTest", b).click();
   });
 }
+/* ---------- Styles: the default style, the built-in ones, and the user's own ---------- */
+async function stylesPage(b, close) {
+  await loadStyles();
+  const ed = {open: false, id: "", name: "", instruction: "", sample: "", showSample: false, note: "", busy: false};
+  const say = (cls, t) => { const el = $("#stRes", b); if (el) { el.className = "res " + cls; el.textContent = t; } };
+  const apply = async body => { S.styles = await post("/api/styles", body); renderBar(); };
+  const draw = () => {
+    const st = S.styles, custom = st.styles.filter(x => !x.preset);
+    b.innerHTML = `${close}<h3>Styles</h3><p class="lead">A style changes how Meshpool words its replies: shorter, more thorough, more formal, or in your own voice. Pick one for a chat from the plus menu in the message box. It works the same with every agent.</p>
+      ${setRow("Default style", "New chats start with this one.", selOpts("stDefault", st.styles.map(x => [x.id, x.name]), st.default))}
+      <h4 class="sr-h">Built in</h4>
+      <ul class="rows2">${st.styles.filter(x => x.preset).map(x => `<li><span class="tg"><b>${esc(x.name)}</b><small>${esc(x.instruction || x.desc)}</small></span></li>`).join("")}</ul>
+      <h4 class="sr-h">Your styles</h4>
+      ${custom.length ? `<ul class="rows2" id="stCustom">${custom.map(x => `<li><span class="tg"><b>${esc(x.name)}</b><small>${esc(clip(x.instruction, 160))}</small></span><span class="stact"><button class="btn" data-edit="${esc(x.id)}" aria-label="Edit ${esc(x.name)}">Edit</button><button class="btn danger" data-del="${esc(x.id)}" aria-label="Delete ${esc(x.name)}">Delete</button></span></li>`).join("")}</ul>` : `<p class="lead small">You have not made a style yet.</p>`}
+      ${ed.open ? `<form class="stedit card" id="stForm" autocomplete="off"><div class="chd"><h3>${ed.id ? "Edit style" : "New style"}</h3></div>
+        <label class="field"><span>Name</span><input id="stName" maxlength="40" value="${esc(ed.name)}" placeholder="For example: Plain and friendly"></label>
+        <label class="field"><span>Instructions</span><textarea id="stIns" rows="5" maxlength="2000" placeholder="How should Meshpool write? For example: Write in short, warm sentences. Avoid jargon.">${esc(ed.instruction)}</textarea></label>
+        ${ed.showSample ? `<label class="field"><span>Your writing sample</span><textarea id="stSample" rows="5" maxlength="6000" placeholder="Paste a few paragraphs you wrote.">${esc(ed.sample)}</textarea><small>One short model call turns it into instructions. Without a key, your text is kept as the instructions.</small></label>
+          <div class="stact"><button class="btn" type="button" id="stMake" ${ed.busy ? "disabled" : ""}>${ed.busy ? "Reading…" : "Make instructions"}</button></div>`
+          : `<button class="linkbtn" type="button" id="stSampleOn">Start from a writing sample</button>`}
+        <div class="res ${ed.note ? "ok" : ""}" id="stNote" role="status">${esc(ed.note)}</div>
+        <div class="stact" style="margin-top:8px"><button class="btn primary" type="submit">Save style</button><button class="btn" type="button" id="stCancel">Cancel</button></div></form>`
+        : `<div class="stact"><button class="btn primary" id="stNew">New style</button></div>`}
+      <div class="res" id="stRes" role="status"></div>`;
+    $(".mclose", b)?.addEventListener("click", closeSettings);
+    $("#stDefault", b).onchange = async e => { try { await apply({action: "default", id: e.target.value}); say("ok", "Saved. New chats start with " + styleOf(e.target.value).name + "."); } catch (err) { say("bad", err.message); } };
+    $("#stNew", b)?.addEventListener("click", () => { Object.assign(ed, {open: true, id: "", name: "", instruction: "", sample: "", showSample: false, note: ""}); draw(); $("#stName", b).focus(); });
+    $$("[data-edit]", b).forEach(x => x.onclick = () => { const r = st.styles.find(y => y.id === x.dataset.edit); Object.assign(ed, {open: true, id: r.id, name: r.name, instruction: r.instruction, sample: "", showSample: false, note: ""}); draw(); $("#stName", b).focus(); });
+    $$("[data-del]", b).forEach(x => x.onclick = async () => {
+      const r = st.styles.find(y => y.id === x.dataset.del);
+      if (!await ask({title: `Delete ${r.name}?`, text: "Chats using it go back to Normal.", ok: "Delete", cancel: "Keep it", danger: true})) return;
+      try { await apply({action: "delete", id: r.id}); if (S.cur?.view?.style === r.id) S.cur.view.style = "normal"; if (S.draft.style === r.id) S.draft.style = ""; draw(); renderBar(); say("ok", "Deleted."); } catch (err) { say("bad", err.message); }
+    });
+    const keep = () => { ed.name = $("#stName", b).value; ed.instruction = $("#stIns", b).value; ed.sample = $("#stSample", b)?.value ?? ed.sample; };
+    $("#stSampleOn", b)?.addEventListener("click", () => { keep(); ed.showSample = true; draw(); $("#stSample", b).focus(); });
+    $("#stCancel", b)?.addEventListener("click", () => { ed.open = false; draw(); });
+    $("#stMake", b)?.addEventListener("click", async () => {
+      keep(); if (!ed.sample.trim()) { ed.note = "Paste a piece of your writing first."; $("#stNote", b).textContent = ed.note; return $("#stSample", b).focus(); }
+      ed.busy = true; draw();
+      try { const r = await post("/api/styles", {action: "sample", sample: ed.sample}); ed.instruction = r.instruction; ed.note = r.message; }
+      catch (err) { ed.note = err.message; }
+      ed.busy = false; draw(); $("#stIns", b).focus();
+    });
+    $("#stForm", b)?.addEventListener("submit", async e => {
+      e.preventDefault(); keep();
+      try { await apply(ed.id ? {action: "update", id: ed.id, name: ed.name, instruction: ed.instruction} : {action: "create", name: ed.name, instruction: ed.instruction}); ed.open = false; draw(); say("ok", "Saved."); renderBar(); }
+      catch (err) { ed.note = err.message; $("#stNote", b).className = "res bad"; $("#stNote", b).textContent = err.message; }
+    });
+  };
+  draw();
+}
 const PV_host = u => { try { return new URL(u).host; } catch (e) { return String(u || ""); } };
 
 (() => {
@@ -204,6 +255,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
     const done = () => $(".mclose", b)?.addEventListener("click", closeSettings);
     const res = (id, cls, t) => { const el = $("#" + id); if (el) { el.className = "res " + cls; el.textContent = t; } };
     if (sec === "general") { await providerPage(b, close); b.scrollTop = 0; return; }
+    if (sec === "styles") { await stylesPage(b, close); b.scrollTop = 0; return; }
     if (sec === "appearance") { appearancePage(b, close); done(); b.scrollTop = 0; return; }
     if (sec === "profile") {
       await Promise.all([loadSettings(), S.models ? 0 : loadModels()]);

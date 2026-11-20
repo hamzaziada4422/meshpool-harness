@@ -48,11 +48,30 @@ function plusMenu(anchor) {
     {label: "Upload or add files", icon: ICON.clip, kbd: `${MOD}U`, fn: () => $("#fileIn").click()},
     {label: "Plan first", icon: ICON.list, checked: !!c.plan, desc: "Write a plan and wait for your OK", fn: () => setPlan(!cfg().plan)},
     {label: "Memory", icon: ICON.brain, checked: capOn("memory") ? true : undefined, fn: async () => { try { await post("/api/capabilities", {id: "memory", on: !capOn("memory")}); await loadCaps(); toast(capOn("memory") ? "Memory is on for new chats" : "Memory is off for new chats"); } catch (e) { toast(e.message); } }},
+    {label: "Style", icon: ICON.pencil, note: styleOf(styleId()).name, sub: styleMenuItems()},
     {sep: true},
     {label: "Skills", icon: ICON.skill, sub: skills.length ? skills : [{label: "No skills yet", fn: () => openSettings("skills")}]},
     {label: "Plugins", icon: ICON.plug, sub: [...conns, ...(conns.length ? [{sep: true}] : []), {label: "Manage plugins", icon: ICON.gear, fn: () => goPage("plugins")}]},
     ...(!S.cur && S.view !== "project" ? [{sep: true}, {label: S.draft.project ? "Change folder" : "Work in a folder", icon: ICON.folder, desc: S.draft.project ? projName(S.draft.project) : "", fn: chooseDraftFolder}, ...(S.draft.project ? [{label: "Don’t use a folder", icon: ICON.x, fn: () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); }}] : [])] : []),
   ], {cls: "plusmenu", up: true});
+}
+
+/* ---------- writing styles: how Meshpool words its replies; per chat, new chats start with the default ---------- */
+async function loadStyles() { try { S.styles = await api("/api/styles"); } catch (e) { S.styles = S.styles || {styles: [], default: "normal"}; } }
+const styleOf = id => (S.styles?.styles || []).find(x => x.id === id) || {id: "normal", name: "Normal"};
+const styleId = () => cfg().style || S.styles?.default || "normal";
+async function setStyle(id) {
+  if (S.cur) { try { await post(`/api/agent/${S.cur.id}/style`, {style: id, since: 1e9}); S.cur.view.style = id; } catch (e) { return toast(e.message); } }
+  else S.draft.style = id;
+  renderBar();
+}
+function styleMenuItems() {
+  const cur = styleId();
+  return [...(S.styles?.styles || [{id: "normal", name: "Normal"}]).map(x => ({label: x.name, desc: x.desc || clip(x.instruction || "", 60), checked: x.id === cur ? true : undefined, fn: () => setStyle(x.id)})),
+    {sep: true}, {label: "Manage styles", icon: ICON.gear, fn: () => openSettings("styles")}];
+}
+function styleMenu(anchor) {
+  ctxMenu({type: "click", currentTarget: anchor}, [{head: S.cur ? "Style · this chat" : "Style · new chats"}, ...styleMenuItems()], {cls: "stylemenu", up: true});
 }
 
 /* ---------- harness: Auto (recommended) or one of the available agents ---------- */
@@ -125,12 +144,14 @@ function renderBar() {
   const barHTML = `
     <button class="pill icon" id="attBtn" aria-haspopup="menu" data-tip="Add files and more" data-kbd="${MOD}U" data-tip-pos="above" aria-label="Add files and more">${ICON.plus}</button>
     ${c.plan ? `<button class="pill planchip" id="planChip" data-tip="Plan first is on. Click to turn it off." aria-label="Plan first is on">${ICON.list}<span>Plan first</span></button>` : ""}
+    ${styleId() !== "normal" ? `<button class="pill stylechip" id="styleChip" aria-haspopup="menu" data-tip="Writing style: ${esc(styleOf(styleId()).name)}. Click to change." data-tip-pos="above" aria-label="Writing style: ${esc(styleOf(styleId()).name)}">${ICON.pencil}<span class="lbl">${esc(clip(styleOf(styleId()).name, 24))}</span></button>` : ""}
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" data-tip="Stop" data-kbd="Esc" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" data-tip="Stop what it is doing and send this instead" data-kbd="${MOD}Enter" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
     $("#planChip")?.addEventListener("click", () => setPlan(false));
+    $("#styleChip")?.addEventListener("click", e => styleMenu(e.currentTarget));
     $("#sendBtn")?.addEventListener("click", () => sendNow(false));
     $("#stopBtn")?.addEventListener("click", stopNow);
     $("#intrBtn")?.addEventListener("click", () => { if ($("#input").value.trim() || S.attachments.length) sendNow(true); else { $("#input").focus(); toast("Type what to do instead, then press Send now."); } });

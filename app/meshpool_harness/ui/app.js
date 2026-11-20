@@ -214,7 +214,7 @@ const S = {
   page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
   // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
   // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
-  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false},
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false, style: ""},
   panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
   collapsed: new Set(store("collapsed") || []),
 };
@@ -474,8 +474,8 @@ function setupComposer() {
 }
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
-  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, busy: false};
+  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, style: S.draft.style, busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -535,8 +535,8 @@ async function sendNow(interrupt) {
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
-      S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text});
+      S.draft.style = ""; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
@@ -2517,7 +2517,7 @@ async function restartApp() {
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
   await loadPj();
-  loadAccount(); loadCaps(); loadConnectors();
+  loadAccount(); loadCaps(); loadConnectors(); loadStyles().then(() => renderBar());
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.ready) showOnboarding();
