@@ -260,6 +260,32 @@ def _strip_style(shape):
         shape._element.remove(st)
 
 
+def chevron_arrow(sl, cx, cy, length, depth, direction="down", name="ov_Chevron", color=TC.ACCENT_1):
+    """BCG's pointer: a wide, flat chevron with a hollow back ("V"), centred on (cx, cy). length runs across the
+    direction it points, depth along it. A shape, never a typed character (user review, with the BCG deck as the
+    model)."""
+    shp = _fill(sl, cx - depth / 2, cy - length / 2, depth, length, color, name, MSO_SHAPE.CHEVRON)
+    try:
+        shp.adjustments[0] = 0.62                          # a thin band: the notch nearly as deep as the point
+    except Exception:  # noqa: BLE001 - the default chevron stands
+        pass
+    if direction == "down":
+        shp.rotation = 90
+    elif direction == "up":
+        shp.rotation = 270
+    elif direction == "left":
+        shp.rotation = 180
+    return shp
+
+
+def circled_chevron(sl, cx, cy, d, name="ov_Chevron", color=TC.ACCENT_1):
+    """BCG's sideways pointer: a filled disc with a white chevron in it, centred on (cx, cy) (a bare thin chevron
+    read as a typed character: user review)."""
+    disc = _fill(sl, cx - d / 2, cy - d / 2, d, d, color, name, MSO_SHAPE.OVAL)
+    chevron_arrow(sl, cx + d * 0.04, cy, d * 0.5, d * 0.3, "right", "ov_PointerMark", TC.BACKGROUND_1)
+    return disc
+
+
 def _rule(sl, x, y, w, color=TC.ACCENT_5, weight=0.75, name="Rule"):
     c = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x), Inches(y), Inches(x + w), Inches(y))
     c.name = name
@@ -3184,8 +3210,7 @@ def a_exhibit_argument(ctx, s, sl, n):
                 b_["color"] = TC.TEXT_1                  # as one template; a white box with a bar on its left read
                 b_["bold"] = True                        # as a stray box: user review)
             _rule(sl, rx, cy, rw, TC.ACCENT_1, 1.5, "ov_SoWhatRule")
-            _fill(sl, rx - 0.34, cy + ch / 2 - 0.1, 0.26, 0.24, TC.ACCENT_1, "ov_SoWhatPointer",
-                  MSO_SHAPE.RIGHT_ARROW)                 # a block arrow into the conclusion from the exhibit's side
+            circled_chevron(sl, rx - 0.22, cy + ch / 2 + 0.02, 0.28, "ov_SoWhatPointer")   # into the conclusion
             _write(_box(sl, rx, cy + 0.04, rw, ch - 0.04, "ov_SoWhat", MSO_ANCHOR.MIDDLE), cb, ctx, n)
             return
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
