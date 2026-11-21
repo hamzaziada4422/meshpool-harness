@@ -212,3 +212,33 @@ def test_writer_hears_about_thin_summary_rows_and_zero_bars():
     assert any("summary rows are thin" in m for m in got.get(1, []))
     assert not any("summary rows are thin" in m for m in got.get(2, []))
     assert any("bar of 0" in m for m in got.get(3, []))
+
+
+def test_fact_ids_in_calcs_are_not_prose():
+    """calcs[].from must hold fact ids: flagging them sent six slides back to the writer for nothing (relay build)."""
+    from engines.forge.build import prose_checks
+    s = {"archetype": "bar_takeaway", "title": "The pilot costs 40% less", "calcs": [
+        {"id": "S1C1", "value": "40%", "formula": "1 - 5.4 / 9", "from": ["F2"]}],
+         "bullets": [{"text": "Pilot costs £5.4M (F2)"}]}
+    got = prose_checks([s]).get(1, [])
+    assert not any("calcs" in m for m in got)
+    assert any("bullets[0]" in m and "F2" in m for m in got)
+
+
+def test_calcs_may_use_small_numbers_from_the_facts():
+    """'picks per hour rose from 92 to 151': (151 - 92) / 92 is a fair calc; the page-text filter for small ordinals
+    dropped the 92 from the fact and sent the slide back (a live relay build lost its 64% this way)."""
+    from engines.forge.build import verify_calcs, load_rules
+    facts = [{"id": "F1", "text": "picks per hour rose from 92 to 151; 3 of 8 warehouses are automated"}]
+    s = {"archetype": "bar_takeaway", "title": "Picks rose 64%", "calcs": [
+        {"id": "C1", "value": "64%", "formula": "(151 - 92) / 92 * 100", "from": ["F1"]},
+        {"id": "C2", "value": "5", "formula": "8 - 3", "from": ["F1"]}]}
+    ok, bad = verify_calcs([s], facts, load_rules())
+    assert not bad.get(1), bad
+
+
+def test_a_stat_value_must_be_a_figure():
+    from engines.forge.build import fill_checks
+    s = {"archetype": "grid", "title": "t", "parts": [{"type": "stats", "items": [
+        {"value": "-140", "label": "roles"}, {"value": "None", "label": "made redundant"}]}]}
+    assert any("stat value is a figure" in m for m in fill_checks([s], "balanced").get(1, []))

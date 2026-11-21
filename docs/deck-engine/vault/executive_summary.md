@@ -13,7 +13,7 @@ Built as: 3-5 numbered findings with one support line each, metrics panel, decis
 
 Fields: points [{lead, bullets}], metrics [{value, label}], decision.
 
-Body words (balanced): up to 100.
+Body words (balanced): up to 130.
 
 Related: [[closing]], [[agenda]]
 

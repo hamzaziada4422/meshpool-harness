@@ -752,6 +752,12 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
                     msgs.append("a bar of 0 is not evidence (it reads as a missing bar): drop that category from the "
                                 "chart and say it held flat in a descriptor, a block or a footnote")
                     break
+        for p_ in s.get("parts") or []:                 # a big number must be a number ("None" in 40 pt reads as
+            if isinstance(p_, dict) and p_.get("type") in ("stats", "stat"):   # a blank or an error)
+                words_ = [str((it or {}).get("value") or "") for it in p_.get("items") or [] if isinstance(it, dict)]
+                if any(w_ and not re.search(r"\d", w_) for w_ in words_):
+                    msgs.append("every stat value is a figure ('0', '140', '+1.5 pts'), never a word such as 'None' "
+                                "or 'All': say it with its number, or move it to the label of another stat")
         pts_ = [p for p in s.get("points") or [] if isinstance(p, dict)]
         if a == "executive_summary" and density != "present" and len(pts_) >= 3 and \
                 sum(len(p.get("bullets") or []) <= 1 for p in pts_) * 2 > len(pts_):
@@ -842,7 +848,7 @@ def _fill_targets(s, a, density) -> list[str]:
             msgs.append(f"the table has {rows} rows: add 'bullets' ({'1-3' if light else '2-4'} lines interpreting it, "
                         "with numbers); they sit beside a table this short. Or show it as a chart in exhibit_argument")
     elif a in ("bar_takeaway", "column_trend", "line_trend", "waterfall_bridge", "stacked_composition"):
-        if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < (20 if light else 35):
+        if len(s.get("bullets") or []) < 2 or _words(s.get("bullets")) < (28 if light else 35):
             msgs.append("the takeaway column is thin: give " + ("2-3 bullets (10-18 words each" if light else
                         "3 bullets (15-25 words each") + ", with the numbers) that interpret the chart: the driver, "
                         "the comparison, the implication")
@@ -1020,7 +1026,8 @@ def verify_calcs(slides, facts, rules) -> tuple[dict[int, list[dict]], dict[int,
             except Exception as e:                               # noqa: BLE001
                 bad_out.setdefault(n, []).append(f"calc {cid} '{formula}': not plain arithmetic ({e})")
                 continue
-            pool = [(abs(v), u) for x in src for _, v, u in _numbers(local[x]["text"], ignore)]
+            pool = [(abs(v), u) for x in src for _, v, u in _numbers(local[x]["text"], None)]   # every number the fact
+            # gives is a source (the ignore pattern is for page text: '92 to 151' lost its 92, a live relay build)
             stray = [f"{v:g}" for v in lits if abs(v) not in _CONSTS
                      and not any(_same_number(f"{v:g}", abs(v), "", fv, fu) or _same_number(f"{v:g}", abs(v), "", fv, "")
                                  for fv, fu in pool)]
@@ -1299,7 +1306,8 @@ def prose_checks(slides) -> dict[int, list[str]]:
             if re.search(r"[,;:]\s*[.!?]|\bTBD\b|\bXX+\b|lorem|\[\s*\]|\{\w+\}", t, re.I):
                 out.setdefault(n, []).append(f"{where}: broken or placeholder text ('{t.strip()[:60]}')")
             ids = re.findall(r"\b(?:S\d+[OC]\d+|S\d{3,}|[FW]\d{1,3})\b", t)
-            if ids:                                            # the board cannot look up the deck's working ids
+            if ids and not where.startswith(("calcs", "options")) and not where.endswith((".from", ".prov")) \
+                    and not re.search(r"\.from\[\d+\]$|prov\[\d+\]$", where):   # working data, never on the page                                            # the board cannot look up the deck's working ids
                 out.setdefault(n, []).append(f"{where}: internal reference {', '.join(dict.fromkeys(ids))} in the "
                                              "text; name the figure or its source instead (ids belong in prov only)")
     return out
