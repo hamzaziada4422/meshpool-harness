@@ -756,8 +756,11 @@ def _footer(ctx, s, sl, n):
     elif notes:
         top = getattr(ctx, "notes_top", None) or FOOTNOTE_Y
         ctx.notes_top = None
-        _write(_box(sl, LEFT, top, RIGHT - LEFT, FOOT_RULE_Y - top - 0.03, "Footnotes", MSO_ANCHOR.BOTTOM),
-               [{"text": "    ".join(f"{i + 1}  {t}" for i, t in enumerate(notes)), "size": T["note"], "numbers": False}])
+        marked = re.search(r"\^\d", json.dumps({k: v for k, v in s.items() if k not in ("footnotes", "notes")},
+                                                 ensure_ascii=False))   # a numbered note needs its marker on the
+        _write(_box(sl, LEFT, top, RIGHT - LEFT, FOOT_RULE_Y - top - 0.03, "Footnotes", MSO_ANCHOR.BOTTOM),   # page:
+               [{"text": "    ".join((f"{i + 1}  {t}" if marked else t) for i, t in enumerate(notes)),   # unmarked
+                 "size": T["note"], "numbers": False}])   # notes read as plain notes, never a "1" pointing nowhere
     src = s.get("source") or {}
     if src.get("text"):
         _rule(sl, LEFT, FOOT_RULE_Y, RIGHT - LEFT, TC.TEXT_1, 0.5, "SourceRule")
@@ -3700,7 +3703,11 @@ def a_executive_summary(ctx, s, sl, n):
         mx, mw = span24(19, 23)                           # floating beside it); evenly spaced when rows are fewer
         _fill(sl, mx, top - 0.05, RIGHT - mx, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")   # on the
         mx, mw = mx + 0.14, mw - 0.14                     # grid, a full gutter from the points; its figures inset
-        even = len(tops) < len(mets)
+        lh_max = max(_need([{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}], mw - 0.24)
+                     for m in mets) + 0.06
+        even = len(tops) < len(mets) or any(              # a row too short for its figure and label: even spacing
+            ((tops[i + 1] if i + 1 < len(tops) else bottom) - claims[i]) < 0.62 + lh_max + 0.08
+            for i in range(len(mets)))
         for i, m in enumerate(mets):
             my = top + i * (bottom - top) / len(mets) if even else tops[i]     # tops: the row bounds (rules)
             mh = ((bottom - top) / len(mets) if even else

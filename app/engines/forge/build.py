@@ -186,7 +186,11 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - The last slide is the decision and the next steps, each with an owner and a date.
 - Never write about the evidence on the page ("not stated", "the sources do not say", "not a stated fact"): a gap in
   a table is N/A; what a number rests on goes in one short footnote or in the notes.
-- At most four big numbers on a slide, one of them the hero; the rest support it.
+- At most four big numbers on a slide; the most important one comes first and the rest support it. Two figures
+  compared with each other (renewal +22% against new quotes +9%, before and after, ours against a peer) are a chart
+  with the gap drawn on it ("delta"), never two big numbers side by side.
+- Keep one order for the same categories on every chart of the deck (UK then Germany everywhere, or Germany then
+  UK everywhere).
 - Concise is not thin. Every slide carries enough evidence to stand on its own: a chart plots every comparable value
   the facts hold (every year, every peer, every segment), never two or three lonely bars; a short chart sits beside
   3-4 points that add what it cannot show (the driver, the comparison, the implication, each with its number). A
@@ -446,7 +450,8 @@ def _same_number(raw: str, v: float, u: str, fv: float, fu: str) -> bool:
     shown ($7m matches $7.2m, never $45m), and only through same-unit scalings ($7.2m = 7,200,000; never $7.2bn)."""
     v = abs(v)
     m = re.search(r"\.(\d+)", raw)
-    half = 0.5 * 10 ** -(len(m.group(1)) if m else 0)          # a figure shown with d decimals is rounded to d
+    half = 0.5 * 10 ** -(len(m.group(1)) if m else 0) + 1e-9   # a figure shown with d decimals is rounded to d
+    # (the epsilon: 3.6 - 3.55 is 0.0500000000000003 in floating point, and 3.6x was refused for 7.1 / 2)
     pct = ("%", "pp")
     if (u in pct) != (fu in pct):
         if u and fu:                                          # a percentage is never a $ amount or a multiple
