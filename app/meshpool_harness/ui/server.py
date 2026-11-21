@@ -282,7 +282,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -357,6 +357,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": str(e)})
             except Exception as e:  # noqa: BLE001 - e.g. the chat's folder is gone: the page polls instead
                 return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+        if u.path == "/api/preview":                  # a file's preview: JSON, or one page as PNG (an <img> cannot send the header)
+            q = parse_qs(u.query)
+            if q.get("t", [""])[0] != TOKEN and self.headers.get("X-Meshpool-Token") != TOKEN:
+                return self._send(403, {"error": "forbidden"})
+            from meshpool_harness.ui import previews as PV
+            try:
+                if "page" in q:
+                    png = PV.page_png(q.get("root", [""])[0], q.get("path", [""])[0], int(q["page"][0] or 0),
+                                      int(q.get("w", [PV.MAX_WIDTH])[0] or PV.MAX_WIDTH))
+                    return self._send(200, png, "image/png")
+                return self._send(200, PV.meta(q.get("root", [""])[0], q.get("path", [""])[0]))
+            except (ValueError, OSError, KeyError) as e:
+                return self._send(400, {"error": str(e).strip("'\"") or "Could not preview this file."})
+            except (BrokenPipeError, ConnectionResetError):
+                return None
+            except Exception as e:  # noqa: BLE001 - a damaged file must not take the app down
+                return self._send(500, {"error": f"Could not preview this file ({type(e).__name__}: {str(e)[:200]})."})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
@@ -392,6 +409,9 @@ class Handler(BaseHTTPRequestHandler):
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
                 return self._send(200, {"sessions": A.listing()})
+            if u.path == "/api/styles":
+                from meshpool_harness import styles as ST
+                return self._send(200, ST.listing())
             if u.path == "/api/mcp":
                 return self._send(200, A.mcp_info())
             if u.path == "/api/mcp-library":
@@ -697,6 +717,23 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/install-cli":
                 from meshpool_harness.ui.desktop import install_cli
                 return self._send(200, install_cli(admin=True))
+            if u.path == "/api/styles":                       # create, update, delete, default, sample
+                from meshpool_harness import styles as ST
+                b = self._json()
+                act = b.get("action", "create")
+                if act == "sample":
+                    return self._send(200, ST.from_sample(b.get("sample", "")))
+                if act == "create":
+                    ST.create(b.get("name", ""), b.get("instruction", ""))
+                elif act == "update":
+                    ST.update(b.get("id", ""), b.get("name", ""), b.get("instruction", ""))
+                elif act == "delete":
+                    ST.delete(b.get("id", ""))
+                elif act == "default":
+                    ST.set_default(b.get("id", ""))
+                else:
+                    return self._send(400, {"error": "Unknown action."})
+                return self._send(200, ST.listing())
             if u.path == "/api/agent":
                 return self._send(200, A.create(self._json()))
             if u.path == "/api/mcp":
@@ -940,17 +977,21 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style)", u.path)
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "model":
                     s_.set_model(b.get("model", ""))
+                elif act == "harness":
+                    s_.switch_harness(b.get("harness", ""))
                 elif act == "route":
                     s_.set_route(b.get("spec", ""))
                 elif act == "plan":
                     s_.set_plan(bool(b.get("on")))
                 elif act == "goal":
                     s_.set_goal(b.get("text", ""))
+                elif act == "style":
+                    s_.set_style(b.get("style", ""))
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))

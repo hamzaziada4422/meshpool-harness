@@ -26,10 +26,10 @@ FONTS = {"major": "Segoe UI", "minor": "Segoe UI"}     # clean and modern; title
 FONT_PAIRS = {"segoe": {"major": "Segoe UI", "minor": "Segoe UI"}, "serif": {"major": "Georgia", "minor": "Arial"}, "sans": {"major": "Arial", "minor": "Arial"},
               "calibri": {"major": "Calibri", "minor": "Calibri"}, "cambria": {"major": "Cambria", "minor": "Calibri"}}
 # roles: dk1 text and title, dk2 navy (callouts, darkest heat), lt2 grey half-panel, accent1 emphasis blue (numbers),
-# accent2 coral (the one highlighted row), accent3 cyan (the focus item in a chart), accent4 mid blue (heat),
+# accent2 a pale accent tint (the one highlighted row, dark text on it), accent3 cyan (the focus item in a chart), accent4 mid blue (heat),
 # accent5 rule grey, accent6 muted text. Our own palette; roles follow the reference grammar.
-COLORS = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "ECECEC", "accent1": "1E5BD8",
-          "accent2": "F4A582", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF", "accent6": "6B6B6B",
+COLORS = {"dk1": "0A1A2F", "lt1": "FFFFFF", "dk2": "0A2540", "lt2": "EEF3FA", "accent1": "1E5BD8",
+          "accent2": "D6E3F8", "accent3": "29B6E8", "accent4": "1A73B8", "accent5": "BFBFBF", "accent6": "6B6B6B",
           "hlink": "1E5BD8", "folHlink": "6B6B6B"}
 # Named palettes (our own values). Slot roles are the same in every palette, so the renderer never changes:
 # dk1 text, dk2 darkest brand tone (callouts, bands), lt2 panel grey, accent1 emphasis, accent2 the one highlight,
@@ -47,6 +47,10 @@ PALETTES = {
     "mono":     {**COLORS, "dk1": "111111", "dk2": "111111", "lt2": "F2F2F2", "accent1": "1D4ED8", "accent2": "BFDBFE",
                  "accent3": "1D4ED8", "accent4": "9CA3AF", "accent5": "D1D5DB", "accent6": "6B7280"},
 }
+# Content-slide frames. "band": a dark title band across the top (the text colour, dk1) with the title in white and
+# an accent rule under it, drawn in the "Title Only" layout so slides carry no extra shapes. None: the hairline grammar.
+FRAMES = ("band",)
+BAND_H, BAND_RULE_H = 1.16, 0.06                       # inches; the body starts at 1.55 in either frame
 SLOTS = ("dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink")
 
 
@@ -64,7 +68,11 @@ def theme_spec(theme=None) -> dict:
     fonts = t.get("fonts")
     fonts = FONT_PAIRS.get(fonts, fonts) if isinstance(fonts, str) else (fonts or FONT_PAIRS["segoe"])
     fonts = {"major": fonts.get("major", FONTS["major"]), "minor": fonts.get("minor", FONTS["minor"])}
-    return {"palette": pal, "colors": colors, "fonts": fonts}
+    frame = t.get("frame") if t.get("frame") in FRAMES else None
+    out = {"palette": pal, "colors": colors, "fonts": fonts}
+    if frame:                                            # only when asked, so existing template caches stay valid
+        out["frame"] = frame
+    return out
 
 
 W_IN, H_IN = 13.333, 7.5
@@ -140,13 +148,40 @@ def _style_master(prs):
                 ph.left, ph.width = Inches(0.6), Inches(12.133)
 
 
+def _band_layout(prs):
+    """The "Title Only" layout gets the band: a full-width rectangle in the text colour, an accent rule under it, and
+    the title placeholder centred in it in white."""
+    lay = next(lay_ for lay_ in prs.slide_masters[0].slide_layouts if lay_.name == "Title Only")
+    tree = lay.shapes._spTree
+    emu = lambda v: str(int(round(v * 914400)))       # noqa: E731
+    for k, (nm, y, h, clr) in enumerate((("Band", 0.0, BAND_H, "tx1"), ("BandRule", BAND_H, BAND_RULE_H, "accent1"))):
+        from pptx.oxml import parse_xml
+        el = parse_xml(
+            f'<p:sp xmlns:p="{P}" xmlns:a="{A}"><p:nvSpPr><p:cNvPr id="{90 + k}" name="{nm}"/><p:cNvSpPr/><p:nvPr/>'
+            f'</p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="{emu(y)}"/><a:ext cx="{emu(W_IN)}" cy="{emu(h)}"/></a:xfrm>'
+            f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:schemeClr val="{clr}"/></a:solidFill>'
+            f'<a:ln><a:noFill/></a:ln></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/>'
+            f'</a:p></p:txBody></p:sp>')
+        tree.insert(2 + k, el)                           # behind the placeholders
+    for ph in lay.placeholders:
+        if ph._element.find(".//p:ph", NS).get("type") == "title":
+            ph.left, ph.top, ph.width, ph.height = Inches(0.6), Inches(0.12), Inches(12.133), Inches(BAND_H - 0.2)
+            bp = ph._element.find(".//a:bodyPr", NS)
+            if bp is not None:
+                bp.set("anchor", "ctr")
+
+
 def default_template(theme=None) -> str:
     """Path of the forge template for a theme (built once per theme into the temp folder)."""
     import hashlib
     import json as _json
     spec = theme_spec(theme)
     key = hashlib.sha1(_json.dumps(spec, sort_keys=True).encode()).hexdigest()[:10]
-    return _build(key, _json.dumps(spec, sort_keys=True))
+    path = _build(key, _json.dumps(spec, sort_keys=True))
+    if not Path(path).exists():                         # the temp folder was cleaned under a running build (a
+        _build.cache_clear()                            # relay build crashed on a deleted template): build it again
+        path = _build(key, _json.dumps(spec, sort_keys=True))
+    return path
 
 
 @lru_cache(maxsize=16)
@@ -163,7 +198,12 @@ def _build(key: str, spec_json: str) -> str:
         _scale_shapes(lay, sx)
     _set_theme(prs, spec)
     _style_master(prs)
-    prs.save(out)
+    if spec.get("frame") == "band":
+        _band_layout(prs)
+    import os
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.tmp.pptx")
+    prs.save(tmp)                                       # written whole, then moved: a concurrent build never reads
+    os.replace(tmp, out)                                # a half-written template
     return str(out)
 
 

@@ -1,5 +1,29 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.9**
+- **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.
+- **Slides that point the way.** Each numbered point beside a chart marks the bar it explains with the same number. A pointer leads from the evidence to its so-what. Difference arrows and target lines never print over the chart's labels.
+- **Cleaner pages, checked on decks written by the real model.** Footnotes go one per line and are never cut. Table columns are sized to their content. A layout that does not fit is never kept. There is no takeaway box with a bar down its side, and bullets are never cut mid-sentence. In blind reviews against a BCG deck, decks from four new briefs scored level with it.
+- **Charts that show the point.** A short column chart carries its insight on the chart:
+  - the multiple or gap as an arrow ("25-35x", "+7 days");
+  - the goal as a dashed target line;
+  - a short line under each bar saying what it is.
+- **Say it once.** A point made on one slide is not repeated on later slides, and a callout never restates the cards beside it. The writer is sent back when it repeats itself.
+- **Meshpool learns your preferences.** When you correct its work or state a preference ("never put a label over the title", "always use Segoe UI"), Meshpool saves it to your memory. It follows it from the next message, in every chat and with every agent, and the deck writer follows it too. You see "Noted for next time" when it learns something. Turning memory off in Settings stops it.
+- **The same deck shape every time.** Before any model plans a deck, the brief is read for the kind of deck, the audience, the question and the options. It is then given a fixed consulting skeleton: the answer and the ask, where we stand, the options on the same measures, the economics and the plan. Different models start from the same plan.
+- **Dated correctly.** The writer knows today's date. Plans never schedule work in the past.
+- **A clean white top, in Segoe UI.** There is no label over the title. The section number sits top right.
+- **Ask any chat for a PowerPoint.** It now produces one on every agent: 14 of 14 test runs made a deck, up from 10 of 14. A chat whose agent cannot make the file moves, with its history, to one that can.
+- **Auto prefers MeshPool's own agents on a tie.** Free web search is bundled in the apps.
+- **Decks with zero images.** Icons are native, editable vector shapes in your theme colours. Company logos are fetched from the internet and drawn as native shapes in their own brand colours. A deck with a picture fails its checks.
+- **Nine new diagrams.** Risk matrix, 3x3 matrix, Gantt plan, issue tree, org chart, cycle, hub and spoke, pyramid and funnel, drawn natively and checked like every other slide.
+- **Seven style packs** from 130 published decks, chosen with `--style` or in Settings > Company, and an optional title-band look.
+- **Layout lookup.** Agents ask which layout proves a slide's message before writing it.
+- **No two slides look alike.** The layout of each slide is chosen knowing its neighbours: a risk list next to a table becomes icon columns, next steps become a numbered process, and chart pages alternate their layout. Body text is larger (14 pt).
+- **No gaps.** Blocks side by side end at the same line, next steps and risk tables use the whole slide, and short tables run full width with their takeaway under them. A check fails any slide where a column stops short of the one beside it.
+- **Points, not bullet lists.** The argument beside a chart or diagram is drawn as cards, each with an icon that fits its meaning and a short header; four short points become a 2x2 of icon boxes.
+- **91 built-in slide layouts** ship with the app as compact specs (the 50 that render clean are offered); the storyline picks one per slide and the writer fills its slots.
+
 **New in 0.0.7**
 - **A new look, built for everyday use.** Chats no longer need a folder. Projects hold their own instructions, files and memory. The sidebar has Pinned and Recents with unread dots, chats group by date, and every chat has a menu to rename, pin, move, archive or delete it. Search finds chats, projects, artifacts and scheduled tasks in one place. Settings is one window with plain sections. Streaming is smooth: no jumps, no flicker.
 - **MeshPool Auto with a stronger engine.** Coding work runs on MeshPool's new engine, built on the open-source Codex design (Apache-2.0) with MeshPool's routing, loop guard and context trimming on top. On our 52-task hard suite (same model for every agent, graded by hidden tests) it solved 47/52, the same as Codex, about twice as fast as MeshPool's previous engine. Full numbers: docs/results/v3/.

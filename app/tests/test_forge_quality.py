@@ -130,7 +130,7 @@ def test_variety_sends_back_look_alike_pages_and_text_led_neighbours_alternate(t
     render(deck[1:3], str(out), carry=False, density="balanced")
     tops = []
     for sl in Presentation(str(out)).slides:
-        ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_IconRing")})
+        ys = sorted({round(sh.top / 914400, 1) for sh in sl.shapes if sh.name.startswith("ov_Icon_")})
         tops.append(len(ys))
     assert tops[0] == 1 and tops[1] > 1           # columns (icons on one line), then rows (icons stacked)
 
@@ -331,7 +331,9 @@ def test_unify_figures_replaces_the_losing_value_in_text_only():
     assert slides[2]["chart"]["series"][0]["values"] == [6.92]
 
 
-def test_executive_summary_shows_its_sizing_figures(tmp_path):
+def test_executive_summary_shows_its_sizing_figures(tmp_path, monkeypatch):
+    from engines.forge import render as _R
+    monkeypatch.setitem(_R.SUMMARY_PANEL, "on", False)   # the classic summary layout (the fallback)
     """metrics on the executive summary render as a figures panel beside the points, sourced like any number."""
     from engines.forge.render import render
     from pptx import Presentation

@@ -7,6 +7,7 @@ description: Turn a report, memo or notes into a presentation deck. Use when the
 
 1. Read the document. Find the one message and the three to five points that support it.
 2. Plan the storyline: title, the message, one slide per point with its evidence, and a closing slide with the ask or next steps.
+   If the slide_layouts tool is available, call it with each slide's message to pick the layout that proves it (a risk matrix for ranked risks, a Gantt for a plan by workstream, an issue tree for drivers), and name that layout in the storyline.
 3. Build it with make_deck, passing the document as a file and the audience and purpose.
 4. Reply with the storyline and the file name.
 

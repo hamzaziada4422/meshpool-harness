@@ -1,0 +1,646 @@
+[
+ {
+  "archetype": "cover",
+  "title": "Entering Vietnam plant-based dairy in two stages",
+  "subtitle": "Market entry recommendation for the executive committee",
+  "date": "Executive committee, November 2026",
+  "id": "s1",
+  "node": "n1"
+ },
+ {
+  "archetype": "executive_summary",
+  "title": "Enter Vietnam through a co-manufacturer now and decide on a plant at month 24",
+  "points": [
+   {
+    "lead": "Vietnam is the fastest growing of five markets",
+    "bullets": [
+     "It grows 14.2% a year to 2030 against 7.4% to 10.3% elsewhere"
+    ],
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "lead": "The market is still open to a new brand",
+    "bullets": [
+     "The top three brands hold 38% in Vietnam against 61% in Thailand"
+    ],
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "lead": "Shoppers will pay for the product",
+    "bullets": [
+     "46% tried plant-based milk and accept an 18% premium"
+    ],
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "lead": "A co-manufacturer gives the best risk-adjusted entry",
+    "bullets": [
+     "It breaks even in year 3 on $6M, against year 5 on $18M for an own plant"
+    ],
+    "prov": [
+     "F8",
+     "F9"
+    ]
+   }
+  ],
+  "decision": "Decision today: approve $6M for option B and a month-24 gate on the plant.",
+  "metrics": [
+   {
+    "value": "$408M",
+    "label": "Vietnam market in 2030",
+    "prov": [
+     "F4"
+    ]
+   },
+   {
+    "value": "14.2%",
+    "label": "annual growth to 2030",
+    "prov": [
+     "F2"
+    ]
+   },
+   {
+    "value": "$6M",
+    "label": "initial commitment",
+    "prov": [
+     "F8"
+    ]
+   }
+  ],
+  "id": "s2",
+  "node": "n2"
+ },
+ {
+  "archetype": "bar_takeaway",
+  "title": "Vietnam is the smallest of the five markets after the Philippines",
+  "subtitle": "Plant-based dairy retail sales, USD million, 2025",
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Thailand",
+    "Indonesia",
+    "Vietnam",
+    "Malaysia",
+    "Philippines"
+   ],
+   "series": [
+    {
+     "name": "2025 retail sales",
+     "values": [
+      340,
+      290,
+      210,
+      150,
+      120
+     ],
+     "prov": [
+      "F1"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "Vietnam"
+   ]
+  },
+  "takeaway": {
+   "text": "Vietnam is a $210M market today, 19% of the $1,110M regional total",
+   "prov": [
+    "F1"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Thailand and Indonesia are larger but already concentrated",
+    "prov": [
+     "F1",
+     "F3"
+    ]
+   },
+   {
+    "text": "Size alone would rank Vietnam third, so growth and openness decide the case",
+    "prov": [
+     "F1"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook market model; retail audit data, 2025",
+   "prov": [
+    "F1"
+   ]
+  },
+  "id": "s3",
+  "node": "n3"
+ },
+ {
+  "archetype": "table_focus",
+  "title": "Vietnam combines the highest growth with the least concentrated market",
+  "subtitle": "Five-market comparison, 2025 sales and 2025-30 outlook",
+  "table": {
+   "columns": [
+    "Market",
+    "Sales 2025 ($M)",
+    "CAGR 2025-30 (%)",
+    "Top-3 share (%)"
+   ],
+   "rows": [
+    [
+     "Vietnam",
+     "210",
+     "14.2",
+     "38"
+    ],
+    [
+     "Philippines",
+     "120",
+     "10.3",
+     "49"
+    ],
+    [
+     "Indonesia",
+     "290",
+     "9.6",
+     "55"
+    ],
+    [
+     "Thailand",
+     "340",
+     "8.1",
+     "61"
+    ],
+    [
+     "Malaysia",
+     "150",
+     "7.4",
+     "66"
+    ]
+   ],
+   "highlight_rows": [
+    0
+   ],
+   "heat": {
+    "2": [
+     14.2,
+     10.3,
+     9.6,
+     8.1,
+     7.4
+    ]
+   },
+   "size": 12,
+   "prov": [
+    "F1",
+    "F2",
+    "F3"
+   ]
+  },
+  "takeaway": {
+   "text": "Only Vietnam is both above 14% growth and below 40% concentration",
+   "prov": [
+    "F2",
+    "F3"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Low concentration means shelf space is still available to a new entrant",
+    "prov": [
+     "F3"
+    ]
+   },
+   {
+    "text": "Malaysia and Thailand are mature, with the top three holding over 60%",
+    "prov": [
+     "F3"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook market model; retail audit data, 2025",
+   "prov": [
+    "F1",
+    "F2",
+    "F3"
+   ]
+  },
+  "id": "s4",
+  "node": "n4"
+ },
+ {
+  "archetype": "column_trend",
+  "title": "Vietnam sales will almost double to $408M by 2030",
+  "subtitle": "Plant-based dairy retail sales, Vietnam, USD million, 2025-2030",
+  "chart": {
+   "kind": "column",
+   "categories": [
+    "2025",
+    "2026",
+    "2027",
+    "2028",
+    "2029",
+    "2030"
+   ],
+   "series": [
+    {
+     "name": "Retail sales",
+     "values": [
+      210,
+      240,
+      274,
+      313,
+      357,
+      408
+     ],
+     "prov": [
+      "F4"
+     ]
+    }
+   ],
+   "unit": "$M",
+   "decimals": 0,
+   "highlight_categories": [
+    "2030"
+   ]
+  },
+  "takeaway": {
+   "text": "Sales grow by $198M in five years, a 14.2% annual rate",
+   "prov": [
+    "F2",
+    "F4"
+   ]
+  },
+  "bullets": [
+   {
+    "text": "Growth comes from urban shoppers aged 25 to 40 trading up from dairy",
+    "prov": [
+     "F5"
+    ]
+   },
+   {
+    "text": "Each year adds more than the year before, so late entry costs share",
+    "prov": [
+     "F4"
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook market model, base case",
+   "prov": [
+    "F4"
+   ]
+  },
+  "id": "s5",
+  "node": "n5"
+ },
+ {
+  "archetype": "exhibit_argument",
+  "title": "Shoppers are ready to buy at a premium",
+  "title_right": "Modern trade and online reach them first",
+  "exhibit": {
+   "title": "Vietnam sales channel mix",
+   "unit": "% of sales, 2025"
+  },
+  "chart": {
+   "kind": "bar",
+   "categories": [
+    "Modern trade",
+    "Traditional trade",
+    "E-commerce"
+   ],
+   "series": [
+    {
+     "name": "Share of sales",
+     "values": [
+      41,
+      36,
+      23
+     ],
+     "prov": [
+      "F6"
+     ]
+    }
+   ],
+   "unit": "%",
+   "decimals": 0,
+   "highlight_categories": [
+    "Modern trade"
+   ]
+  },
+  "blocks": [
+   {
+    "text": "**46% of urban shoppers** aged 25 to 40 already tried a plant-based milk",
+    "bullets": [
+     "They accept a median **18% premium** over dairy"
+    ]
+   },
+   {
+    "text": "Two channels hold **64%** of sales and suit a first launch",
+    "bullets": [
+     "Modern trade is **41%** and e-commerce **23%**"
+    ]
+   }
+  ],
+  "callout": {
+   "bullets": [
+    "**Start** with 1,200 modern-trade stores",
+    "**Add** e-commerce in the first year",
+    "**Defer** traditional trade to the gate"
+   ]
+  },
+  "source": {
+   "text": "Alderbrook consumer survey; channel audit, 2025",
+   "prov": [
+    "F5",
+    "F6",
+    "F12"
+   ]
+  },
+  "id": "s6",
+  "node": "n6"
+ },
+ {
+  "archetype": "grid",
+  "title": "Option B balances speed, cost and scale better than A or C",
+  "layout": "main_side",
+  "look": "editorial",
+  "parts": [
+   {
+    "type": "harvey",
+    "heading": "Entry options against criteria (4 = best)",
+    "criteria": [
+     "Capex",
+     "Time to break-even",
+     "2030 revenue",
+     "Tariff exposure"
+    ],
+    "rows": [
+     {
+      "label": "A. Export only",
+      "scores": [
+       4,
+       1,
+       1,
+       0
+      ]
+     },
+     {
+      "label": "B. Co-manufacturer",
+      "scores": [
+       3,
+       3,
+       2,
+       4
+      ]
+     },
+     {
+      "label": "C. Own plant",
+      "scores": [
+       0,
+       0,
+       4,
+       4
+      ]
+     }
+    ]
+   },
+   {
+    "type": "stats",
+    "heading": "Option B in numbers",
+    "items": [
+     {
+      "value": "$6M",
+      "label": "capex",
+      "prov": [
+       "F8"
+      ]
+     },
+     {
+      "value": "Year 3",
+      "label": "break-even",
+      "prov": [
+       "F8"
+      ]
+     },
+     {
+      "value": "$48M",
+      "label": "2030 revenue",
+      "prov": [
+       "F8"
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook entry model; Vietnam customs schedule",
+   "prov": [
+    "F7",
+    "F8",
+    "F9",
+    "F10"
+   ]
+  },
+  "id": "s7",
+  "node": "n7"
+ },
+ {
+  "archetype": "challenge_matrix",
+  "title": "Three risks threaten the entry and each has a mitigation",
+  "columns": [
+   "Risk",
+   "Exposure",
+   "Mitigation"
+  ],
+  "rows": [
+   {
+    "icon": "money",
+    "label": "**Tariff** on imports",
+    "cells": [
+     {
+      "lead": "Imports pay a 15% duty",
+      "bullets": [
+       {
+        "text": "15% tariff on finished dairy alternatives lifts shelf price",
+        "prov": [
+         "F10"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Local co-packing avoids the duty",
+      "bullets": [
+       {
+        "text": "Option B produces in Vietnam from month 9",
+        "prov": [
+         "F10",
+         "F12"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "growth",
+    "label": "**Incumbent** brands",
+    "cells": [
+     {
+      "lead": "Three brands hold 38% of sales",
+      "bullets": [
+       {
+        "text": "They will defend shelf space once we list",
+        "prov": [
+         "F3"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Target the gap between them",
+      "bullets": [
+       {
+        "text": "Aim at shoppers paying an 18% premium",
+        "prov": [
+         "F5"
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "icon": "risk",
+    "label": "**Scale** shortfall",
+    "cells": [
+     {
+      "lead": "A plant stays idle below volume",
+      "bullets": [
+       {
+        "text": "Option C needs $18M and breaks even only in year 5",
+        "prov": [
+         "F9"
+        ]
+       }
+      ]
+     },
+     {
+      "lead": "Gate the plant on run-rate sales",
+      "bullets": [
+       {
+        "text": "Build only if sales reach $20M by month 24",
+        "prov": [
+         "F11"
+        ]
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook entry model; Vietnam customs schedule",
+   "prov": [
+    "F3",
+    "F9",
+    "F10",
+    "F11"
+   ]
+  },
+  "id": "s8",
+  "node": "n8"
+ },
+ {
+  "archetype": "grid",
+  "title": "The plan reaches a plant decision in 24 months",
+  "layout": "full",
+  "look": "minimal",
+  "parts": [
+   {
+    "type": "timeline",
+    "heading": "Entry roadmap",
+    "milestones": [
+     {
+      "date": "Month 0",
+      "label": "Sign co-manufacturer and approve $6M"
+     },
+     {
+      "date": "Month 9",
+      "label": "Launch in 1,200 modern-trade stores"
+     },
+     {
+      "date": "Month 15",
+      "label": "Add e-commerce and review price premium"
+     },
+     {
+      "date": "Month 24",
+      "label": "Gate: build plant if run-rate reaches $20M"
+     }
+    ]
+   }
+  ],
+  "source": {
+   "text": "Alderbrook entry plan",
+   "prov": [
+    "F8",
+    "F11",
+    "F12"
+   ]
+  },
+  "id": "s9",
+  "node": "n9"
+ },
+ {
+  "archetype": "closing",
+  "title": "Approve option B and start the co-manufacturer negotiation this month",
+  "steps": [
+   {
+    "action": "Approve $6M for option B",
+    "detail": "Funds the co-manufacturer contract and launch for 1,200 stores, with break-even in year 3.",
+    "milestones": [
+     "Board sign-off in December"
+    ],
+    "owner": "CFO",
+    "timing": "December 2026",
+    "prov": [
+     "F8"
+    ]
+   },
+   {
+    "action": "Sign the co-manufacturer",
+    "detail": "Locks local production from month 9 and avoids the 15% import tariff.",
+    "milestones": [
+     "Term sheet by January"
+    ],
+    "owner": "COO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F10",
+     "F12"
+    ]
+   },
+   {
+    "action": "Set the month-24 gate",
+    "detail": "Agree that a plant is built only if run-rate sales reach $20M.",
+    "milestones": [
+     "Gate criteria approved with the plan"
+    ],
+    "owner": "CEO",
+    "timing": "Q1 2027",
+    "prov": [
+     "F11"
+    ]
+   }
+  ],
+  "id": "s10",
+  "node": "n10"
+ }
+]

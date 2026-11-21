@@ -46,6 +46,11 @@ def classify(text: str, has_files: bool = False) -> str:
         return "normal"
     if _MAKE.search(t) and _FILES.search(t):
         return "normal"                       # a deliverable or a change to the project: not a quick question
+    from meshpool_harness import capabilities as CAP
+    if CAP.needs(t):
+        return "normal"                       # a PowerPoint, document, workbook or PDF: never a 30-second answer
+                                              # (the quick note says not to create files: "can you create a ppt"
+                                              # was answered with "I can't")
     if re.search(r"\b(fix|implement|refactor|debug|deploy|install|commit|merge)\b", t, re.I):
         return "normal"
     return "quick" if _ASK.search(t) else "normal"

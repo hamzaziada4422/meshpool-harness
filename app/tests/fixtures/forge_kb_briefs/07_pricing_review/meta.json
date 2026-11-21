@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s7": "decision_flow (discount approval flowchart)",
+  "s5": "scatter_deal_dispersion (discount vs deal size per deal)"
+ },
+ "has_data": true
+}

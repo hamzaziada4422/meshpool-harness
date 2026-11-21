@@ -40,7 +40,8 @@ LOOKS = {
     "bold": {"heading": "tab", "card": False, "pad": 0.0, "after": 0.14, "inset": 0.0, "tab": TC.ACCENT_1},
 }
 
-PART_TYPES = ("chart", "table", "stats", "text", "callout", "process", "timeline", "matrix2x2", "harvey", "quote")
+PART_TYPES = ("chart", "table", "stats", "text", "callout", "process", "timeline", "matrix2x2", "harvey", "quote",
+              "shift", "evidence")
 
 
 # ------------------------------------------------------------------ grid
@@ -147,8 +148,13 @@ def _vline(sl, x, y, h, color=TC.ACCENT_5, weight=0.5, name="Rule", arrow=False)
 
 
 def _arrow(c):
-    ln = c.line._get_or_add_ln()
-    ln.append(ln.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+    """The connector's end gets BCG's flat chevron as its head (never the default triangle); the line is shortened
+    into the chevron's hollow back."""
+    E = 914400
+    x0, y0, x1, y1 = c.begin_x / E, c.begin_y / E, c.end_x / E, c.end_y / E
+    col = c.line.color.theme_color if c.line.color.type is not None else TC.TEXT_1
+    ex, ey = R.head_chevron(c.part.slide, x0, y0, x1, y1, col, 0.15, "ov_Head_" + (c.name or "Arrow"))
+    c.end_x, c.end_y = int(ex * E), int(ey * E)
 
 
 def _fit_trim(blocks, w, h, s, what, ctx=None, n=None, floor=FLOOR):
@@ -180,8 +186,8 @@ def _frame(ctx, sl, n, part, box, look, i, s):
     card = None
     if L["card"] and part.get("type") != "callout":
         card = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Card{i}")
-    if L["inset"]:
-        w, h = w - L["inset"], h - L["inset"]
+    if L["inset"]:                                   # vertical air only: a narrower part would end off the grid (P7)
+        h = h - L["inset"]
     head = _plain(part.get("heading") or "").strip()
     used = 0.0
     if head:
@@ -275,7 +281,7 @@ def _stat_grid(k, w, h, gap):
         cols = -(-k // rows)
         tw, th = (w - gap * (cols - 1)) / cols, (h - gap * (rows - 1)) / rows
         score = abs(math.log(max(tw, 0.01) / max(th, 0.01) / 1.6)) + (3 if tw < 1.1 else 0) + (3 if th < 0.75 else 0)
-        score += 0.4 * (cols * rows - k)
+        score += 2.5 * (cols * rows - k)                  # an empty cell reads as a missing figure (blind review)
         if best is None or score < best[0]:
             best = (score, cols, rows)
     return best[1], best[2]
@@ -286,12 +292,15 @@ STAT_GROW = 1.3            # a tile may be this much taller than its content (ce
 
 
 def _stat_items(part):
-    return [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []][:6]
+    raw = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
+    real = [it for it in raw if _plain(R._GAP_RE.sub("", str(it.get("value") or ""))).strip()]
+    return (real or raw)[:6]
 
 
 def _stat_rest(it, size_label):
     rest = [{"text": it.get("label") or "", "size": size_label, "numbers": False, "space_before": 4}]
-    if it.get("delta"):
+    if it.get("delta") and re.search(r"\d", str(it["delta"])):   # a change is a figure ("+1.5 pts", "up from 92"):
+        # a word there ("hero", "key") is a writer's note to itself, never shown (blind review found one on a slide)
         rest.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2})
     return [b for b in rest if b["text"]]
 
@@ -328,7 +337,7 @@ def stats_plan(items, w, boxed, h=None, up=0) -> dict:
             shape = abs(math.log(max(tw, 0.01) / max(th, 0.01) / (1.6 if style == "stack" else 4.0)))
             cands.append({"cols": cols, "rows": rows, "style": style, "vsize": vsize, "vw": vw, "label": lab,
                           "th": th, "tw": tw, "gap": gap, "pad": pad, "total": total,
-                          "score": shape + 0.4 * (cols * rows - k) - vsize / 60})
+                          "score": shape + 2.5 * (cols * rows - k) - vsize / 60})   # an empty cell: a hole
     if not cands:                                          # a figure too wide for any tile: the smallest size, one column
         return {"cols": 1, "rows": k, "style": "stack", "vsize": 20, "vw": w, "label": R.bump(12), "th": 0.9, "tw": w,
                 "gap": gap, "pad": pad, "total": k * 0.9 + gap * (k - 1), "score": 0}
@@ -337,6 +346,8 @@ def stats_plan(items, w, boxed, h=None, up=0) -> dict:
     fit = [c for c in cands if c["total"] <= h + 0.01]
     if not fit:
         return min(cands, key=lambda c: c["total"])
+    full = [c for c in fit if c["cols"] * c["rows"] == k]  # no empty cell when a full arrangement fits: three
+    fit = full or fit                                     # figures in a 2x2 left a hole (blind review)
     return max(fit, key=lambda c: (min(h, c["total"] * STAT_GROW) - 0.15 * c["score"], -c["score"]))
 
 
@@ -344,6 +355,10 @@ def p_stats(ctx, sl, n, part, box, look, i, s, card):
     """Figures as tiles sized to their content (at most STAT_GROW taller), figures aligned across a row."""
     x, y, w, h = box
     raw = [it if isinstance(it, dict) else {"value": str(it), "label": ""} for it in part.get("items") or []]
+    gaps = [it for it in raw if not _plain(R._GAP_RE.sub("", str(it.get("value") or ""))).strip()]
+    if gaps and len(gaps) < len(raw):                      # a figure the facts do not give is not a tile
+        _note(s, f"part {i}: figures without a value left out: " + "; ".join(_txt(it.get("label")) for it in gaps))
+        raw = [it for it in raw if it not in gaps]
     if len(raw) > 6:
         _note(s, f"part {i}: {len(raw) - 6} figures left out: " + "; ".join(_txt(v) for v in raw[6:]))
     items = raw[:6]
@@ -406,9 +421,22 @@ def p_text(ctx, sl, n, part, box, look, i, s, card):
     bl = _text_blocks(part)
     if not bl:
         return
+    bullets = [b if isinstance(b, dict) else {"text": str(b)} for b in part.get("bullets") or []]
+    if (card is None and R.POINTS["on"] and not part.get("text") and 2 <= len(bullets) <= 4 and h >= 2.4
+            and not any(int(b.get("level", 0) or 0) for b in bullets)):
+        lead = _txt(part.get("lead") or part.get("title") or "")   # a tall column of points: designed points (icon
+        pts = [{"text": lead, "bullets": [dict(b, text=_txt(b)) for b in bullets], "prov": part.get("prov")}]
+        if R.draw_points(ctx, s, sl, n, x, y, w, h, pts, card=TC.BACKGROUND_2):   # cards), not a bullet list
+            return
     room = max(0, MAX_BUMP.get(R.DENSITY["mode"], 3) - int(part.get("_bump") or 0))   # never past the mode's limit
     bl = _fit_trim(R._grow(bl, w, h, min(room, 6 if R.DENSITY["mode"] == "present" else 2)), w, h, s,
                    f"the text of part {i}", ctx, n)     # presenting: short text steps well up the scale
+    if part.get("_spread") and len(bl) > 1:              # a side column beside a drawing: spare height goes between
+        left = h - R._need(bl, w) - 0.1                  # the points, up to 0.3in each (the argument rhythm)
+        if left > 0.4:
+            gap = min(left * 0.85 / (len(bl) - 1), 0.3) * 72
+            for b in bl[1:]:
+                b["space_before"] = (b.get("space_before") or 0) + gap
     if card is not None and not part.get("heading"):
         R._shape_text(card, bl, ctx, n, (x, y, w, h))   # the card is the text's own shape
         return
@@ -422,7 +450,24 @@ def p_callout(ctx, sl, n, part, box, look, i, s, card):
     if not bl:
         return
     iw, ih = w - 0.5, h - 0.3
-    bl = _fit_trim(R._grow(bl, iw, ih, 6), iw, ih, s, f"the callout of part {i}", ctx, n)
+    near_table = any(isinstance(p_, dict) and p_.get("type") == "table" for p_ in (s or {}).get("parts") or [])
+    bl = _fit_trim(R._grow(bl, iw, ih, 1 if near_table else 2), iw, ih, s, f"the callout of part {i}", ctx, n)
+    # at most two steps up: a so-what set twice the chart labels' size overpowered the exhibit (blind review)
+    if h > 1.6 * (R._need(bl, iw) + 0.3) and h > 1.4:     # a box far taller than its words: a light panel with an
+        for b_ in bl:                                     # accent bar reads as a designed panel; a tall navy slab
+            b_["color"] = TC.TEXT_1                       # around three lines reads as dead space
+        shp = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Callout{i}")
+        R._rule(sl, x, y, w, TC.ACCENT_1, 1.5, f"ov_CalloutRule{i}")   # an accent rule across its top, never a
+        R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.TOP)   # bar down its left (it read
+        # as a stray small box: user review); from the top, level with
+        return                                            # the exhibit's first line (centred, it floated: review)
+    if not R.sowhat_dark(ctx):                             # the deck alternates its so-what boxes
+        for b_ in bl:
+            b_["color"] = TC.TEXT_1
+        shp = R._fill(sl, x, y, w, h, TC.BACKGROUND_2, f"Callout{i}")
+        R._rule(sl, x, y, w, TC.ACCENT_1, 1.5, f"ov_CalloutRule{i}")
+        R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
+        return
     shp = R._fill(sl, x, y, w, h, TC.TEXT_2, f"Callout{i}")
     R._shape_text(shp, bl, ctx, n, (x + 0.25, y + 0.15, iw, ih), MSO_ANCHOR.MIDDLE)
 
@@ -445,12 +490,14 @@ def p_process(ctx, sl, n, part, box, look, i, s, card):
     tw = sw - 2 * d - 0.14
     words = [wd for st in steps for wd in re.findall(r"\S+", _txt(st.get("title")) + " " + _txt(st.get("text")))]
     fits = all(R._need_w(wd, R.bump(12), True) * 1.15 <= tw for wd in words)   # else a word breaks mid-word
-    if w / k >= 1.25 and w > h * 0.9 and fits:          # wide: interlocking chevrons, text inside
-        need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},
-                                      {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
-                             for st in steps)
-        bump = next((z for z in (3, 2, 1) if need(z) <= 0.55 * h), 0)   # one type size for every step
-        ch = min(h, max(1.1, need(bump) + 0.5))           # as tall as the text needs, set a little above centre
+    need = lambda z: max(R._need([{"text": _txt(st.get("title")), "size": R.bump(12) + z, "bold": True},  # noqa: E731
+                                  {"text": _txt(st.get("text")), "size": R.bump(11) + z, "space_before": 4}], tw)
+                         for st in steps)
+    bump = next((z for z in (3, 2, 1) if need(z) <= 0.55 * h), 0)     # one type size for every step
+    ch = min(h, max(1.1, need(bump) + 0.5))               # chevrons as tall as their text needs
+    # chevrons only where they fill the region: in a tall region they left most of it empty (forge-kb eval, P20 on
+    # the process parts of 3 dev decks); there the stacked steps below take the height instead
+    if w / k >= 1.25 and w > h * 0.9 and fits and (ch >= 0.6 * h or w >= 1.8 * h):   # wide: chevrons, text inside
         y += (h - ch) * 0.35
         for j, st in enumerate(steps):
             sx = x + j * (sw - d + g)
@@ -518,6 +565,8 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
     k = max(1, len(ms))
     hl = part.get("highlight")
     dot = 0.18
+    if w > h and card is None:                           # a roadmap: dates over a slim band with milestone
+        return _roadmap(ctx, sl, n, ms, hl, x, y, w, h, i, s)   # diamonds, a column of words under each
     if w > h:                                            # horizontal: dates above the axis, labels below
         sp = w / k
         cw = sp - 0.12
@@ -526,10 +575,22 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
             dates, dh, ln, band = _tl_band(ms, cw, z)    # sits at the top of the box (the composition gave the box
             if band <= h or z == 0:                      # its height from the band: no white above and below it)
                 break
-        h = min(h, band + 0.04)
+        cards = h - band > 0.9 and card is None           # room under the band: each milestone gets a card that runs
+        if not cards:                                      # to the foot of its box (no white block under a roadmap)
+            if card is not None and h - band > 0.6:        # inside a card: the band sits in the card's middle
+                y += (h - band) / 2
+            h = min(h, band + 0.04)
         ly = y + dh + 0.16 + dot / 2
         R._rule(sl, x, ly, w, TC.TEXT_2, 1.5, f"ov_TimelineAxis{i}")
         lh = max(0.2, y + h - (ly + dot / 2 + 0.12))
+        tl_cards = {}
+        if cards:                                          # each card as tall as the longest label needs, plus air: a
+            lh = min(lh, ln + 0.5)                         # thin roadmap stays thin and is flagged (P20) for detail
+            for j in range(len(ms)):
+                cx = x + sp * (j + 0.5)
+                tl_cards[j] = _shape(sl, MSO_SHAPE.RECTANGLE, cx - cw / 2, ly + dot / 2 + 0.12, cw, lh,
+                                     f"ov_TLCard{i}_{j + 1}", fill=TC.ACCENT_1 if hl == j else TC.BACKGROUND_2)
+            cw, lh = cw - 0.24, lh - 0.24                  # the label is written into its card
         for j, m in enumerate(ms):
             cx = x + sp * (j + 0.5)
             on = hl == j
@@ -539,6 +600,11 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
             if dates[j][0]["text"]:
                 R._write(R._box(sl, cx - cw / 2, y, cw, dh, f"ov_TLDate{i}_{j + 1}", MSO_ANCHOR.BOTTOM), dates[j])
             lb = _fit_trim(lab(j, z), cw, lh, s, f"milestone {j + 1} of part {i}", ctx, n)
+            if cards:
+                if on:
+                    lb = [dict(b_, color=TC.BACKGROUND_1) for b_ in lb]
+                R._shape_text(tl_cards[j], lb, ctx, n, (cx - cw / 2, ly + dot / 2 + 0.24, cw, lh), MSO_ANCHOR.TOP)
+                continue
             R._write(R._box(sl, cx - cw / 2, ly + dot / 2 + 0.12, cw, lh, f"ov_TLLabel{i}_{j + 1}"), lb, ctx, n)
         return
     # vertical: axis down the left, each milestone's date and label to its right
@@ -563,6 +629,52 @@ def p_timeline(ctx, sl, n, part, box, look, i, s, card):
         R._write(R._box(sl, tx, ry, tw, max(need, rh - 0.04), f"ov_TLLabel{i}_{j + 1}"), bl, ctx, n)
 
 
+def _roadmap(ctx, sl, n, ms, hl, x, y, w, h, i, s):
+    """The roadmap look (BCG, think-cell): each milestone's date left-aligned in the accent colour, a slim accent band
+    with a diamond per milestone (the highlighted one dark and larger), and under it a column per milestone with its
+    label in bold and what happens then, left-aligned, thin rules between the columns down to the foot. No boxes
+    and no centred text."""
+    k = max(1, len(ms))
+    gap = 0.25
+    cw = (w - gap * (k - 1)) / k
+    dz = R.bump(14)
+    dates = [[{"text": _txt(m.get("date")), "size": dz, "bold": True, "numbers": False, "color": TC.ACCENT_1}]
+             for m in ms]
+    dh = max([R._need(d, cw) for d in dates if d[0]["text"]] or [0.0]) + 0.04
+    yb = y + dh + 0.1                                     # the band
+    R._fill(sl, x, yb, w, 0.05, TC.ACCENT_1, f"ov_RoadBand{i}")
+    top = yb + 0.32
+    avail = max(0.4, y + h - top)
+    cols_ = []
+    for m in ms:
+        bl = [{"text": _txt(m.get("label") or m.get("title")), "size": R.bump(16), "bold": True, "numbers": False,
+               "prov": m.get("prov")}]
+        if m.get("text"):
+            bl.append({"text": _txt(m["text"]), "size": R.bump(14), "space_before": 6, "prov": m.get("prov")})
+        for d in m.get("bullets") or []:
+            bl.append({"text": _txt(d), "size": R.bump(13), "bullet": True, "space_before": 4})
+        cols_.append(bl)
+    for bump in (4, 3, 2, 1, 0):                          # the largest step at which every column fits
+        grown = [[dict(b_, size=b_["size"] + bump) for b_ in bl] for bl in cols_]
+        if all(R._need(bl, cw) <= 0.8 * avail for bl in grown):
+            cols_ = grown
+            break
+    used = max(R._need(bl, cw) for bl in cols_) if cols_ else 0.0
+    rule_h = min(avail, used + 0.5)                       # the rules end a little under the longest column
+    for j, m in enumerate(ms):
+        cx = x + j * (cw + gap)
+        on = hl == j
+        dd = 0.3 if on else 0.24
+        _shape(sl, MSO_SHAPE.DIAMOND, cx, yb + 0.025 - dd / 2, dd, dd, f"ov_RoadMark{i}_{j + 1}",
+               fill=TC.TEXT_2 if on else TC.ACCENT_1, line=TC.BACKGROUND_1, weight=1.0)
+        if dates[j][0]["text"]:
+            R._write(R._box(sl, cx, y, cw, dh, f"ov_RoadDate{i}_{j + 1}", MSO_ANCHOR.BOTTOM), dates[j])
+        bl = _fit_trim(cols_[j], cw, avail, s, f"milestone {j + 1} of part {i}", ctx, n)
+        R._write(R._box(sl, cx, top, cw, avail, f"ov_RoadText{i}_{j + 1}"), bl, ctx, n)
+        if j:                                             # a thin rule between the columns
+            _vline(sl, cx - gap / 2, top, rule_h, TC.ACCENT_5, 0.5, f"ov_RoadRule{i}_{j}")
+
+
 def _axis(v):
     if isinstance(v, dict):
         return _txt(v.get("label")), _txt(v.get("low") or "Low"), _txt(v.get("high") or "High")
@@ -581,7 +693,7 @@ def p_matrix2x2(ctx, sl, n, part, box, look, i, s, card):
     bot_h = 0.3 if xl else 0.0
     if yl:
         R._write(R._box(sl, x + gw, y, w - gw, top_h - 0.04, f"ov_MxYLabel{i}", MSO_ANCHOR.BOTTOM),
-                 [{"text": f"↑ {yl}", "size": R.bump(11, 0.5), "bold": True, "numbers": False}])
+                 [{"text": yl, "size": R.bump(11, 0.5), "bold": True, "numbers": False}])
     g = 0.08
     qx, qy = x + gw, y + top_h
     qw, qh = (w - gw - g) / 2, (h - top_h - bot_h - g) / 2
@@ -616,7 +728,7 @@ def p_matrix2x2(ctx, sl, n, part, box, look, i, s, card):
         R._write(R._box(sl, qx, by + 0.03, lw, 0.22, f"ov_MxXLow{i}"),
                  [{"text": xlo, "size": R.bump(10, 0.5), "bold": True, "numbers": False}])
         R._write(R._box(sl, qx + lw, by + 0.03, w - gw - 2 * lw, 0.22, f"ov_MxXLabel{i}"),
-                 [{"text": f"{xl} →", "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}])
+                 [{"text": xl, "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}])
         R._write(R._box(sl, x + w - lw, by + 0.03, lw, 0.22, f"ov_MxXHigh{i}"),
                  [{"text": xhi, "size": R.bump(10, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.RIGHT}])
 
@@ -657,16 +769,16 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     m = max(1, len(crit))
     lw = min(2.4, max(1.2, 0.34 * w))
     cw = (w - lw) / m
-    head = [[{"text": c, "size": R.bump(11, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
+    head = [[{"text": c, "size": R.bump(13, 0.5), "bold": True, "numbers": False, "align": PP_ALIGN.CENTER}] for c in crit]
     hh = max([R._need(b, cw - 0.08) for b in head] or [0.3]) + 0.04
     if hh > 0.75:
-        head = [[dict(b[0], size=R.bump(10, 0.5))] for b in head]
+        head = [[dict(b[0], size=R.bump(12, 0.5))] for b in head]
         hh = min(0.9, max(R._need(b, cw - 0.08) for b in head) + 0.04)
     for c_, b in enumerate(head):
         R._write(R._box(sl, x + lw + c_ * cw + 0.04, y, cw - 0.08, hh, f"ov_HvHead{i}_{c_ + 1}", MSO_ANCHOR.BOTTOM), b)
     R._rule(sl, x, y + hh + 0.04, w, TC.TEXT_1, 0.75, f"HvRule{i}")
     body_y = y + hh + 0.08
-    rh = min(1.0, (y + h - body_y) / max(1, len(rows)))
+    rh = min(1.3, (y + h - body_y) / max(1, len(rows)))
     keep = rows
     while keep and rh < 0.3:
         _note(s, f"part {i}: Harvey-ball row left out: {_txt(keep[-1].get('label'))}")
@@ -679,7 +791,9 @@ def p_harvey(ctx, sl, n, part, box, look, i, s, card):
     d = min(0.34, rh * 0.62, cw * 0.6)
     for r_, r in enumerate(keep):
         ry = body_y + r_ * rh
-        lb = [{"text": _txt(r.get("label")), "size": R.bump(12), "numbers": False, "bold": bool(r.get("highlight"))}]
+        if rh > 0.75 and r_ % 2 == 0 and card is None:    # tall rows: alternate light bands keep the eye on the row
+            _shape(sl, MSO_SHAPE.RECTANGLE, x, ry, w, rh, f"ov_HvBand{i}_{r_ + 1}", fill=TC.BACKGROUND_2)
+        lb = [{"text": _txt(r.get("label")), "size": R.bump(14), "numbers": False, "bold": bool(r.get("highlight"))}]
         lb = _fit_trim(lb, lw - 0.1, rh - 0.04, s, f"row {r_ + 1} of part {i}", ctx, n)
         R._write(R._box(sl, x, ry, lw - 0.1, rh, f"ov_HvLabel{i}_{r_ + 1}", MSO_ANCHOR.MIDDLE), lb)
         for c_ in range(m):
@@ -707,8 +821,158 @@ def p_quote(ctx, sl, n, part, box, look, i, s, card):
     R._write(R._box(sl, x, ty, w, bh, f"Quote{i}"), bl, ctx, n)
 
 
+# ------------------------------------------------------------------ shift rows and evidence (the BCG panel grammar)
+def _side(v):
+    v = v if isinstance(v, dict) else {"text": str(v or "")}
+    return _txt(v.get("text") or ""), _txt(v.get("value") or "")
+
+
+def _shift_plan(part, w, up=0):
+    rows = [r for r in part.get("rows") or [] if isinstance(r, dict)][:6]
+    lw = min(1.7, max(1.0, w * 0.24))
+    cw, g = 0.26, 0.12
+    fw = max(0.8, (w - lw - cw - 3 * g) / 2)
+
+    def fits(d):                                          # no word broken, every value on one line
+        sz_, vz_, lz_ = R.bump(12) + d, R.bump(16) + d, R.bump(13) + d
+        for r in rows:
+            if any(R._need_w(wd, lz_, True) > lw - 0.2 for wd in _txt(r.get("label") or "").split()):
+                return False
+            for v in (r.get("from"), r.get("to")):
+                tx, val = _side(v)
+                if val and R._need_w(val, vz_, True) > fw - 0.04:
+                    return False
+                if any(R._need_w(wd, sz_, False) > fw - 0.04 for wd in tx.split()):
+                    return False
+        return True
+
+    up = next((d for d in range(up, -5, -1) if fits(d)), -4)
+    sz, vz, lz = R.bump(12) + up, R.bump(16) + up, R.bump(13) + up
+
+    heads = [_txt(part.get("from_head") or ""), _txt(part.get("to_head") or "")]
+
+    def side(v, accent, head=""):
+        tx, val = _side(v)
+        hw = set(re.findall(r"[a-z]+", head.lower()))
+        if tx and hw and set(re.findall(r"[a-z]+", tx.lower())) <= hw | {"rate", "in", "the", "sites"}:
+            tx = ""                                       # "Before automation" under the heading "Before
+        bl = []                                           # automation" says it twice (blind review): the figure
+        if tx:
+            bl.append({"text": tx, "size": sz, "numbers": False, "color": TC.TEXT_2})
+        if val:
+            bl.append({"text": val, "size": vz, "bold": True, "numbers": False, "space_before": 2,
+                       "color": TC.ACCENT_1 if accent else TC.TEXT_1})
+        return bl
+
+    out = []
+    for r in rows:
+        lab = [{"text": _txt(r.get("label") or ""), "size": lz, "bold": True, "numbers": False,
+                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}]
+        fb, tb = side(r.get("from"), False, heads[0]), side(r.get("to"), True, heads[1])
+        need = max(R._need(lab, lw - 0.16) + 0.16, R._need(fb, fw) * 1.08, R._need(tb, fw) * 1.08) + 0.14
+        out.append((r, lab, fb, tb, need))
+    hh = (R._need([{"text": max(heads, key=len), "size": R.bump(12), "bold": True}], fw) + 0.08) if any(heads) else 0
+    return {"rows": out, "lw": lw, "cw": cw, "g": g, "fw": fw, "hh": hh, "heads": heads,
+            "need": hh + sum(o[4] for o in out) + 0.04 * max(0, len(out) - 1)}
+
+
+def p_shift(ctx, sl, n, part, box, look, i, s, card):
+    """From-to rows (BCG): a label tile, how it is done today and what it costs, a chevron, how it is done in the new
+    way and what that costs. The shift and its size read in one line per row."""
+    x, y, w, h = box
+    P = _shift_plan(part, w, int(part.get("_bump") or 0))
+    if not P["rows"]:
+        return
+    lw, cw, g, fw = P["lw"], P["cw"], P["g"], P["fw"]
+    fx = x + lw + g
+    tx = fx + fw + g + cw + g
+    if P["hh"]:
+        for k_, (hx, ht) in enumerate(((fx, P["heads"][0]), (tx, P["heads"][1]))):
+            if ht:
+                R._write(R._box(sl, hx, y, fw, P["hh"], f"ov_ShiftHead{i}_{k_ + 1}", MSO_ANCHOR.BOTTOM),
+                         [{"text": ht, "size": R.bump(12), "bold": True, "numbers": False, "color": TC.TEXT_2}])
+        y, h = y + P["hh"] + 0.04, h - P["hh"] - 0.04
+    k = len(P["rows"])
+    gap = 0.08
+    extra = max(0.0, (h - sum(o[4] for o in P["rows"]) - gap * (k - 1)) / k)
+    ry = y
+    for j, (r, lab, fb, tb, need) in enumerate(P["rows"], 1):
+        rh = need + min(extra, need * 0.8)
+        prov = r.get("prov")
+        for b in fb + tb:
+            b["prov"] = prov
+        tile = R._fill(sl, x, ry, lw, rh, TC.TEXT_2, f"ov_ShiftTile{i}_{j}")
+        _in_shape(tile, lab, ctx, n, (0.08, 0.04, 0.08, 0.04), MSO_ANCHOR.MIDDLE)
+        R._write(R._box(sl, fx, ry, fw, rh, f"ov_ShiftFrom{i}_{j}", MSO_ANCHOR.MIDDLE), fb, ctx, n)
+        R.circled_chevron(sl, fx + fw + g + cw / 2, ry + rh / 2, min(0.32, max(0.22, cw - 0.04)),
+                          f"ov_ShiftArrow{i}_{j}")                    # a block arrow, not a thin chevron that read as a typed
+                                                          # character (user review)
+        R._write(R._box(sl, tx, ry, fw, rh, f"ov_ShiftTo{i}_{j}", MSO_ANCHOR.MIDDLE), tb, ctx, n)
+        ry += rh
+        if j < k:
+            R._rule(sl, fx, ry + gap / 2, w - lw - g, TC.ACCENT_5, 0.5, f"ov_ShiftRule{i}_{j}")
+            ry += gap
+
+
+def _evidence_plan(part, w, up=0):
+    items = [it if isinstance(it, dict) else {"text": str(it)} for it in part.get("items") or []][:6]
+    nw = min(1.7, max(1.0, w * 0.3))
+    tw = w - nw - 0.15
+    sz = R.bump(12) + up
+    out = []
+    for it in items:
+        nm = _txt(it.get("name") or "")
+        bl = [{"text": _txt(it.get("text") or ""), "size": sz, "numbers": False, "prov": it.get("prov")}]
+        nz = R.bump(13) + up
+        while nz > 10 and any(R._need_w(wd, nz, True) > nw - 0.55 for wd in nm.split()):
+            nz -= 1                                       # a name is never broken mid-word (a mark may sit before it)
+        nb = [{"text": nm, "size": nz, "bold": True, "numbers": False}]
+        need = max(R._need(bl, tw) * 1.08, R._need(nb, nw - 0.1) * 1.08, 0.42) + 0.14
+        out.append((it, nm, nb, bl, need))
+    return {"items": out, "nw": nw, "tw": tw, "need": sum(o[4] for o in out) + 0.06 * max(0, len(out) - 1)}
+
+
+def p_evidence(ctx, sl, n, part, box, look, i, s, card):
+    """Proof points from named companies (BCG): the company's logo (or its name) on the left, one line of what it
+    achieved on the right, hairlines between."""
+    x, y, w, h = box
+    P = _evidence_plan(part, w, int(part.get("_bump") or 0))
+    if not P["items"]:
+        return
+    from .logos import for_names
+    logos = part.get("logos") if isinstance(part.get("logos"), dict) else for_names([o[1] for o in P["items"] if o[1]])
+    k = len(P["items"])
+    gap = 0.06
+    extra = max(0.0, (h - P["need"]) / k)
+    ry = y
+    for j, (it, nm, nb, bl, need) in enumerate(P["items"], 1):
+        rh = need + min(extra, need * 0.8)
+        lg = logos.get(nm)
+        drawn = 0.0
+        if lg:
+            try:
+                from pathlib import Path
+                if Path(lg).exists():
+                    drawn = R.logo_shape(sl, lg, x, ry + rh / 2 - 0.14, 0.28, 4.5, f"ov_Logo{i}_{j}", f"{nm} logo")
+            except Exception:                              # noqa: BLE001 - a logo never breaks the slide
+                drawn = 0.0
+        if nm:                                             # the name is always said; a mark, when known, before it
+            off = min(drawn + 0.08, 0.5) if drawn else 0.0
+            if drawn and drawn + 0.08 > 0.5:               # a wide wordmark carries the name itself
+                off = None
+            if off is not None:
+                R._write(R._box(sl, x + off, ry, P["nw"] - off, rh, f"ov_EvName{i}_{j}", MSO_ANCHOR.MIDDLE), nb,
+                         ctx, n)
+        R._write(R._box(sl, x + P["nw"] + 0.15, ry, P["tw"], rh, f"ov_EvText{i}_{j}", MSO_ANCHOR.MIDDLE), bl, ctx, n)
+        ry += rh
+        if j < k:
+            R._rule(sl, x, ry + gap / 2, w, TC.ACCENT_5, 0.5, f"ov_EvRule{i}_{j}")
+            ry += gap
+
+
 DRAW = {"chart": p_chart, "table": p_table, "stats": p_stats, "text": p_text, "callout": p_callout,
-        "process": p_process, "timeline": p_timeline, "matrix2x2": p_matrix2x2, "harvey": p_harvey, "quote": p_quote}
+        "process": p_process, "timeline": p_timeline, "matrix2x2": p_matrix2x2, "harvey": p_harvey, "quote": p_quote,
+        "shift": p_shift, "evidence": p_evidence}
 
 
 def _strings(v, out):
@@ -728,6 +992,7 @@ def _strings(v, out):
 def render_part(ctx, sl, n, part, box, look="editorial", idx=1, s=None):
     """Draw one part inside box (x, y, w, h): the look's card and heading, then the body. A part that cannot be
     drawn is removed whole and its words are shown as plain text, so a slide is never left half-drawn."""
+    _register_diagrams()
     look = look if look in LOOKS else "editorial"
     kind = part.get("type")
     before = len(sl.shapes._spTree)
@@ -794,7 +1059,7 @@ def _overhead(part, w, look) -> tuple[float, float]:
     card = L["card"] and part.get("type") != "callout"
     head = _plain(part.get("heading") or "").strip()
     used = 0.0
-    ww = w - (L["inset"] or 0)
+    ww = w                                           # the minimal look's inset is vertical only (_frame)
     if head:
         if L["heading"] == "tab":
             bl, _ = R._fit([{"text": head, "size": R.bump(13), "bold": True}], ww - 0.24, 0.62, 11)
@@ -816,6 +1081,7 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
     """(min, natural, max) height of a part drawn w wide, frame included. Text, callouts, tables and quotes have one
     natural height (they never stretch); figures may grow a little; charts, processes, timelines and 2x2s are
     exhibits that take what they are given."""
+    _register_diagrams()
     oh, pad = _overhead(part, w, look)
     iw = w - 2 * pad
     t = part.get("type")
@@ -835,7 +1101,8 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
         cw = iw / max(1, len(ms)) - 0.12
         band = lambda z: _tl_band(ms, cw, z)[3] * 1.08 + 0.04   # noqa: E731  the renderer sets labels looser
         top = band(TL_STEPS[0])
-        return oh + min(MIN_H[t], top), oh + min(top, band(TL_STEPS[1])), oh + top
+        return oh + min(MIN_H[t], top), oh + min(top, band(TL_STEPS[1])), 99.0   # with room, cards under the
+                                                                                    # milestones take the height
     if t in FLEX:
         return oh + MIN_H[t], oh + MIN_H[t] + 0.8, 99.0
     if t == "stats":
@@ -858,12 +1125,18 @@ def measure(part, w, look, bump=0) -> tuple[float, float, float]:
             tb["size"] = R.T["cell"] + bump
         from types import SimpleNamespace
         ctx = SimpleNamespace(carry_rows=None)
-        need = R._table(ctx, None, 0, dict(tb), 0, 0, iw, 20.0, dry=True) * 1.06 + 0.1   # rendered rows run a little
-        return oh + need, oh + need, oh + need                                           # taller than measured
+        need = R._table(ctx, None, 0, dict(tb), 0, 0, iw, 20.0, dry=True) + 0.06   # the dry run already measures
+        return oh + need, oh + need, oh + need                                     # wrapped cells generously
     if t == "harvey":
         k = len(part.get("rows") or [])
         nat = 0.5 + 0.5 * k
-        return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 0.8 * k
+        return oh + 0.4 + 0.32 * k, oh + nat, oh + 0.5 + 1.3 * k     # rows spread (banded) to fill the column
+    if t == "shift":
+        nat = _shift_plan(part, iw, bump)["need"]
+        return oh + nat, oh + nat, oh + nat * 1.8
+    if t == "evidence":
+        nat = _evidence_plan(part, iw, bump)["need"]
+        return oh + nat, oh + nat, oh + nat * 1.8
     if t == "quote":
         bl = [{"text": _txt(part.get("text") or part.get("quote")), "size": 18 + bump, "italic": True}]
         if part.get("attribution"):
@@ -905,9 +1178,12 @@ def _compose_one(parts, lay, look, top, bottom):
         # (a callout and the figures at most two steps: a callout is already large, a figure grows 6 pt a step)
         step = lambda j, b: (min(b, 2) if parts[j].get("type") == "callout" else  # noqa: E731
                              min(b, 3) if parts[j].get("type") == "stats" else b)
+        beside_table = any(p_.get("type") == "table" for p_ in parts) and not any(
+            parts[j].get("type") == "table" for j in slots)    # words beside a table stay near its type size (a
+        cap_ = 1 if beside_table else MAX_BUMP.get(R.DENSITY["mode"], BUMPS[-1])   # 16 pt callout by a 9 pt table)
         if not any(parts[j].get("type") in FLEX and ms[j][2] > 50 for j in slots):   # an exhibit that takes any
                                                                                        # height takes the room first
-            for b in range(1, MAX_BUMP.get(R.DENSITY["mode"], BUMPS[-1]) + 1):
+            for b in range(1, cap_ + 1):
                 trial = {j: (measure(parts[j], w, look, step(j, b))
                              if parts[j].get("type") in GROWS else ms[j]) for j in slots}
                 if sum(m[1] for m in trial.values()) + gaps > H:
@@ -935,25 +1211,38 @@ def _compose_one(parts, lay, look, top, bottom):
                     over -= take
             if over > 0.01:
                 over_all += over
-                last = max(slots, key=lambda j: hs[j])
-                hs[last] = max(0.6, hs[last] - over)       # the part fits what it can and notes the rest
+                words_ = [j for j in slots if parts[j].get("type") in ("text", "quote", "callout")]
+                last = max(words_ or slots, key=lambda j: hs[j])   # words give way first (their extra lines go to
+                hs[last] = max(0.6, hs[last] - over)       # the notes): a table never loses a row of its comparison
         gap = GAP
         if len(slots) > 1 and slack > 0.01:                # what is left: a larger, equal rhythm between the parts
             gap = GAP + min(slack / (len(slots) - 1), RHYTHM_MAX - GAP)
+        left = H - (sum(hs.values()) + gap * (len(slots) - 1))
+        push = 0.0
+        if len(slots) > 1 and left > 0.3 and parts[slots[-1]].get("type") == "callout" and len(cols) > 1:
+            for j in slots[:-1]:                           # a column ending in a callout ends level with the column
+                add = min(left, max(0.0, ms[j][2] - hs[j]))   # beside it: the parts above take what they can use,
+                hs[j] += add                               # the callout keeps its own height and sits at the foot
+                left -= add                                # (stretched, it became a tall navy box around one line)
+            push = left
         y = top
         for j in slots:
+            if j == slots[-1]:
+                y += push
             out.append((j, (x, y, w, hs[j]), dict(parts[j], _bump=bumps[j]) if bumps[j] else parts[j]))
             y += hs[j] + gap
         empty += max(0.0, H - (y - gap - top)) * w
-    # side-by-side single cards of nearly one height share it (aligned feet); a much shorter card keeps its own
+    # side-by-side single parts share one height: their tops and feet align (a callout or a text column that stops
+    # short of the exhibit beside it leaves a block of white; house style: blocks share the top and bottom edge)
     xs = {}
     for o in out:
         xs[o[1][0]] = xs.get(o[1][0], 0) + 1
-    row = [o for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1 and o[2].get("type") not in FLEX]
-    if len(row) >= 2:
-        tallest = max(o[1][3] for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1)
+    singles = [o for o in out if abs(o[1][1] - top) < 1e-6 and xs[o[1][0]] == 1]
+    row = [o for o in singles if o[2].get("type") not in FLEX]
+    if len(singles) >= 2 and row:
+        tallest = max(o[1][3] for o in singles)
         for k_, (j, (x, y, w, h), p) in enumerate(out):
-            if (j, (x, y, w, h), p) in row and h >= 0.8 * tallest:
+            if (j, (x, y, w, h), p) in row:
                 out[k_] = (j, (x, y, w, tallest), p)
     return out, over_all, empty / (H * (R.RIGHT - R.LEFT))
 
@@ -965,19 +1254,31 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
     layout would overflow or leave much of the body empty, the layout that fits the content best is used instead
     (deterministic, scored on overflow and empty area). Returns [(part index, (x, y, w, h), part with its type
     step)]."""
+    _register_diagrams()
     if len(parts) > MAX_PARTS:
         _note(s, "parts left out (at most four on a slide): "
               + "; ".join(str(p.get("heading") or p.get("type")) for p in parts[MAX_PARTS:]))
         parts = parts[:MAX_PARTS]
     k = len(parts)
     best = None
+    tbl_w = lambda pl: min([b[2] for j, b, p in pl if p.get("type") == "table"] or [99.0])   # noqa: E731
+    tw0 = None
     for cand in [lay] + [c for c in ALTERNATIVES.get(k, []) if c != lay]:
         if LAYOUTS[cand] > k:
             continue
         placed, over, empty = _compose_one(parts, cand, look, top, bottom)
-        if cand == lay and (any(p.get("type") == "table" for p in parts) or over <= 0.01 and empty <= KEEP_EMPTY):
+        if tw0 is None:
+            tw0 = tbl_w(placed)
+        elif tbl_w(placed) < tw0 - 0.01:
+            continue                                       # a table is never moved into a narrower column
+        if cand == lay and over <= 0.01 and (s or {}).get("_keep_layout"):
+            return placed                                  # a diagram beside its argument stays beside it (a flat,
+                                                           # full-width diagram above short text read worse)
+        if cand == lay and over <= 0.01 and (any(p.get("type") == "table" for p in parts) or empty <= KEEP_EMPTY):
             return placed                                  # the asked-for layout fits (and fills): keep it; a table
                                                            # is never moved into a narrower column for fill alone
+                                                           # (but a layout that overflows is never kept: its callout
+                                                           # was crushed into the footer, real-path build)
         score = 10 * over + empty + (0 if cand == lay else 0.06)
         if best is None or score < best[0] - 1e-9:
             best = (score, cand, placed)
@@ -1025,6 +1326,7 @@ def a_grid(ctx, s, sl, n):
         return R.a_argument_only(ctx, s, sl, n)
     R._header(ctx, s, sl, n)
     parts = [p for p in s.get("parts") or [] if isinstance(p, dict)]
+    _share_scale(parts)
     look = s.get("look") or "editorial"
     if look not in LOOKS:
         _note(s, f"look '{look}' is not one of {', '.join(LOOKS)}; used editorial")
@@ -1033,21 +1335,125 @@ def a_grid(ctx, s, sl, n):
     if len(parts) > LAYOUTS[lay]:
         _note(s, f"layout '{lay}' has {LAYOUTS[lay]} regions for {len(parts)} parts; the extra parts were stacked")
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = R._notes_h(notes) if notes else 0
     bottom = R.FOOT_RULE_Y - 0.08 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h
-    for j, box, p in compose(parts, lay, look, R.BODY_Y, bottom, s):
+    placed = compose(parts, lay, look, R.BODY_Y, bottom, s)
+    if _chart_left(placed) and (ctx.last_side == n - 1 or s.get("_form") == "mirror"):
+        alt = _mirrored(parts, lay)                       # the slide before (or after) has its chart on the left with
+        if alt:                                           # a column beside it: this one puts its chart on the right
+            placed2 = compose(alt[1], alt[0], look, R.BODY_Y, bottom, s)
+            if not _chart_left(placed2):
+                parts, placed = alt[1], placed2
+    if _chart_left(placed):
+        ctx.last_side = n
+    for j, box, p in placed:
         render_part(ctx, sl, n, p, box, look, j + 1, s)
+    _flow_pointer(sl, placed)
+
+
+EVIDENCE_PARTS = ("chart", "table", "stats", "process", "timeline", "matrix2x2", "harvey", "shift", "evidence")
+
+
+def _flow_pointer(sl, placed) -> None:
+    """BCG's flat chevron from the evidence to its so-what: in the gutter, pointing right, when the callout sits
+    beside an exhibit; in the gap, pointing down, when it sits under one. The reader's eye goes from the proof to
+    the conclusion (consulting decks point the way; the user asked for it)."""
+    calls = [(j, b) for j, b, p in placed if p.get("type") == "callout"]
+    ev = [b for j, b, p in placed if p.get("type") in EVIDENCE_PARTS]
+    if len(calls) != 1 or not ev:
+        return
+    _, (x, y, w, h) = calls[0]
+    left = [b for b in ev if b[0] + b[2] <= x + 0.01 and b[1] < y + h and b[1] + b[3] > y]
+    above = [b for b in ev if b[1] + b[3] <= y + 0.01 and b[0] < x + w and b[0] + b[2] > x]
+    gx = max([b[0] + b[2] for b in left] or [x])
+    if left and x - gx >= 0.22:                          # a gutter wide enough: pointing right, at mid-height
+        R.circled_chevron(sl, gx + (x - gx) / 2, y + h / 2, min(0.3, x - gx - 0.04), "ov_FlowPointer")
+    elif above:
+        gy = max(b[1] + b[3] for b in above)
+        ex = [b for b in above if b[1] + b[3] >= gy - 0.01][0]
+        cx_ = max(x, ex[0]) + (min(x + w, ex[0] + ex[2]) - max(x, ex[0])) / 2   # centred on the shared span
+        E = 914400                                       # from what is drawn there (a table ends above its slot)
+        drawn = [(sh.top + sh.height) / E for sh in sl.shapes
+                 if sh.left / E < cx_ < (sh.left + sh.width) / E and gy - 3 < (sh.top + sh.height) / E <= y - 0.02
+                 and sh.top / E >= ex[1] - 0.01 and not (sh.name or "").startswith("Heading")]
+        gy = max(drawn) if drawn else gy
+        if y - gy >= 0.2:                                # BCG's flat chevron in the gap, pointing down at the so-what
+            span_ = min(x + w, ex[0] + ex[2]) - max(x, ex[0])
+            R.chevron_arrow(sl, cx_, gy + (y - gy) / 2, min(1.1, max(0.6, span_ * 0.18)), min(0.2, y - gy - 0.06),
+                            "down", "ov_FlowPointer")
+
+
+_STOP = {"a", "an", "the", "of", "per", "in", "by", "and", "to", "for", "on", "at", "vs", "year", "%", "share", "rate"}
+
+
+def _same_words(names) -> bool:
+    """Series names that name one measure (same categories alone do not: growth and concentration by country are two
+    measures that share their categories and their unit)."""
+    import re as _re
+    sets = [{w for n in ns for w in _re.findall(r"[a-z]+", n) if w not in _STOP} for ns in names]
+    if not all(sets):
+        return False
+    return all(len(x & sets[0]) / len(x | sets[0]) >= 0.5 for x in sets[1:])
+
+
+def _share_scale(parts) -> None:
+    """Two or more bar or column charts of one unit on a slide (small multiples) share one value scale, so their
+    bars compare at a glance; without it each chart fills its own frame and a small number looks large."""
+    charts = [p for p in parts if p.get("type") == "chart"]
+    cs = [_chart_of(p) for p in charts]
+    if len(cs) < 2 or len({c.get("kind") for c in cs}) != 1 or cs[0].get("kind") not in ("bar", "column") \
+            or len({str(c.get("unit") or "") for c in cs}) != 1:
+        return
+    names = [tuple(sorted(str(se.get("name", "")).lower() for se in c.get("series") or [] if isinstance(se, dict)))
+             for c in cs]
+    same_measure = len(set(names)) == 1 or (
+        len({tuple(str(x) for x in c.get("categories") or []) for c in cs}) == 1 and _same_words(names))
+    if not same_measure:                                   # two different measures that happen to share a unit (a
+        return                                             # price rise and a renewal rate, both %): own scales
+    vals = [v for c in cs for se in c.get("series") or [] if isinstance(se, dict)
+            for v in se.get("values") or [] if isinstance(v, (int, float))]
+    if not vals or min(vals) < 0:
+        return
+    for p, c in zip(charts, cs):
+        if isinstance(p.get("chart"), dict):
+            p["chart"] = dict(c, _shared_max=max(vals))
+        else:
+            p["_shared_max"] = max(vals)
+
+
+def _chart_left(placed) -> bool:
+    """A chart in the left part of the body with another part beside it (the chart-and-column look)."""
+    charts = [b for _, b, p in placed if p.get("type") == "chart" and b[0] < R.LEFT + 0.3 and 4.0 < b[2] < 9.5]
+    return bool(charts) and any(b[0] >= charts[0][0] + charts[0][2] - 0.1 for _, b, p in placed)
+
+
+def _mirrored(parts, lay):
+    """(layout, parts) with the chart on the right: main_side -> side_main, main_stack -> stack_main, halves with
+    its two parts swapped. None when the layout has no mirror."""
+    ci = next((k for k, p in enumerate(parts) if p.get("type") == "chart"), None)
+    if ci is None:
+        return None
+    rest = [p for k, p in enumerate(parts) if k != ci]
+    if lay == "main_side" and len(parts) == 2:
+        return "side_main", rest + [parts[ci]]
+    if lay == "main_stack" and len(parts) == 3:
+        return "stack_main", rest + [parts[ci]]
+    if lay == "halves" and len(parts) == 2:
+        return "halves", rest + [parts[ci]]
+    return None
 
 
 # ------------------------------------------------------------------ schema gate
 _NEEDS = {"chart": ("chart", "categories"), "table": ("table", "rows"), "stats": ("items",), "text": ("lead", "text", "bullets"),
           "callout": ("text", "bullets", "lead"), "process": ("steps",), "timeline": ("milestones", "items"),
-          "matrix2x2": ("quadrants",), "harvey": ("rows",), "quote": ("text", "quote")}
+          "matrix2x2": ("quadrants",), "harvey": ("rows",), "quote": ("text", "quote"), "shift": ("rows",),
+          "evidence": ("items",)}
 
 
 def part_errors(p, i) -> list[str]:
+    _register_diagrams()
     if not isinstance(p, dict):
         return [f"part {i}: must be an object with a 'type'"]
     t = p.get("type")
@@ -1071,6 +1477,15 @@ def part_errors(p, i) -> list[str]:
         errs.append(f"part {i} (matrix2x2): needs exactly 4 quadrants (top-left, top-right, bottom-left, bottom-right)")
     if t == "harvey" and not p.get("criteria"):
         errs.append(f"part {i} (harvey): needs 'criteria' (the columns) and rows [{{label, scores}}]")
+    if t == "shift" and not all(isinstance(r, dict) and r.get("label") and r.get("from") and r.get("to")
+                                for r in p.get("rows") or []):
+        errs.append(f"part {i} (shift): every row needs 'label', 'from' {{text, value}} and 'to' {{text, value}}")
+    if t == "evidence" and not all(isinstance(it, dict) and it.get("name") and it.get("text")
+                                   for it in p.get("items") or []):
+        errs.append(f"part {i} (evidence): every item needs 'name' (the company) and 'text' (what it achieved)")
+    from . import diagrams as D
+    if t in D.CHECKS:
+        errs += [f"part {i} ({t}): {e}" for e in D.CHECKS[t](p, i)]
     return errs
 
 
@@ -1120,3 +1535,24 @@ def grid_fallback(s: dict) -> dict:
     s["archetype"] = "argument_only"
     s["blocks"] = [{"text": "", "bullets": [{"text": t} for t in _strings(s.get("parts") or [], [])[:8]]}]
     return s
+
+
+# ------------------------------------------------------------------ diagram parts (engines/forge/diagrams)
+_DIAGRAMS = {"on": False}
+
+
+def _register_diagrams():
+    """Diagrams (3x3 and risk matrix, trees, Gantt, cycle, hub and spoke, pyramid, funnel) are parts too: they take
+    the height they are given, like the other exhibits. Registered on first use (diagrams imports this module)."""
+    if _DIAGRAMS["on"]:
+        return
+    _DIAGRAMS["on"] = True
+    from . import diagrams as D
+    global PART_TYPES, FLEX
+    DRAW.update(D.DRAW)
+    for t, need in D.NEEDS.items():
+        _NEEDS[t] = need
+        MIN_H[t] = D.MIN_H[t]
+    PART_TYPES = tuple(dict.fromkeys(PART_TYPES + tuple(D.DRAW)))
+    FLEX = tuple(dict.fromkeys(FLEX + tuple(D.DRAW)))
+

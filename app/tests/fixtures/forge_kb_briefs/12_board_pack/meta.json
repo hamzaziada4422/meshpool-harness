@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 9,
+ "wanted_diagrams": {
+  "s7": "risk_heatmap (likelihood vs impact, four risks)",
+  "s8": "strategy_house (pillars and enablers)"
+ },
+ "has_data": true
+}

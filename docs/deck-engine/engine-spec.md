@@ -53,7 +53,8 @@ renderer writes `provenance.json` next to the deck, and the validator reads it b
 Each archetype maps to a layout in the client template (the template loader finds it by placeholder signature,
 falling back to the forge default template). Word caps are body text outside tables and charts (P10,
 `density.by_archetype`). They were calibrated on 16 English reference decks: median 114 body words per content page,
-p90 185, chart labels included.
+p90 185, chart labels included. A recheck on 130 decks (3,655 pages, 2026-11-20) gives median 84 and p90 250; the caps
+stay.
 
 | # | Archetype | Use when the title says… | Elements | Body words |
 |---|---|---|---|---|
@@ -85,6 +86,41 @@ p90 185, chart labels included.
 | 26 | `quote_voice` | stakeholders say … | ≤3 quotes with attribution | 60 |
 | 27 | `appendix_divider` | — | — | exempt |
 | 28 | `end` | — | contact / next steps | exempt |
+| 29 | `risk_matrix` | these risks matter most | 3x3 heat grid (likelihood x impact), numbered items in cells, three severity bands | 95 |
+| 30 | `matrix_3x3` | items fall into nine zones | 3x3 grid on two named criteria, optional zone names | 95 |
+| 31 | `gantt` (`gantt_plan`) | the plan runs in these workstreams | label column, period header, a bar per row, milestone diamonds, group rows | 95 |
+| 32 | `issue_tree` | the metric breaks down into these drivers | left-to-right tree, up to 3 levels and 12 leaves, elbow hairlines | 95 |
+| 33 | `org_chart` | this is who owns what | top-down tree, up to 3 levels, wide rows wrap under their parent | 85 |
+| 34 | `cycle` | each step feeds the next | 3-6 nodes on an ellipse, glued arrows, optional centre label | 85 |
+| 35 | `hub_spoke` | everything depends on one centre | hub and 3-8 spokes with glued connectors | 95 |
+| 36 | `pyramid` | each layer builds on the one below | 3-5 stacked trapezoids, text beside each band | 85 |
+| 37 | `funnel` | most drop out between these stages | 3-6 narrowing bars, values and conversion rates | 75 |
+| 38 | `cases` | these firms already show it works | one row per company: its logo (fetched, own colours, native shapes) or name, a big figure and a line | 70 |
+| 39 | `layout` | (any; a built-in layout fits the message) | one of 91 shipped layout specs (`data/layouts.json`), slots filled by the writer, side column for the argument | 100 |
+| 40 | `library` | (any; local only) | a golden library item rebuilt as native themed shapes with the writer's text in its slots; needs `MESHPOOL_KB` | 100 |
+
+Archetypes 29 to 37 are diagrams (`app/engines/forge/diagrams/`). Each is also a grid part of the same name (the 3x3
+part is `matrix3x3`), so it can fill a grid region beside a chart or text. As an archetype it draws the diagram on
+the left two thirds and the takeaway and bullets on the right third, or across the slide when there is no argument.
+Body words are the balanced caps; read and present caps are in `rules.yaml`. Their labels take the dense 10 pt floor
+(`text_fit.dense_archetypes`), like the grid's 2x2. A diagram that fails its schema keeps every part that can be
+drawn faithfully and shows the rest as text. Their proportions were studied on the golden library items and encoded
+as numbers in code; no shape, text or image was copied.
+
+The `slide_layouts` tool (engines/forge/tools.py, on the office MCP server) names the archetypes that prove a
+message, with the reference decks' numbers for them.
+
+An argument column (exhibit_argument's right panel, a diagram's or a layout's side column) of 2-4 points is drawn
+as point cards (`render.draw_points`): an icon chosen by meaning or a numbered badge, the point's `label` as its
+header, its text and detail lines; four one-line points make a 2x2 of boxes. A column that does not fit as cards at
+10 pt is written as text.
+
+Archetypes 38 to 40 are composite. `cases` fetches each company's logo once from the internet (full-colour CC0
+logos from gilbarbara/logos, else the Simple Icons mark in the brand's own colour) and draws it as a group of native
+shapes; shapes marked `logo:` keep their own colours and are not counted by P6. With no network or no mark, the
+company's name is shown. `layout` draws a shipped layout spec: abstract geometry and slot roles only, with no template
+text, colours, fonts or source names. The storyline prompt lists the layouts, and the writer is given the chosen
+layout's slots. `library` and `layout` fall back to their `fallback` slide when the item or spec is missing.
 
 Selection rule: the archetype is chosen to prove the title, not at random. The same archetype may appear at most 3
 times in a row (P15). Stock imagery is never used unless the user supplied it.
@@ -155,7 +191,7 @@ Every threshold is in `app/engines/forge/rules.yaml`. Summary:
 | P17 | not editable | group depth ≤1; no forbidden locks |
 | P18 | inaccessible | alt text on pictures/charts (a file name doesn't count); reading order |
 | P19 | inconsistent fonts and placement | title box, title size and face, body face, content margin, source line, chart label size identical across content slides |
-| P20 | big or disguised empty space ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`; chart plot areas count as content; McKinsey content pages median 6%, p90 12%). From the file: table rows ≤0.25in taller than their text (`max_row_air_in`); bars ≤0.6in and columns ≤1.2in thick (`max_bar_in`, `max_column_in`). Before render: fill targets per archetype (`build.fill_checks`) |
+| P20 | big or disguised empty space ("looks AI-generated") | on the render, the largest empty block in a content slide's body is ≤20% of the body (`whitespace.max_empty_share`; chart plot areas count as content; McKinsey content pages median 6%, p90 12%). From the file: table rows ≤0.25in taller than their text (`max_row_air_in`); bars ≤0.6in and columns ≤1.2in thick (`max_bar_in`, `max_column_in`). Before render: fill targets per archetype (`build.fill_checks`). From the file: blocks side by side (tables, charts, panels, cards) that start together end within 0.45in of each other unless another part continues the shorter column (`unaligned_feet`) |
 
 **Excel (validate_xlsx.py)**: recalculates headless in LibreOffice first.
 

@@ -968,3 +968,91 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .subtabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--pool)}
 .th .end .tm{pointer-events:none}
 .th .end .tm{white-space:nowrap;text-align:right}
+
+/* Writing styles */
+.stact{display:flex;gap:8px;align-items:center;flex:none;flex-wrap:wrap}
+.stedit{max-width:560px;margin:12px 0}
+.stedit .linkbtn{padding:0;text-align:left;margin-bottom:8px}
+.rows2 li .stact{margin-left:auto}
+@media (max-width:640px){.rows2 li:has(.stact){flex-wrap:wrap}.rows2 li .stact{margin-left:0}}
+
+/* ---------- previews: the viewer pane, the cards under a reply, the Preview button on code ---------- */
+.pvp{grid-column:3;width:clamp(480px,46vw,920px);border-left:1px solid var(--line-2);background:var(--bg);display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;outline:none}
+.app.pvopen>.panel{display:none}
+.pvp:not([hidden]){animation:mp-fade .16s ease-out both}
+.pv-bar{display:flex;align-items:center;gap:8px;padding:8px 10px 8px 14px;border-bottom:1px solid var(--line-2);background:var(--surface);min-height:46px}
+.pv-bar .sp{flex:1}
+.pv-ic{color:var(--ink-3);display:inline-grid}.pv-ic svg{width:16px;height:16px}
+.pv-name{font-size:var(--fs-m);font-weight:500;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pv-type{font-size:var(--fs-xs);color:var(--ink-3);border:1px solid var(--line);border-radius:var(--r-s);padding:1px 6px;white-space:nowrap;flex:none}
+.pv-seg{display:inline-flex;border:1px solid var(--line-3);border-radius:var(--r-s);overflow:hidden;flex:none}
+.pv-seg button{border:0;background:var(--surface);color:var(--ink-3);padding:4px 10px;font-size:var(--fs-s)}
+.pv-seg button[aria-pressed="true"]{background:var(--sel);color:var(--ink)}
+.pv-seg button:not([aria-pressed="true"]):hover{background:var(--hover)}
+#pvOpen{flex:none;white-space:nowrap}
+.pv-tabs{display:flex;gap:2px;padding:6px 10px 0;border-bottom:1px solid var(--line-2);overflow-x:auto;background:var(--surface)}
+.pv-tabs button{border:0;background:none;color:var(--ink-3);padding:6px 12px;font-size:var(--fs-s);border-radius:var(--r-s) var(--r-s) 0 0;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;border-bottom:2px solid transparent}
+.pv-tabs button:hover{color:var(--ink);background:var(--hover)}
+.pv-tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink-2)}
+.pv-stage{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.pv-note{margin:auto;padding:24px;color:var(--ink-3);font-size:var(--fs-s);display:flex;gap:10px;align-items:center;text-align:center;max-width:420px}
+.pv-spin{width:14px;height:14px;border:2px solid var(--line-3);border-top-color:var(--ink-3);border-radius:50%;animation:pvspin .8s linear infinite;flex:none}
+@keyframes pvspin{to{transform:rotate(360deg)}}
+.pv-pagewrap{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start;background:var(--fill)}
+.pv-pg{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:2px;box-shadow:var(--shadow-s);transition:opacity var(--t-fast);min-height:120px;min-width:200px}
+.pv-pg.loading{opacity:.45}
+.pv-more{padding:6px 14px;font-size:var(--fs-xs);color:var(--ink-3);border-top:1px solid var(--line-2);background:var(--surface)}
+.pv-strip{display:flex;align-items:center;gap:4px;padding:8px 10px;border-top:1px solid var(--line-2);background:var(--surface)}
+.pv-strip .iconbtn:disabled{opacity:.35;cursor:default}
+#pvPrev svg{transform:rotate(90deg)}#pvNext svg{transform:rotate(-90deg)}
+.pv-thumbs{flex:1;min-width:0;display:flex;gap:8px;overflow-x:auto;padding:2px;scrollbar-width:thin}
+.pv-th{flex:none;position:relative;width:88px;border:1px solid var(--line);background:#fff;padding:0;border-radius:var(--r-s);overflow:hidden;min-height:50px}
+.pv-th img{display:block;width:100%;height:auto;min-height:48px}
+.pv-th span{position:absolute;left:3px;bottom:2px;font-size:10px;line-height:1;background:var(--surface);color:var(--ink-2);border-radius:3px;padding:2px 4px}
+.pv-th:hover{border-color:var(--line-3)}
+.pv-th.on{outline:2px solid var(--focus);outline-offset:1px;border-color:transparent}
+.pv-count{font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap;min-width:48px;text-align:right;padding-right:4px}
+.pv-frame{flex:1;width:100%;border:0;background:#fff;color-scheme:light}
+.pv-md{flex:1;overflow:auto;padding:20px 24px;font-size:var(--fs-m);line-height:1.6;color:var(--ink)}
+.pv-md h3{margin:1.2em 0 .5em}.pv-md table{border-collapse:collapse}.pv-md th,.pv-md td{border:1px solid var(--line);padding:4px 10px}
+.pv-md pre{background:var(--fill);border-radius:var(--r-m);padding:12px 14px;overflow:auto;font:var(--fs-s)/1.55 var(--mono)}
+.pv-code{flex:1;margin:0;overflow:auto;padding:14px 16px;font:var(--fs-s)/1.55 var(--mono);color:var(--ink);background:var(--bg);white-space:pre;tab-size:2;outline:none}
+.pv-img{flex:1;min-height:0;overflow:auto;padding:16px;display:flex;justify-content:center;align-items:flex-start;background:var(--fill)}
+.pv-img img{max-width:100%;height:auto;background:#fff;border:1px solid var(--line);border-radius:var(--r-s)}
+.pv-sheet{flex:1;min-height:0;overflow:auto;background:var(--surface);outline:none}
+.pv-sheet table{border-collapse:separate;border-spacing:0;font-size:var(--fs-s);min-width:100%}
+.pv-sheet th,.pv-sheet td{border-right:1px solid var(--line-2);border-bottom:1px solid var(--line-2);padding:4px 10px;text-align:left;white-space:nowrap;max-width:320px;overflow:hidden;text-overflow:ellipsis;font-weight:400;color:var(--ink)}
+.pv-sheet thead th{position:sticky;top:0;z-index:2;background:var(--fill);color:var(--ink-3);font-size:var(--fs-xs);text-align:center}
+.pv-sheet th.rn{position:sticky;left:0;z-index:1;background:var(--fill);color:var(--ink-3);font-size:var(--fs-xs);text-align:right;min-width:36px}
+.pv-sheet thead th.rn{z-index:3}
+.pv-sheet td.num{text-align:right;font-variant-numeric:tabular-nums}
+.pv-sheet tbody tr:nth-child(2) td{font-weight:500}
+.pv-sheet tbody tr:hover td{background:var(--hover)}
+@media (max-width:980px){.pvp{position:fixed;right:0;top:0;bottom:0;z-index:40;width:100vw;box-shadow:var(--shadow)}}
+@media (max-width:560px){.pv-type,.pv-ic{display:none}#pvOpen{padding:5px 8px}.pv-th{width:68px}.pv-count{display:none}}
+
+/* cards under a reply */
+.pvcards{display:flex;flex-wrap:wrap;gap:8px;margin:-12px 0 16px}
+.pvcard{display:flex;align-items:stretch;gap:0;text-align:left;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-m);padding:0;overflow:hidden;width:240px;max-width:100%;color:var(--ink);transition:background var(--t-hover),border-color var(--t-hover)}
+.pvcard:hover{background:var(--hover);border-color:var(--line-3)}
+.pvth{flex:none;width:72px;height:54px;background:var(--fill);border-right:1px solid var(--line-2);display:grid;place-items:center;overflow:hidden;color:var(--ink-3)}
+.pvth img{width:100%;height:100%;object-fit:cover;object-position:top;background:#fff}
+.pvth.wait{animation:pvpulse 1.4s ease-in-out infinite}
+@keyframes pvpulse{50%{opacity:.55}}
+.pvi svg{width:20px;height:20px}
+.pvcm{min-width:0;padding:8px 10px;display:flex;flex-direction:column;justify-content:center;gap:2px}
+.pvcm b{font-size:var(--fs-s);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pvcm small{font-size:var(--fs-xs);color:var(--ink-3)}
+.pvmore{align-self:center;font-size:var(--fs-xs);color:var(--ink-3)}
+
+/* Preview button on html and svg code blocks */
+/* a header row above the code (language, Preview), so the button never sits on the code */
+.codewrap{margin:12px 0 8px;background:var(--fill);border-radius:var(--r-m);overflow:hidden}
+.codehd{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px 0 14px;font:var(--fs-xs)/1.4 var(--mono);color:var(--ink-3)}
+.msg-ai .codewrap pre{margin:0;border-radius:0}
+.msg-ai .codewrap:last-child{margin-bottom:0}
+.pvbtn{border:1px solid var(--line-3);background:var(--surface);color:var(--ink-2);border-radius:var(--r-s);padding:2px 9px;font-size:var(--fs-xs);opacity:.85}
+.pvbtn:hover,.pvbtn:focus-visible{opacity:1;background:var(--hover);color:var(--ink)}
+.pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}
+.pvth{width:96px}
+

@@ -24,7 +24,13 @@ from . import render as R
 # meaning -> a Lucide icon that exists in the bundled set; the first family whose words appear in the text wins
 MEANINGS = (
     (r"\brisks?\b|threat|downside|exposure|conflict|critic|break the case", "triangle-alert"),
-    (r"antitrust|regulat|clearance|approval|legal|lawsuit|compliance|governance", "scale"),
+    (r"fraud|secur|protect|safety|cyber|privacy", "shield-check"),
+    (r"take rate|pricing|\bfees?\b|charges?\b|tariff|discount|price war|price cut", "tag"),
+    (r"cross-border|global|international|countr|abroad|geograph|regions?\b|worldwide", "globe"),
+    (r"payment|card|checkout|transaction|payout|wallet", "credit-card"),
+    (r"volume|throughput|processed|transfers?\b", "chart-column"),
+    (r"market share|\bshare of\b|mix\b|split\b", "chart-pie"),
+    (r"antitrust|regulat|clearance|approval|legal|lawsuit|compliance|governance", "gavel"),
     (r"\beps\b|accreti|dilut|earnings per share", "chart-line"),
     (r"synerg", "combine"),
     (r"valuation|multiple|\bdcf\b|comps?\b|precedent|ev\s*/|premium|price per share|\bprice\b|offer", "gauge"),
@@ -33,15 +39,26 @@ MEANINGS = (
     (r"revenue|sales|backlog|bookings|pipeline|demand", "trending-up"),
     (r"decline|fall|drop|loss|shrink|dilutive", "trending-down"),
     (r"cost|margin|expense|spend", "receipt"),
-    (r"customer|client|hyperscaler|user|tenant", "users"),
+    (r"customer|client|hyperscaler|user|tenant|shopper|consumer|buyer", "users"),
     (r"partner|deal\b|acqui|merger|takeover|buy\b|stake|ownership|shares", "handshake"),
     (r"integrat|combine|structure|licen", "puzzle"),
     (r"\bgw\b|power|energy|capacity|data cent|compute|gpu|chip|infrastructure", "zap"),
-    (r"\btime|timing|week|month|quarter|year|date|deadline|schedule|by \d", "clock"),
+    (r"\btime\b|timing|weeks?\b|deadline|schedule|lead time", "clock"),   # not "year" or "month": every finance
+    # line has one, and a clock beside "39.6% of the three-year budget" means nothing (blind review)
     (r"confirm|verify|diligence|check|review|test", "search-check"),
-    (r"plan|next step|action|roadmap|prepare|run\b", "list-checks"),
-    (r"growth|scale|expand|grow", "trending-up"),
-    (r"people|team|talent|hire|workforce|staff", "users"),
+    (r"\bplans?\b|planning|planned|next step|action|roadmap|prepare|\brun\b", "list-checks"),
+    (r"growth|scale|expand|grow|grew|rising|rose\b|up \d", "trending-up"),
+    (r"supply|logistic|freight|shipping|deliver|warehouse|fleet", "truck"),
+    (r"factory|\bplants?\b(?!-based)|manufactur|production|assembly", "factory"),
+    (r"retention|\bretain|loyal|churn|repeat|renewal|satisf", "repeat"),
+    (r"brand|marketing|campaign|awareness|advertis", "megaphone"),
+    (r"launch|new product|innovat|idea|pilot", "lightbulb"),
+    (r"sustainab|carbon|\besg\b|emission|climate|green", "leaf"),
+    (r"health|patient|clinic|hospital|nurs|care\b", "heart-pulse"),
+    (r"data\b|analytics|insight|dashboard|measure", "database"),
+    (r"speed|faster|slower|install time|cycle time|lead time|hours?\b|days?\b", "timer"),
+    (r"quality|award|best[- ]in|winner", "award"),
+    (r"people|team|talent|hire|hiring|recruit|clinicians?|headcount|workforce|staff", "users"),
     (r"goal|target|aim|objective|recommend|decision|approve", "target"),
     (r"market|competit|rival|peer", "store"),
     (r"technology|software|platform|\bai\b|model", "cpu"),
@@ -59,17 +76,23 @@ def meaning_icon(text: str, taken=()) -> str | None:
     """The icon for a block's meaning, or None when nothing in the text names one (no meaningless dots). Icons
     already used on the slide (`taken`) are skipped, so each block gets its own."""
     t = plain(text).lower()
-    for pat, name in MEANINGS:
-        if re.search(pat, t) and R.icon_name(name) not in taken:
-            return R.icon_name(name)
-    return None
+    hits = []
+    for k, (pat, name) in enumerate(MEANINGS):            # the meaning named first in the text wins (a point about
+        m = re.search(pat, t)                              # growth that mentions prices is about growth)
+        if m:
+            hits.append((m.start(), k, name))
+    for pos, _, name in sorted(hits)[:1]:                 # its first meaning only, named early: a second choice or
+        ic = R.icon_name(name)                             # a word deep in the line gave a clock to "fewer errors"
+        if ic not in taken and len(t[:pos].split()) <= 6:  # and a shop to "shopped against the market" (blind
+            return ic                                      # review); none is better: the slide then numbers its
+    return None                                            # points
 
 
 def item_icons(items) -> list[str | None]:
     """One distinct icon per item: chosen by its lead first, then by its detail."""
     out: list[str | None] = []
     for it in items:
-        ic = meaning_icon(it["lead"], out) or meaning_icon(" ".join(b["text"] for b in it["bullets"]), out)
+        ic = meaning_icon(it["lead"], out)                # the lead names it, or the point gets a number
         out.append(ic)
     return out
 
@@ -140,11 +163,20 @@ SIZES = ((0, 0), (3, 2), (3, 5), (5, 5))         # (lead, bullet) steps over the
 def _col_blocks(it, z, figure):
     lead = it["lead"]
     out = []
-    if lead:
-        out.append({"text": lead, "size": R.ARGUMENT["intro"] + SIZES[z][0], "numbers": False, "prov": it.get("prov")})
+    if lead:                                              # the column's lead: bold, the one weight step
+        out.append({"text": lead, "size": R.ARGUMENT["intro"] + SIZES[z][0], "bold": True, "numbers": False,
+                    "prov": it.get("prov")})
     for b in it["bullets"]:
         out.append({"text": b["text"], "size": R.ARGUMENT["bullet"] + SIZES[z][1], "bullet": True,
                     "space_before": 4, "prov": b.get("prov")})
+    foot = it.get("foot")
+    if foot:                                              # who and when, in a band at the foot of the column: the
+        fz = max(11, R.ARGUMENT["bullet"] + SIZES[z][1] - 2)   # owner in bold, the timing under it, both smaller
+        parts = foot if isinstance(foot, list) else [foot]      # and lighter than the step
+        for k_, f_ in enumerate(p_ for p_ in parts if p_):
+            out.append({"text": f_, "size": fz, "bold": k_ == 0 and len(parts) > 1, "numbers": False,
+                        "color": TC.TEXT_1 if k_ == 0 and len(parts) > 1 else TC.TEXT_2,
+                        "space_before": 8 if k_ == 0 else 1})
     return out
 
 
@@ -154,7 +186,7 @@ def argument_layout(ctx, s, sl, n):
     intro, items = _items(s)
     co = [b["text"] if isinstance(b, dict) else str(b) for b in (s.get("callout") or {}).get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.14 * max(1, (len("    ".join(notes)) // 190) + 1) + 0.04) if notes else 0
+    notes_h = R._notes_h(notes) if notes else 0
     bottom = R.FOOT_RULE_Y - 0.06 - notes_h if notes else R.BODY_B
     if notes:
         ctx.notes_top = R.FOOT_RULE_Y - 0.03 - notes_h
@@ -186,20 +218,44 @@ def argument_layout(ctx, s, sl, n):
 
 
 def _spans(k):
-    return {2: [(0, 11), (12, 23)], 3: [(0, 7), (8, 15), (16, 23)], 4: [(0, 5), (6, 11), (12, 17), (18, 23)]}[k]
+    return {2: [(0, 11), (12, 23)], 3: [(0, 7), (8, 15), (16, 23)], 4: [(0, 5), (6, 11), (12, 17), (18, 23)],
+            5: [(0, 3), (5, 8), (10, 13), (15, 18), (20, 23)]}[k]
+
+
+_DATE = re.compile(r"(?i)\b(?:(\d{1,2})\s+)?(jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|"
+                   r"nov\w*|dec\w*)\s+(20\d\d)\b|\b(q[1-4])\s+(20\d\d)\b")
 
 
 def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
     """One column per item under its marker (figure, chevron or icon). Returns the height used."""
     k = len(items)
     cols = [R.span24(a, b) for a, b in _spans(k)]
+    whens = [None] * k
+    if mode == "process":                                 # a step bar carries each step's date (a row of bare
+        short = [None] * k                                # digits says nothing: blind review); a short timing leaves
+        for j, it in enumerate(items):                    # the foot, so it is said once; a long one keeps its words
+            f_ = it.get("foot")                           # there and gives the bar its first date
+            t_ = str(f_[-1]) if isinstance(f_, list) and len(f_) >= 2 and f_[-1] else ""
+            m_ = _DATE.search(t_)
+            if m_ and m_.group(4):                        # one date form across the bar: "16 Dec 2026", "Q2 2027"
+                whens[j] = f"{m_.group(4).upper()} {m_.group(5)}"
+            elif m_:
+                whens[j] = (m_.group(1) + " " if m_.group(1) else "") + m_.group(2)[:3].capitalize() + " " + m_.group(3)
+            elif t_ and len(t_) <= 26:
+                whens[j] = t_
+            short[j] = bool(t_) and (not m_ or len(t_) - len(m_.group(0)) <= 4)   # the timing is just the date
+        if all(whens):
+            items = [dict(it, foot=[x for x in it["foot"][:-1] if x]) if short[j] else it
+                     for j, it in enumerate(items)]
+        else:
+            whens = [None] * k
     figs = [headline_figure(it["lead"]) for it in items] if mode == "figures" else [None] * k
     icons = item_icons(items)
     if mode == "icons" and sum(1 for i in icons if i) < k:
         mode = "badges" if sum(1 for i in icons if i) < 2 else "icons"   # one shared look per slide
     mark_h = {"figures": 0.95, "process": 0.62, "icons": 0.72, "badges": 0.62}[mode]
     best = None
-    for z in range(len(SIZES)):
+    for z in range(len(SIZES) if k <= 4 else 2):          # five narrow columns grow one step at most
         need = max(R._need(_col_blocks(it, z, f), w) for it, f, (_, w) in zip(items, figs, cols))
         if need <= avail - mark_h or best is None:
             best = (z, need)
@@ -207,6 +263,39 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             break
     z, need = best
     body_h = min(avail - mark_h, need)
+    # what the largest type still leaves goes into an even rhythm between the lines of each column, capped (BCG
+    # benchmark: two short columns ended halfway down the body); never into the words
+    extra_pt = 0.0
+    lines_ = max(len(_col_blocks(it, z, f)) for it, f in zip(items, figs))
+    left = (avail - mark_h) - need
+    if left > 0.4 and lines_ > 1:
+        extra_pt = min(left * 0.85 / (lines_ - 1), 0.32) * 72
+        body_h = min(avail - mark_h, need + extra_pt / 72 * (lines_ - 1) + 0.05)
+    grid, lead_h, foot_h = None, 0.0, 0.0
+    if mode != "figures" and all(it.get("lead") for it in items):   # shared bands across the columns
+        grid = []
+        for it, f in zip(items, figs):
+            bl_ = _col_blocks(it, z, f)
+            nf = len([f_ for f_ in it["foot"] if f_]) if isinstance(it.get("foot"), list) else 1
+            foot_b = bl_[-nf:] if it.get("foot") and len(bl_) > nf else []
+            mid_b = bl_[1:len(bl_) - len(foot_b)]
+            det = max([b_["size"] for b_ in mid_b] or [R.ARGUMENT["bullet"]])
+            lead_b = [dict(bl_[0], size=min(det + 2, R.T["head"] + 2))] if bl_ else []   # the lead: one step over
+                                                                                          # its detail, never under
+            if extra_pt:                                  # one even rhythm in every column (capped), so the
+                for b_ in mid_b[1:]:                      # columns use the body without ragged gaps
+                    b_["space_before"] = (b_.get("space_before") or 0) + min(extra_pt, 12)
+            grid.append((lead_b, mid_b, foot_b))
+        lead_h = max(R._need(g[0], w) for g, (_, w) in zip(grid, cols)) if grid else 0.0
+        foot_h = max((R._need(g[2], w) for g, (_, w) in zip(grid, cols) if g[2]), default=0.0)
+        room = avail - mark_h
+        fixed = lead_h + (0.12 if foot_h else 0) + foot_h + 0.08
+        mid_need = lambda: max((R._need(g[1], w) for g, (_, w) in zip(grid, cols) if g[1]), default=0.0)  # noqa: E731
+        if fixed + mid_need() > room:                     # the rhythm never costs a line: drop the extra spacing
+            for g in grid:                                # before any detail would be cut
+                for b_ in g[1][1:]:
+                    b_["space_before"] = 4
+        body_h = min(room, max(body_h, fixed + mid_need() + 0.04))   # the bands hold what the leads grew to
     for j, (it, (x, w)) in enumerate(zip(items, cols)):
         if mode == "figures":
             val, cap = figs[j]
@@ -219,12 +308,14 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                          [{"text": cap[:60], "size": R.T["label"], "bold": True, "numbers": False,
                            "color": TC.TEXT_2}])
         elif mode == "process":
-            shp = R._fill(sl, x, y, w + (0.12 if j < k - 1 else 0), 0.46, TC.TEXT_2 if j == k - 1 else TC.ACCENT_4,
+            shp = R._fill(sl, x, y + 0.06, w + (0.12 if j < k - 1 else 0), 0.32,     # a slim step bar, one
+                          TC.ACCENT_1,                                                  # colour for every step
                           f"ov_Step{j + 1}", MSO_SHAPE.PENTAGON if j == 0 else MSO_SHAPE.CHEVRON)
-            shp.adjustments[0] = 0.35
-            R._shape_text(shp, [{"text": f"{j + 1}", "size": R.T["head"], "bold": True, "numbers": False,
+            shp.adjustments[0] = 0.3
+            R._shape_text(shp, [{"text": f"{j + 1}   {whens[j]}" if whens[j] else f"{j + 1}", "size": R.T["label"],
+                                 "bold": True, "numbers": False,
                                  "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
-                          (x + 0.2, y + 0.02, w - 0.3, 0.42), MSO_ANCHOR.MIDDLE)
+                          (x + 0.2, y + 0.06, w - 0.3, 0.32), MSO_ANCHOR.MIDDLE)
         elif mode == "icons" and icons[j]:
             R._icon(sl, icons[j], x, y, 0.52, plain(it["lead"])[:60])
         else:
@@ -233,8 +324,27 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
             R._shape_text(b, [{"text": str(j + 1), "size": R.T["head"], "bold": True, "numbers": False,
                                "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
                           (x, y + 0.03, d, d), MSO_ANCHOR.MIDDLE)
-        R._rule(sl, x, y + mark_h - 0.1, w, TC.TEXT_1, 0.75, f"ov_ColumnRule{j + 1}")
-        bl, dropped = R._trim_to_fit(_col_blocks(it, z, figs[j]), w, body_h + 0.02, 11)
+        R._rule(sl, x, y + mark_h - 0.1, w, TC.ACCENT_1, 0.75, f"ov_ColumnRule{j + 1}")
+        if grid:                                          # shared bands: leads, then the detail from one line, then
+            lead_b, mid_b, foot_b = grid[j]               # who and when on one bottom line in every column
+            top_ = y + mark_h
+            if lead_b:
+                R._write(R._box(sl, x, top_, w, lead_h + 0.04, f"Column{j + 1}"), lead_b, ctx, n)
+            mid_h = body_h - lead_h - foot_h - (0.12 if foot_h else 0) - 0.08
+            if mid_b:
+                bl, dropped = R._trim_to_fit(mid_b, w, mid_h + 0.02, 11)
+                R._cut_note(s, dropped)
+                R._write(R._box(sl, x, top_ + lead_h + 0.08, w, mid_h + 0.05, f"ColumnDetail{j + 1}"), bl, ctx, n)
+            if foot_b:
+                R._rule(sl, x, top_ + body_h - foot_h - 0.07, w, TC.ACCENT_5, 0.75, f"ov_FootRule{j + 1}")
+                R._write(R._box(sl, x, top_ + body_h - foot_h, w, foot_h + 0.04, f"ColumnFoot{j + 1}"), foot_b,
+                         ctx, n)
+            continue
+        blocks = _col_blocks(it, z, figs[j])
+        if extra_pt:
+            for b in blocks[1:]:
+                b["space_before"] = (b.get("space_before") or 0) + extra_pt
+        bl, dropped = R._trim_to_fit(blocks, w, body_h + 0.02, 11)
         R._cut_note(s, dropped)
         R._write(R._box(sl, x, y + mark_h, w, body_h + 0.05, f"Column{j + 1}"), bl, ctx, n)
     return mark_h + body_h

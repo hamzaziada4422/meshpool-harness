@@ -80,6 +80,14 @@ def brand_from(task: str, files: list[str] | None = None) -> tuple[dict, dict | 
         print(f"company look skipped: {type(e).__name__}: {e}", file=sys.stderr)
         prof = None
     if not prof:
+        if not asked:                                            # Settings > Company: a style pack for new decks
+            try:
+                from engines.forge import brand as B, styles as ST
+                chosen = B._index().get("style")
+                if chosen in ST.names():
+                    return {"theme": ST.theme(chosen)}, None
+            except Exception:                                    # noqa: BLE001 - a broken index never blocks a deck
+                pass
         return {"theme": asked}, None
     look = B.render_kwargs(prof)
     if asked:
@@ -269,9 +277,15 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, files: list[str
         th = look.get("theme")
         look["theme"] = {**(th if isinstance(th, dict) else {"palette": th} if th else {}), "icon_set": iset}
     from engines.forge.design import mode_from as design_mode
-    res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client, task_id=task_id,
-                density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"),
-                design=design_mode(task, options), **look)
+    from engines.forge import select as SEL
+    kw_ = dict(density=mode, fixed_pages=fixed, extra_facts=extra, research=(options or {}).get("research"),
+               design=design_mode(task, options), **look)
+    if SEL.wanted() > 1:                                       # best of N builds, graded (MH_BEST_OF; off by default)
+        res = SEL.best_of(_brief(task, workdir, files), workdir, SEL.wanted(), build, client=client,
+                          slides_wanted=max(slides, len(fixed) + 3), **kw_)
+    else:
+        res = build(_brief(task, workdir, files), workdir, max(slides, len(fixed) + 3), client=client,
+                    task_id=task_id, **kw_)
     pptx = res["pptx"]
     failing = [k for k, v in res["rules"].items() if v == "fail"]
     left = sum(len(v) for v in (res.get("unresolved") or {}).values())

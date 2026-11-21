@@ -381,7 +381,7 @@ function openSearch(tab = "all", q0 = "") {
     closeSearch();
     if (it.kind === "chat" || it.kind === "code") { S.mode = it.kind === "code" ? "code" : "chat"; store("appmode", S.mode); syncMode(); openThread(it.id); }
     else if (it.kind === "project") { S.mode = "chat"; syncMode(); openProject(it.id); }
-    else if (it.kind === "artifact") post("/api/open-file", {root: it.root, path: it.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message));
+    else if (it.kind === "artifact") openPreview(it.root, it.path);
     else if (it.kind === "scheduled") goPage("scheduled");
     else if (it.id === "new_chat") { S.mode = "chat"; syncMode(); newThread(); }
     else if (it.id === "new_session") { S.mode = "code"; syncMode(); newThread(); }

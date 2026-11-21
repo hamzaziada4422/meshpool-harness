@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 10,
+ "wanted_diagrams": {
+  "s8": "risk_matrix (likelihood vs impact for the four findings)",
+  "s5": "pareto_concentration (customer concentration curve)"
+ },
+ "has_data": true
+}

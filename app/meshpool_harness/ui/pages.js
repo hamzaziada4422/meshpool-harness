@@ -79,7 +79,7 @@ async function pageArtifacts() {
     $("#gView").onclick = () => { G.view = G.view === "list" ? "grid" : "list"; store("art_view", G.view); draw(); };
     $("#gPlus").onclick = e => newArtifact(e.currentTarget);
     $$("[data-mk]").forEach(b => b.onclick = () => { newThread(); const i = $("#input"); i.value = b.dataset.mk; i.focus(); i.dispatchEvent(new Event("input")); });
-    const open = id => { const a = d.artifacts.find(x => x.id === id); if (a) post("/api/open-file", {root: a.root, path: a.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); };
+    const open = id => { const a = d.artifacts.find(x => x.id === id); if (a) openPreview(a.root, a.path); };
     $$("[data-open]").forEach(c => { c.onclick = () => open(c.dataset.open); c.onkeydown = e => { if (e.key === "Enter") open(c.dataset.open); }; c.oncontextmenu = e => { e.preventDefault(); const a = d.artifacts.find(x => x.id === c.dataset.open); ctxMenu(e, [{label: "Open", icon: ICON.files, fn: () => open(a.id)}, {label: "Open the chat", icon: ICON.chat, fn: () => openThread(a.session_id)}]); }; });
   };
   draw();

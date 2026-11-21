@@ -365,8 +365,9 @@ jobs:
           TAG="v$VER"
           # the in-app code update installs this archive, checked against SHA256SUMS.txt
           git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
-          # update-manifest.json (docs/plan/AUTO_UPDATE.md): runtime_changed is true when a bundled program changed (pinned
-          # packages, the LibreOffice, Chromium and Git pins in bundled_tools.py, the LibreOffice prune list), so the app
+          # update-manifest.json (docs/plan/AUTO_UPDATE.md): runtime_changed is true when a bundled program changed (the
+          # packages the bundled Python gets (requirements-cli.txt, the Mac constraints, Hermes' requirements), the Hermes
+          # patch, the LibreOffice, Chromium and Git pins in bundled_tools.py, the LibreOffice prune list), so the app
           # then uses the full installer instead of the in-place code update. Node and Pi are versioned in this workflow:
           # if you change them, also change one of the listed files.
           gh release download "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')" \
@@ -374,6 +375,8 @@ jobs:
           python3 packaging/updater/make_manifest.py --version "$VER" \
             --runtime-file packaging/requirements-pinned.txt --runtime-file packaging/requirements-runtime.txt \
             --runtime-file packaging/bundled_tools.py --runtime-file packaging/lo_prune.py \
+            --runtime-file packaging/requirements-cli.txt --runtime-file packaging/mac/constraints.txt \
+            --runtime-file packaging/hermes_requirements.py --runtime-file packaging/hermes-acp-server.patch \
             --previous prev/update-manifest.json -o dist/update-manifest.json
           (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz update-manifest.json > SHA256SUMS.txt)
           # Updates check every download against SHA256SUMS.txt, so a release users can see must never be half

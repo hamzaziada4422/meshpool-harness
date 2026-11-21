@@ -162,6 +162,14 @@ def test_render_in_the_company_look(home, decks, tmp_path):
     out = tmp_path / "forge.pptx"
     B.sample_deck(dict(p, template_mode="forge"), str(out))
     pages = _shapes(str(out))
+    assert not any(n == "ov_Logo" for pg in pages for n, _ in pg)         # zero images: a raster logo is left out
+    import os
+    os.environ["MH_ALLOW_PICTURES"] = "1"                                 # a deck that allows pictures shows it
+    try:
+        B.sample_deck(dict(p, template_mode="forge"), str(out))
+    finally:
+        os.environ.pop("MH_ALLOW_PICTURES", None)
+    pages = _shapes(str(out))
     assert all(any(n == "ov_Logo" for n, _ in pg) for pg in pages)       # the logo on the cover and every page
     firm = [sh for pg in pages[1:] for n, sh in pg if n == "Firm"]
     assert all(sh.text_frame.text.strip().isdigit() for sh in firm)        # the logo replaces the firm name

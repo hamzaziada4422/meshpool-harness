@@ -1,0 +1,10 @@
+{
+ "density": "balanced",
+ "slides_wanted": 10,
+ "wanted_diagrams": {
+  "s5": "funnel (visits to purchases with conversion at each step)",
+  "s9": "gantt_roadmap (launch workstreams)",
+  "s8": "risk_matrix"
+ },
+ "has_data": true
+}

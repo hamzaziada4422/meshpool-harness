@@ -17,7 +17,9 @@ pptx:
     timeout_s: 240
     box_tolerance_in: 0.08      # a rendered text span may sit this far outside its shape box
   whitespace:                   # P20: dead space, measured on the render
-    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12
+    max_empty_share: 0.20       # largest empty block in the body; McKinsey content pages median 0.06, p90 0.12.
+                                # 130 reference decks (2026-11-20): median 0.10, p90 0.27; 16.7% of pages exceed 0.20.
+                                # Kept: a quality floor, not the reference median
     body_top: 0.20              # body band as fractions of page height (below the title block, above the source)
     body_bottom: 0.90
     exempt_archetypes: [cover, section_divider, agenda, appendix_divider, end]
@@ -69,7 +71,10 @@ pptx:
     wrap_safety: 0.97           # PowerPoint wraps a little earlier than raw advance widths
     line_height: 1.15           # Arial single spacing as a multiple of font size (calibrated on renders)
     min_dense_pt: 10            # dense archetypes: the reference sets matrix and heat-table body at 10 pt
-    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid]
+    dense_archetypes: [challenge_matrix, text_matrix, table_focus, table_highlight, exhibit_argument, grid,
+                       risk_matrix, matrix_3x3, gantt, issue_tree, org_chart, cycle, hub_spoke, pyramid, funnel,
+                       library, layout, cases]
+                                # diagram archetypes draw a grid part (diagrams/): their labels take the grid's floor
     overflow_tolerance_in: 0.04
   colors:                       # P6
     srgb_exceptions: []         # hex values allowed as hardcoded colours (e.g. "FFFFFF" for knockout text)
@@ -84,6 +89,8 @@ pptx:
     overlap_min_in: 0.05
     overlap_declare_prefix: "ov_"   # shape names starting with this declare an intended overlap
     allow_panel_containment: true   # a text-free filled panel fully containing other shapes is not an overlap
+  images:                       # P9: zero images. Icons and logos are native vector shapes (vector.py), charts and
+    allow_pictures: false       # tables native; any picture part on a slide fails (a client override may allow them)
   icons:                        # P9
     max_per_slide: 4
     max_per_slide_by_archetype: {challenge_matrix: 6}
@@ -100,7 +107,8 @@ pptx:
   language:                     # P21: words that mark a slide as machine-written, linted on every text frame
     # finance terms stay legal: "synergies" (merger maths) and "leverage" as debt ("net leverage 3.0x"); "re:" entries
     # are regular expressions, so only the verb "leverage our/the/its..." is flagged
-    banned_phrases: ["in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
+    banned_phrases: ["in the brief", "the brief's", "is not supported by", "as provided", "facts supplied",
+                     "in today's fast-paced", "fast-paced world", "re:leverag(?:e|es|ed) (?:our|its|the|their|this|these|a|an|ai|data)",
                      "leveraging", "unlock", "unlocking",
                      "game-changer", "game changer", "delve", "robust", "seamless", "seamlessly", "key takeaways",
                      "it's important to note", "it is important to note", "holistic", "cutting-edge",
@@ -118,8 +126,10 @@ pptx:
     max_body_words: 80          # default for narrative archetypes
     max_bullets: 5
     max_bullet_levels: 2
-    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words)
-      executive_summary: 120
+    by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words).
+                                # Rechecked 2026-11-20 on 130 decks, 3655 pages (reference_stats.json): median 84,
+                                # p90 250 body words; 50% of pages over 80, 20% over 160. Caps unchanged.
+      executive_summary: 150      # a BCG summary page carries 120-150 words (four claims with two proof lines)
       text_matrix: 160
       case_example: 110
       options_evaluation: 120
@@ -132,7 +142,23 @@ pptx:
       exhibit_argument: 170      # reference page: ~150 words of argument beside the exhibit
       table_focus: 60
       grid: 200                  # parts grid: up to four parts, each about a quarter-slide argument
+      # diagrams (engines/forge/diagrams): labels count; the side column adds a takeaway and 2-3 bullets
+      risk_matrix: 110
+      matrix_3x3: 110
+      gantt: 110
+      issue_tree: 110
+      org_chart: 100
+      cycle: 100
+      hub_spoke: 110
+      pyramid: 100
+      funnel: 90
+      cases: 80
+      library: 120              # a library layout: its slot texts plus the side column
+      layout: 120               # a built-in layout: its slot texts plus the side column
+      closing: 200              # the next steps with detail, milestones, owner and timing
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
+      executive_summary: 10     # four or five claims, two proof lines each (the thin-row check asks for them)
+      layout: 12
       recommendations_now_next_later: 12
       timeline_roadmap: 12
       options_evaluation: 12
@@ -148,8 +174,8 @@ pptx:
         max_body_words: 90
         max_bullets: 5
         by_archetype:
-          executive_summary: 100
-          text_matrix: 130
+          executive_summary: 130  # four claims with two proof lines each; at 100 the cap and the thin-row check
+          text_matrix: 130        # sent the summary back and forth (relay build, 2026-11-21)
           case_example: 90
           options_evaluation: 100
           recommendations_now_next_later: 90
@@ -161,8 +187,23 @@ pptx:
           exhibit_argument: 120
           table_focus: 60
           grid: 130
-          closing: 110
+          closing: 170          # four steps, each with its detail, two milestones and an owner (the columns
+                                # form spreads them over the page; at 110 the detail was cut and the page left empty)
+          risk_matrix: 95
+          matrix_3x3: 95
+          gantt: 95
+          issue_tree: 95
+          org_chart: 85
+          cycle: 85
+          hub_spoke: 95
+          pyramid: 85
+          funnel: 75
+          cases: 70
+          library: 100
+          layout: 100
         bullets_by_archetype:
+          executive_summary: 8  # four claims with two proof lines each: at 6 the cap and the thin-row check fought
+          layout: 9
           recommendations_now_next_later: 9
           timeline_roadmap: 9
           options_evaluation: 9
@@ -193,7 +234,20 @@ pptx:
           grid: 80              # parts headings, stat labels, process and timeline captions included
           closing: 90           # column heads, actions, one-line details, owners and dates
           argument_only: 50
+          risk_matrix: 60
+          matrix_3x3: 60
+          gantt: 60
+          issue_tree: 60
+          org_chart: 55
+          cycle: 55
+          hub_spoke: 60
+          pyramid: 55
+          funnel: 50
+          cases: 45
+          library: 60
+          layout: 60
         bullets_by_archetype:
+          layout: 6
           recommendations_now_next_later: 6
           timeline_roadmap: 6
           options_evaluation: 6
@@ -205,7 +259,8 @@ pptx:
           exhibit_argument: 3   # two points beside the exhibit, each with one short bullet, and one so-what
           grid: 8               # up to 4 parts of 2 bullets
           closing: 4
-  titles:                       # P11
+  titles:                       # P11. 130 reference decks: title words median 6, p90 18 (consulting p90 24); 4.2% of
+                                # titles run past 2 lines; 61% of English titles carry a verb. Kept as is.
     max_words: 15
     max_lines: 2
     require_verb: true
@@ -329,6 +384,9 @@ review:
     timeout_s: 300              # wall clock per reviewer call
     deck_models: []             # vision models first; then MH_REVIEW_MODEL, claude-sonnet-5.5, gpt-6.1-terra, kimi-k3
     text_models: []             # storyboard review and research picks: MH_STORY_REVIEW_MODEL, these, then the chain
+  references:                   # reference-guided review (review.py reference_images): golden library slides of the
+    enabled: false              # same kind sent beside each rendered slide. Off: no A/B has shown a gain yet (no model
+    per_slide: 2                # budget on 2026-11-20). Needs MESHPOOL_KB; MH_REVIEW_REFERENCES=1 turns it on
   research:                     # the reviewers' research step (engines/forge/research.py); live builds only
     enabled: true               # off with MH_RESEARCH=0, a brief that says no research, stub clients or no network
     max_questions: 6            # questions per research step

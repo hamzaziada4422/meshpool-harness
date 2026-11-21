@@ -309,7 +309,10 @@ def measure(path: str, rules: dict | None = None) -> dict:
     for n, slide in enumerate(prs.slides, 1):
         sx = etree.fromstring(slide.part.blob)
         s_scheme = len(sx.findall(".//a:schemeClr", NS))
-        s_srgb_vals = sx.xpath(".//a:srgbClr/@val", namespaces=NS)
+        # a fetched company logo keeps its own colours (shapes tagged "logo:<company>", render.logo_shape): those
+        # are not off-brand colours (P6) but counted apart
+        s_srgb_vals = sx.xpath(".//a:srgbClr[not(ancestor::*[(self::p:sp or self::p:grpSp) and "
+                               "*/p:cNvPr[starts-with(@descr, 'logo:')]])]/@val", namespaces=NS)
         cname = slide._element.find(qn("p:cSld")).get("name") or ""
         rec = {"n": n, "slide_id": slide.slide_id, "layout": slide.slide_layout.name, "name": cname,
                "archetype": (tag_re.search(cname).group(1) if tag_re.search(cname) else None),
@@ -349,7 +352,12 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 rec["slide_number"] = True
             if kind == "cxnSp" or (el.find(".//" + qn("a:prstGeom")) is not None and
                                    el.find(".//" + qn("a:prstGeom")).get("prst") in ("line", "straightConnector1")):
-                connected = el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
+                connected = (el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
+                             or el.find(".//" + qn("a:tailEnd")) is not None   # an arrow points at data: not decor,
+                             or (sh.name or "").startswith(("ov_DeltaArrow", "ov_CagrArrow", "ov_Arrow",
+                                                              "ov_MxXAxis", "ov_MxYAxis")))   # nor any piece of one
+                # (heads are drawn as chevron shapes beside the line, so the line itself has no head)
+                # (a difference arrow is broken around its pill, the run before the pill has no head)
                 ln = el.find(".//" + qn("a:ln"))
                 weight_pt = int(ln.get("w")) / 12700 if ln is not None and ln.get("w") else 0.75
                 axis = w is not None and (w < 0.02 or h < 0.02)       # horizontal or vertical rule
@@ -373,6 +381,10 @@ def measure(path: str, rules: dict | None = None) -> dict:
                 rec["table_words"] += words
                 srec["role"] = "table"
                 srec["text"] = " | ".join(c.text for r in sh.table.rows for c in r.cells)
+            elif kind != "pic" and descr.startswith(R["icons"]["tag_prefix"]):   # a vector icon (native shape)
+                iset = descr.split(":")[1] if descr.count(":") >= 2 else None
+                rec["icons"].append({"shape": sh.name, "set": iset, "svg": True, "vector": True})
+                srec["role"] = "icon"
             elif kind == "pic":
                 rec["pictures"] += 1
                 svg = SVG_EXT in etree.tostring(el).decode()

@@ -264,3 +264,18 @@ def test_slow_endpoint_never_holds_up_routing(monkeypatch):
     monkeypatch.setenv("MH_CLASSIFY_TIMEOUT", "0.3")
     t0 = time.time()
     assert CL.ask_model("fix it", "", Slow(), "m") is None and time.time() - t0 < 2
+
+
+def test_auto_picks_meshpools_own_agent_for_every_kind_of_task(monkeypatch):
+    """With Meshpool's agents, Pi and Hermes all ready, Auto picks Meshpool Code or Meshpool Work in every category:
+    on the measured 52-task eval the four tie on quality and Meshpool's 0.0.7 engine is the cheapest and fastest
+    (routing.json v4 source); where nothing is measured, Meshpool's own agent ranks first."""
+    from meshpool_harness import harness_router as H
+    ready = {k: {"id": k, "name": k} for k in ("meshpool-work", "meshpool-code", "pi", "hermes")}
+    monkeypatch.setattr(H, "_ready", lambda kind: ready)
+    for cat, c in H.table()["categories"].items():
+        for kind in ("cowork", "code"):
+            got = H.route("x", kind, category=cat)["harness"]
+            assert got in ("meshpool-work", "meshpool-code"), (cat, kind, got)
+    assert H.route("fix the failing test in parser.py", "code")["harness"] == "meshpool-code"
+    assert H.route("make a powerpoint about coffee", "cowork")["harness"] == "meshpool-work"

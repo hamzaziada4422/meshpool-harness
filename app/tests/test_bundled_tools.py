@@ -376,3 +376,19 @@ def test_windows_build_gives_mingit_a_bash_exe(tmp_path, monkeypatch):
     assert bundled.bundled_bash().endswith("bash.exe")
     (root / "git" / "usr" / "bin" / "bash.exe").unlink()
     assert bundled.bundled_bash().endswith("sh.exe")
+
+
+def test_the_bundled_runtime_has_every_package_the_app_needs():
+    """The release installs packaging/requirements-cli.txt into the bundled Python, not app/requirements.txt. ddgs
+    (free web search) was only in the latter, so the 0.0.7 apps searched with rate-limited fallbacks."""
+    import re as _re
+
+    def names(p):
+        out = set()
+        for line in (ROOT / p).read_text().splitlines():
+            line = line.split("#")[0].strip()
+            if line and not line.startswith("-"):
+                out.add(_re.split(r"[<>=!~;\[ ]", line)[0].lower())
+        return out
+    missing = names("app/requirements.txt") - names("packaging/requirements-cli.txt") - {"pytest"}
+    assert not missing, f"in app/requirements.txt but not bundled: {sorted(missing)}"

@@ -49,7 +49,8 @@ PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
             "mcp__meshpool_tools__calculate", "mcp__meshpool_office__check_deck",
             "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
-            "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon"}
+            "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon",
+            "mcp__meshpool_office__slide_layouts"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
               "ask_user"]
 BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
@@ -645,6 +646,8 @@ def _apply_refused(body: dict) -> dict:
 
 
 class Agent:
+    office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
+
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
                  sessions_dir: str | None = None):
@@ -782,9 +785,15 @@ class Agent:
         if self.plan:
             return T.schemas(PLAN_TOOLS)
         if self._codex():                          # Codex's tools, and the user's own MCP tools
-            return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas()
-                                                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_")
-                                                and not x["function"]["name"].endswith("run_subtasks")]
+            # Meshpool's own servers stay out of a coding chat (about 2k tokens a call), except the office tools
+            # once a message in this chat asks for a PowerPoint, document, workbook or PDF (office_on, set by the
+            # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot.
+            def keep(name: str) -> bool:
+                n = name.replace("-", "_")
+                if n.startswith("mcp__meshpool_office__"):
+                    return bool(getattr(self, "office_on", False))
+                return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
+            return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
         names = self._tool_names()
         if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():

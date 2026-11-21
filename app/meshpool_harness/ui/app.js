@@ -42,8 +42,8 @@ function ago(t) {
 // Paths inside the project become buttons that open the file in its app.
 function linkFiles(html) {
   const root = String(curRoot() || "").replace(/[\\/]+$/, ""); if (!root) return html;
-  const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|xlsx|pptx|pdf|csv|md|html|txt|png|jpe?g|py|js|ts|json))", "g");
-  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Open ${rel}">${ICON.files}${rel}</button>`);
+  const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|doc|xlsx|xls|pptx|ppt|odt|odp|ods|pdf|csv|tsv|md|html|htm|txt|png|jpe?g|gif|webp|svg|py|js|ts|json)(?![\\w]))", "g");
+  return html.replace(rx, (m, rel) => `<button class="flink" data-open="${rel}" title="Preview ${rel}">${ICON.files}${rel}</button>`);
 }
 // Windows: PowerShell, Command Prompt or Git Bash for commands you type; Mac and Linux: your login shell.
 function termShellPicker() {
@@ -214,7 +214,7 @@ const S = {
   page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
   // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
   // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
-  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false},
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false, style: ""},
   panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
   collapsed: new Set(store("collapsed") || []),
 };
@@ -474,8 +474,8 @@ function setupComposer() {
 }
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
-  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, busy: false};
+  if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, style: S.draft.style, busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -535,8 +535,8 @@ async function sendNow(interrupt) {
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, task: text});
-      S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text});
+      S.draft.style = ""; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
@@ -700,7 +700,12 @@ function harnessPop(anchor) {
   $$(".opt[data-id]", p).forEach(b => b.onclick = async () => {
     closePop(); const id = b.dataset.id;
     if (harness(id).ready === false) { openSettings(harness(id).login ? "harnesses" : "general"); return; }
-    if (S.cur) { if (id === S.cur.view.harness.id) return; toast("An agent can’t change mid-chat, so this started a new chat with " + harness(id).name + "."); newThread(); S.draft.harness = id; renderBar(); renderHero(); return; }
+    if (S.cur) {                                   // the chat continues on the new agent, with what was said so far
+      if (id === S.cur.view.harness.id) return;
+      try { const v = await post(`/api/agent/${S.cur.id}/harness`, {harness: id, since: 1e9}); S.cur.view.harness = v.harness || harness(id); }
+      catch (e) { return toast(e.message); }
+      renderBar(); return;
+    }
     S.draft.harness = id; renderBar(); renderHero();
   });
   $("#hManage").onclick = () => { closePop(); openSettings("harnesses"); };
@@ -823,7 +828,7 @@ function stashChat(cur) {
 function leaveChat(cur) {
   if (!cur) return;
   clearTimeout(cur.pollT); stopStream(cur); clearTimeout(cur.sseT);
-  stashChat(cur); EASE.clear();
+  stashChat(cur); EASE.clear(); if (typeof closePreview === "function") closePreview(true);
 }
 function beginStage(cur) {                       // the next events build a detached list; commitStage swaps it in
   cur.stage = document.createElement("div"); cur.group = null; cur.live = null; cur.liveText = ""; cur.thought = null; cur.plan = null; cur.planEv = null; cur.mcpNote = null; cur.route = null; cur.subs = null; cur.tools = {}; cur.q = []; cur.ready = false;
@@ -1032,7 +1037,10 @@ function inline(s) {
 function md(src) {
   const parts = String(src || "").split(/```/);
   return parts.map((p, i) => {
-    if (i % 2) return `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+    if (i % 2) {
+      const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), pre = `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+      return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
+    }
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
     const flushL = () => { if (list) { out += `<${list.t}${list.t === "ol" && list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
@@ -1095,7 +1103,7 @@ function applyEv(ev) {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
-      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking";
+      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
       add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }
     case "text_delta":
@@ -1118,6 +1126,7 @@ function applyEv(ev) {
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
       { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_end": {
+      if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
       const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
@@ -1186,7 +1195,7 @@ function applyEv(ev) {
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
       settleSteps("");
@@ -1195,6 +1204,7 @@ function applyEv(ev) {
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
       const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
+      pvTurnCards(cur, foot, cur.turn);
       if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(foot); }
       if (cur.view?.plan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
@@ -1332,7 +1342,7 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = !!S.panel && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
+  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
@@ -1372,9 +1382,9 @@ function progressSteps() {
   return {kind: "steps", items: Object.entries(tools).map(([id, t]) => Object.assign({key: "t" + id}, t))};
 }
 const OUT_RX = /(?:Saved(?: the [\w ]+)?|[Ww]rote|[Cc]reated)[: ]+((?:[A-Za-z]:)?[^\n"'`<>():]+?\.(?:docx|xlsx|pptx|pdf|csv|md|png|jpg|html|txt|json))(?![\w.])/g;
+const relPath = p => { const n = String(p).replace(/\\/g, "/"), r = String(curRoot()).replace(/\\/g, "/").replace(/\/$/, ""); return n.startsWith(r + "/") ? n.slice(r.length + 1) : n; };
 function outputFiles() {
-  const root = curRoot(); const seen = new Map();
-  const rel = p => { const n = String(p).replace(/\\/g, "/"); const r = String(root).replace(/\\/g, "/").replace(/\/$/, ""); return n.startsWith(r + "/") ? n.slice(r.length + 1) : n; };
+  const seen = new Map(), rel = relPath;
   for (const t of S.cur?.view?.turns || []) for (const c of t.changed || []) if (c.status !== "deleted") seen.set(c.path, {path: c.path, turn: t.n});
   for (const e of threadLog()) if (e.type === "tool_end" && e.output) for (const m of String(e.output).matchAll(OUT_RX)) { const r = rel(m[1]); if (!r.startsWith("/") && !/^[A-Za-z]:/.test(r)) seen.set(r, {path: r}); }
   return [...seen.values()];
@@ -1413,7 +1423,7 @@ function progressUpdate() {
   if (!outs.length) { ul?.remove(); setHTML(fbox, `<div class="pnote" style="padding:4px 0">Documents, sheets, decks and other files the task creates show up here.</div>`); }
   else {
     if (!ul) { fbox.innerHTML = ""; fbox._h = null; ul = document.createElement("ul"); ul.className = "outs"; fbox.appendChild(ul); }
-    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => { toast(`Opening ${o.path}…`); post("/api/open-file", {root: curRoot(), path: o.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)); }; return li; }, () => {});
+    reconcile(ul, outs, o => o.path, o => { const li = document.createElement("li"); li.innerHTML = `<button data-open="${esc(o.path)}" title="Open ${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button>`; $("button", li).onclick = () => openPreview(curRoot(), o.path); return li; }, () => {});
   }
   setTxt($("#pgHarness", body), v.harness?.name || ""); setTxt($("#pgModel", body), modelName(v.model || ""));
 }
@@ -1441,10 +1451,10 @@ function panelProgress(body) {
 function panelOutputs(body) {
   const outs = S.cur ? outputFiles() : [];
   body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen">Open folder</button></div>
-    ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to open it.</div>`}
+    ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
     <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto"><ul class="tree" id="tree"></ul></div><div class="viewer" id="viewer" hidden></div></div>`;
   $("#oOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
-  $$("[data-open]", body).forEach(b => b.onclick = () => post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message)));
+  $$("[data-open]", body).forEach(b => b.onclick = () => openPreview(curRoot(), b.dataset.open));
   loadTree($("#tree"), "");
 }
 async function panelDiff(body) {
@@ -1735,7 +1745,7 @@ function spDraw(sid, root, d) {
   $$("details.spsec", body).forEach(el => el.ontoggle = () => { const o = store("sp_open") || {}; o[el.dataset.k] = el.open; store("sp_open", o); });
   $$("[data-go]", body).forEach(b => b.onclick = () => togglePanel(b.dataset.go, true));
   $("#spRoute", body)?.addEventListener("click", e => routeMenu(e.currentTarget.parentElement));
-  $$("[data-open]", body).forEach(b => b.onclick = () => openFile(root, b.dataset.open));
+  $$("[data-open]", body).forEach(b => b.onclick = () => openPreview(root, b.dataset.open));
   $("#spBr", body)?.addEventListener("change", e => gitAct({action: "checkout", branch: e.target.value}));
   $("#spCreate", body)?.addEventListener("click", () => gitAct({action: "checkout", branch: $("#spNew").value, create: true}));
   $("#spConn", body)?.addEventListener("click", () => openSettings("connectors"));
@@ -2509,7 +2519,7 @@ async function restartApp() {
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
-    toast(`Opening ${b.dataset.open}…`); post("/api/open-file", {root: curRoot(), path: b.dataset.open}).then(r => r.message && toast(r.message, 4000)).catch(err => toast(err.message)); });
+    openPreview(curRoot(), b.dataset.open); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
   new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
@@ -2517,7 +2527,7 @@ async function restartApp() {
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
   await loadThreads();
   await loadPj();
-  loadAccount(); loadCaps(); loadConnectors();
+  loadAccount(); loadCaps(); loadConnectors(); loadStyles().then(() => renderBar());
   newThread();
   if (S.panel) renderPanel();
   if (!S.settings.ready) showOnboarding();

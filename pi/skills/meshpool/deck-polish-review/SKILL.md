@@ -8,6 +8,7 @@ description: Review a slide deck the way a demanding engagement partner or clien
 1. Look at the slides as the reader will see them (the rendered pages or images, not only the text). Read the titles in order first: they should tell the whole argument.
 2. For each slide ask: what would a partner send back, and what would the client complain about? Check the list below.
 3. Report per slide: ship or fix, a score from 1 to 10, and each complaint as "what is wrong (quote the slide) -> the concrete change". Mark each high, medium or low. Raise only what you can point to on the slide; taste is not a complaint.
+   When a slide's layout does not fit its point and the slide_layouts tool is available, call it with the slide's title and name the better layout in the fix.
 4. End with the deck verdict: the overall score, the slides to fix, and the complaints that recur. If the user wants the fixes made, rebuild with make_deck and review again.
 
 What a partner checks:

@@ -1,0 +1,9 @@
+{
+ "density": "balanced",
+ "slides_wanted": 10,
+ "wanted_diagrams": {
+  "s8": "risk_matrix (likelihood vs impact grid for the three entry risks)",
+  "s9": "decision_tree (go / no-go gate at month 24 with branches)"
+ },
+ "has_data": true
+}
