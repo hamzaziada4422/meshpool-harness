@@ -1,0 +1,41 @@
+# Deletes every GitHub release except one (the latest published release unless a tag is given). Run by hand only.
+# The git tags are kept. Run this only after the new release is public: release.yml reads the previous release's
+# update-manifest.json while it builds.
+name: Clean up old releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      keep:
+        description: "Tag of the release to keep (empty: the latest published release)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      KEEP: ${{ inputs.keep }}
+    steps:
+      - name: Delete all other releases
+        run: |
+          set -euo pipefail
+          if [ -z "$KEEP" ]; then
+            KEEP=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')
+          fi
+          # never delete anything unless the release to keep exists and is public
+          [ -n "$KEEP" ] || { echo "::error::no release to keep"; exit 1; }
+          [ "$(gh release view "$KEEP" --json isDraft -q .isDraft)" = "false" ] || { echo "::error::$KEEP is not public"; exit 1; }
+          echo "Keeping $KEEP"
+          gh release list --limit 200 --json tagName -q '.[].tagName' | while read -r tag; do
+            if [ "$tag" != "$KEEP" ]; then
+              echo "Deleting release $tag (its tag stays)"
+              gh release delete "$tag" --yes
+            fi
+          done
+          gh release list --limit 200
