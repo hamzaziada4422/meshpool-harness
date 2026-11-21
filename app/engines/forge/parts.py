@@ -148,8 +148,13 @@ def _vline(sl, x, y, h, color=TC.ACCENT_5, weight=0.5, name="Rule", arrow=False)
 
 
 def _arrow(c):
-    ln = c.line._get_or_add_ln()
-    ln.append(ln.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+    """The connector's end gets BCG's flat chevron as its head (never the default triangle); the line is shortened
+    into the chevron's hollow back."""
+    E = 914400
+    x0, y0, x1, y1 = c.begin_x / E, c.begin_y / E, c.end_x / E, c.end_y / E
+    col = c.line.color.theme_color if c.line.color.type is not None else TC.TEXT_1
+    ex, ey = R.head_chevron(c.part.slide, x0, y0, x1, y1, col, 0.15, "ov_Head_" + (c.name or "Arrow"))
+    c.end_x, c.end_y = int(ex * E), int(ey * E)
 
 
 def _fit_trim(blocks, w, h, s, what, ctx=None, n=None, floor=FLOOR):

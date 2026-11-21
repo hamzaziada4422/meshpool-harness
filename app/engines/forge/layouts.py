@@ -257,6 +257,10 @@ def _blocks(text: str, size: float, bold: bool, color, align) -> list[dict]:
     return out
 
 
+ARROW_PRESETS = {"rightArrow": "right", "notchedRightArrow": "right", "leftArrow": "left", "downArrow": "down",
+                 "upArrow": "up"}                     # default arrows in built-in layouts, drawn as chevrons
+
+
 def _set_prst(shp, o: dict):
     """Adjustments of the preset (a:avLst) from the spec; the preset itself comes from add_shape."""
     adj = o.get("a")
@@ -289,10 +293,19 @@ def _line(sl, o, x, y, w, h, name):
     if o.get("d"):
         ln.append(ln.makeelement(qn("a:prstDash"), {"val": "dash"}))
     ends = o.get("e", "")
-    if "h" in ends:
-        ln.append(ln.makeelement(qn("a:headEnd"), {"type": "triangle", "w": "med", "len": "med"}))
-    if "t" in ends:
-        ln.append(ln.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
+    if ends:                                             # heads are BCG's flat chevrons, never default triangles
+        from engines.forge.render import head_chevron
+        E = 914400
+        x0, y0, x1, y1 = c.begin_x / E, c.begin_y / E, c.end_x / E, c.end_y / E
+        col = ROLE.get(o.get("l"), TC.TEXT_2)
+        sl_ = c.part.slide
+        if "t" in ends:
+            ex, ey = head_chevron(sl_, x0, y0, x1, y1, col, 0.15, "ov_Head_Lay")
+            c.end_x, c.end_y = int(ex * E), int(ey * E)
+        if "h" in ends:
+            hx, hy = head_chevron(sl_, x1, y1, x0, y0, col, 0.15, "ov_Head_Lay")
+            c.begin_x, c.begin_y = int(hx * E), int(hy * E)
+        c.name = "ov_Arrow" + (c.name or "")
     return c
 
 
@@ -416,6 +429,10 @@ def a_layout(ctx, s, sl, n):
             R._table(ctx, sl, n, t, x, y, w, h)
             for shp in list(sl.shapes)[before:]:
                 shp.name = name                                  # a declared overlay: it sits where the layout puts it
+            continue
+        if p in ARROW_PRESETS and not it.get("val"):     # a default block arrow becomes BCG's flat chevron,
+            R.chevron_arrow(sl, x + w / 2, y + h / 2, h, min(w, h * 0.6), ARROW_PRESETS[p], name,   # pointing the
+                            ROLE.get(o.get("f") or o.get("l"), TC.ACCENT_1))                        # same way
             continue
         shp = sl.shapes.add_shape(MSO_SHAPE.from_xml(p), Inches(x), Inches(y), Inches(max(w, 0.02)),
                                   Inches(max(h, 0.02)))

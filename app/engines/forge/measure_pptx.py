@@ -354,7 +354,9 @@ def measure(path: str, rules: dict | None = None) -> dict:
                                    el.find(".//" + qn("a:prstGeom")).get("prst") in ("line", "straightConnector1")):
                 connected = (el.find(".//" + qn("a:stCxn")) is not None or el.find(".//" + qn("a:endCxn")) is not None
                              or el.find(".//" + qn("a:tailEnd")) is not None   # an arrow points at data: not decor,
-                             or (sh.name or "").startswith(("ov_DeltaArrow", "ov_CagrArrow")))   # nor any piece of one
+                             or (sh.name or "").startswith(("ov_DeltaArrow", "ov_CagrArrow", "ov_Arrow",
+                                                              "ov_MxXAxis", "ov_MxYAxis")))   # nor any piece of one
+                # (heads are drawn as chevron shapes beside the line, so the line itself has no head)
                 # (a difference arrow is broken around its pill, the run before the pill has no head)
                 ln = el.find(".//" + qn("a:ln"))
                 weight_pt = int(ln.get("w")) / 12700 if ln is not None and ln.get("w") else 0.75
