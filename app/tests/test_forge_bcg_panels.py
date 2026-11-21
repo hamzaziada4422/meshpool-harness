@@ -263,3 +263,14 @@ def test_a_chart_may_plot_small_numbers_the_facts_give():
     s = {"archetype": "column_trend", "title": "Picks rose 64%", "chart": {
         "kind": "column", "categories": ["Before", "After"], "series": [{"name": "Picks per hour", "values": [92, 151]}]}}
     assert not chart_fact_checks([s], facts, load_rules()).get(1)
+
+
+def test_a_footnote_citing_a_figure_the_slide_never_shows_goes_back():
+    from engines.forge.build import fill_checks
+    s = {"archetype": "closing", "title": "Gate the rollout on downtime",
+         "steps": [{"action": "Trial the second vendor", "detail": "The quote is £2.1M cheaper per site"}],
+         "footnotes": ["The £4.2M is the £2.1M per-site difference for two sites."]}
+    got = fill_checks([s], "balanced").get(1, [])
+    assert any("footnote cites 4.2M" in m for m in got)
+    ok = dict(s, steps=[{"action": "Trial the second vendor", "detail": "Saves £4.2M across two sites, £2.1M each"}])
+    assert not any("footnote cites" in m for m in fill_checks([ok], "balanced").get(1, []))

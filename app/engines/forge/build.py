@@ -763,6 +763,19 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
                 if any(w_ and not re.search(r"\d", w_) for w_ in words_):
                     msgs.append("every stat value is a figure ('0', '140', '+1.5 pts'), never a word such as 'None' "
                                 "or 'All': say it with its number, or move it to the label of another stat")
+        notes_ = [str(x.get("text") if isinstance(x, dict) else x) for x in s.get("footnotes") or []]
+        if notes_ and density != "present":                # a footnote explains a figure on the page; one that cites
+            body_ = json.dumps({k: v for k, v in s.items()   # a figure the page never shows reads as left over (blind
+                                if k not in ("footnotes", "notes", "calcs", "source", "options")},   # review: "£4.2M"
+                               ensure_ascii=False)          # under a plan that never mentions it)
+            page = [v for _, v, _u in _numbers(body_, None)]
+            stray_ = [raw for t_ in notes_ for raw, v, u in _numbers(t_, None)
+                      if (u or abs(v) >= 100 or "." in raw) and not any(abs(abs(v) - abs(pv)) <= 1e-6 + 0.006 * abs(v)
+                                                                         for pv in page)]
+            if stray_:
+                msgs.append(f"a footnote cites {', '.join(dict.fromkeys(stray_[:3]))}, which the slide does not show: "
+                            "a footnote explains a figure on the page (how it was worked out, what it covers); show "
+                            "that figure on the slide or drop the note")
         pts_ = [p for p in s.get("points") or [] if isinstance(p, dict)]
         if a == "executive_summary" and density != "present" and len(pts_) >= 3 and \
                 sum(len(p.get("bullets") or []) <= 1 for p in pts_) * 2 > len(pts_):
