@@ -260,7 +260,7 @@ def _strip_style(shape):
         shape._element.remove(st)
 
 
-def chevron_arrow(sl, cx, cy, length, depth, direction="down", name="ov_Chevron", color=TC.ACCENT_1):
+def chevron_arrow(sl, cx, cy, length, depth, direction="down", name="ov_Chevron", color=TC.ACCENT_1, angle=None):
     """BCG's pointer: a wide, flat chevron with a hollow back ("V"), centred on (cx, cy). length runs across the
     direction it points, depth along it. A shape, never a typed character (user review, with the BCG deck as the
     model)."""
@@ -269,13 +269,29 @@ def chevron_arrow(sl, cx, cy, length, depth, direction="down", name="ov_Chevron"
         shp.adjustments[0] = 0.62                          # a thin band: the notch nearly as deep as the point
     except Exception:  # noqa: BLE001 - the default chevron stands
         pass
-    if direction == "down":
+    if angle is not None:
+        shp.rotation = angle % 360
+    elif direction == "down":
         shp.rotation = 90
     elif direction == "up":
         shp.rotation = 270
     elif direction == "left":
         shp.rotation = 180
     return shp
+
+
+def head_chevron(sl, x0, y0, x1, y1, color=TC.ACCENT_1, size=0.17, name="ov_Head"):
+    """The head of a line that runs from (x0, y0) to (x1, y1): a small flat chevron with its point at (x1, y1),
+    never PowerPoint's default triangle head (user review, with BCG's chevron as the model). Returns where the line
+    should now end, inside the chevron's hollow back."""
+    import math
+    dx, dy = x1 - x0, y1 - y0
+    ln_ = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / ln_, dy / ln_
+    depth = size * 0.6
+    chevron_arrow(sl, x1 - ux * depth / 2, y1 - uy * depth / 2, size, depth, name=name, color=color,
+                  angle=math.degrees(math.atan2(dy, dx)))
+    return x1 - ux * depth * 0.55, y1 - uy * depth * 0.55
 
 
 def circled_chevron(sl, cx, cy, d, name="ov_Chevron", color=TC.ACCENT_1):
@@ -1702,14 +1718,13 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         x0, x1 = cx(0), cx(k - 1)
         for i_, (a_, b_) in enumerate((((x0, yv(vals[0]) - 0.36), (x0, ya)), ((x0, ya), (x1, ya)),
                                        ((x1, ya), (x1, yv(vals[-1]) - 0.4)))):      # stops above the value label
+            if i_ == 2:                                   # a flat chevron for its head, not a default triangle
+                b_ = head_chevron(sl, a_[0], a_[1], b_[0], b_[1], TC.TEXT_2, name="ov_Head_Cagr")
             ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_[0]), Inches(a_[1]), Inches(b_[0]),
                                          Inches(b_[1]))
             ln.name = f"ov_CagrArrow{i_ + 1}"
             ln.line.color.theme_color = TC.TEXT_2
             ln.line.width = Pt(1)
-            if i_ == 2:
-                end = ln.line._get_or_add_ln()
-                end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         bw = _need_w(lab, T["label"], True) + 0.24
         box = _fill(sl, (x0 + x1) / 2 - bw / 2, ya - 0.15, bw, 0.3, TC.BACKGROUND_1, "ov_CagrLabel",
                     MSO_SHAPE.ROUNDED_RECTANGLE)
@@ -1750,14 +1765,13 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                 mx, my = (a_[0] + b_[0]) / 2, max(py + 0.2, yv(max(vals[j0], vals[j1])) - 0.55)   # else above both
                 # bars' value labels, never above the plot
         for k_, (p0, p1) in enumerate(segs):
+            if k_ == len(segs) - 1:                       # a flat chevron for its head, not a default triangle
+                p1 = head_chevron(sl, p0[0], p0[1], p1[0], p1[1], TC.ACCENT_1, name="ov_Head_Delta")
             ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(p0[0]), Inches(p0[1]), Inches(p1[0]),
                                          Inches(p1[1]))
             ln.name = "ov_DeltaArrow" + (str(k_ + 1) if len(segs) > 1 else "")
             ln.line.color.theme_color = TC.ACCENT_1
             ln.line.width = Pt(1.25)
-            if k_ == len(segs) - 1:
-                end = ln.line._get_or_add_ln()
-                end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
             my = min(my, yv(target)) - 0.32                      # label: it rides above them
         box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.RECTANGLE)

@@ -132,7 +132,9 @@ def test_cycle_arrows_are_glued_and_close_the_ring(size, tmp_path):
         st, en = nv.find(qn("a:stCxn")), nv.find(qn("a:endCxn"))
         assert st is not None and en is not None
         assert int(st.get("id")) == nodes[j] and int(en.get("id")) == nodes[(j + 1) % len(nodes)]
-        assert el.find(qn("p:spPr")).find(qn("a:ln")).find(qn("a:tailEnd")) is not None      # an arrowhead
+        assert el.find(qn("p:spPr")).find(qn("a:ln")).find(qn("a:tailEnd")) is None          # no default head:
+    heads = [shp for shp in sl.shapes if shp.name.startswith("ov_Head_ov_CycleArrow")]    # a flat chevron each
+    assert len(heads) == len(arrows)
 
 
 @pytest.mark.parametrize("size", ["short", "normal", "long"])
