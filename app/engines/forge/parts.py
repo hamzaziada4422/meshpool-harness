@@ -899,9 +899,8 @@ def p_shift(ctx, sl, n, part, box, look, i, s, card):
         tile = R._fill(sl, x, ry, lw, rh, TC.TEXT_2, f"ov_ShiftTile{i}_{j}")
         _in_shape(tile, lab, ctx, n, (0.08, 0.04, 0.08, 0.04), MSO_ANCHOR.MIDDLE)
         R._write(R._box(sl, fx, ry, fw, rh, f"ov_ShiftFrom{i}_{j}", MSO_ANCHOR.MIDDLE), fb, ctx, n)
-        aw_ = max(0.3, min(cw - 0.02, 0.5))
-        R._fill(sl, fx + fw + g + (cw - aw_) / 2, ry + rh / 2 - 0.13, aw_, 0.26, TC.ACCENT_1, f"ov_ShiftArrow{i}_{j}",
-                MSO_SHAPE.RIGHT_ARROW)                    # a block arrow, not a thin chevron that read as a typed
+        R.circled_chevron(sl, fx + fw + g + cw / 2, ry + rh / 2, min(0.32, max(0.22, cw - 0.04)),
+                          f"ov_ShiftArrow{i}_{j}")                    # a block arrow, not a thin chevron that read as a typed
                                                           # character (user review)
         R._write(R._box(sl, tx, ry, fw, rh, f"ov_ShiftTo{i}_{j}", MSO_ANCHOR.MIDDLE), tb, ctx, n)
         ry += rh
@@ -1353,10 +1352,9 @@ EVIDENCE_PARTS = ("chart", "table", "stats", "process", "timeline", "matrix2x2",
 
 
 def _flow_pointer(sl, placed) -> None:
-    """A small accent triangle from the evidence to its so-what: in the gutter, pointing right, when the callout sits
+    """BCG's flat chevron from the evidence to its so-what: in the gutter, pointing right, when the callout sits
     beside an exhibit; in the gap, pointing down, when it sits under one. The reader's eye goes from the proof to
     the conclusion (consulting decks point the way; the user asked for it)."""
-    from pptx.enum.shapes import MSO_SHAPE
     calls = [(j, b) for j, b, p in placed if p.get("type") == "callout"]
     ev = [b for j, b, p in placed if p.get("type") in EVIDENCE_PARTS]
     if len(calls) != 1 or not ev:
@@ -1364,11 +1362,9 @@ def _flow_pointer(sl, placed) -> None:
     _, (x, y, w, h) = calls[0]
     left = [b for b in ev if b[0] + b[2] <= x + 0.01 and b[1] < y + h and b[1] + b[3] > y]
     above = [b for b in ev if b[1] + b[3] <= y + 0.01 and b[0] < x + w and b[0] + b[2] > x]
-    aw, ah = 0.34, 0.26                                  # a block arrow (a shape, never a typed character)
     gx = max([b[0] + b[2] for b in left] or [x])
-    if left and x - gx >= ah + 0.06:                     # a gutter wide enough to hold it
-        R._fill(sl, gx + (x - gx - ah) / 2, y + h / 2 - aw / 2, ah, aw, TC.ACCENT_1, "ov_FlowPointer",
-                MSO_SHAPE.RIGHT_ARROW)
+    if left and x - gx >= 0.22:                          # a gutter wide enough: pointing right, at mid-height
+        R.circled_chevron(sl, gx + (x - gx) / 2, y + h / 2, min(0.3, x - gx - 0.04), "ov_FlowPointer")
     elif above:
         gy = max(b[1] + b[3] for b in above)
         ex = [b for b in above if b[1] + b[3] >= gy - 0.01][0]
@@ -1378,18 +1374,10 @@ def _flow_pointer(sl, placed) -> None:
                  if sh.left / E < cx_ < (sh.left + sh.width) / E and gy - 3 < (sh.top + sh.height) / E <= y - 0.02
                  and sh.top / E >= ex[1] - 0.01 and not (sh.name or "").startswith("Heading")]
         gy = max(drawn) if drawn else gy
-        if y - gy >= 0.6:                                # a long gap: an arrow line from the evidence's foot to the
-            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(cx_), Inches(gy + 0.06), Inches(cx_),
-                                         Inches(y - 0.05))   # so-what, so the two read as one chain (a block arrow
-            ln.name = "ov_FlowPointer"                   # alone in the gap floated: user review)
-            R._strip_style(ln)
-            ln.line.color.theme_color = TC.ACCENT_1
-            ln.line.width = Pt(1.5)
-            _arrow(ln)
-        elif y - gy >= 0.22:                             # a short gap: a block arrow sized to it
-            ah_ = min(ah, y - gy - 0.04)
-            R._fill(sl, cx_ - aw / 2, gy + (y - gy - ah_) / 2, aw, ah_, TC.ACCENT_1, "ov_FlowPointer",
-                    MSO_SHAPE.DOWN_ARROW)
+        if y - gy >= 0.2:                                # BCG's flat chevron in the gap, pointing down at the so-what
+            span_ = min(x + w, ex[0] + ex[2]) - max(x, ex[0])
+            R.chevron_arrow(sl, cx_, gy + (y - gy) / 2, min(1.1, max(0.6, span_ * 0.18)), min(0.2, y - gy - 0.06),
+                            "down", "ov_FlowPointer")
 
 
 _STOP = {"a", "an", "the", "of", "per", "in", "by", "and", "to", "for", "on", "at", "vs", "year", "%", "share", "rate"}
