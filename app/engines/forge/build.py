@@ -442,7 +442,7 @@ def facts_from_brief(text: str) -> list[dict]:
 
 
 def _fact_values(facts, ids, ignore) -> list[tuple[float, str]]:
-    return [(abs(v), u) for f in facts if f["id"] in ids for _, v, u in _numbers(f["text"], ignore)]
+    return [(abs(v), u) for f in facts if f["id"] in ids for _, v, u in _numbers(f["text"], None)]
 
 
 def _same_number(raw: str, v: float, u: str, fv: float, fu: str) -> bool:
@@ -768,7 +768,9 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
                 sum(len(p.get("bullets") or []) <= 1 for p in pts_) * 2 > len(pts_):
             msgs.append("the summary rows are thin: give each point two evidence lines (each with its number) taken "
                         "from the section it summarises, so every row reads as a claim and its proof")
-        if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
+        if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1 \
+                and not c.get("delta"):                    # two figures with their gap drawn is the comparison chart
+            # the house style asks for (22% against 9%, the 13 points on the arrow), not a thin one
             msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
                         "split over time, or a comparison with a benchmark")
         if msgs:
@@ -1397,8 +1399,8 @@ def chart_fact_checks(slides, facts, rules) -> dict[int, list[str]]:
     ignore = re.compile(rules["pptx"]["provenance"]["ignore_numbers"])
     pool: list[tuple[float, str]] = []
     for f in facts:
-        nums = _numbers(f["text"], ignore)
-        pool += [(abs(v), u) for _, v, u in nums]
+        nums = _numbers(f["text"], None)                     # every figure a fact gives is a source ('92 to 151':
+        pool += [(abs(v), u) for _, v, u in nums]            # the small-ordinal filter is for page text only)
         pool += [((abs(a[1]) + abs(b[1])) / 2, a[2] or b[2]) for a, b in zip(nums, nums[1:])]   # 13.0-13.3 -> 13.15
     out: dict[int, list[str]] = {}
     for n, s in enumerate(slides, 1):
