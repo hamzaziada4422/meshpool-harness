@@ -30,8 +30,12 @@ def _plan(m: dict, R: dict) -> dict:
         sizes = sorted(c)
         if len(sizes) <= cap or cap < 1:
             continue
-        keep = {sizes[0]} | {z for z, _ in sorted(((z, n) for z, n in c.items() if z != sizes[0]),
-                                                  key=lambda t: (-t[1], -t[0]))[:cap - 1]}
+        floor = (R.get("text_fit") or {}).get("min_body_pt", 0) if role == "body" else 0
+        base = {sizes[0]} | ({min(z for z in sizes if z >= floor)} if floor and any(z >= floor for z in sizes) else set())
+        # the smallest size and the smallest legal one stay: a size moved down never lands under the floor (13 pt
+        # mapped to an 11 pt caption was skipped, and the deck kept eight body sizes)
+        keep = base | {z for z, _ in sorted(((z, n) for z, n in c.items() if z not in base),
+                                            key=lambda t: (-t[1], -t[0]))[:max(0, cap - len(base))]}
         plan[(mode, role)] = {z: max(k for k in keep if k <= z) for z in sizes if z not in keep}
     return plan
 

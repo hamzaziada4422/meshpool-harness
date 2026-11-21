@@ -129,7 +129,7 @@ pptx:
     by_archetype:               # dense exhibit archetypes, calibrated on the reference decks (median 114, p90 185 words).
                                 # Rechecked 2026-11-20 on 130 decks, 3655 pages (reference_stats.json): median 84,
                                 # p90 250 body words; 50% of pages over 80, 20% over 160. Caps unchanged.
-      executive_summary: 120
+      executive_summary: 150      # a BCG summary page carries 120-150 words (four claims with two proof lines)
       text_matrix: 160
       case_example: 110
       options_evaluation: 120
@@ -173,8 +173,8 @@ pptx:
         max_body_words: 90
         max_bullets: 5
         by_archetype:
-          executive_summary: 100
-          text_matrix: 130
+          executive_summary: 130  # four claims with two proof lines each; at 100 the cap and the thin-row check
+          text_matrix: 130        # sent the summary back and forth (relay build, 2026-11-21)
           case_example: 90
           options_evaluation: 100
           recommendations_now_next_later: 90

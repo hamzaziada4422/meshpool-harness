@@ -729,8 +729,16 @@ def footnote_text(t) -> str:
 
 
 def _notes_h(notes) -> float:
-    """Height the footnotes take above the source rule (one line per ~190 characters, 8 pt)."""
-    return (0.155 * max(1, (len("    ".join(map(str, notes))) // 170) + 1) + 0.05) if notes else 0.0
+    """Height the footnotes take above the source rule, measured at their size and width (a character count put a
+    two-line note at one line, and it ran into the captions under the chart: blind review, three decks)."""
+    if not notes:
+        return 0.0
+    txt = "    ".join(f"{i + 1}  {footnote_text(t) or t}" for i, t in enumerate(map(str, notes[:2])))
+    est = 0.155 * max(1, (len(txt) // 170) + 1) + 0.05
+    try:
+        return max(est, _need([{"text": txt, "size": T["note"], "numbers": False}], RIGHT - LEFT) + 0.08)
+    except Exception:  # noqa: BLE001 - the estimate stands
+        return est
 
 
 def _footer(ctx, s, sl, n):
@@ -1613,8 +1621,16 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
             mx, my = (cx(j0) + cx(j1)) / 2, ya - 0.2         # the pill sits on top of the run, not across it
         else:
             segs = [(a_, b_)]
-            mx = (a_[0] + b_[0]) / 2                      # the pill rides above both bars' value labels, never on
-            my = max(py + 0.2, yv(max(vals[j0], vals[j1])) - 0.55)   # them, and never above the plot
+            mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2   # the pill sits on the arrow (think-cell) when it
+            hits = any(abs(mx - cx(j)) < bw / 2 + bwid + 0.02 and my + 0.17 > yv(v) - 0.32    # clears every bar and
+                       for j, v in enumerate(vals))                                         # value label
+            vx, vy = b_[0] - a_[0], b_[1] - a_[1]
+            edge = min(bw / 2 / abs(vx) if vx else 9.0, 0.19 / abs(vy) if vy else 9.0) * 1.08   # where the line
+            if not hits and my - 0.17 >= py and edge < 0.35:     # leaves the pill (fraction of the arrow from its
+                segs = [(a_, (mx - vx * edge, my - vy * edge)), ((mx + vx * edge, my + vy * edge), b_)]   # middle):
+            else:                                         # the line stops at the pill, never runs through its text;
+                mx, my = (a_[0] + b_[0]) / 2, max(py + 0.2, yv(max(vals[j0], vals[j1])) - 0.55)   # else above both
+                # bars' value labels, never above the plot
         for k_, (p0, p1) in enumerate(segs):
             ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(p0[0]), Inches(p0[1]), Inches(p1[0]),
                                          Inches(p1[1]))
@@ -2659,7 +2675,7 @@ def _as_columns(ctx, s, sl, n, items, mode):
     """Items drawn as columns under their markers (compose: numbered chevrons or icons), the body's full height."""
     from .compose import _columns
     notes = s.get("footnotes") or []
-    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
+    notes_h = _notes_h(notes) if notes else 0
     bottom = FOOT_RULE_Y - 0.06 - notes_h if notes else BODY_B
     if notes:
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
@@ -2700,7 +2716,7 @@ def a_closing(ctx, s, sl, n):
     top, bottom = y0 + 0.46, FOOT_RULE_Y - 0.1
     notes = s.get("footnotes") or []
     if notes:
-        notes_h = 0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05
+        notes_h = _notes_h(notes)
         bottom -= notes_h + 0.06
         ctx.notes_top = FOOT_RULE_Y - 0.03 - notes_h
 
@@ -2765,7 +2781,9 @@ def a_challenge_matrix(ctx, s, sl, n):
     """Numbered rows (serif numeral, line icon, two-weight label) x 2 columns of lead + bullets, hairlines; next to a
     table-like slide (plan_forms), one icon column per row: its label, then each lens's lead and evidence."""
     _header(ctx, s, sl, n)
-    rows_ = [r for r in s.get("rows") or [] if isinstance(r, dict)]
+    rows_ = [dict(r, label=re.sub(r"^(\*\*)?\s*\d{1,2}[.)]?\s+", r"\1", str(r.get("label") or "")))
+             for r in s.get("rows") or [] if isinstance(r, dict)]   # the rows are numbered: "1 Price" said it twice
+    s = dict(s, rows=rows_)
     if s.get("_form") == "columns" and 2 <= len(rows_) <= 4:
         heads = [h for h in (s.get("columns") or [])[1:3]] + ["", ""]
         items = []
@@ -3124,25 +3142,36 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
         return ih + room
     hs = plan[3]
     spare = room - sum(hs) - POINT_GAP * (len(items) - 1)
+    if kind == "stack" and spare / len(items) > 0.6 and not dropped_detail:   # thin points: larger type before
+        tw_ = w - 2 * POINT_PAD - d - 0.12                                   # air (a one-line point in a tall card
+        hs2 = [max(_need(_point_blocks(it, ls + 2, ds + 2), tw_) + 0.22, d + 0.26) for it in items]   # reads as an
+        if sum(hs2) + POINT_GAP * (len(items) - 1) <= room:                  # empty box, blind review)
+            ls, ds, hs = ls + 2, ds + 2, hs2
+            spare = room - sum(hs) - POINT_GAP * (len(items) - 1)
     grow = spare / len(items) if fill else min(spare / len(items), 0.6)   # the cards share the column's height:
                                                                           # the column ends where its neighbour does
+    lead_in, gap_ = 0.0, POINT_GAP
+    if kind == "stack" and grow > 0.45 and len(items) > 1:   # never a card twice its text: the cards hug their
+        gap_ = POINT_GAP + min(0.3, (spare - 0.45 * len(items)) / (len(items) - 1))   # points, some air goes
+        grow = (spare - (gap_ - POINT_GAP) * (len(items) - 1)) / len(items)   # between them (never a void P20 counts
+        # as empty), the rest to the cards; the stack still ends at its neighbour's foot
     k_ = getattr(ctx, "_point_slides", 0)                  # the deck alternates its point columns: boxed cards,
     ctx._point_slides = k_ + 1                             # then open rows between hairlines (BCG varies the two;
     open_ = k_ % 2 == 1                                    # cards on every slide read as one template)
-    cy = y0
+    cy = y0 + lead_in
     for j, (it, hh) in enumerate(zip(items, hs)):
         hh += grow
         box = _fill(sl, x, cy, w, hh, card, f"ov_PointCard{j + 1}")
         if open_:
             box.fill.background()
             if j < len(items) - 1:
-                _rule(sl, x, cy + hh + POINT_GAP / 2, w, TC.ACCENT_5, 0.75, f"ov_PointRule{j + 1}")
+                _rule(sl, x, cy + hh + gap_ / 2, w, TC.ACCENT_5, 0.75, f"ov_PointRule{j + 1}")
         tx = x + POINT_PAD + d + 0.12                          # the text is written into the card itself (P17)
         _shape_text(box, _point_blocks(it, ls, ds), ctx, n, (tx, cy + 0.08, x + w - POINT_PAD - tx, hh - 0.16),
                     MSO_ANCHOR.MIDDLE)
         _point_marker(ctx, sl, n, j, icons[j], x + POINT_PAD, cy + (hh - d) / 2, d, plain(it["lead"])[:60])
-        cy += hh + POINT_GAP
-    return cy - POINT_GAP - y
+        cy += hh + gap_
+    return cy - gap_ - y
 
 
 _NUMCELL = re.compile(r"^\s*([+\-−]?)\s*([$€£]?)\s*(\d[\d,]*(?:\.\d+)?)\s*(%|pp|x|[KMBT]|bn|m)?\s*$", re.I)
@@ -3310,7 +3339,7 @@ def a_table_focus(ctx, s, sl, n):
         y += 0.36
     tk = s.get("takeaway") or {}
     notes = s.get("footnotes") or []
-    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
+    notes_h = _notes_h(notes) if notes else 0
     tk_h = 0.34 if tk.get("text") else 0
     bottom = FOOT_RULE_Y - 0.04 - notes_h - tk_h
     ctx.carry_rows = None
@@ -3666,18 +3695,23 @@ def a_executive_summary(ctx, s, sl, n):
     mets = fresh if len(fresh) >= 2 else []           # a panel that repeats the points says it twice: leave it out
     if mets:                                              # the decision's size, large in a panel beside the points
         dx, dw = span24(10, 18)
-        mx, mw = span24(19, 23)
+
+    def draw_mets(tops, claims):                                  # each figure level with a row (one table, not a panel
+        mx, mw = span24(19, 23)                           # floating beside it); evenly spaced when rows are fewer
         _fill(sl, mx, top - 0.05, RIGHT - mx, bottom - top + 0.05, TC.BACKGROUND_2, "ov_MetricsPanel")   # on the
         mx, mw = mx + 0.14, mw - 0.14                     # grid, a full gutter from the points; its figures inset
-        mh = (bottom - top) / len(mets)
+        even = len(tops) < len(mets)
         for i, m in enumerate(mets):
-            my = top + i * mh
+            my = top + i * (bottom - top) / len(mets) if even else tops[i]     # tops: the row bounds (rules)
+            mh = ((bottom - top) / len(mets) if even else
+                  (tops[i + 1] if i + 1 < len(tops) else bottom) - my)
             vb = [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
                    "color": TC.ACCENT_1}]
             ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
             lb_ = [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}]
             lh_ = _need(lb_, mw - 0.1) + 0.06
-            off = max(0.12, (mh - 0.62 - lh_) / 2)        # the figure and its label centred in their share of the
+            off = (claims[i] - my - 0.04) if not even else max(0.12, (mh - 0.62 - lh_) / 2)   # level with its
+            # row's claim; else
             _write(_box(sl, mx, my + off, mw - 0.1, 0.62, f"role_numeral_Metric{i + 1}"), vb)   # panel: no blank
             _write(_box(sl, mx, my + off + 0.62, mw - 0.1, max(0.3, min(lh_, mh - off - 0.66)),  # foot under each
                         f"MetricLabel{i + 1}"), lb_)
@@ -3718,6 +3752,7 @@ def a_executive_summary(ctx, s, sl, n):
     if not icons or not all(icons):
         icons = [None] * len(pts)                                  # one look per slide: all icons or all numbers
     y = top
+    bounds, claims = [top], []
     tracker = len(pts) >= 2                               # the points are the deck's numbered sections
     for i, (a, d, h) in enumerate(laid):
         rh = h if len(laid) > 1 else h + gap
@@ -3728,12 +3763,16 @@ def a_executive_summary(ctx, s, sl, n):
                    [{"text": f"{i + 1:02d}" if tracker else str(i + 1), "size": T["num"], "bold": True,
                      "heading": True, "numbers": False, "color": TC.ACCENT_1}])
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
+        claims.append(y + 0.08)
         if d:
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
         if i < len(laid) - 1:
             _rule(sl, LEFT, y + rh + gap / 2, (dx + dw if mets else RIGHT) - LEFT, TC.ACCENT_5, 0.5,
                   f"SummaryRule{i + 1}")
+            bounds.append(y + rh + gap / 2)
         y += rh + gap
+    if mets:
+        draw_mets(bounds[:len(mets)] if len(mets) <= len(pts) else [], claims)
 
 
 def a_waterfall_bridge(ctx, s, sl, n):
@@ -3857,7 +3896,7 @@ def a_benchmark(ctx, s, sl, n):
     bl = [{"text": x["text"] if isinstance(x, dict) else str(x), "size": T["body"], "bullet": True,
            "space_before": 4, "prov": x.get("prov") if isinstance(x, dict) else None} for x in s.get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
+    notes_h = _notes_h(notes) if notes else 0
     bottom_all = FOOT_RULE_Y - 0.04 - notes_h
     rows_n = len(names) + 1
     head_h = 0.42
@@ -3923,7 +3962,7 @@ def a_football_field(ctx, s, sl, n):
     bl = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": T["body"], "bullet": True, "space_before": 4,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in s.get("bullets") or []]
     notes = s.get("footnotes") or []
-    notes_h = (0.155 * max(1, (len("    ".join(notes)) // 170) + 1) + 0.05) if notes else 0
+    notes_h = _notes_h(notes) if notes else 0
     bottom = FOOT_RULE_Y - 0.04 - notes_h
     need = _panel(ctx, s, sl, n, LEFT, 0, RIGHT - LEFT, 0.5 * (bottom - BODY_Y), lead, bl, dry=True, grow=False)
     gf = _range_chart(ctx, sl, n, dict(s["chart"], kind="range"), LEFT, BODY_Y, RIGHT - LEFT,
