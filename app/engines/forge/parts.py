@@ -1254,16 +1254,24 @@ def compose(parts, lay, look, top, bottom, s=None) -> list[tuple[int, tuple, dic
         parts = parts[:MAX_PARTS]
     k = len(parts)
     best = None
+    tbl_w = lambda pl: min([b[2] for j, b, p in pl if p.get("type") == "table"] or [99.0])   # noqa: E731
+    tw0 = None
     for cand in [lay] + [c for c in ALTERNATIVES.get(k, []) if c != lay]:
         if LAYOUTS[cand] > k:
             continue
         placed, over, empty = _compose_one(parts, cand, look, top, bottom)
+        if tw0 is None:
+            tw0 = tbl_w(placed)
+        elif tbl_w(placed) < tw0 - 0.01:
+            continue                                       # a table is never moved into a narrower column
         if cand == lay and over <= 0.01 and (s or {}).get("_keep_layout"):
             return placed                                  # a diagram beside its argument stays beside it (a flat,
                                                            # full-width diagram above short text read worse)
-        if cand == lay and (any(p.get("type") == "table" for p in parts) or over <= 0.01 and empty <= KEEP_EMPTY):
+        if cand == lay and over <= 0.01 and (any(p.get("type") == "table" for p in parts) or empty <= KEEP_EMPTY):
             return placed                                  # the asked-for layout fits (and fills): keep it; a table
                                                            # is never moved into a narrower column for fill alone
+                                                           # (but a layout that overflows is never kept: its callout
+                                                           # was crushed into the footer, real-path build)
         score = 10 * over + empty + (0 if cand == lay else 0.06)
         if best is None or score < best[0] - 1e-9:
             best = (score, cand, placed)

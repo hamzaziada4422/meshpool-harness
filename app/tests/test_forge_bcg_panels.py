@@ -316,3 +316,73 @@ def test_a_deleted_template_is_built_again():
     p = T.default_template(None)
     os.remove(p)
     assert os.path.exists(T.default_template(None))
+
+
+def test_long_footnotes_go_one_per_line_and_a_third_is_kept():
+    long_ = ["Illustrative: UK café margin of 14% less the 5-point staff cost gap leaves 9%, assuming no offset.",
+             "Average rent per café is £96,000 a year in Berlin against £120,000 in London: £24,000 less a year.",
+             "Average ticket is €7.20 in Germany against £5.80 in the UK; conversion to be confirmed."]
+    paras = R._note_paras(long_, True)
+    assert len(paras) == 3 and paras[2]["text"].startswith("3\u00a0\u00a0")
+    assert len(R._note_paras(["Short note.", "Another."], True)) == 2      # never run together on one line
+    assert R._notes_h(long_) > R._notes_h(long_[:1])
+
+
+def test_argument_panel_stops_above_the_footnotes(tmp_path):
+    s = {"archetype": "exhibit_argument", "title": "Staff cost is 5 points higher in Germany than in the UK",
+         "chart": {"kind": "column", "categories": ["UK", "Germany"], "series": [{"name": "Staff", "values": [29, 34]}],
+                   "unit": "%", "decimals": 0},
+         "title_right": "The pilot tests whether rent and ticket offset the gap",
+         "blocks": [{"label": "Margin is at stake", "text": "Germany's 34% against 29% comes off margin.^1"},
+                    {"label": "Rent helps", "text": "Berlin rent per café is lower than London's.^2"},
+                    {"label": "Ticket needs a check", "text": "The two tickets are quoted in different currencies."}],
+         "callout": {"bullets": [{"text": "**So what:** run the pilot first, then decide whether to expand."}]},
+         "footnotes": ["^1 Illustrative: a long note " + "about the margin and the offset " * 6,
+                       "^2 Another long note " + "about the rent and the ticket " * 6], "source": SRC}
+    r, prs, _ = _deck([s], tmp_path)
+    sl = prs.slides[0]
+    panel = next(sh for sh in sl.shapes if sh.name == "ov_ArgumentPanel")
+    notes = next(sh for sh in sl.shapes if sh.name == "Footnotes")
+    tf = notes.text_frame
+    assert len(tf.paragraphs) == 2                              # one note per line
+    assert len(r["errors"]) == 0 or r["errors"]
+    first_line = notes.top + notes.height - 2 * 0.16 * 914400     # two note lines, set at the foot of the box
+    assert panel.top + panel.height <= first_line
+
+
+def test_an_overflowing_layout_is_not_kept_for_its_table():
+    tbl = {"type": "table", "heading": "Only the price gap explains the lapses; the rest amplify it or are ruled out",
+           "table": {"columns": ["Hypothesis", "Status", "Evidence"], "rows": [
+               ["Price gap at renewal", "Supported", "22% rise against 9% for new quotes"],
+               ["Service quality", "Ruled out", "Claims satisfaction 7.9 of 10, flat on prior year"],
+               ["Comparison-site exposure", "Amplifies", "Sites bring 68% of new motor customers"],
+               ["App engagement", "Partial", "Renewal 88% with app against 71% without; correlation only"]]}}
+    ch = {"type": "chart", "heading": "Average price change, %", "chart": {
+        "kind": "column", "categories": ["Renewal", "New quotes"], "series": [{"name": "Change", "values": [22, 9]}],
+        "unit": "%", "decimals": 0}}
+    co = {"type": "callout", "heading": "So what", "text": "**Reprice renewals**, not service."}
+    parts = [ch, tbl, co]
+    _, over, _ = PT._compose_one(parts, "main_stack", "editorial", R.BODY_Y, R.BODY_B - 0.3)
+    assert over > 0.01                                          # the asked-for layout overflows...
+    placed = PT.compose(parts, "main_stack", "editorial", R.BODY_Y, R.BODY_B - 0.3, {})
+    callout = next(b for j, b, p in placed if p.get("type") == "callout")
+    assert callout[1] + callout[3] <= R.BODY_B - 0.3 + 0.01    # ...so another one is used: the callout fits
+
+
+def test_table_columns_follow_their_content():
+    w = R._content_widths(["Hypothesis", "Status", "Evidence"],
+                          [["Service quality", "Ruled out", "Claims satisfaction 7.9 of 10, flat on prior year"],
+                           ["App engagement", "Partial", "Renewal 88% with app against 71% without; correlation only"]],
+                          6.0, 12, R._font("body"), R._font("body", True))
+    assert abs(sum(w) - 6.0) < 1e-6 and w[2] > w[0] > w[1]
+
+
+def test_a_target_at_a_peer_bar_keeps_its_line(tmp_path):
+    def deck(cats):
+        s = {"archetype": "column_trend", "title": "Renewal fell to 76%, below the 81% peer low",
+             "chart": {"kind": "column", "categories": cats, "series": [{"name": "Rate", "values": [84, 76, 81]}],
+                       "unit": "%", "decimals": 0, "target": 81}, "source": SRC}
+        _, prs, _ = _deck([s], tmp_path)
+        return _names(prs.slides[0])
+    assert "ov_TargetLine" in deck(["2023", "2025", "Peer low"])
+    assert "ov_TargetLine" not in deck(["2023", "2025", "Target"])
