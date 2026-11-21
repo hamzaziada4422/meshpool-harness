@@ -743,6 +743,20 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
             msgs.append("a chart of three bars is thin evidence: plot every comparable value the facts hold (each "
                         "year, peer, segment or site, or a second series such as the target or the benchmark), or "
                         "say in a footnote that the facts hold no more; never add a value the facts do not give")
+        for ch in charts:                                  # a bar of 0 among others plots nothing: a "held flat"
+            if (isinstance(ch, dict) and ch.get("kind") in ("bar", "column") and len(ch.get("series") or []) == 1
+                    and len(ch.get("categories") or []) >= 3
+                    and not all(_PERIOD.match(str(x)) for x in ch.get("categories") or [])):
+                vals = [v for v in (ch["series"][0] or {}).get("values") or [] if isinstance(v, (int, float))]
+                if 0 in vals and any(v for v in vals):
+                    msgs.append("a bar of 0 is not evidence (it reads as a missing bar): drop that category from the "
+                                "chart and say it held flat in a descriptor, a block or a footnote")
+                    break
+        pts_ = [p for p in s.get("points") or [] if isinstance(p, dict)]
+        if a == "executive_summary" and density != "present" and len(pts_) >= 3 and \
+                sum(len(p.get("bullets") or []) <= 1 for p in pts_) * 2 > len(pts_):
+            msgs.append("the summary rows are thin: give each point two evidence lines (each with its number) taken "
+                        "from the section it summarises, so every row reads as a claim and its proof")
         if c.get("kind") in ("bar", "column") and len(c.get("categories") or []) == 2 and len(c.get("series") or []) == 1:
             msgs.append("a two-bar chart is a thin exhibit: show the breakdown behind it (3+ categories), the same "
                         "split over time, or a comparison with a benchmark")
