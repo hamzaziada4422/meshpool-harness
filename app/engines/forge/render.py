@@ -746,18 +746,28 @@ def _notes_h(notes) -> float:
     two-line note at one line, and it ran into the captions under the chart: blind review, three decks)."""
     if not notes:
         return 0.0
-    txt = "    ".join(f"{i + 1}  {footnote_text(t) or t}" for i, t in enumerate(map(str, notes[:2])))
-    est = 0.155 * max(1, (len(txt) // 170) + 1) + 0.05
+    paras = _note_paras([footnote_text(t) or str(t) for t in notes[:NOTE_MAX]], True)
+    est = sum(0.155 * max(1, (len(p_["text"]) // 170) + 1) for p_ in paras) + 0.05
     try:
-        return max(est, _need([{"text": txt, "size": T["note"], "numbers": False}], RIGHT - LEFT) + 0.08)
+        return max(est, _need(paras, RIGHT - LEFT) + 0.08)
     except Exception:  # noqa: BLE001 - the estimate stands
         return est
+
+
+NOTE_MAX = 3                     # a third note is kept: a marker on the page never points at a note that was cut
+
+
+def _note_paras(notes, marked) -> list[dict]:
+    """The footnotes as paragraphs, one note per line (run together on one line, two notes read as one statement,
+    and a wrapped note as part of the next: blind reviews, real-path decks)."""
+    lab = [(f"{i + 1}\u00a0\u00a0{t}" if marked else t) for i, t in enumerate(notes)]   # the number stays with its note
+    return [{"text": t, "size": T["note"], "numbers": False, "space_before": 1 if i else 0} for i, t in enumerate(lab)]
 
 
 def _footer(ctx, s, sl, n):
     notes = [footnote_text(t) for t in s.get("footnotes") or [] if footnote_text(t)]
     meta = [x for x in notes if _META_NOTE.search(x)]     # notes about what the sources lack are for the presenter
-    notes = [x for x in notes if x not in meta][:2]       # at most two short notes on the page
+    notes = [x for x in notes if x not in meta][:NOTE_MAX]   # at most three short notes on the page
     if meta:
         s["notes"] = (s.get("notes", "") + "\n[QA] Note moved off the slide: " + " | ".join(meta)).strip()
     lc = getattr(ctx, "label_col_notes", None)
@@ -771,9 +781,16 @@ def _footer(ctx, s, sl, n):
         ctx.notes_top = None
         marked = re.search(r"\^\d", json.dumps({k: v for k, v in s.items() if k not in ("footnotes", "notes")},
                                                  ensure_ascii=False))   # a numbered note needs its marker on the
-        _write(_box(sl, LEFT, top, RIGHT - LEFT, FOOT_RULE_Y - top - 0.03, "Footnotes", MSO_ANCHOR.BOTTOM),   # page:
-               [{"text": "    ".join((f"{i + 1}  {t}" if marked else t) for i, t in enumerate(notes)),   # unmarked
-                 "size": T["note"], "numbers": False}])   # notes read as plain notes, never a "1" pointing nowhere
+        avail = FOOT_RULE_Y - top - 0.03
+        paras = _note_paras(notes, bool(marked))      # unmarked notes read as plain notes, never a "1" pointing nowhere
+        while len(paras) > 1 and _need(paras, RIGHT - LEFT) > avail + 0.02:   # a layout that kept two lines for
+            joined = [dict(paras[0], text="    ".join(p_["text"] for p_ in paras))]   # its notes: side by side
+            if _need(joined, RIGHT - LEFT) <= avail + 0.02:                    # when they fit so; else the last
+                paras = joined                                                 # note goes to the speaker notes
+                break
+            s["notes"] = (s.get("notes", "") + "\n[QA] Footnote moved off the slide: " + paras[-1]["text"]).strip()
+            paras = paras[:-1]
+        _write(_box(sl, LEFT, top, RIGHT - LEFT, avail, "Footnotes", MSO_ANCHOR.BOTTOM), paras)
     src = s.get("source") or {}
     if src.get("text"):
         _rule(sl, LEFT, FOOT_RULE_Y, RIGHT - LEFT, TC.TEXT_1, 0.5, "SourceRule")
@@ -1725,9 +1742,11 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                                                           # (a caption row stranded below the axis: blind review)
                        [{"text": d_, "size": dz, "numbers": False, "color": TC.TEXT_2, "align": PP_ALIGN.CENTER}],
                        ctx, n)
-    if target is not None and any(abs(v - target) <= 1e-9 + 0.002 * abs(target) for v in vals):
-        target = None                                     # a bar already stands at the target: a line at its top
-    if target is not None:                                # says it twice and crossed the labels (blind review)
+    if target is not None and any(abs(v - target) <= 1e-9 + 0.002 * abs(target) and _TARGET_CAT.search(str(cv))
+                                  for v, cv in zip(vals, cats)):
+        target = None                                     # a target bar already stands at the target: a line at
+    if target is not None:                                # its top says it twice (blind review); a peer or plan bar
+                                                          # at that height keeps the line (its footnote named it)
         yt = yv(target)
         lab_w = max(0.5, min(band * 0.8, 0.9))            # a value label's width over its bar
         cuts = sorted((cx(j) - lab_w / 2 - 0.04, cx(j) + lab_w / 2 + 0.04) for j, v in enumerate(vals)
@@ -1754,11 +1773,19 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                        for j, v in enumerate(vals)) or (delta is not None and any(   # arrow's end there
                            abs(yt - 0.15 - (yv(vals[j_]) - 0.34)) < 0.45 and xa - 0.1 < cx(j_) < xb + 0.1
                            for j_ in delta[:2]))
+        if any(abs(v - target) <= 1e-9 + 0.002 * abs(target) for v in vals):
+            return                                        # a bar (a peer, a plan) stands at the line: its value label
+                                                          # and the footnote name it; a "Target" label overprinted
+                                                          # the bar labels beside it (blind review, real-path deck)
         lx_ = px                                          # at the line's start; at its end when a value label sits
-        if clash(px, px + lw_):                           # there; above both when the end is taken too
-            lx_ = px + pw - lw_
+        if clash(px, px + lw_):                           # there; then in a free run of the line; above all of them
+            lx_ = px + pw - lw_                           # when every place is taken
             if clash(lx_, lx_ + lw_):
-                lx_, yt = px, yt - 0.32
+                free = [(a_, b_) for a_, b_ in runs if b_ - a_ >= lw_ and not clash(a_, a_ + lw_)]
+                if free:
+                    lx_ = max(free, key=lambda r_: r_[1] - r_[0])[0]
+                else:
+                    lx_, yt = px, yt - 0.32
         _write(_box(sl, lx_, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.ACCENT_1}], ctx, n)
         ctx.track(n, lab, prov)
@@ -1826,6 +1853,37 @@ def _drop_na_columns(t: dict) -> dict:
                 _dropped_cols=[cols[j] for j in drop])
 
 
+def _content_widths(cols, rows, w, size_, f_reg, f_bold) -> list[float]:
+    """Column widths by content: each column first gets its longest word (so nothing breaks mid-word), then the rest
+    of the width in proportion to what its longest cell still needs on one line. Equal shares wrapped a long
+    evidence column to four lines beside a one-word status column (blind review); the old split (a third for the
+    labels, the rest equal) stands when the words alone do not fit."""
+    from .common import text_width_in
+    k = len(cols)
+    default = [w * 0.32] + [(w * 0.68) / max(1, k - 1)] * (k - 1)
+    if k < 2:
+        return default
+    try:
+        mins, needs = [], []
+        for ci in range(k):
+            heads = [(wd, size_ + 2, f_bold) for wd in re.findall(r"\S+", _plain(cols[ci]))]
+            cells = [(wd, size_, f_bold if ci == 0 else f_reg) for r in rows if ci < len(r)
+                     for wd in re.findall(r"\S+", _plain(r[ci]))]
+            mins.append(max([text_width_in(*a) for a in heads + cells] or [0.3]) / 0.94 + 0.32)
+            lines = [text_width_in(_plain(r[ci]), size_, f_bold if ci == 0 else f_reg) for r in rows if ci < len(r)]
+            needs.append(max(lines + [text_width_in(_plain(cols[ci]), size_ + 2, f_bold) * 0.6] or [0.3]) / 0.94
+                         + 0.3)                     # LibreOffice sets a little wider than measured
+    except Exception:  # noqa: BLE001 - the fixed split
+        return default
+    if sum(mins) > w:
+        return default
+    extra = [max(0.0, nd - mn) for nd, mn in zip(needs, mins)]
+    room = w - sum(mins)
+    if sum(extra) <= room:                                  # everything fits on one line: share the rest evenly
+        return [mn + ex + (room - sum(extra)) / k for mn, ex in zip(mins, extra)]
+    return [mn + room * ex / sum(extra) for mn, ex in zip(mins, extra)]
+
+
 def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     t = _drop_na_columns(t)
     groups = t.get("groups")
@@ -1839,8 +1897,7 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
     pad_r = 0.045
     row_min = lambda sz: sz * lf / 72 + pad_r                     # LibreOffice/PowerPoint minimum, measured
     widths = t.get("col_widths")
-    colw = ([w * cw / sum(widths) for cw in widths] if widths else
-            [w * 0.32] + [(w * 0.68) / max(1, len(cols) - 1)] * (len(cols) - 1))
+    colw = ([w * cw / sum(widths) for cw in widths] if widths else _content_widths(cols, rows, w, size_, f_reg, f_bold))
 
     def col_head_h(sz):
         """Column-header row: as many lines as its most-wrapped (bold, size + 2) heading."""
@@ -3030,7 +3087,8 @@ def a_exhibit_argument(ctx, s, sl, n):
     foot = BODY_B - (FOOT_RULE_Y - 0.08 - _notes_h(notes)) if notes else 0
     if notes:
         ctx.notes_top = FOOT_RULE_Y - 0.03 - _notes_h(notes)
-    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
+        panel.height = Inches(max(1.0, ctx.notes_top - 0.06 - (TITLE_RULE_Y + 0.02)))   # the panel stops above the
+    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)                         # notes, never under them
     blocks = []
     for blk in s.get("blocks") or []:
         blocks.append({"text": blk["text"], "size": ARGUMENT["intro"], "numbers": False, "space_before": 8, "prov": blk.get("prov")})
@@ -4564,13 +4622,20 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
         chart_ = s.get("chart") if isinstance(s.get("chart"), dict) else {}
         ctx.slide_prov = chart_.get("prov") or s.get("title_prov") or src_.get("prov")   # what derived figures
                                                                                           # drawn on the slide cite
-        try:
+        global BODY_B
+        body_b0 = BODY_B
+        notes_ = [t for t in s.get("footnotes") or [] if footnote_text(t)] if arch not in DIVIDERS else []
+        if notes_:                                         # notes taller than the band the body leaves them (three
+            BODY_B = min(BODY_B, FOOT_RULE_Y - 0.08 - _notes_h(notes_))   # notes, one per line): the body ends
+        try:                                               # higher on this slide, the notes never run together
             if spec:
                 if not _designed(ctx, s, sl, n, spec, mode, arch):
                     fn(ctx, s, sl, n)
             else:
                 fn(ctx, s, sl, n)
             if arch not in DIVIDERS:
+                if notes_ and BODY_B < body_b0 and getattr(ctx, "notes_top", None) is None:
+                    ctx.notes_top = FOOT_RULE_Y - 0.03 - _notes_h(notes_)
                 _footer(ctx, s, sl, n)
         except (KeyError, TypeError, IndexError, ValueError, AttributeError, ZeroDivisionError) as e:
             errors.append(f"slide {n} ({arch}): missing or malformed field: {type(e).__name__}: {e}")
@@ -4588,6 +4653,8 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
                 _footer(ctx, fb, sl, n)
             except Exception as e2:
                 errors.append(f"slide {n}: fallback layout failed too: {type(e2).__name__}: {e2}")
+        finally:
+            BODY_B = body_b0
         if s.get("notes"):
             sl.notes_slide.notes_text_frame.text = s["notes"]
         if ctx.carry and carry:

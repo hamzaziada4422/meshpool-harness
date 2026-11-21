@@ -115,11 +115,14 @@ def headline(text: str, max_words: int) -> str:
     t = str(text or "").strip()
     if len(_plain(t).split()) <= max_words:
         return t
-    for sep in (r";\s", r"\s[–—]\s", r"\s-\s", r":\s", r",\s", r"\s(?:because|as|while|which|after|since|with)\s"):
+    for sep in (r"(?<=[.!?])\s+(?=[A-Z£$€\d])", r";\s", r"\s[–—]\s", r"\s-\s", r":\s", r",\s",
+                r"\s(?:because|as|while|which|after|since|with)\s"):
         for m in re.finditer(sep, t):
             head = t[:m.start()]
             if head.count("(") > head.count(")"):         # a break inside a bracketed aside is not a clause end
                 continue
+            if re.search(r"[.!?]\s+\S", head):           # a cut after a full sentence keeps that sentence, never
+                break                                     # a fragment of the next ("... £5.4M. Franchise": c4)
             k = len(_plain(head).split())
             if 4 <= k <= max_words and _is_clause(head):
                 return _balance(head)
