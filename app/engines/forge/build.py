@@ -2380,6 +2380,7 @@ if __name__ == "__main__":
     ap.add_argument("--design", choices=["archetype", "image", "auto"], default=None)
     ap.add_argument("--style", default=None, help="style pack (engines/forge/styles.py); default look when omitted")
     ap.add_argument("--frame", choices=["band"], default=None, help="band: the dark title band look (template.FRAMES)")
+    ap.add_argument("--best-of", type=int, default=None, help="build N decks and keep the best graded (select.py)")
     a = ap.parse_args()
     theme = None
     if a.style:
@@ -2390,5 +2391,11 @@ if __name__ == "__main__":
             ap.error(f"unknown style {a.style!r}; styles: {', '.join(styles.names())}")
     if a.frame:
         theme = dict(theme or {"palette": "navy"}, frame=a.frame)
-    r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design, theme=theme)
+    from engines.forge import select as SEL
+    n_best = a.best_of or SEL.wanted()
+    if n_best > 1:
+        r = SEL.best_of(Path(a.brief).read_text(), a.out_dir, n_best, build, slides_wanted=a.slides,
+                        density=a.density, design=a.design, theme=theme)
+    else:
+        r = build(Path(a.brief).read_text(), a.out_dir, a.slides, density=a.density, design=a.design, theme=theme)
     print(json.dumps(r, indent=1, default=str))
