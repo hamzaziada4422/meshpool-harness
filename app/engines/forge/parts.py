@@ -843,9 +843,14 @@ def _shift_plan(part, w, up=0):
     up = next((d for d in range(up, -5, -1) if fits(d)), -4)
     sz, vz, lz = R.bump(12) + up, R.bump(16) + up, R.bump(13) + up
 
-    def side(v, accent):
+    heads = [_txt(part.get("from_head") or ""), _txt(part.get("to_head") or "")]
+
+    def side(v, accent, head=""):
         tx, val = _side(v)
-        bl = []
+        hw = set(re.findall(r"[a-z]+", head.lower()))
+        if tx and hw and set(re.findall(r"[a-z]+", tx.lower())) <= hw | {"rate", "in", "the", "sites"}:
+            tx = ""                                       # "Before automation" under the heading "Before
+        bl = []                                           # automation" says it twice (blind review): the figure
         if tx:
             bl.append({"text": tx, "size": sz, "numbers": False, "color": TC.TEXT_2})
         if val:
@@ -857,10 +862,9 @@ def _shift_plan(part, w, up=0):
     for r in rows:
         lab = [{"text": _txt(r.get("label") or ""), "size": lz, "bold": True, "numbers": False,
                 "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}]
-        fb, tb = side(r.get("from"), False), side(r.get("to"), True)
+        fb, tb = side(r.get("from"), False, heads[0]), side(r.get("to"), True, heads[1])
         need = max(R._need(lab, lw - 0.16) + 0.16, R._need(fb, fw) * 1.08, R._need(tb, fw) * 1.08) + 0.14
         out.append((r, lab, fb, tb, need))
-    heads = [_txt(part.get("from_head") or ""), _txt(part.get("to_head") or "")]
     hh = (R._need([{"text": max(heads, key=len), "size": R.bump(12), "bold": True}], fw) + 0.08) if any(heads) else 0
     return {"rows": out, "lw": lw, "cw": cw, "g": g, "fw": fw, "hh": hh, "heads": heads,
             "need": hh + sum(o[4] for o in out) + 0.04 * max(0, len(out) - 1)}
