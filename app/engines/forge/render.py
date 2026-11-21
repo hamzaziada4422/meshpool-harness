@@ -2578,7 +2578,9 @@ def a_cover(ctx, s, sl, n):
     """Opening (and end) slide: short accent bar, large serif title, subtitle, hairline, date line, firm label.
     The title stays in the layout's title placeholder so outline view and accessibility tools see it."""
     clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
-    x, w = LEFT, colx24(17) - LEFT
+    secs = (getattr(ctx, "sections", None) or []) if s.get("archetype") == "cover" else []
+    secs = secs if 2 <= len(secs) <= 6 else []
+    x, w = LEFT, (colx24(14) if secs else colx24(17)) - LEFT   # with the sections listed, the title keeps the left
     from .common import font_file, wrap_lines
     f = _font("head", True)
     size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
@@ -2628,6 +2630,20 @@ def a_cover(ctx, s, sl, n):
                         _set_font(r, 16, soft)
             else:
                 ph._element.getparent().remove(ph._element)
+    if secs:                                               # the story's sections down the right: what the deck
+        sx = colx24(16)                                    # answers, in order; the 01, 02 marks on every later page
+        sw = RIGHT - sx                                    # refer back to them
+        rh = min(0.78, 4.2 / len(secs))
+        sy = (4.25 if COVER_DARK else 3.35) - rh * len(secs) + 0.1
+        for k, sec in enumerate(secs):
+            yy = sy + k * rh
+            _write(_box(sl, sx, yy, 0.62, rh, f"ov_CoverSecNo{k + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": f"{k + 1:02d}", "size": 20, "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_1 if not dark else TC.ACCENT_2}])
+            _write(_box(sl, sx + 0.7, yy, sw - 0.7, rh, f"ov_CoverSec{k + 1}", MSO_ANCHOR.MIDDLE),
+                   [{"text": clean(sec["title"]), "size": 15, "numbers": False, "color": ink}])
+            if k < len(secs) - 1:
+                _rule(sl, sx, yy + rh, sw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"ov_CoverSecRule{k + 1}")
     _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, "CoverRule")
     if s.get("date"):
         _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
@@ -4357,6 +4373,7 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
     queue = plan_forms(list(slides))
+    ctx.sections = agenda_sections([s0 for s0 in slides if isinstance(s0, dict)])   # the cover lists them
     n = 0
     from collections import Counter
     used = Counter(str(t) for s0 in slides if s0.get("archetype") not in DIVIDERS
