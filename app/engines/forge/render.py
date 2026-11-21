@@ -1607,8 +1607,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if any(desc):                                         # what each category is, in a line or three under its name
         dz = max(9, T["label"] - 2)
         dh = max(_need([{"text": d_, "size": dz}], w / k - 0.12) for d_ in desc if d_) + 0.06
-        cat_extra = max(_need([{"text": str(cv), "size": T["label"]}], w / k - 0.1) for cv in cats) - \
-            _need([{"text": "A", "size": T["label"]}], 1.0)
+        cat_extra = max(_need([{"text": str(cv), "size": T["label"]}], w / k * 0.78) for cv in cats) - \
+            _need([{"text": "A", "size": T["label"]}], 1.0)       # measured narrower than the band: the chart
+        # engine wraps a category name sooner, and "Germany, downside case" ran into its caption (blind review)
         dh += max(0.0, cat_extra) + 0.04                 # a category name that wraps never runs into its descriptor
         dh = min(dh, h * 0.28)
         ph -= dh
@@ -1728,7 +1729,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
             ln.line.color.theme_color = TC.ACCENT_1
             ln.line.width = Pt(1.25)
             ln.line.dash_style = 4
-        lab = "Target " + fmt_value(target, unit, dec)
+        t_dec = 0 if float(target).is_integer() else min(dec or 1, len(f"{target}".split(".")[-1]))
+        lab = "Target " + fmt_value(target, unit, t_dec)   # the target as stated ("2%", not "2.0%": the text says
+        # 2% and the figure check flagged the two precisions until the line was dropped)
         lw_ = _need_w(lab, T["label"], True) + 0.1
         def clash(xa, xb):                                # a bar's value label under the target label's span,
             return any(abs(yt - (yv(v) - 0.2)) < 0.4 and xa - band / 2 < cx(j) < xb + band / 2   # or a difference
