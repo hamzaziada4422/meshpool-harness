@@ -581,6 +581,20 @@ def date_checks(slides, today=None) -> dict[int, list[str]]:
                 if end < now:
                     out.setdefault(i, []).append(f"\"{m.group(0)}\" is in the past (today is {today:%B %Y}): "
                                                  "every date in the plan comes after today")
+        steps = [st for st in s.get("steps") or [] if isinstance(st, dict)]   # the steps run in date order: a
+        firsts = []                                        # step bar reading Dec, 29 Jan, 26 Feb, Jan looks wrong
+        for st in steps:
+            m = _WHEN.search(str(st.get("timing") or ""))
+            if m:
+                y = int(m.group(4))
+                firsts.append(y * 12 + (_MONTHS[m.group(1).lower()[:3]] if m.group(1) else
+                                        3 * int(m.group(2)[1]) - 2 if m.group(2) else 6 * int(m.group(3)[1]) - 5))
+            else:
+                firsts.append(None)
+        known = [f for f in firsts if f is not None]
+        if len(known) >= 3 and any(b < a for a, b in zip(known, known[1:])):
+            out.setdefault(i, []).append("the steps are not in date order: put them in the order they start (a "
+                                         "recurring review goes last, timed from its first occurrence)")
     for k in out:
         out[k] = list(dict.fromkeys(out[k]))
     return out
@@ -1326,6 +1340,9 @@ def prose_checks(slides) -> dict[int, list[str]]:
                 out.setdefault(n, []).append(f"{where}: unbalanced ** bold markers in '{t[:60]}'")
             if re.search(r"\b(but|and|or|of|because|while)\s*[.!?]?\s*$", t.strip(), re.I) and len(t.split()) > 3:
                 out.setdefault(n, []).append(f"{where}: sentence breaks off ('...{t.strip()[-40:]}'); finish it or cut it")
+            if re.search(r"(?:^|[.;:]\s+)[A-Z][a-z]+\.\s*$", t.strip()) and len(t.split()) > 3:   # "... Franchise."
+                out.setdefault(n, []).append(f"{where}: ends on a one-word fragment ('...{t.strip()[-30:]}'); "
+                                             "finish the sentence or cut it")
             if re.search(r"[,;:]\s*[.!?]|\bTBD\b|\bXX+\b|lorem|\[\s*\]|\{\w+\}", t, re.I):
                 out.setdefault(n, []).append(f"{where}: broken or placeholder text ('{t.strip()[:60]}')")
             ids = re.findall(r"\b(?:S\d+[OC]\d+|S\d{3,}|[FW]\d{1,3})\b", t)
