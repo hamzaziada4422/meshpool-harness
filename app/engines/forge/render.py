@@ -3099,9 +3099,10 @@ def _point_marker(ctx, sl, n, j, icon, x, y, d, meaning):
     if icon:
         _icon(sl, icon, x, y, d, meaning)
         return
-    b = _fill(sl, x, y, d, d, TC.ACCENT_1, f"ov_PointBadge{j + 1}", MSO_SHAPE.OVAL)
-    _shape_text(b, [{"text": str(j + 1), "size": T["body"], "bold": True, "numbers": False,
-                     "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n, (x, y, d, d), MSO_ANCHOR.MIDDLE)
+    _write(_box(sl, x - 0.04, y - 0.02, d + 0.16, d + 0.04, f"ov_PointBadge{j + 1}", MSO_ANCHOR.MIDDLE),   # "01" in
+           [{"text": f"{j + 1:02d}", "size": T["num"] - 2, "bold": True, "heading": True, "numbers": False,   # the
+             "color": TC.ACCENT_1, "align": PP_ALIGN.LEFT}], ctx, n)   # accent, as the summary and the BCG deck
+    # number their points: a filled blue disc on every card read as a generated template (blind review)
 
 
 def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=False, fill=True,
