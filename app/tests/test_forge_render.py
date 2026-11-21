@@ -55,7 +55,7 @@ def test_waterfall_below_zero_and_signed_labels(tmp_path):
     assert above[0] == 5 and above[3] == 1
     labels = [pt.data_label.text_frame.text for se in list(ch.plots[0].series)[1:]
               for j, pt in enumerate(se.points) if pt.data_label.has_text_frame]
-    assert "-8" in labels and "+4" in labels
+    assert "\u22128" in labels and "+4" in labels                  # a true minus, as on every other label
 
 
 def test_columns_start_at_zero_and_keep_decimals(tmp_path):

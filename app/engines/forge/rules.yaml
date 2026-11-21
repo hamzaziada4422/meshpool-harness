@@ -157,6 +157,7 @@ pptx:
       layout: 120               # a built-in layout: its slot texts plus the side column
       closing: 200              # the next steps with detail, milestones, owner and timing
     bullets_by_archetype:       # multi-column archetypes: the cap is per slide, at most 4 per column
+      executive_summary: 10     # four or five claims, two proof lines each (the thin-row check asks for them)
       layout: 12
       recommendations_now_next_later: 12
       timeline_roadmap: 12
@@ -201,6 +202,7 @@ pptx:
           library: 100
           layout: 100
         bullets_by_archetype:
+          executive_summary: 8  # four claims with two proof lines each: at 6 the cap and the thin-row check fought
           layout: 9
           recommendations_now_next_later: 9
           timeline_roadmap: 9

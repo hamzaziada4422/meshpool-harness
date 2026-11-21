@@ -1279,7 +1279,49 @@ def _wf_totals(vals: list) -> tuple[set, float]:
     return tot, run
 
 
-def _waterfall_style(plot, vals, spans, dec, usfx):
+def _wf_connectors(ch, sl, vals, spans, x, y, w, h) -> None:
+    """think-cell's bridge: a thin line at the running total from each bar to the next, so a step reads as the
+    move between two totals (a floating step with no connector read as unfinished: blind review). The plot area is
+    fixed so each bar's place is known; only for bridges that stay above zero."""
+    ends = [e for sp in spans for e in sp]
+    if not ends or min(ends) < 0 or len(vals) < 2:
+        return
+    va = ch.value_axis
+    M = max(ends) * 1.1 or 1.0
+    va.minimum_scale, va.maximum_scale = 0, M
+    pa = ch._chartSpace.find(".//" + qn("c:plotArea"))
+    lay = pa.find(qn("c:layout"))
+    if lay is None:
+        lay = pa.makeelement(qn("c:layout"), {})
+        pa.insert(0, lay)
+    for e in list(lay):
+        lay.remove(e)
+    ml = lay.makeelement(qn("c:manualLayout"), {})
+    for tag, val in (("c:layoutTarget", "inner"), ("c:xMode", "edge"), ("c:yMode", "edge"), ("c:x", PLOT_FR[0]),
+                     ("c:y", PLOT_FR[1]), ("c:w", PLOT_FR[2]), ("c:h", PLOT_FR[3])):
+        ml.append(ml.makeelement(qn(tag), {"val": str(val)}))
+    lay.append(ml)
+    px, py, pw, ph = x + w * PLOT_FR[0], y + h * PLOT_FR[1], w * PLOT_FR[2], h * PLOT_FR[3]
+    k = len(vals)
+    band = pw / k
+    gap = (ch.plots[0].gap_width or 60) / 100
+    half = band / (1 + gap) / 2
+    totals, _ = _wf_totals(vals)
+    run = []
+    r = 0.0
+    for j, v in enumerate(vals):
+        r = v if j in totals else r + v
+        run.append(r)
+    for j in range(k - 1):
+        yy = py + ph * (1 - run[j] / M)
+        x0, x1 = px + band * (j + 0.5) + half, px + band * (j + 1.5) - half
+        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x0), Inches(yy), Inches(x1), Inches(yy))
+        ln.name = f"ov_BridgeLine{j + 1}"
+        ln.line.color.theme_color = TC.TEXT_2
+        ln.line.width = Pt(0.75)
+
+
+def _waterfall_style(plot, vals, spans, dec, usfx, hl=()):
     """Totals grey, increases and decreases in their own colours; each bar labelled once with its signed value."""
     base, above, below = plot.series
     base.format.fill.background()
@@ -1287,14 +1329,14 @@ def _waterfall_style(plot, vals, spans, dec, usfx):
     totals, _ = _wf_totals(vals)
     for j, v in enumerate(vals):
         total = j in totals
-        colr = TC.TEXT_2 if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_2)
+        colr = (TC.ACCENT_1 if j in hl else TC.TEXT_2) if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_2)
         lo, hi = spans[j]
         for se in (above, below):
             f = se.points[j].format
             f.fill.solid()
             f.fill.fore_color.theme_color = colr
         num = f"{abs(v):,.{dec}f}{usfx}"
-        txt = ("-" + num if v < 0 else num) if total else ("+" if v >= 0 else "-") + num
+        txt = ("\u2212" + num if v < 0 else num) if total else ("+" if v >= 0 else "\u2212") + num
         lab_se = above if hi > 0 or lo == hi else below
         dl = lab_se.points[j].data_label
         dl.has_text_frame = True
@@ -1427,7 +1469,8 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
     hl = {str(v) for v in c.get("highlight_categories") or []}
     palette = [TC.TEXT_2, TC.ACCENT_1, TC.ACCENT_5, TC.ACCENT_4]   # navy, the accent, grey: never three blues
     if kind == "waterfall":
-        _waterfall_style(plot, vals, spans, dec, usfx)
+        _waterfall_style(plot, vals, spans, dec, usfx, [j for j, cv in enumerate(cats) if str(cv) in hl])
+        _wf_connectors(ch, sl, vals, spans, x, y, w, h)
         _alt(gf, c.get("alt") or f"waterfall chart of {series[0]['name']} ({c.get('unit', '')})")
         return gf
     for i, s in enumerate(plot.series):
