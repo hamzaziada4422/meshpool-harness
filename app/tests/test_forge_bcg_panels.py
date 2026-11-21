@@ -198,3 +198,17 @@ def test_the_summary_is_a_statement_panel(tmp_path, monkeypatch):
     v = VP.validate(out, VP.load_rules(), render=False, density="balanced")
     for rule in ("P7", "P8", "P9", "P11", "P17"):
         assert v["rules"][rule] == "pass", [f for f in v["failures"] if f["rule"] == rule]
+
+
+def test_writer_hears_about_thin_summary_rows_and_zero_bars():
+    from engines.forge.build import fill_checks
+    summ = {"archetype": "executive_summary", "title": "t",
+            "points": [{"lead": f"Point {i}", "bullets": [f"Fact {i}"]} for i in range(4)]}
+    full = dict(summ, points=[{"lead": f"Point {i}", "bullets": [f"Fact {i}", f"More {i}"]} for i in range(4)])
+    zero = {"archetype": "column_trend", "title": "t", "chart": {
+        "kind": "column", "categories": ["Renewal price", "New quotes", "Claims satisfaction"], "delta": {"from": 0, "to": 1},
+        "series": [{"name": "% change", "values": [22, 9, 0]}]}}
+    got = fill_checks([summ, full, zero], "balanced")
+    assert any("summary rows are thin" in m for m in got.get(1, []))
+    assert not any("summary rows are thin" in m for m in got.get(2, []))
+    assert any("bar of 0" in m for m in got.get(3, []))
