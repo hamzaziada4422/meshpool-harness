@@ -1485,7 +1485,8 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
 
 
 _PERIOD = re.compile(r"(?i)^\s*(?:(?:19|20)\d{2}|fy\s?\d{2,4}|q[1-4]|h[12])\b")
-_TARGET_CAT = re.compile(r"(?i)\b(target|goal|plan|budget)\b")
+_TARGET_CAT = re.compile(r"(?i)\b(target|goal)\b")      # a budget or a plan is a figure, drawn solid (a dashed
+# three-year budget beside spend to date read as a confusing hollow bar: blind review, two rounds)
 PLOT_FR = (0.02, 0.03, 0.96, 0.85)                       # x, y, w, h of an annotated column chart's plot area
 
 
@@ -1538,7 +1539,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     if not (periods or target is not None or tcat or delta or any(desc)):
         return
     top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
-    M = top * (1.42 if periods else 1.5 if delta else 1.18)   # headroom: an arrow and its pill ride above the
+    M = top * (1.42 if periods else 1.3 if delta else 1.18)   # headroom: an arrow and its pill ride above the
                                                               # tallest label, clear of the chart's heading
     ch = gf.chart
     va = ch.value_axis
@@ -1567,7 +1568,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         ph -= dh
         ml.find(qn("c:h")).set("val", str(round(ph / h, 4)))
     if delta and ph > 0.5:                                # a short plot needs room in inches above the tallest
-        M = max(M, top / (1 - min(0.6, (1.0 if ph >= 1.8 else 0.8) / ph)))   # label for the arrow and its pill (a
+        M = max(M, top / (1 - min(0.6, (0.8 if ph >= 1.8 else 0.7) / ph)))   # label for the arrow and its pill (a
         va.maximum_scale = M                              # scale was not enough on a 2 in chart)
     band = pw / k
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731

@@ -43,7 +43,8 @@ MEANINGS = (
     (r"partner|deal\b|acqui|merger|takeover|buy\b|stake|ownership|shares", "handshake"),
     (r"integrat|combine|structure|licen", "puzzle"),
     (r"\bgw\b|power|energy|capacity|data cent|compute|gpu|chip|infrastructure", "zap"),
-    (r"\btime|timing|week|month|quarter|year|date|deadline|schedule|by \d", "clock"),
+    (r"\btime\b|timing|weeks?\b|deadline|schedule|lead time", "clock"),   # not "year" or "month": every finance
+    # line has one, and a clock beside "39.6% of the three-year budget" means nothing (blind review)
     (r"confirm|verify|diligence|check|review|test", "search-check"),
     (r"\bplans?\b|planning|planned|next step|action|roadmap|prepare|\brun\b", "list-checks"),
     (r"growth|scale|expand|grow|grew|rising|rose\b|up \d", "trending-up"),
@@ -80,18 +81,18 @@ def meaning_icon(text: str, taken=()) -> str | None:
         m = re.search(pat, t)                              # growth that mentions prices is about growth)
         if m:
             hits.append((m.start(), k, name))
-    for _, _, name in sorted(hits):
-        ic = R.icon_name(name)
-        if ic not in taken:
-            return ic
-    return None
+    for pos, _, name in sorted(hits)[:1]:                 # its first meaning only, named early: a second choice or
+        ic = R.icon_name(name)                             # a word deep in the line gave a clock to "fewer errors"
+        if ic not in taken and len(t[:pos].split()) <= 6:  # and a shop to "shopped against the market" (blind
+            return ic                                      # review); none is better: the slide then numbers its
+    return None                                            # points
 
 
 def item_icons(items) -> list[str | None]:
     """One distinct icon per item: chosen by its lead first, then by its detail."""
     out: list[str | None] = []
     for it in items:
-        ic = meaning_icon(it["lead"], out) or meaning_icon(" ".join(b["text"] for b in it["bullets"]), out)
+        ic = meaning_icon(it["lead"], out)                # the lead names it, or the point gets a number
         out.append(ic)
     return out
 
@@ -221,18 +222,31 @@ def _spans(k):
             5: [(0, 3), (5, 8), (10, 13), (15, 18), (20, 23)]}[k]
 
 
+_DATE = re.compile(r"(?i)\b(?:(\d{1,2})\s+)?(jan\w*|feb\w*|mar\w*|apr\w*|may|jun\w*|jul\w*|aug\w*|sep\w*|oct\w*|"
+                   r"nov\w*|dec\w*)\s+(20\d\d)\b|\b(q[1-4])\s+(20\d\d)\b")
+
+
 def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
     """One column per item under its marker (figure, chevron or icon). Returns the height used."""
     k = len(items)
     cols = [R.span24(a, b) for a, b in _spans(k)]
     whens = [None] * k
     if mode == "process":                                 # a step bar carries each step's date (a row of bare
-        for j, it in enumerate(items):                    # digits says nothing: blind review); the date then leaves
-            f_ = it.get("foot")                           # the foot, so it is said once
-            if isinstance(f_, list) and len(f_) >= 2 and f_[-1] and len(str(f_[-1])) <= 26:
-                whens[j] = str(f_[-1])
+        short = [None] * k                                # digits says nothing: blind review); a short timing leaves
+        for j, it in enumerate(items):                    # the foot, so it is said once; a long one keeps its words
+            f_ = it.get("foot")                           # there and gives the bar its first date
+            t_ = str(f_[-1]) if isinstance(f_, list) and len(f_) >= 2 and f_[-1] else ""
+            m_ = _DATE.search(t_)
+            if m_ and m_.group(4):                        # one date form across the bar: "16 Dec 2026", "Q2 2027"
+                whens[j] = f"{m_.group(4).upper()} {m_.group(5)}"
+            elif m_:
+                whens[j] = (m_.group(1) + " " if m_.group(1) else "") + m_.group(2)[:3].capitalize() + " " + m_.group(3)
+            elif t_ and len(t_) <= 26:
+                whens[j] = t_
+            short[j] = bool(t_) and (not m_ or len(t_) - len(m_.group(0)) <= 4)   # the timing is just the date
         if all(whens):
-            items = [dict(it, foot=[x for x in it["foot"][:-1] if x]) for it in items]
+            items = [dict(it, foot=[x for x in it["foot"][:-1] if x]) if short[j] else it
+                     for j, it in enumerate(items)]
         else:
             whens = [None] * k
     figs = [headline_figure(it["lead"]) for it in items] if mode == "figures" else [None] * k
