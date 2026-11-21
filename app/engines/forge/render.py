@@ -1721,7 +1721,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         for j, d_ in enumerate(desc):
             if d_:
                 _write(_box(sl, px + band * j + 0.04, y + h - dh, band - 0.08, dh, f"ov_CatNote{j + 1}",
-                            MSO_ANCHOR.BOTTOM),
+                            MSO_ANCHOR.TOP),              # right under its category name, not at the frame's foot
+                                                          # (a caption row stranded below the axis: blind review)
                        [{"text": d_, "size": dz, "numbers": False, "color": TC.TEXT_2, "align": PP_ALIGN.CENTER}],
                        ctx, n)
     if target is not None and any(abs(v - target) <= 1e-9 + 0.002 * abs(target) for v in vals):
@@ -3157,7 +3158,9 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
     else:
         intro_prov = None
     if intro:
-        ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": True, "numbers": False, "prov": intro_prov}]
+        ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": not (s or {}).get("title_right"), "numbers": False,
+               "prov": intro_prov}]                        # under a panel heading the intro is plain: two bold
+        # headings stacked over the cards read as redundant (blind review)
         ih = _need(ib, w) + 0.1
     room = h - ih
     d = POINT_MARK
