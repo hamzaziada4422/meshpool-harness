@@ -1480,11 +1480,21 @@ def chart_fact_checks(slides, facts, rules) -> dict[int, list[str]]:
     return out
 
 
-def _content_failures(res: dict) -> dict[int, list[str]]:
+def _content_failures(res: dict, facts=None) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
     for f in res["failures"]:
         if f["status"] == "fail" and f["fix_scope"] == "content" and f.get("slide"):
-            out.setdefault(int(f["slide"]), []).append(f"[{f['rule']}] {f['message']}")
+            msg = f"[{f['rule']}] {f['message']}"
+            if f["rule"] == "P13" and facts and "without a source" in msg:   # name the fact that gives it: told only
+                hints = []                                 # "no source", the writer deleted £5.2B and 27% (facts it
+                for raw, v, u in _numbers(msg.split("source:", 1)[-1], None):   # had) instead of citing them
+                    ids = [x["id"] for x in facts if any(_same_number(raw, v, u, fv, fu)
+                                                         for _, fv, fu in _numbers(str(x.get("text") or ""), None))]
+                    if ids:
+                        hints.append(f"{raw} is in {ids[0]}: add {ids[0]} to that element's prov")
+                if hints:
+                    msg += " (" + "; ".join(hints[:4]) + "; keep the figure)"
+            out.setdefault(int(f["slide"]), []).append(msg)
     return out
 
 
@@ -2024,7 +2034,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
     clear = [clarity.review(slides, client, main_model=MODEL, task_id=task_id + "-clarity")]
     calls += 1
     def collect(r, res):                                   # every content check, after a render
-        fails = _content_failures(res)
+        fails = _content_failures(res, facts)
         calcs_ok, calcs_bad = verify_calcs(slides, facts, rules)
         for n, msgs in calcs_bad.items():
             fails.setdefault(n, []).extend(f"[calc] {m}" for m in msgs)
