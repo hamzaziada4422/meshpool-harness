@@ -775,6 +775,14 @@ def fill_checks(slides, density: str = "read", facts=None) -> dict[int, list[str
         for p_ in s.get("parts") or []:                 # a big number must be a number ("None" in 40 pt reads as
             if isinstance(p_, dict) and p_.get("type") in ("stats", "stat"):   # a blank or an error)
                 words_ = [str((it or {}).get("value") or "") for it in p_.get("items") or [] if isinstance(it, dict)]
+                pairs_ = [it for it in p_.get("items") or [] if isinstance(it, dict) and re.search(
+                    r"(?i)\b(up|down) from\b|\bfrom [\d$£€]|\bbefore\b|\bwas \d", " ".join(
+                        str(it.get(k_) or "") for k_ in ("label", "delta")))]
+                if len(pairs_) >= 2 and not any(isinstance(q_, dict) and q_.get("type") == "chart"
+                                                for q_ in s.get("parts") or []):
+                    msgs.append("these figures are before/after pairs ('151, up from 92'): show them as a chart, "
+                                "each measure's before and after as bars with the change drawn on it ('delta'), and "
+                                "keep at most one big figure beside it")
                 if any(w_ and not re.search(r"\d", w_) for w_ in words_):
                     msgs.append("every stat value is a figure ('0', '140', '+1.5 pts'), never a word such as 'None' "
                                 "or 'All': say it with its number, or move it to the label of another stat")

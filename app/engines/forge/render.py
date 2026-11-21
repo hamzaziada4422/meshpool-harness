@@ -3369,10 +3369,15 @@ def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel", dry=False,
     if lead:
         lead = [dict(b, size=T["head"]) for b in lead]
         lh = min(_need(lead, iw) + 0.18, 0.35 * h)
-    cw = w / 2
+    k = 3 if len(bullets) == 3 and iw > 9 else 2         # three points side by side; more split by height, not
+    cw = w / k                                           # count (2 + 1 under a table read as lopsided: blind review)
     bh = h - lh
     icw, ibh = cw - 1.5 * PANEL_PAD, bh - 0.24
-    cols = [bullets[: (len(bullets) + 1) // 2], bullets[(len(bullets) + 1) // 2:]]
+    if k == 3:
+        cols = [[b] for b in bullets]
+    else:
+        cut = min(range(1, len(bullets)), key=lambda j: max(_need(bullets[:j], icw), _need(bullets[j:], icw)))
+        cols = [bullets[:cut], bullets[cut:]]
     fitted, dropped = [], []
     for c in cols:
         c2, d = _trim_to_fit(c, icw, ibh, 10)
@@ -3399,7 +3404,7 @@ def _panel(ctx, s, sl, n, x, y, w, h, lead, bullets, name="ov_Panel", dry=False,
         cx = x + i * cw
         box = _fill(sl, cx, y0 + lh, cw, bh, TC.BACKGROUND_2, f"{name}Col{i + 1}")
         _shape_text(box, c, ctx, n, (cx + (PANEL_PAD if i == 0 else PANEL_PAD / 2), y0 + lh + 0.12, icw, bh - 0.24),
-                    MSO_ANCHOR.MIDDLE)
+                    MSO_ANCHOR.TOP)                       # every column starts on one line
     return ph
 
 
