@@ -1607,10 +1607,10 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
             segs = []                                     # pill over the bar it lands on
             mx, my = cx(j1), max(py + 0.17, yv(vals[j1]) - 0.62)
         elif abs(j1 - j0) > 1:                            # bars in between: an elbow above all their labels (the
-            ya = max(py + 0.25, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
+            ya = max(py + 0.45, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
             segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
                     ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
-            mx, my = (cx(j0) + cx(j1)) / 2, ya
+            mx, my = (cx(j0) + cx(j1)) / 2, ya - 0.2         # the pill sits on top of the run, not across it
         else:
             segs = [(a_, b_)]
             mx = (a_[0] + b_[0]) / 2                      # the pill rides above both bars' value labels, never on
