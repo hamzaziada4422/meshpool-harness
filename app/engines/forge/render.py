@@ -561,6 +561,17 @@ def _cont_title(t: str) -> str:
     return head.rstrip(" .…") + " (continued)"
 
 
+def _wrap_last(text: str, width: float, size: float, f) -> str:
+    """The last line of text wrapped at width (greedy, by the same metrics wrap_lines uses)."""
+    from .common import wrap_lines
+    words = text.split()
+    for k in range(len(words) - 1, -1, -1):
+        if wrap_lines(" ".join(words[k:]), width, size, f, 0.97) > 1 or \
+                wrap_lines(" ".join(words[:k]), width, size, f, 0.97) + 1 != wrap_lines(text, width, size, f, 0.97):
+            return " ".join(words[k + 1:])
+    return text
+
+
 def _balanced(text: str, width: float, size: float) -> tuple[str, str]:
     """(line 1, line 2) for a title that wraps to two lines with one or two words left on the second: broken where the
     two lines are closest in width. ("text", "") when it fits one line or already wraps evenly."""
@@ -2675,6 +2686,17 @@ def a_cover(ctx, s, sl, n):
     size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
                  if wrap_lines(clean(s["title"]), w - 0.2, z, f, 0.97) <= 3), 28)
     lines = wrap_lines(clean(s["title"]), w - 0.2, size, f, 0.97)
+    tw_ = w                                                # a last line of one word: narrow the box until the lines
+    if lines > 1:                                          # even out at the same count ("... committing / further")
+        for k_ in range(1, 16):
+            cand = w - 0.2 * k_
+            if cand < 0.6 * w or wrap_lines(clean(s["title"]), cand - 0.6, size, f, 0.97) != lines:   # margin:
+                # the renderer's face runs wider than the metrics, and a narrowed title overflowed (P1)
+                break
+            tw_ = cand
+            last = _wrap_last(clean(s["title"]), cand - 0.2, size, f)
+            if len(last.split()) >= 3:
+                break
     th = lines * _pitch(size, 1.05) / 72 + 0.3
     ty = (4.25 if COVER_DARK else 3.35) - th              # title block ends on a fixed line, whatever its length; on the
                                                            # dark cover the block sits at the optical middle of the page
@@ -2688,7 +2710,8 @@ def a_cover(ctx, s, sl, n):
         sl.shapes._spTree.insert(2, sp)                    # behind everything else on the page
     _fill(sl, x, ty - 0.32, 0.9, 0.06, TC.ACCENT_1, "CoverBar")
     t = sl.shapes.title
-    t.left, t.top, t.width, t.height = Inches(x), Inches(ty), Inches(w + 0.5), Inches(th)   # slack past the wrap width
+    edge_ = min((colx24(i) + CW for i in range(COLS) if colx24(i) + CW >= x + tw_ - 0.05), default=x + w)
+    t.left, t.top, t.width, t.height = Inches(x), Inches(ty), Inches(edge_ - x), Inches(th)   # on a column edge (P7)
     tf = t.text_frame
     tf.word_wrap = True
     tf.vertical_anchor = MSO_ANCHOR.BOTTOM
@@ -2723,7 +2746,9 @@ def a_cover(ctx, s, sl, n):
         sx = colx24(16)                                    # answers, in order; the 01, 02 marks on every later page
         sw = RIGHT - sx                                    # refer back to them
         rh = min(0.78, 4.2 / len(secs))
-        sy = (4.25 if COVER_DARK else 3.35) - rh * len(secs) + 0.1
+        blk_top = ty - 0.32                                # centred on the title block (bar to subtitle), not hung
+        blk_bot = ty + th + (0.15 + _need([{"text": sub, "size": 16}], w) if sub else 0)   # from the title's foot
+        sy = max(0.6, (blk_top + blk_bot) / 2 - rh * len(secs) / 2)
         for k, sec in enumerate(secs):
             yy = sy + k * rh
             _write(_box(sl, sx, yy, 0.62, rh, f"ov_CoverSecNo{k + 1}", MSO_ANCHOR.MIDDLE),
