@@ -386,3 +386,24 @@ def test_a_target_at_a_peer_bar_keeps_its_line(tmp_path):
         return _names(prs.slides[0])
     assert "ov_TargetLine" in deck(["2023", "2025", "Peer low"])
     assert "ov_TargetLine" not in deck(["2023", "2025", "Target"])
+
+
+def test_no_so_what_box_has_a_bar_down_its_left(tmp_path):
+    arg = {"archetype": "exhibit_argument", "title": "Staff cost is 5 points higher in Germany than in the UK",
+           "chart": {"kind": "column", "categories": ["UK", "Germany"], "series": [{"name": "Staff", "values": [29, 34]}],
+                     "unit": "%", "decimals": 0},
+           "title_right": "The pilot tests whether rent and ticket offset the gap",
+           "blocks": [{"label": "Margin is at stake", "text": "Germany's 34% against 29% comes off margin."},
+                      {"label": "Rent helps", "text": "Berlin rent per café is lower than London's."}],
+           "callout": {"bullets": [{"text": "**So what:** run the pilot first, then decide whether to expand."}]},
+           "source": SRC}
+    grid = {"archetype": "grid", "title": "Renewal prices rose 22% against 9% for new quotes", "layout": "halves",
+            "parts": [{"type": "chart", "heading": "Price change, %", "chart": {
+                "kind": "column", "categories": ["Renewal", "New quotes"], "series": [{"name": "Change", "values": [22, 9]}],
+                "unit": "%", "decimals": 0}},
+                {"type": "callout", "heading": "So what", "text": "**Reprice renewals**, not service."}], "source": SRC}
+    _, prs, _ = _deck([arg, dict(arg), grid, dict(grid)], tmp_path)   # the so-whats alternate: see both looks
+    for sl in prs.slides:
+        for sh in sl.shapes:
+            assert "Bar" not in sh.name or sh.name.startswith(("ov_Delta", "ov_Cagr")), sh.name
+            assert not (sh.width < 0.12 * 914400 and sh.height > 0.3 * 914400 and sh.shape_type == 1), sh.name

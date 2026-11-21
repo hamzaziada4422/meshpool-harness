@@ -3041,7 +3041,7 @@ def a_challenge_matrix(ctx, s, sl, n):
 
 
 def sowhat_dark(ctx) -> bool:
-    """The deck's so-what boxes alternate: navy, then light with an accent bar (BCG keeps its dark box rare)."""
+    """The deck's so-what boxes alternate: navy, then bold text under an accent rule (BCG keeps its dark box rare)."""
     k = getattr(ctx, "_sowhats", 0)
     ctx._sowhats = k + 1
     return k % 2 == 0
@@ -3143,11 +3143,13 @@ def a_exhibit_argument(ctx, s, sl, n):
                         MSO_SHAPE.PENTAGON)
             arr.rotation = 180
             box = _fill(sl, rx, cy, rw, ch, TC.TEXT_2, "ov_SoWhat")
-        else:                                            # every other so-what: a white box with an accent bar and
-            for b_ in cb:                                # dark text (a navy box on every slide reads as one template)
-                b_["color"] = TC.TEXT_1
-            box = _fill(sl, rx, cy, rw, ch, TC.BACKGROUND_1, "ov_SoWhat")
-            _fill(sl, rx, cy, 0.07, ch, TC.ACCENT_1, "ov_SoWhatBar")
+        else:                                            # every other so-what: bold dark text under an accent rule
+            for b_ in cb:                                # across the column, no box (a navy box on every slide reads
+                b_["color"] = TC.TEXT_1                  # as one template; a white box with a bar on its left read
+                b_["bold"] = True                        # as a stray box: user review)
+            _rule(sl, rx, cy, rw, TC.ACCENT_1, 1.5, "ov_SoWhatRule")
+            _write(_box(sl, rx, cy + 0.04, rw, ch - 0.04, "ov_SoWhat", MSO_ANCHOR.MIDDLE), cb, ctx, n)
+            return
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
 
 
