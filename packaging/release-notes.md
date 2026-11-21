@@ -2,6 +2,8 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 
 **New in 0.0.9**
 - **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.
+- **Slides that point the way.** Each numbered point beside a chart marks the bar it explains with the same number. A pointer leads from the evidence to its so-what. Difference arrows and target lines never print over the chart's labels.
+- **Cleaner pages, checked on decks written by the real model.** Footnotes go one per line and are never cut. Table columns are sized to their content. A layout that does not fit is never kept. There is no takeaway box with a bar down its side, and bullets are never cut mid-sentence. In blind reviews against a BCG deck, decks from four new briefs scored level with it.
 - **Charts that show the point.** A short column chart carries its insight on the chart:
   - the multiple or gap as an arrow ("25-35x", "+7 days");
   - the goal as a dashed target line;
