@@ -253,3 +253,13 @@ def test_rounded_figures_and_ranges_count_as_the_fact():
     got = numbers("peers report renewal rates of 81-83%; Coventry (7.1%); a loss of (4.2)")
     assert ("81", 81.0, "%") in got and any(v == 7.1 and u == "%" for _, v, u in got) and \
         any(v == -4.2 for _, v, _u in got)
+
+
+def test_a_chart_may_plot_small_numbers_the_facts_give():
+    """'picks per hour rose from 92 to 151': a before/after chart of 92 and 151 is sourced (the chart check dropped the
+    92 with the page-text filter and the writer replaced the chart with text)."""
+    from engines.forge.build import chart_fact_checks, load_rules
+    facts = [{"id": "F1", "text": "picks per hour rose from 92 to 151 in automated sites"}]
+    s = {"archetype": "column_trend", "title": "Picks rose 64%", "chart": {
+        "kind": "column", "categories": ["Before", "After"], "series": [{"name": "Picks per hour", "values": [92, 151]}]}}
+    assert not chart_fact_checks([s], facts, load_rules()).get(1)
