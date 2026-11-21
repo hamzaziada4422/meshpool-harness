@@ -1651,9 +1651,14 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         ln.line.dash_style = 4
         lab = "Target " + fmt_value(target, unit, dec)
         lw_ = _need_w(lab, T["label"], True) + 0.1
-        lx_ = px                                          # at the line's start, or at its end when the first bar's
-        if abs(yt - (yv(vals[0]) - 0.2)) < 0.4:           # value label sits there (Target 83% met the 84% label)
+        def clash(xa, xb):                                # a bar's value label under the target label's span
+            return any(abs(yt - (yv(v) - 0.2)) < 0.4 and xa - band / 2 < cx(j) < xb + band / 2
+                       for j, v in enumerate(vals))
+        lx_ = px                                          # at the line's start; at its end when a value label sits
+        if clash(px, px + lw_):                           # there; above both when the end is taken too
             lx_ = px + pw - lw_
+            if clash(lx_, lx_ + lw_):
+                lx_, yt = px, yt - 0.32
         _write(_box(sl, lx_, yt - 0.3, lw_, 0.26, "ov_TargetLabel", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "numbers": False, "color": TC.ACCENT_1}], ctx, n)
         ctx.track(n, lab, prov)
@@ -2914,7 +2919,8 @@ def a_exhibit_argument(ctx, s, sl, n):
            "color": TC.BACKGROUND_1, "numbers": False, "space_before": 5,
            "prov": b.get("prov") if isinstance(b, dict) else None} for b in co.get("bullets") or []]
     if cb:                                             # the so-what keeps readable type (12 pt at least): a line
-        cb, cut_ = _trim_to_fit(cb, rw - 0.3, 1.3, 12)  # that does not fit goes to the notes
+        cb, cut_ = _trim_to_fit(cb, rw - 0.3, 1.3, 10 if DENSITY["mode"] == "read" else 12)   # that does not fit
+        # goes to the notes (a dense send-ahead page may set it at 10 pt)
         _cut_note(s, cut_)
     ch = (_need(cb, rw - 0.3) + 0.28) if cb else 0
     cy = BODY_B - foot - ch
@@ -3069,7 +3075,8 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
     dropped_detail = False
     if plan is None:                                           # stacked cards, marker on the left
         tw = w - 2 * POINT_PAD - d - 0.12
-        for drop in (False, True):
+        for drop in ((False,) if DENSITY["mode"] == "read" else (False, True)):   # a send-ahead page keeps its
+            # detail: no room for it in cards means the column is written as text
             its = [dict(it, bullets=[]) for it in items] if drop else items
             for ls, ds in sizes:
                 hs = [max(_need(_point_blocks(it, ls, ds), tw) + 0.22, d + 0.26) for it in its]
@@ -3515,7 +3522,8 @@ def repeats(text: str, title: str, share: float = 0.8) -> bool:
     return sum(1 for w in short if w in other) / len(short) >= share
 
 
-SUMMARY_PANEL = {"on": True}       # the summary as a statement panel (BCG): the answer large in a tinted panel
+SUMMARY_PANEL = {"on": False}      # the summary as a statement panel: off (blind review 2026-11-21: no gain, the
+                                   # panel read as dead space); the classic numbered rows are the default
 
 
 PANEL_W = 4.55

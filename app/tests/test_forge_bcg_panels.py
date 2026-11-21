@@ -179,7 +179,8 @@ def test_the_summary_points_are_the_sections():
     assert nums == ["", "01", "01", "02", "03"]
 
 
-def test_the_summary_is_a_statement_panel(tmp_path):
+def test_the_summary_is_a_statement_panel(tmp_path, monkeypatch):
+    monkeypatch.setitem(R.SUMMARY_PANEL, "on", True)                 # off by default; the layout is kept
     s = {"archetype": "executive_summary", "id": "s2", "node": "1",
          "title": "Fund the pilot now and gate the rollout on a 2% downtime target",
          "decision": "Decision today: approve the two gates for the 2027 rollout",
