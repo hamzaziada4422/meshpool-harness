@@ -17,6 +17,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import threading
@@ -138,7 +139,9 @@ def _convert_job(src: Path, key: str) -> None:
                 n = _pdf_pages(made)
                 out.mkdir(parents=True, exist_ok=True)
                 made.replace(out / "doc.pdf")
-                (out / "meta.json").write_text(json.dumps({"total": n}))
+                part = out / f"meta.{os.getpid()}.{threading.get_ident()}.tmp"
+                part.write_text(json.dumps({"total": n}))   # written whole, then moved: a poll never reads an
+                os.replace(part, out / "meta.json")           # empty meta.json (CI failed on that race)
             finally:
                 shutil.rmtree(tmp, ignore_errors=True)
         _prune()
@@ -160,7 +163,10 @@ def _office_state(p: Path) -> dict:
     key = _key(p)
     done = _dir() / key / "meta.json"
     if done.exists() and (done.parent / "doc.pdf").exists():
-        total = json.loads(done.read_text()).get("total", 0)
+        try:
+            total = json.loads(done.read_text()).get("total", 0)
+        except (ValueError, OSError):                      # caught mid-write by an older writer: still working
+            return {"state": "working", "key": key}
         return {"state": "ready", "pages": min(total, MAX_PAGES), "total": total, "key": key}
     from meshpool_harness import office_runtime
     if not office_runtime.find_soffice():
