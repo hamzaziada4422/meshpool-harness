@@ -1319,8 +1319,8 @@ def _wf_connectors(ch, sl, vals, spans, x, y, w, h) -> None:
         x0, x1 = px + band * (j + 0.5) + half, px + band * (j + 1.5) - half
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(x0), Inches(yy), Inches(x1), Inches(yy))
         ln.name = f"ov_BridgeLine{j + 1}"
-        ln.line.color.theme_color = TC.TEXT_2
-        ln.line.width = Pt(0.75)
+        ln.line.color.theme_color = TC.TEXT_1
+        ln.line.width = Pt(1.0)                           # visible: faint connectors read as unfinished
 
 
 def _waterfall_style(plot, vals, spans, dec, usfx, hl=()):
@@ -1331,7 +1331,8 @@ def _waterfall_style(plot, vals, spans, dec, usfx, hl=()):
     totals, _ = _wf_totals(vals)
     for j, v in enumerate(vals):
         total = j in totals
-        colr = (TC.ACCENT_1 if j in hl else TC.TEXT_2) if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_2)
+        colr = (TC.ACCENT_1 if j in hl else TC.TEXT_2) if total else (TC.ACCENT_4 if v >= 0 else TC.ACCENT_6)
+        # a decrease in a mid grey-blue with a dark label, never the palest tint (low contrast: blind review)
         lo, hi = spans[j]
         for se in (above, below):
             f = se.points[j].format
@@ -1346,7 +1347,7 @@ def _waterfall_style(plot, vals, spans, dec, usfx, hl=()):
         dl.position = XL_LABEL_POSITION.CENTER
         for f in (dl.font, dl.text_frame.paragraphs[0].runs[0].font):   # the rich text run carries its own font
             f.size = Pt(T["label"])
-            f.color.theme_color = TC.TEXT_1 if colr == TC.ACCENT_2 else TC.BACKGROUND_1   # dark on the light highlight
+            f.color.theme_color = TC.TEXT_1 if colr in (TC.ACCENT_2, TC.ACCENT_6) else TC.BACKGROUND_1   # dark on light
 
 
 def _no_wrap(dl) -> None:
