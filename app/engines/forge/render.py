@@ -3515,9 +3515,108 @@ def repeats(text: str, title: str, share: float = 0.8) -> bool:
     return sum(1 for w in short if w in other) / len(short) >= share
 
 
+SUMMARY_PANEL = {"on": True}       # the summary as a statement panel (BCG): the answer large in a tinted panel
+
+
+PANEL_W = 4.55
+
+
+def _summary_panel(ctx, s, sl, n) -> bool:
+    """The executive summary the way BCG opens a deck: the governing thought large in a tinted panel down the left
+    (with the decision and the figures that size it under it), the numbered points down the right, one per section,
+    between hairlines. Returns False (the classic layout draws) when the points do not fit."""
+    pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
+    if not 2 <= len(pts) <= 5:
+        return False
+    ask = re.sub(r"(?i)^\s*decision today:\s*", "", str(s.get("decision") or "")).strip()
+    if ask and repeats(ask, s.get("title", ""), 0.55):
+        ask = ""
+    said_ = " ".join(_plain(_txt(x)) for p_ in pts for x in [p_.get("lead") or ""] + list(p_.get("bullets") or []))
+    mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()
+            and _plain(str(m["value"])).strip() not in said_][:2]
+    nx, cw = span24(8, 8)                               # the points on the grid: numeral, claim, evidence
+    lx, lw = span24(9, 14)
+    dx, dw = span24(15, 23)
+    rx = nx
+    top, bottom = 0.75, BODY_B
+    size = T["body"] + 2
+
+    def rows(z):
+        out = []
+        for p in pts:
+            a = [{"text": p.get("lead", ""), "size": z + 2, "bold": True, "numbers": False}]
+            d = [{"text": b["text"] if isinstance(b, dict) else str(b), "size": z, "bullet": True, "space_before": 3,
+                  "prov": (b.get("prov") if isinstance(b, dict) else None) or p.get("prov")}
+                 for b in (p.get("bullets") or [])[:3]]
+            out.append((a, d, max(_need(a, lw), _need(d, dw) if d else 0) + 0.24))
+        return out
+    laid = rows(size)
+    while sum(h for *_, h in laid) > bottom - top and size > 13:
+        size -= 1
+        laid = rows(size)
+    if sum(h for *_, h in laid) > bottom - top:
+        return False
+    # the panel: full height down the left, the answer in it
+    pw_ = colx24(8) - 0.32                                # the panel ends a gutter before the points
+    panel = _fill(sl, 0, 0, pw_, 7.5, TC.BACKGROUND_2, "ov_StatementPanel")
+    tree = sl.shapes._spTree                              # behind the title placeholder (drawn first)
+    tree.remove(panel._element)
+    tree.insert(2, panel._element)
+    t = sl.shapes.title
+    tw = colx24(8) - 0.32 - LEFT - 0.35
+    title = re.sub(r"\*\*", "", s["title"])
+    tz = next((z for z in (30, 28, 26, 24, 22, 20) if _need([{"text": title, "size": z, "bold": True,
+                                                              "heading": True}], tw) <= 2.7), 20)
+    t.left, t.top, t.width = Inches(LEFT), Inches(0.75), Inches(tw)
+    th = _need([{"text": title, "size": tz, "bold": True, "heading": True}], tw) + 0.15
+    t.height = Inches(th)
+    tf = t.text_frame
+    tf.text = ""
+    tf.margin_left = 0
+    tf.vertical_anchor = MSO_ANCHOR.TOP
+    _rich(tf.paragraphs[0], title, tz, TC.TEXT_1, True, numbers=False, heading=True)
+    ctx.track(n, s["title"], s.get("title_prov"))
+    y = 0.75 + th + 0.12
+    _rule(sl, LEFT, y, 0.7, TC.ACCENT_1, 1.5, "ov_StatementRule")
+    y += 0.25
+    if ask:
+        ab = [{"text": ask[:1].upper() + ask[1:], "size": T["head"], "bold": True, "numbers": False,
+               "color": TC.ACCENT_1}]
+        ah = _need(ab, tw) + 0.06
+        _write(_box(sl, LEFT, y, tw, ah, "ov_StatementAsk"), ab, ctx, n)
+        y += ah + 0.2
+    if mets:                                              # the figures that size the answer, at the panel's foot
+        mh = 0.95
+        my = max(y, BODY_B - mh * len(mets))
+        for i, m in enumerate(mets):
+            _write(_box(sl, LEFT, my, tw, 0.55, f"role_numeral_Metric{i + 1}"),
+                   [{"text": str(m["value"]), "size": T["num"] + 6, "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_1}])
+            ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
+            _write(_box(sl, LEFT, my + 0.55, tw, 0.36, f"MetricLabel{i + 1}"),
+                   [{"text": str(m.get("label") or ""), "size": T["body"], "numbers": False}])
+            my += mh
+    gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / len(laid))
+    yy = top
+    for i, (a, d, h) in enumerate(laid):
+        rh = h + gap
+        _write(_box(sl, nx, yy + 0.08, cw, 0.5, f"role_numeral_{i + 1}"),
+               [{"text": f"{i + 1:02d}", "size": T["num"], "bold": True, "heading": True, "numbers": False,
+                 "color": TC.ACCENT_1}])
+        _write(_box(sl, lx, yy + 0.1, lw, rh - 0.14, f"Claim{i + 1}"), a, ctx, n)
+        if d:
+            _write(_box(sl, dx, yy + 0.1, dw, rh - 0.14, f"Evidence{i + 1}"), d, ctx, n)
+        yy += rh
+        if i < len(laid) - 1:
+            _rule(sl, rx, yy, RIGHT - rx, TC.ACCENT_5, 0.75, f"SummaryRule{i + 1}")
+    return True
+
+
 def a_executive_summary(ctx, s, sl, n):
     """Executive summary: the answer first. Numbered rows, each a bold claim on the left (the section's message) and
     its evidence on the right, hairlines between rows; an optional dark band at the foot with what to decide."""
+    if SUMMARY_PANEL["on"] and not FRAME["band"] and _summary_panel(ctx, s, sl, n):
+        return
     _header(ctx, s, sl, n)
     pts = [p if isinstance(p, dict) else {"lead": str(p)} for p in (s.get("points") or [])][:5]
     ask = s.get("decision") or (s.get("callout") or {}).get("text") or ""

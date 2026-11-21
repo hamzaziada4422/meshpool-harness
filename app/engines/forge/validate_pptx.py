@@ -422,6 +422,12 @@ def density_caps(R: dict, mode: str) -> dict:
     return _merge(D, over) if over else D
 
 
+def _statement_slide(s: dict) -> bool:
+    """The executive summary drawn as a statement panel: its title is the panel's large statement (many short lines,
+    its own size and margin), by design."""
+    return any(str(sh.get("name", "")) == "ov_StatementPanel" for sh in s.get("shapes") or [])
+
+
 def validate(path: str, rules: dict | None = None, brief: dict | None = None, provenance: dict | None = None,
              storyline: dict | None = None, render: bool | None = None, density: str | None = None) -> dict:
     """density: check every slide against this mode's P10 caps and P20 threshold ("present", "balanced", "read");
@@ -682,7 +688,7 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 if T["require_verb"] and not _has_verb(t):
                     failures.append(F("P11", "title_no_verb", f"Slide {n}: title \"{t[:80]}\" is a topic label. "
                                       "Rewrite it as a sentence that states the takeaway, with a verb.", slide=n))
-                if tsh and (tsh.get("overflow") or {}).get("lines", 0) > T["max_lines"]:
+                if tsh and (tsh.get("overflow") or {}).get("lines", 0) > T["max_lines"] and not _statement_slide(s):
                     failures.append(F("P11", "title_lines", f"Slide {n}: title runs to {tsh['overflow']['lines']} lines; "
                                       f"keep it to {T['max_lines']}.", slide=n, measured=tsh["overflow"]["lines"],
                                       limit=T["max_lines"]))
@@ -915,7 +921,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
 
     # ---------------- P19 cross-slide consistency
     K = R["consistency"]
-    body_slides = [s for s in content if s.get("consistency") and s["n"] not in stats.get("inferred_divider_slides", [])]
+    body_slides = [s for s in content if s.get("consistency") and s["n"] not in stats.get("inferred_divider_slides", [])
+                   and not _statement_slide(s)]          # a statement-panel summary has its own title frame
     if len(body_slides) >= K["min_slides"]:
         tol = K["geometry_tol_in"]
 
