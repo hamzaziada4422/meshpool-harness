@@ -331,7 +331,9 @@ def test_unify_figures_replaces_the_losing_value_in_text_only():
     assert slides[2]["chart"]["series"][0]["values"] == [6.92]
 
 
-def test_executive_summary_shows_its_sizing_figures(tmp_path):
+def test_executive_summary_shows_its_sizing_figures(tmp_path, monkeypatch):
+    from engines.forge import render as _R
+    monkeypatch.setitem(_R.SUMMARY_PANEL, "on", False)   # the classic summary layout (the fallback)
     """metrics on the executive summary render as a figures panel beside the points, sourced like any number."""
     from engines.forge.render import render
     from pptx import Presentation

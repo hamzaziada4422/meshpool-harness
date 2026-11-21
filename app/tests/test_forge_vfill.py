@@ -157,7 +157,9 @@ def test_explicit_dashes_and_grid_tables():
 
 
 # ------------------------------------------------------------------ executive summary
-def test_decision_band_is_dropped_when_it_repeats_the_title(tmp_path):
+def test_decision_band_is_dropped_when_it_repeats_the_title(tmp_path, monkeypatch):
+    from engines.forge import render as _R
+    monkeypatch.setitem(_R.SUMMARY_PANEL, "on", False)   # the classic summary layout (the fallback)
     base = {"archetype": "executive_summary", "title": "Buy CoreWeave's remaining shares at $65.37 per share",
             "points": [{"lead": "The backlog is the prize", "bullets": ["$132.5B at 30 Sep"]},
                        {"lead": "The premium is defensible", "bullets": ["35% above $48.42"]}], "source": SRC}

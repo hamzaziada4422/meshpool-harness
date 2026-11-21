@@ -601,7 +601,9 @@ def test_storyboard_variety_is_sent_back_like_a_partner_would():
     assert story_variety(good, "Should we open 40 stores?") == []
 
 
-def test_executive_summary_and_band_composition(tmp_path):
+def test_executive_summary_and_band_composition(tmp_path, monkeypatch):
+    from engines.forge import render as _R
+    monkeypatch.setitem(_R.SUMMARY_PANEL, "on", False)   # the classic summary layout (the fallback)
     from engines.forge.render import render
     from pptx import Presentation as P2
     chart = {"kind": "bar", "categories": ["North", "South", "East"], "series": [{"name": "Revenue", "values": [420, 310, 220]}],

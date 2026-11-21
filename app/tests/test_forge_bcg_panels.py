@@ -177,3 +177,24 @@ def test_the_summary_points_are_the_sections():
     assert B.tracker_checks([dict(slides[0], points=slides[0]["points"][:2])] + slides[1:])
     nums = [s.get("_section", "").split(" | ")[0] for s in R.plan_forms([dict(s) for s in slides])]
     assert nums == ["", "01", "01", "02", "03"]
+
+
+def test_the_summary_is_a_statement_panel(tmp_path, monkeypatch):
+    monkeypatch.setitem(R.SUMMARY_PANEL, "on", True)                 # off by default; the layout is kept
+    s = {"archetype": "executive_summary", "id": "s2", "node": "1",
+         "title": "Fund the pilot now and gate the rollout on a 2% downtime target",
+         "decision": "Decision today: approve the two gates for the 2027 rollout",
+         "points": [{"lead": "Spend runs ahead of plan", "bullets": ["£19M spent against £17M planned"]},
+                    {"lead": "Automation lifts productivity", "bullets": ["Picks per hour rose from 92 to 151"]},
+                    {"lead": "Downtime must fall first", "bullets": ["Coventry runs at 7.1% against 2%"]}],
+         "metrics": [{"value": "£48M", "label": "programme budget"}, {"value": "3 of 8", "label": "sites live"}],
+         "source": SRC}
+    r, prs, out = _deck([s], tmp_path)
+    nm = _names(prs.slides[0])
+    assert r["errors"] == [] and "ov_StatementPanel" in nm and nm.index("ov_StatementPanel") < nm.index("Title 1")
+    assert {"role_numeral_1", "Claim3", "Evidence3", "ov_StatementAsk"} <= set(nm)
+    text = " ".join(sh.text_frame.text for sh in prs.slides[0].shapes if sh.has_text_frame)
+    assert "01" in text and "£48M" in text and "Approve the two gates" in text
+    v = VP.validate(out, VP.load_rules(), render=False, density="balanced")
+    for rule in ("P7", "P8", "P9", "P11", "P17"):
+        assert v["rules"][rule] == "pass", [f for f in v["failures"] if f["rule"] == rule]
