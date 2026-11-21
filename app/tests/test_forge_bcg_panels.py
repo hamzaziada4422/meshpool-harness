@@ -242,3 +242,14 @@ def test_a_stat_value_must_be_a_figure():
     s = {"archetype": "grid", "title": "t", "parts": [{"type": "stats", "items": [
         {"value": "-140", "label": "roles"}, {"value": "None", "label": "made redundant"}]}]}
     assert any("stat value is a figure" in m for m in fill_checks([s], "balanced").get(1, []))
+
+
+def test_rounded_figures_and_ranges_count_as_the_fact():
+    """3.6x is 7.1 / 2 rounded (a float edge refused it); '81-83%' gives 81% as well as 83% (the range's first figure
+    lost its unit and the writer dropped the peer benchmark); '(7.1%)' is an aside, not a negative."""
+    from engines.forge.build import _same_number
+    from engines.forge.common import numbers
+    assert _same_number("3.6x", 3.6, "x", 3.55, "x")
+    got = numbers("peers report renewal rates of 81-83%; Coventry (7.1%); a loss of (4.2)")
+    assert ("81", 81.0, "%") in got and any(v == 7.1 and u == "%" for _, v, u in got) and \
+        any(v == -4.2 for _, v, _u in got)

@@ -296,6 +296,9 @@ def open_pptx(path):
 NUM = re.compile(r"(?<![\w.])[-+]?\$?\(?\d[\d,]*(?:\.\d+)?\)?\s?(?:%|pp|x|bn|b|m|mm|k|million|billion|thousand)?(?![\w])", re.I)
 
 
+_RANGE_TAIL = re.compile(r"\s*(?:-|\u2013|to)\s*\$?\d[\d,]*(?:\.\d+)?\s?(%|pp|x|bn|mm|million|billion|thousand)(?![\w])", re.I)
+
+
 def numbers(text: str, ignore: re.Pattern | None = None) -> list[tuple[str, float, str]]:
     """(raw, value, unit) for every number in text; years and small ordinals filtered by `ignore`."""
     out = []
@@ -304,16 +307,22 @@ def numbers(text: str, ignore: re.Pattern | None = None) -> list[tuple[str, floa
         core = re.sub(r"[^\d.]", "", raw.split()[0] if " " in raw else raw)
         if not core or core == ".":
             continue
-        if ignore is not None and ignore.match(core) and not re.search(r"%|\$|bn|b$|m$|k$|x$|million|billion|thousand", raw, re.I):
+        shared = None                                   # a range's first figure takes its unit: "81-83%" is 81% and
+        if not re.search(r"(%|pp|x|bn|b|mm|m|k|million|billion|thousand)\s*\)?$", raw, re.I):   # 83%, not a bare 81
+            r_ = _RANGE_TAIL.match(text, m.end())
+            if r_:
+                shared = r_.group(1)
+        if ignore is not None and ignore.match(core) and not shared and \
+                not re.search(r"%|\$|bn|b$|m$|k$|x$|million|billion|thousand", raw, re.I):
             continue
         try:
             v = float(core)
         except ValueError:
             continue
-        if raw.startswith("-") or raw.startswith("("):
+        if raw.startswith("-") or (raw.startswith("(") and ")" in raw):   # (7.1) is a negative; "(7.1%" is an aside
             v = -v
         unit = (re.search(r"(%|pp|x|bn|b|mm|m|k|million|billion|thousand)\s*$", raw, re.I) or [None])[0]
-        unit = unit.lower() if unit else ""
+        unit = unit.lower() if unit else (shared or "")
         out.append((raw, v, unit))
     return out
 

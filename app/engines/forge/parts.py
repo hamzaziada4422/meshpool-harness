@@ -294,7 +294,8 @@ def _stat_items(part):
 
 def _stat_rest(it, size_label):
     rest = [{"text": it.get("label") or "", "size": size_label, "numbers": False, "space_before": 4}]
-    if it.get("delta"):
+    if it.get("delta") and re.search(r"\d", str(it["delta"])):   # a change is a figure ("+1.5 pts", "up from 92"):
+        # a word there ("hero", "key") is a writer's note to itself, never shown (blind review found one on a slide)
         rest.append({"text": it["delta"], "size": R.bump(11), "bold": True, "numbers": False, "space_before": 2})
     return [b for b in rest if b["text"]]
 

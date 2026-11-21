@@ -225,6 +225,16 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
     """One column per item under its marker (figure, chevron or icon). Returns the height used."""
     k = len(items)
     cols = [R.span24(a, b) for a, b in _spans(k)]
+    whens = [None] * k
+    if mode == "process":                                 # a step bar carries each step's date (a row of bare
+        for j, it in enumerate(items):                    # digits says nothing: blind review); the date then leaves
+            f_ = it.get("foot")                           # the foot, so it is said once
+            if isinstance(f_, list) and len(f_) >= 2 and f_[-1] and len(str(f_[-1])) <= 26:
+                whens[j] = str(f_[-1])
+        if all(whens):
+            items = [dict(it, foot=[x for x in it["foot"][:-1] if x]) for it in items]
+        else:
+            whens = [None] * k
     figs = [headline_figure(it["lead"]) for it in items] if mode == "figures" else [None] * k
     icons = item_icons(items)
     if mode == "icons" and sum(1 for i in icons if i) < k:
@@ -288,7 +298,8 @@ def _columns(ctx, s, sl, n, items, mode, y, avail) -> float:
                           TC.ACCENT_1,                                                  # colour for every step
                           f"ov_Step{j + 1}", MSO_SHAPE.PENTAGON if j == 0 else MSO_SHAPE.CHEVRON)
             shp.adjustments[0] = 0.3
-            R._shape_text(shp, [{"text": f"{j + 1}", "size": R.T["label"], "bold": True, "numbers": False,
+            R._shape_text(shp, [{"text": f"{j + 1}   {whens[j]}" if whens[j] else f"{j + 1}", "size": R.T["label"],
+                                 "bold": True, "numbers": False,
                                  "color": TC.BACKGROUND_1, "align": PP_ALIGN.CENTER}], ctx, n,
                           (x + 0.2, y + 0.06, w - 0.3, 0.32), MSO_ANCHOR.MIDDLE)
         elif mode == "icons" and icons[j]:
