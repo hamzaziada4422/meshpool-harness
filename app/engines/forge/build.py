@@ -166,7 +166,8 @@ CONSULTING = """House style (always, whatever the brief says about look):
 - Emphasise one thing per exhibit (highlight_categories, the focus row) and leave the rest muted. Label values
   directly; no legends where labels fit.
 - Short text: phrases inside exhibits, bullets of one line where possible. Sentence case everywhere, no capitals for
-  emphasis, no em dashes, no jargon, no filler ("leverage", "robust", "holistic", "synergies").
+  emphasis, no em dashes, no typed arrows ("→", "↑", "->": write "to", "up"; the renderer draws arrows as shapes),
+  no jargon, no filler ("leverage", "robust", "holistic", "synergies").
 - Steps, options, drivers and pillars get a one-word "icon" meaning so the renderer can draw a line icon.
 - A money decision shows its economics: when the reader must invest, return cash, buy or sell, set the returns side
   by side as calcs from the facts (return on capital = operating income after tax / (equity + debt); a buyback's

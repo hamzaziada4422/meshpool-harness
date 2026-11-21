@@ -405,5 +405,35 @@ def test_no_so_what_box_has_a_bar_down_its_left(tmp_path):
     _, prs, _ = _deck([arg, dict(arg), grid, dict(grid)], tmp_path)   # the so-whats alternate: see both looks
     for sl in prs.slides:
         for sh in sl.shapes:
-            assert "Bar" not in sh.name or sh.name.startswith(("ov_Delta", "ov_Cagr")), sh.name
+            assert "Bar" not in sh.name or sh.name.startswith(("ov_Delta", "ov_Cagr", "ov_BarMark")), sh.name
             assert not (sh.width < 0.12 * 914400 and sh.height > 0.3 * 914400 and sh.shape_type == 1), sh.name
+
+
+def test_points_mark_the_bars_they_explain(tmp_path):
+    s = {"archetype": "exhibit_argument", "title": "Berlin and Munich rents sit 13-20% below London",
+         "chart": {"kind": "column", "categories": ["London", "Munich", "Berlin"],
+                   "series": [{"name": "Rent", "values": [120, 104, 96]}], "unit": "£k", "decimals": 0},
+         "title_right": "Rent offsets part of the staff-cost gap",
+         "blocks": [{"label": "Berlin is cheapest", "text": "Berlin rent is £24k a year below London per café."},
+                    {"label": "Munich is close", "text": "Munich rent is £16k below London."},
+                    {"label": "London sets the bar", "text": "London is the UK base the plan compares against."}],
+         "callout": {"bullets": [{"text": "**So what:** open the first cafés in Berlin."}]}, "source": SRC}
+    assert R.chart_marks(s["chart"], s["blocks"]) == {0: 3, 1: 2, 2: 1}     # by the point about the bar, not a
+    _, prs, _ = _deck([s], tmp_path)                                         # passing mention
+    marks = {sh.name: sh.text_frame.text for sh in prs.slides[0].shapes if sh.name.startswith("ov_BarMark")}
+    assert marks == {"ov_BarMark1": "3", "ov_BarMark2": "2", "ov_BarMark3": "1"}
+    same = dict(s, blocks=[{"label": "Both", "text": "London and Munich and Berlin all matter."},
+                           {"label": "Other", "text": "Something else."}])
+    assert R.chart_marks(same["chart"], same["blocks"]) == {}                # one number on every bar says nothing
+
+
+def test_the_evidence_points_to_its_so_what(tmp_path):
+    grid = {"archetype": "grid", "title": "Renewal prices rose 22% against 9% for new quotes", "layout": "halves_v",
+            "parts": [{"type": "chart", "heading": "Price change, %", "chart": {
+                "kind": "column", "categories": ["Renewal", "New quotes"], "series": [{"name": "Change", "values": [22, 9]}],
+                "unit": "%", "decimals": 0}},
+                {"type": "callout", "heading": "So what", "text": "**Reprice renewals**, not service."}], "source": SRC}
+    _, prs, _ = _deck([grid], tmp_path)
+    shapes = {sh.name: sh for sh in prs.slides[0].shapes}
+    ptr, call = shapes["ov_FlowPointer"], next(v for k, v in shapes.items() if k.startswith("Callout"))
+    assert ptr.top < call.top and ptr.left < call.left + call.width

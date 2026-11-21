@@ -1614,7 +1614,8 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     desc = [_txt(d) for d in (c.get("descriptors") or [])][:k] if isinstance(c.get("descriptors"), list) else []
     if delta and periods:
         periods = False                                   # one arrow per chart: the asked-for difference wins
-    if not (periods or target is not None or tcat or delta or any(desc)):
+    marks = {j: m for j, m in (getattr(ctx, "chart_marks", None) or {}).items() if 0 <= j < k and vals[j] > 0}
+    if not (periods or target is not None or tcat or delta or any(desc) or marks):
         return
     top = max([c.get("_shared_max") or 0, max(vals)] + ([target] if target is not None else []))
     M = top * (1.42 if periods else 1.3 if delta else 1.18)   # headroom: an arrow and its pill ride above the
@@ -1653,6 +1654,14 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
     cx = lambda j: px + band * (j + 0.5)                  # noqa: E731
     yv = lambda v: py + ph * (1 - v / M)                  # noqa: E731
     prov = c.get("prov") or getattr(ctx, "slide_prov", None) or ["calc"]   # derived from the chart's sourced data
+    for j, m in sorted(marks.items()):                    # the number of the point that explains this bar, at
+        d_ = min(0.3, band * 0.45)                        # the bar's foot, inside it: the reader goes from the
+        if yv(0) - yv(vals[j]) >= d_ + 0.16 and j not in tcat:   # point "01" to the bar marked 1 (consulting
+            ov = _fill(sl, cx(j) - d_ / 2, yv(0) - d_ - 0.08, d_, d_, TC.BACKGROUND_1, f"ov_BarMark{j + 1}",
+                       MSO_SHAPE.OVAL)                    # call-out markers; blind reviews asked for things that
+            _shape_text(ov, [{"text": str(m), "size": max(9, T["label"] - 2), "bold": True, "numbers": False,
+                              "color": TC.TEXT_1, "align": PP_ALIGN.CENTER}], ctx, n,
+                        (cx(j) - d_ / 2, yv(0) - d_ - 0.08, d_, d_), MSO_ANCHOR.MIDDLE)   # point the way)
     for j in tcat:                                        # a target is a dashed outline, not a bar of fact
         f = ch.plots[0].series[0].points[j].format
         f.fill.background()
@@ -1808,6 +1817,28 @@ def _borders(cell, bottom=None, top=None, left=None, right=None):
         else:
             ln.append(ln.makeelement(qn("a:noFill"), {}))
         tcPr.insert(i, ln)
+
+
+_TYPED_ARROW = re.compile(r"\s*(?:[→➜➔➝➞⟶⇒]|\s->\s|\s=>\s)\s*")
+_TYPED_UPDOWN = re.compile(r"([↑↓▲▼])\s*")
+
+
+def unarrow(v):
+    """Typed arrows out of slide text, deep: "A → B" becomes "A to B", "↑ 5%" becomes "up 5%". Arrows on a slide
+    are drawn as shapes (difference arrows, pointers, chevrons); a typed one reads as a generated deck. Right-to-left
+    text is left as written."""
+    if isinstance(v, str):
+        from .common import is_rtl
+        if is_rtl(v) or not re.search(r"[→➜➔➝➞⟶⇒↑↓▲▼]|\s[-=]>\s", v):
+            return v
+        v = _TYPED_ARROW.sub(" to ", v)
+        v = _TYPED_UPDOWN.sub(lambda m: "up " if m.group(1) in "↑▲" else "down ", v)
+        return re.sub(r"^\s*to\s+", "", re.sub(r"\s+to\s*$", "", v)).strip() if v.strip() else v
+    if isinstance(v, list):
+        return [unarrow(x) for x in v]
+    if isinstance(v, dict):
+        return {k: (x if k in ("prov", "notes", "calcs") else unarrow(x)) for k, x in v.items()}
+    return v
 
 
 def _plain(t) -> str:
@@ -2311,6 +2342,9 @@ def normalize(s: dict) -> dict:
         s["callout"] = {"bullets": s["callout"]}
     if isinstance(s.get("source"), str):
         s["source"] = {"text": s["source"]}
+    for k in list(s):                                      # an arrow is a shape the renderer draws, never a typed
+        if k not in ("notes", "prov", "calcs", "title_prov"):   # character (user review): "84% → 76%" reads
+            s[k] = unarrow(s[k])                                # "84% to 76%"
     gaps = []
     gap_re = re.compile(r"\s*[\(\[]?\[GAP:?\s*([^\]]*)\][\)\]]?")
 
@@ -3088,7 +3122,9 @@ def a_exhibit_argument(ctx, s, sl, n):
     if notes:
         ctx.notes_top = FOOT_RULE_Y - 0.03 - _notes_h(notes)
         panel.height = Inches(max(1.0, ctx.notes_top - 0.06 - (TITLE_RULE_Y + 0.02)))   # the panel stops above the
-    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)                         # notes, never under them
+    ctx.chart_marks = chart_marks(s.get("chart"), s.get("blocks"))                      # notes, never under them
+    _chart(ctx, sl, n, s["chart"], LEFT, y, lw, BODY_B - y - foot)
+    ctx.chart_marks = None
     blocks = []
     for blk in s.get("blocks") or []:
         blocks.append({"text": blk["text"], "size": ARGUMENT["intro"], "numbers": False, "space_before": 8, "prov": blk.get("prov")})
@@ -3148,9 +3184,42 @@ def a_exhibit_argument(ctx, s, sl, n):
                 b_["color"] = TC.TEXT_1                  # as one template; a white box with a bar on its left read
                 b_["bold"] = True                        # as a stray box: user review)
             _rule(sl, rx, cy, rw, TC.ACCENT_1, 1.5, "ov_SoWhatRule")
+            _fill(sl, rx - 0.34, cy + ch / 2 - 0.1, 0.26, 0.24, TC.ACCENT_1, "ov_SoWhatPointer",
+                  MSO_SHAPE.RIGHT_ARROW)                 # a block arrow into the conclusion from the exhibit's side
             _write(_box(sl, rx, cy + 0.04, rw, ch - 0.04, "ov_SoWhat", MSO_ANCHOR.MIDDLE), cb, ctx, n)
             return
         _shape_text(box, cb, ctx, n, (rx + 0.12, cy + 0.06, rw - 0.2, ch - 0.1), MSO_ANCHOR.MIDDLE)
+
+
+def chart_marks(chart, blocks) -> dict:
+    """{category index: point number} for the bars a numbered point names ("Germany's 34%..." marks the Germany
+    bar 1): each category goes to the first point that names it, and only when the points are numbered (icons carry
+    no number to match). Empty when no point names a bar, or every bar would carry the same number."""
+    from .compose import MAX_ICONS, item_icons
+    if not isinstance(chart, dict) or chart.get("kind") not in (None, "column"):
+        return {}
+    cats = [str(c_) for c_ in chart.get("categories") or []]
+    _, items = point_items(blocks)
+    if not 2 <= len(items) <= 4 or not cats:
+        return {}
+    icons = item_icons([dict(it, lead=f"{it.get('label', '')} {it['lead']}") for it in items])
+    if all(icons) and len(items) <= MAX_ICONS:
+        return {}
+    out = {}
+    for j, cv in enumerate(cats):
+        if len(cv.strip()) < 2:
+            continue
+        pat = re.compile(r"(?i)(?<![\w-])" + re.escape(cv.strip()) + r"(?![\w-])")
+        best = (0, None)                                  # the point about this bar, not one that names it in
+        for k_, it in enumerate(items):                   # passing: its header, then its opening words, then
+            lead = _plain(it["lead"])                     # anywhere in it
+            sc = (3 if pat.search(it.get("label") or "") else 2 if pat.search(" ".join(lead.split()[:6])) else
+                  1 if pat.search(" ".join([lead] + [_plain(b["text"]) for b in it["bullets"]])) else 0)
+            if sc > best[0]:
+                best = (sc, k_ + 1)
+        if best[1]:
+            out[j] = best[1]
+    return out if out and not (len(out) == len(cats) and len(set(out.values())) == 1) else {}
 
 
 POINT_PAD, POINT_GAP, POINT_MARK = 0.15, 0.12, 0.42
