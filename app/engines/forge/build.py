@@ -909,7 +909,7 @@ def _fill_targets(s, a, density) -> list[str]:
                for st in s.get("steps") or [] if isinstance(st, dict)):
             msgs.append("every step needs a 'detail' (what it involves, with numbers)"
                         + ("" if light else " and 1-3 'milestones'"))
-    if light:
+    if light and a != "executive_summary":            # the summary has its own caps (130 words, 8 lines)
         busy = [len(x) for x in _lists(s) if len(x) > 5]
         if busy or _words({k: v for k, v in s.items() if k in ("bullets", "blocks", "rows", "parts", "callout")}) > 180:
             msgs.append("too dense for a balanced slide: at most 4-5 bullets per list and about 60-110 words on the "
@@ -1368,6 +1368,14 @@ def variety_checks(slides) -> dict[int, list[str]]:
     if body and len(words) > max(1, len(body) // 3):
         for i in words[max(1, len(body) // 3):]:
             out.setdefault(i, []).append(f"{len(words)} of {len(body)} content slides are words with icons; {ask}")
+
+    side = [i for i, s in body if s.get("archetype") in ("exhibit_argument", "bar_takeaway", "column_trend",
+                                                         "line_trend", "waterfall_bridge")]
+    for i in side[1:]:                                 # a chart beside numbered cards, once per deck: on every chart
+        out.setdefault(i, []).append(               # slide it reads as one generated template (blind review)
+            f"slides {side[0]} and {i} both put a chart beside a column of points; give this one another "
+            "composition: a grid with the chart across the top and 2-3 big figures (stats) or a from-to (shift) "
+            "under it, two charts side by side with a so-what callout, a table, or a 2x2")
 
     def plots(s):
         return bool(s.get("chart") or s.get("charts") or any(isinstance(p, dict) and p.get("type") == "chart"

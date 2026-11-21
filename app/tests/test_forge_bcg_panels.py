@@ -282,3 +282,15 @@ def test_a_footnote_may_quote_a_fact_the_chart_does_not_plot():
          "rows": [], "footnotes": ["Claims satisfaction is 7.9 of 10, flat on 2024."]}
     facts = [{"id": "F1", "text": "claims satisfaction is 7.9 of 10, flat on 2024"}]
     assert not any("footnote cites" in m for m in fill_checks([s], "balanced", facts).get(1, []))
+
+
+def test_chart_beside_points_is_used_once_per_deck():
+    from engines.forge.build import variety_checks
+    ch = {"kind": "column", "categories": ["a", "b", "c"], "series": [{"name": "s", "values": [1, 2, 3]}]}
+    deck = [{"archetype": "executive_summary", "title": "t"},
+            {"archetype": "bar_takeaway", "title": "a", "chart": ch},
+            {"archetype": "table_focus", "title": "b"},
+            {"archetype": "exhibit_argument", "title": "c", "chart": ch}]
+    got = variety_checks(deck)
+    assert any("both put a chart beside a column of points" in m for m in got.get(4, []))
+    assert not any("both put a chart" in m for m in got.get(2, []))
