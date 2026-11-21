@@ -294,3 +294,15 @@ def test_chart_beside_points_is_used_once_per_deck():
     got = variety_checks(deck)
     assert any("both put a chart beside a column of points" in m for m in got.get(4, []))
     assert not any("both put a chart" in m for m in got.get(2, []))
+
+
+def test_plan_steps_in_date_order_and_fragments_go_back():
+    from engines.forge.build import date_checks, prose_checks
+    import datetime
+    s = {"archetype": "closing", "title": "Approve the discount", "steps": [
+        {"action": "a", "timing": "1 December 2026"}, {"action": "b", "timing": "29 January 2027"},
+        {"action": "c", "timing": "26 February 2027"}, {"action": "d", "timing": "Monthly from January 2027"}]}
+    assert any("date order" in m for m in date_checks([s], datetime.date(2026, 11, 21)).get(1, []))
+    f = {"archetype": "executive_summary", "title": "t", "points": [{"lead": "x", "bullets": [
+        {"text": "Pilot: 12 cafés for £5.4M. Franchise."}]}]}
+    assert any("one-word fragment" in m for m in prose_checks([f]).get(1, []))

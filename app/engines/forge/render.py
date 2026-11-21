@@ -567,8 +567,10 @@ def _balanced(text: str, width: float, size: float) -> tuple[str, str]:
     from .common import wrap_lines
     f = _font("head", True)
     words = text.split()
-    if len(words) < 4 or wrap_lines(text, width, size, f, 0.97) != 2:
-        return text, ""
+    lines = wrap_lines(text, width, size, f, 0.97)
+    close = lines == 1 and len(words) >= 6 and _need_w(text, size, True) > 0.88 * width   # one line by the metrics,
+    if len(words) < 4 or (lines != 2 and not close):     # but near the edge: the renderer's own face may wrap it
+        return text, ""                                  # and leave one word under it ("cite it"): break it evenly
     best = None
     for k in range(2, len(words) - 1):
         a, b = " ".join(words[:k]), " ".join(words[k:])
@@ -581,7 +583,7 @@ def _balanced(text: str, width: float, size: float) -> tuple[str, str]:
         return text, ""
     natural_tail = len(words) - next((k for k in range(len(words), 0, -1)
                                       if wrap_lines(" ".join(words[:k]), width, size, f, 0.97) == 1), len(words))
-    return (best[1], best[2]) if natural_tail <= 2 else (text, "")
+    return (best[1], best[2]) if close or natural_tail <= 2 else (text, "")
 
 
 def _title_size(text: str, width: float, lines_max: int = 2):
@@ -2005,8 +2007,9 @@ def _table(ctx, sl, n, t, x, y, w, h, dry=False):
                 cell.fill.solid()
                 cell.fill.fore_color.theme_color = TC.BACKGROUND_2
                 color = TC.ACCENT_1
-            elif on:                                     # the recommended row: accent text between accent rules,
-                cell.fill.background()                   # no fill
+            elif on:                                     # the recommended row: a light tint and accent text
+                cell.fill.solid()                        # between accent rules (accent text alone did not mark the
+                cell.fill.fore_color.theme_color = TC.BACKGROUND_2   # winner: blind review)
                 color = TC.ACCENT_1
             elif ci in heat and not (total and last):
                 vals = sorted(heat[ci])
