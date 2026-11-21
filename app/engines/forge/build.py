@@ -783,6 +783,11 @@ def fill_checks(slides, density: str = "read", facts=None) -> dict[int, list[str
                     msgs.append("these figures are before/after pairs ('151, up from 92'): show them as a chart, "
                                 "each measure's before and after as bars with the change drawn on it ('delta'), and "
                                 "keep at most one big figure beside it")
+                fact_nums = {v for f_ in facts or [] for _, v, _u in _numbers(str(f_.get("text") or ""), None)}
+                for w_ in words_:                          # "1 of 4" is a count claim: both numbers come from the
+                    m_ = re.fullmatch(r"\s*(\d+)\s+of\s+(\d+)\s*", w_)   # facts (the page check skips small
+                    if m_ and facts and not {float(m_.group(1)), float(m_.group(2))} <= fact_nums:   # numbers)
+                        msgs.append(f"the figure '{w_}' is not in the facts: show only counts the facts give")
                 if any(w_ and not re.search(r"\d", w_) for w_ in words_):
                     msgs.append("every stat value is a figure ('0', '140', '+1.5 pts'), never a word such as 'None' "
                                 "or 'All': say it with its number, or move it to the label of another stat")
@@ -801,6 +806,27 @@ def fill_checks(slides, density: str = "read", facts=None) -> dict[int, list[str
                 msgs.append(f"a footnote cites {', '.join(dict.fromkeys(stray_[:3]))}, which the slide does not show: "
                             "a footnote explains a figure on the page (how it was worked out, what it covers); show "
                             "that figure on the slide or drop the note")
+        if a not in ("cover", "executive_summary", "closing", "next_steps", "agenda", "section_divider", "end") \
+                and s.get("title"):                        # the title's figures are proved on the page: a title
+            body_t = json.dumps({k: v for k, v in s.items() if k not in ("title", "notes", "calcs", "source",
+                                                                          "title_prov")}, ensure_ascii=False)
+            shown = [v for _, v, _u in _numbers(body_t, None)]
+            for ch_ in [s.get("chart")] + [p_.get("chart") for p_ in s.get("parts") or [] if isinstance(p_, dict)]:
+                for se_ in (ch_ or {}).get("series") or [] if isinstance(ch_, dict) else []:
+                    vv = [float(x) for x in (se_ or {}).get("values") or [] if isinstance(x, (int, float)) and x]
+                    for a_ in vv:                          # what the bars show between them: the change, the
+                        for b_ in vv:                      # multiple, the gap ("grew 20%" over two bars is shown)
+                            if a_ != b_:
+                                shown += [(b_ / a_ - 1) * 100, b_ / a_, b_ - a_]
+            missing = [raw for raw, v, u in _numbers(re.sub(r"\*\*", "", str(s["title"])), None)
+                       if (u or abs(v) >= 10 or "." in raw or re.search(re.escape(raw) + r"\s*(?:points|pts|times)\b",
+                                                                        str(s["title"])))
+                       and not any(abs(abs(v) - abs(pv)) <= 0.5 * 10 ** -len((raw.split(".") + [""])[1].strip("%xX"))
+                                   + 0.006 * abs(v) for pv in shown)]
+            if missing:                                    # promising a 5-point staff gap over a rent-only chart
+                msgs.append(f"the title states {', '.join(missing[:3])}, which the slide never shows: put that "
+                            "figure on the exhibit (a bar, a label, a figure tile) or make the title say what the "
+                            "slide proves")
         pts_ = [p for p in s.get("points") or [] if isinstance(p, dict)]
         if a == "executive_summary" and density != "present" and len(pts_) >= 3 and \
                 sum(len(p.get("bullets") or []) <= 1 for p in pts_) * 2 > len(pts_):

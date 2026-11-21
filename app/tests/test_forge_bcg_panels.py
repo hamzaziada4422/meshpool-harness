@@ -306,3 +306,13 @@ def test_plan_steps_in_date_order_and_fragments_go_back():
     f = {"archetype": "executive_summary", "title": "t", "points": [{"lead": "x", "bullets": [
         {"text": "Pilot: 12 cafés for £5.4M. Franchise."}]}]}
     assert any("one-word fragment" in m for m in prose_checks([f]).get(1, []))
+
+
+def test_a_deleted_template_is_built_again():
+    """A cleaned temp folder under a long build left the cached template path pointing at nothing (a relay build
+    crashed with PackageNotFoundError): the path is checked and the template rebuilt."""
+    import os
+    from engines.forge import template as T
+    p = T.default_template(None)
+    os.remove(p)
+    assert os.path.exists(T.default_template(None))

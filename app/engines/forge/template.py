@@ -177,7 +177,11 @@ def default_template(theme=None) -> str:
     import json as _json
     spec = theme_spec(theme)
     key = hashlib.sha1(_json.dumps(spec, sort_keys=True).encode()).hexdigest()[:10]
-    return _build(key, _json.dumps(spec, sort_keys=True))
+    path = _build(key, _json.dumps(spec, sort_keys=True))
+    if not Path(path).exists():                         # the temp folder was cleaned under a running build (a
+        _build.cache_clear()                            # relay build crashed on a deleted template): build it again
+        path = _build(key, _json.dumps(spec, sort_keys=True))
+    return path
 
 
 @lru_cache(maxsize=16)
@@ -196,7 +200,10 @@ def _build(key: str, spec_json: str) -> str:
     _style_master(prs)
     if spec.get("frame") == "band":
         _band_layout(prs)
-    prs.save(out)
+    import os
+    tmp = out.with_name(f"{out.stem}.{os.getpid()}.tmp.pptx")
+    prs.save(tmp)                                       # written whole, then moved: a concurrent build never reads
+    os.replace(tmp, out)                                # a half-written template
     return str(out)
 
 
