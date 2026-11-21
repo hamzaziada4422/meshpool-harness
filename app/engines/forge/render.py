@@ -1458,6 +1458,10 @@ def _chart(ctx, sl, n, c, x, y, w, h, name="Chart"):
             ca.reverse_order = True
         ca.tick_label_position = XL_TICK_LABEL_POSITION.LOW     # labels stay clear of negative bars
         ends = [e for sp in spans for e in sp] if kind == "waterfall" else allv
+        if kind == "line" and allv and min(allv) > 0 and (max(allv) - min(allv)) < 0.6 * max(allv):
+            lo_, hi_ = _nice_bounds(min(allv) - 0.15 * (max(allv) - min(allv)), max(allv))
+            va.minimum_scale = max(0.0, lo_)                   # a line needs no zero baseline: from zero it
+            # filled half its panel with empty axis (blind review); bars always start at zero
         if kind in ("bar", "column", "stacked_bar", "stacked_column", "waterfall") and ends:
             if min(ends) >= 0:                                 # the axis is hidden: bars must start at zero, or
                 va.minimum_scale = 0                           # auto-scaling exaggerates the differences
@@ -1665,7 +1669,7 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
         if abs(j1 - j0) > 1 and ph < 1.8:                 # a short plot has no room for an elbow: the gap sits in a
             segs = []                                     # pill over the bar it lands on
             mx, my = cx(j1), max(py + 0.17, yv(vals[j1]) - 0.62)
-        elif abs(j1 - j0) > 1:                            # bars in between: an elbow above all their labels (the
+        elif abs(j1 - j0) >= 1:                           # an elbow above the bars' labels (the think-cell
             ya = max(py + 0.45, yv(max(between)) - 0.5)   # think-cell difference arrow), the pill on its top run
             segs = [((cx(j0), yv(vals[j0]) - 0.34), (cx(j0), ya)), ((cx(j0), ya), (cx(j1), ya)),
                     ((cx(j1), ya), (cx(j1), yv(vals[j1]) - 0.34))]
@@ -1693,9 +1697,9 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                 end.append(end.makeelement(qn("a:tailEnd"), {"type": "triangle", "w": "med", "len": "med"}))
         if target is not None and abs(my - yv(target)) < 0.3:   # the pill never sits on the target line or its
             my = min(my, yv(target)) - 0.32                      # label: it rides above them
-        box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.OVAL)
-        box.line.color.theme_color = TC.ACCENT_1
-        box.line.width = Pt(1)
+        box = _fill(sl, mx - bw / 2, my - 0.17, bw, 0.34, TC.BACKGROUND_1, "ov_DeltaLabel", MSO_SHAPE.RECTANGLE)
+        box.line.fill.background()                        # the gap as bold accent text on the bracket, no oval: a
+        # diagonal arrow with an outlined pill read as improvised, "the main generated tell" (blind review)
         _shape_text(box, [{"text": lab, "size": T["label"] + 1, "bold": True, "numbers": False,
                            "color": TC.ACCENT_1, "align": PP_ALIGN.CENTER}], ctx, n,
                     (mx - bw / 2, my - 0.17, bw, 0.34), MSO_ANCHOR.MIDDLE)
