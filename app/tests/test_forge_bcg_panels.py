@@ -274,3 +274,11 @@ def test_a_footnote_citing_a_figure_the_slide_never_shows_goes_back():
     assert any("footnote cites 4.2M" in m for m in got)
     ok = dict(s, steps=[{"action": "Trial the second vendor", "detail": "Saves £4.2M across two sites, £2.1M each"}])
     assert not any("footnote cites" in m for m in fill_checks([ok], "balanced").get(1, []))
+
+
+def test_a_footnote_may_quote_a_fact_the_chart_does_not_plot():
+    from engines.forge.build import fill_checks
+    s = {"archetype": "challenge_matrix", "title": "Claims service is not the cause",
+         "rows": [], "footnotes": ["Claims satisfaction is 7.9 of 10, flat on 2024."]}
+    facts = [{"id": "F1", "text": "claims satisfaction is 7.9 of 10, flat on 2024"}]
+    assert not any("footnote cites" in m for m in fill_checks([s], "balanced", facts).get(1, []))
