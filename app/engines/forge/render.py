@@ -3695,6 +3695,9 @@ def a_executive_summary(ctx, s, sl, n):
             out.append((a, d, max(_need(a, lw), _need(d, dw) if d else 0) + 0.2))
         return out
     laid = rows(size)
+    while sum(h for *_, h in laid) < 0.62 * (bottom - top) and size < T["body"] + 5:   # thin rows step up the
+        size += 1                                                   # type before air is spread between them
+        laid = rows(size)
     while sum(h for *_, h in laid) > bottom - top and size > 13:   # never under 13 pt (house style)
         size -= 1
         laid = rows(size)
