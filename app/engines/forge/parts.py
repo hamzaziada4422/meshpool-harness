@@ -276,7 +276,7 @@ def _stat_grid(k, w, h, gap):
         cols = -(-k // rows)
         tw, th = (w - gap * (cols - 1)) / cols, (h - gap * (rows - 1)) / rows
         score = abs(math.log(max(tw, 0.01) / max(th, 0.01) / 1.6)) + (3 if tw < 1.1 else 0) + (3 if th < 0.75 else 0)
-        score += 0.4 * (cols * rows - k)
+        score += 2.5 * (cols * rows - k)                  # an empty cell reads as a missing figure (blind review)
         if best is None or score < best[0]:
             best = (score, cols, rows)
     return best[1], best[2]
@@ -332,7 +332,7 @@ def stats_plan(items, w, boxed, h=None, up=0) -> dict:
             shape = abs(math.log(max(tw, 0.01) / max(th, 0.01) / (1.6 if style == "stack" else 4.0)))
             cands.append({"cols": cols, "rows": rows, "style": style, "vsize": vsize, "vw": vw, "label": lab,
                           "th": th, "tw": tw, "gap": gap, "pad": pad, "total": total,
-                          "score": shape + 0.4 * (cols * rows - k) - vsize / 60})
+                          "score": shape + 2.5 * (cols * rows - k) - vsize / 60})   # an empty cell: a hole
     if not cands:                                          # a figure too wide for any tile: the smallest size, one column
         return {"cols": 1, "rows": k, "style": "stack", "vsize": 20, "vw": w, "label": R.bump(12), "th": 0.9, "tw": w,
                 "gap": gap, "pad": pad, "total": k * 0.9 + gap * (k - 1), "score": 0}
@@ -341,6 +341,8 @@ def stats_plan(items, w, boxed, h=None, up=0) -> dict:
     fit = [c for c in cands if c["total"] <= h + 0.01]
     if not fit:
         return min(cands, key=lambda c: c["total"])
+    full = [c for c in fit if c["cols"] * c["rows"] == k]  # no empty cell when a full arrangement fits: three
+    fit = full or fit                                     # figures in a 2x2 left a hole (blind review)
     return max(fit, key=lambda c: (min(h, c["total"] * STAT_GROW) - 0.15 * c["score"], -c["score"]))
 
 
@@ -444,7 +446,8 @@ def p_callout(ctx, sl, n, part, box, look, i, s, card):
         return
     iw, ih = w - 0.5, h - 0.3
     near_table = any(isinstance(p_, dict) and p_.get("type") == "table" for p_ in (s or {}).get("parts") or [])
-    bl = _fit_trim(R._grow(bl, iw, ih, 1 if near_table else 6), iw, ih, s, f"the callout of part {i}", ctx, n)
+    bl = _fit_trim(R._grow(bl, iw, ih, 1 if near_table else 2), iw, ih, s, f"the callout of part {i}", ctx, n)
+    # at most two steps up: a so-what set twice the chart labels' size overpowered the exhibit (blind review)
     if h > 1.6 * (R._need(bl, iw) + 0.3) and h > 1.4:     # a box far taller than its words: a light panel with an
         for b_ in bl:                                     # accent bar reads as a designed panel; a tall navy slab
             b_["color"] = TC.TEXT_1                       # around three lines reads as dead space
