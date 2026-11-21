@@ -3711,7 +3711,8 @@ def a_executive_summary(ctx, s, sl, n):
         laid = rows(size)
     if sum(h for *_, h in laid) > bottom - top:
         ctx.miss(n, "the executive summary", int((sum(h for *_, h in laid) - (bottom - top)) * 30))
-    gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / len(laid))
+    gap = max(0.0, (bottom - top - sum(h for *_, h in laid)) / max(1, len(laid) - 1))   # the air goes between
+    # rows, the hairline in the middle of it: the last row ends on the band, no blank strip above it
     from .compose import item_icons
     icons = item_icons([{"lead": p.get("lead", ""), "bullets": []} for p in pts]) if len(pts) <= 4 else []
     if not icons or not all(icons):
@@ -3719,7 +3720,7 @@ def a_executive_summary(ctx, s, sl, n):
     y = top
     tracker = len(pts) >= 2                               # the points are the deck's numbered sections
     for i, (a, d, h) in enumerate(laid):
-        rh = h + gap
+        rh = h if len(laid) > 1 else h + gap
         if icons[i] and not tracker:
             _icon(sl, icons[i], LEFT, y + 0.08, 0.42, re.sub(r"\*\*", "", pts[i].get("lead", ""))[:60])
         else:                                             # "01": the same mark as the section number on the slide
@@ -3729,9 +3730,10 @@ def a_executive_summary(ctx, s, sl, n):
         _write(_box(sl, lx, y + 0.08, lw, rh - 0.12, f"Claim{i + 1}"), a, ctx, n)
         if d:
             _write(_box(sl, dx, y + 0.08, dw, rh - 0.12, f"Evidence{i + 1}"), d, ctx, n)
-        y += rh
         if i < len(laid) - 1:
-            _rule(sl, LEFT, y, (dx + dw if mets else RIGHT) - LEFT, TC.ACCENT_5, 0.5, f"SummaryRule{i + 1}")
+            _rule(sl, LEFT, y + rh + gap / 2, (dx + dw if mets else RIGHT) - LEFT, TC.ACCENT_5, 0.5,
+                  f"SummaryRule{i + 1}")
+        y += rh + gap
 
 
 def a_waterfall_bridge(ctx, s, sl, n):

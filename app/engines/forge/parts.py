@@ -1329,6 +1329,19 @@ def a_grid(ctx, s, sl, n):
         render_part(ctx, sl, n, p, box, look, j + 1, s)
 
 
+_STOP = {"a", "an", "the", "of", "per", "in", "by", "and", "to", "for", "on", "at", "vs", "year", "%", "share", "rate"}
+
+
+def _same_words(names) -> bool:
+    """Series names that name one measure (same categories alone do not: growth and concentration by country are two
+    measures that share their categories and their unit)."""
+    import re as _re
+    sets = [{w for n in ns for w in _re.findall(r"[a-z]+", n) if w not in _STOP} for ns in names]
+    if not all(sets):
+        return False
+    return all(len(x & sets[0]) / len(x | sets[0]) >= 0.5 for x in sets[1:])
+
+
 def _share_scale(parts) -> None:
     """Two or more bar or column charts of one unit on a slide (small multiples) share one value scale, so their
     bars compare at a glance; without it each chart fills its own frame and a small number looks large."""
@@ -1337,9 +1350,10 @@ def _share_scale(parts) -> None:
     if len(cs) < 2 or len({c.get("kind") for c in cs}) != 1 or cs[0].get("kind") not in ("bar", "column") \
             or len({str(c.get("unit") or "") for c in cs}) != 1:
         return
-    same_measure = (len({tuple(sorted(str(se.get("name", "")).lower() for se in c.get("series") or []
-                                       if isinstance(se, dict))) for c in cs}) == 1
-                    or len({tuple(str(x) for x in c.get("categories") or []) for c in cs}) == 1)
+    names = [tuple(sorted(str(se.get("name", "")).lower() for se in c.get("series") or [] if isinstance(se, dict)))
+             for c in cs]
+    same_measure = len(set(names)) == 1 or (
+        len({tuple(str(x) for x in c.get("categories") or []) for c in cs}) == 1 and _same_words(names))
     if not same_measure:                                   # two different measures that happen to share a unit (a
         return                                             # price rise and a renewal rate, both %): own scales
     vals = [v for c in cs for se in c.get("series") or [] if isinstance(se, dict)

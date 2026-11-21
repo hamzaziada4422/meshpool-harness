@@ -188,6 +188,16 @@ def test_small_multiples_share_one_scale():
     mixed = [mk([1, 2]), dict(mk([3, 4]), chart=dict(mk([3, 4])["chart"], unit="%"))]
     P._share_scale(mixed)
     assert not any("_shared_max" in p["chart"] for p in mixed)   # different units: each its own scale
+    two = [{"type": "chart", "chart": {"kind": "column", "categories": ["UK", "Germany"], "unit": "%",
+                                       "series": [{"name": n, "values": v}]}}
+           for n, v in (("Market growth, % a year", [2, 6]), ("Top-three chains' share of market, %", [58, 31]))]
+    P._share_scale(two)
+    assert not any("_shared_max" in p["chart"] for p in two)     # same countries, two measures: own scales
+    same = [{"type": "chart", "chart": {"kind": "column", "categories": ["UK", "Germany"], "unit": "$M",
+                                        "series": [{"name": n, "values": v}]}}
+            for n, v in (("Revenue 2024", [20, 6]), ("Revenue 2025", [24, 9]))]
+    P._share_scale(same)
+    assert {p["chart"]["_shared_max"] for p in same} == {24}      # one measure in two years: one scale
 
 
 def test_column_charts_carry_think_cell_annotations(tmp_path):
