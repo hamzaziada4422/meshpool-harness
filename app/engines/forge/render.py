@@ -1662,18 +1662,33 @@ def _annotate_columns(ctx, sl, n, gf, c, cats, se, x, y, w, h, dec, unit):
                             MSO_ANCHOR.BOTTOM),
                        [{"text": d_, "size": dz, "numbers": False, "color": TC.TEXT_2, "align": PP_ALIGN.CENTER}],
                        ctx, n)
-    if target is not None:
+    if target is not None and any(abs(v - target) <= 1e-9 + 0.002 * abs(target) for v in vals):
+        target = None                                     # a bar already stands at the target: a line at its top
+    if target is not None:                                # says it twice and crossed the labels (blind review)
         yt = yv(target)
-        ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(px), Inches(yt), Inches(px + pw), Inches(yt))
-        ln.name = "ov_TargetLine"
-        ln.line.color.theme_color = TC.ACCENT_1
-        ln.line.width = Pt(1.25)
-        ln.line.dash_style = 4
+        lab_w = max(0.5, min(band * 0.8, 0.9))            # a value label's width over its bar
+        cuts = sorted((cx(j) - lab_w / 2 - 0.04, cx(j) + lab_w / 2 + 0.04) for j, v in enumerate(vals)
+                      if yv(v) - 0.34 <= yt <= yv(v) + 0.02)   # the line breaks around a value label it would cross
+        runs, x0_ = [], px
+        for a_, b_ in cuts:
+            if a_ > x0_ + 0.05:
+                runs.append((x0_, a_))
+            x0_ = max(x0_, b_)
+        if px + pw > x0_ + 0.05:
+            runs.append((x0_, px + pw))
+        for k_, (a_, b_) in enumerate(runs):
+            ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(a_), Inches(yt), Inches(b_), Inches(yt))
+            ln.name = "ov_TargetLine" + (str(k_ + 1) if k_ else "")
+            ln.line.color.theme_color = TC.ACCENT_1
+            ln.line.width = Pt(1.25)
+            ln.line.dash_style = 4
         lab = "Target " + fmt_value(target, unit, dec)
         lw_ = _need_w(lab, T["label"], True) + 0.1
-        def clash(xa, xb):                                # a bar's value label under the target label's span
-            return any(abs(yt - (yv(v) - 0.2)) < 0.4 and xa - band / 2 < cx(j) < xb + band / 2
-                       for j, v in enumerate(vals))
+        def clash(xa, xb):                                # a bar's value label under the target label's span,
+            return any(abs(yt - (yv(v) - 0.2)) < 0.4 and xa - band / 2 < cx(j) < xb + band / 2   # or a difference
+                       for j, v in enumerate(vals)) or (delta is not None and any(   # arrow's end there
+                           abs(yt - 0.15 - (yv(vals[j_]) - 0.34)) < 0.45 and xa - 0.1 < cx(j_) < xb + 0.1
+                           for j_ in delta[:2]))
         lx_ = px                                          # at the line's start; at its end when a value label sits
         if clash(px, px + lw_):                           # there; above both when the end is taken too
             lx_ = px + pw - lw_

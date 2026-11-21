@@ -69,8 +69,9 @@ renderer applies a strict consulting design; you only fill fields.
   safety, growth, risk, time), "label": "**Key word** rest of label" (<= 6 words), "cells": [A, B]} where each
   cell is {"lead": one bold sentence (<= 10 words), "bullets": 1-3 evidence lines (<= 22 words) each starting
   with its number}. Use for 'N issues/challenges/drivers, each with evidence'.
-- exhibit_argument: left = one exhibit, right = the argument. "title" (left half, <= 9 words, a complete sentence,
-  never ending in "…"), "title_right" (<= 9 words, a complete sentence: the implication or the counter-point), "exhibit": {"title": what is shown,
+- exhibit_argument: left = one exhibit, right = the argument. "title" (the slide's action title across the top, a
+  complete sentence with its number, never ending in "…"), "title_right" (the heading of the argument panel, <= 9
+  words, a complete sentence: the implication or the counter-point), "exhibit": {"title": what is shown,
   "unit": measure and period}, "chart" (bar/column/line, or bubble with points[{x,y,size,label,focus}],
   x_range, y_range, x_major, y_major, x_cross, y_cross, x_title), "blocks": 2-3 of {"label": a 2-4 word header
   naming the point (e.g. "Scale beats price"), "text": intro sentence with **bold key phrases**, "bullets": 1-3
@@ -715,7 +716,7 @@ def _lists(s) -> list[list]:
     return [x for x in out if isinstance(x, list)]
 
 
-def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
+def fill_checks(slides, density: str = "read", facts=None) -> dict[int, list[str]]:
     """Pre-render: does the slide carry what its density mode needs? In 'read' (dense send-ahead) a thin slide is
     sent back for more evidence (or a merge), never stretched by the renderer to look full. 'balanced' asks for less;
     'present' never asks for MORE text: it asks for an exhibit and a takeaway, and sends back slides that are too
@@ -769,6 +770,8 @@ def fill_checks(slides, density: str = "read") -> dict[int, list[str]]:
                                 if k not in ("footnotes", "notes", "calcs", "source", "options")},   # review: "£4.2M"
                                ensure_ascii=False)          # under a plan that never mentions it)
             page = [v for _, v, _u in _numbers(body_, None)]
+            page += [v for f_ in facts or [] for _, v, _u in _numbers(str(f_.get("text") or ""), None)]   # a fact
+            # quoted in a note is context (P14 sends a figure the chart does not plot there); a derived one is not
             stray_ = [raw for t_ in notes_ for raw, v, u in _numbers(t_, None)
                       if (u or abs(v) >= 100 or "." in raw) and not any(abs(abs(v) - abs(pv)) <= 1e-6 + 0.006 * abs(v)
                                                                          for pv in page)]
@@ -2001,7 +2004,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
         known = facts + [f for v in calcs_ok.values() for f in v]
         for n, msgs in number_checks(slides, known, rules).items():
             fails.setdefault(n, []).extend(f"[P13] {m}" for m in msgs)
-        for n, msgs in fill_checks(slides, density).items():
+        for n, msgs in fill_checks(slides, density, facts).items():
             fails.setdefault(n, []).extend(f"[fill] {m}" for m in msgs)
         for n, msgs in chart_checks(slides).items():
             fails.setdefault(n, []).extend(f"[chart] {m}" for m in msgs)
