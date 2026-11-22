@@ -133,3 +133,6 @@
 .imp .tg small{display:block}
 .impag{margin:0 0 8px}.impag summary{cursor:pointer;padding:4px 0}
 .imp.have{opacity:.55}
+
+.mem-ins{margin:0;font-size:var(--fs-s);color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.mem-files{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -86,7 +86,14 @@ function ev010(ev) {
     under010(`<details class="chkline"><summary>${ICON.check2}<span>${esc(ev.text)}</span></summary><ul>${(ev.items || []).map(i => `<li>${esc(i.text || i.label || i)}</li>`).join("")}</ul></details>`, "chkwrap"); return;
   }
   if (ev.type === "task_receipt") { under010(`<span title="${esc(ev.reason || "")}">${esc(ev.text || "")}</span>`, "rcpt010"); return; }
-  if (ev.type === "insight" && ev.card) { insightUnder010(ev.card); return; }
+  if (ev.type === "insight" && ev.card) {
+    insightUnder010(ev.card);
+    const ns = Object.assign({suggest: false}, store("notify") || {});
+    if (ev.card.type !== "followup" && ns.suggest && document.hidden) {        // only if the user allowed it, and Meshpool is not in view
+      post("/api/insights/os", {}).then(r => { if (r && r.card) post("/api/notify", {title: "Meshpool", body: r.card.title}).catch(() => {}); }).catch(() => {});
+    }
+    return;
+  }
   if (ev.type === "turn_end") sources010();
 }
 function insightUnder010(c) {

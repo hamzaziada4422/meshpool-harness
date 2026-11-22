@@ -134,8 +134,15 @@ def load() -> list[dict]:
     if hit and hit[0] == key:
         return json.loads(hit[1])                      # a copy: callers may edit what they get
     rows = _read_lines(p)
-    _CACHE["facts"] = (key, json.dumps(rows))
-    return rows
+    _CACHE["facts"] = (key, json.dumps(rows), rows)
+    return json.loads(_CACHE["facts"][1])
+
+
+def _peek() -> list[dict]:
+    """The same facts without a copy. Read only: for lookups and reports, never for edits."""
+    load()
+    hit = _CACHE.get("facts")
+    return hit[2] if hit and len(hit) > 2 else load()
 
 
 def _save(facts: list[dict]) -> None:
@@ -327,7 +334,7 @@ def _new(text, kind, category, scope, status, source, created=None, pinned=False
 
 # ---------- reading ------------------------------------------------------------------------------------------------------
 def get(fid: str) -> dict | None:
-    return next((f for f in load() if f["id"] == fid), None)
+    return next((f for f in _peek() if f["id"] == fid), None)
 
 
 def facts(status: str | None = None, scope: str | None = None, kind: str | None = None,
@@ -879,24 +886,47 @@ def review_queue(days: int = REVIEW_DAYS) -> list[dict]:
 
 
 def health() -> dict:
-    ev = [f for f in load() if f["scope"] == "everywhere" and f["status"] == "active"]
+    rows = _peek()
+    hit = _CACHE.get("facts")
+    if hit and _CACHE.get("health", (None,))[0] == hit[0]:
+        return _CACHE["health"][1]
+    ev = [f for f in rows if f["scope"] == "everywhere" and f["status"] == "active"]
     used = sum(len(f["text"]) + 3 for f in ev)
-    return {"used": used, "budget": BUDGET, "share": round(used / BUDGET, 3), "facts": len(ev),
-            "near": used >= NEAR * BUDGET, "pending": len([f for f in load() if f["status"] == "pending"]),
-            "proposal": consolidation() if used >= NEAR * BUDGET else None}
+    out = {"used": used, "budget": BUDGET, "share": round(used / BUDGET, 3), "facts": len(ev),
+           "near": used >= NEAR * BUDGET, "pending": len([f for f in rows if f["status"] == "pending"]),
+           "proposal": consolidation() if used >= NEAR * BUDGET else None}
+    if hit:
+        _CACHE["health"] = (hit[0], out)
+    return out
 
 
 def consolidation() -> dict:
     """What would shrink memory: merge near-duplicates, archive facts not given for 90 days. Only a proposal."""
-    rows = [f for f in load() if f["status"] == "active" and f["scope"] == "everywhere" and not f["pinned"]]
+    rows = [f for f in _peek() if f["status"] == "active" and f["scope"] == "everywhere" and not f["pinned"]]
+    byid = {f["id"]: f for f in rows}
+    words = {f["id"]: _words(f["text"]) for f in rows}
+    index: dict = {}
+    for f in rows:
+        for w in words[f["id"]]:
+            index.setdefault(w, []).append(f["id"])
+    order = {f["id"]: i for i, f in enumerate(rows)}
     merges, used = [], set()
-    for i, a in enumerate(rows):
+    for a in rows:
         if a["id"] in used:
             continue
+        cand: dict = {}
+        for w in words[a["id"]]:
+            ids = index[w]
+            if len(ids) > 80:
+                continue                                      # a word in most facts says nothing about a duplicate
+            for bid in ids:
+                if order[bid] > order[a["id"]] and bid not in used:
+                    cand[bid] = cand.get(bid, 0) + 1
         group = [a]
-        for b in rows[i + 1:]:
-            if b["id"] in used:
+        for bid, shared in cand.items():
+            if shared < max(2, 0.5 * min(len(words[a["id"]]), len(words[bid]))):
                 continue
+            b = byid[bid]
             r = difflib.SequenceMatcher(None, norm(a["text"]), norm(b["text"])).ratio()
             if r >= 0.85 and not disagree(a["text"], b["text"]):
                 group.append(b)
@@ -908,9 +938,9 @@ def consolidation() -> dict:
                            "text": keep["text"]})
     cut = time.time() - STALE_DAYS * 86400
     stale = [f["id"] for f in rows if f["id"] not in used and f["created"] < cut and (f["last_given"] or 0) < cut]
+    size = lambda ids: sum(len(byid[i]["text"]) for i in ids if i in byid)      # noqa: E731
     return {"merges": merges, "archive": stale,
-            "saves": sum(len(load_by(i)["text"]) for m in merges for i in m["drop"]) +
-            sum(len(load_by(i)["text"]) for i in stale)}
+            "saves": sum(size(m["drop"]) for m in merges) + size(stale)}
 
 
 def load_by(fid: str) -> dict:
@@ -1107,7 +1137,9 @@ def search(q: str, rows: list[dict] | None = None) -> list[dict]:
     toks = ql.split()
     out = []
     for f in rows:
-        hay = (f["text"] + " " + json.dumps(f["source"]) + " " + f["category"] + " " + f["kind"]).lower()
+        src = f["source"]
+        hay = " ".join([f["text"], str(src.get("quote") or ""), str(src.get("type") or ""), str(src.get("file") or ""),
+                        str(src.get("agent") or ""), f["category"], f["kind"], f["scope"]]).lower()
         if all(t in hay for t in toks):
             out.append(f)
     return out

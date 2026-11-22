@@ -102,8 +102,11 @@ def view(q: dict) -> dict:
     projects = []
     try:
         from meshpool_harness import project_store as PS
-        projects = [{"id": p["id"], "name": p["name"], "instructions": bool((PS.get_meta(p["id"]) or {}).get("instructions")),
-                     "knowledge": len(PS.knowledge_list(p["id"]))} for p in PS.list_projects()]
+        for p in PS.list_projects():
+            dt = PS.detail(p["id"])
+            projects.append({"id": p["id"], "name": p["name"], "instructions": bool(dt["instructions"]),
+                             "instructions_text": dt["instructions"][:240],
+                             "knowledge": len(dt["knowledge"]), "files": [k["name"] for k in dt["knowledge"]][:8]})
     except Exception:  # noqa: BLE001
         pass
     by = {f["id"]: f for f in rows}

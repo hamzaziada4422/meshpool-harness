@@ -65,6 +65,8 @@ def draft_skill(body: dict) -> dict:
 def handle_post(path: str, body: dict) -> tuple[int, dict]:
     body = body or {}
     try:
+        if path == "/api/insights/os":                          # the one notification a day; None in quiet hours or when used
+            return 200, {"card": I.take_os_notification()}
         if path == "/api/insights/draft-skill":
             return 200, draft_skill(body)
         if path == "/api/insights/accept":                       # a teach card: write the rules as learned facts

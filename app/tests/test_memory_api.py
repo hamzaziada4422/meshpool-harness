@@ -116,3 +116,17 @@ def test_undo_noted_for_next_time(web):
     f, _ = MS.add("Prefers dark charts", kind="learned")
     web("/api/memory", {"action": "undo_noted", "ids": [f["id"]]})
     assert "dark charts" not in A.memory()
+
+
+def test_the_projects_view_shows_instructions_and_files(web):
+    import base64
+    pid = PS.create("Board deck", "", "One message per slide.")["id"]
+    PS.knowledge_add(pid, "style-guide.md", b"Use sentence case.")
+    MS.add("Board wants USD", scope=f"project:{pid}")
+    p = next(x for x in web("/api/memory")[1]["projects"] if x["id"] == pid)
+    assert p["instructions_text"] == "One message per slide." and p["files"] == ["style-guide.md"] and p["knowledge"] == 1
+
+
+def test_one_os_notification_a_day_and_none_without_a_card(web):
+    st, r = web("/api/insights/os", {})
+    assert st == 200 and r["card"] is None

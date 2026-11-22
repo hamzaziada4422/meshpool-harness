@@ -332,3 +332,17 @@ def test_an_incognito_turn_pauses_memory_writes_from_every_harness(home):
         A.remember_project(str(home), "tests run with make")
     MS.incognito_end("inc-1")
     assert A.remember("Prefers dark mode") == "Saved to memory."
+
+
+def test_a_thousand_facts_load_the_whole_page_data_in_well_under_a_second(home):
+    from meshpool_harness.ui import memory_api as MA
+    from urllib.parse import parse_qs
+    rows = [MS._new(f"Extra fact number {i} about topic {i % 23}", "stated", "about", "everywhere", "active", {"type": "manual"})
+            for i in range(1000)]
+    MS._save_new(rows)
+    MA.view(parse_qs(""))                                        # warm: first read parses the file
+    t = time.time()
+    d = MA.view(parse_qs(""))
+    assert time.time() - t < 1.0 and len(d["facts"]) == 1000 and d["health"]["near"]
+    assert len(MS.search("topic 7")) < 1000                       # search reads words, not timestamps
+    assert MS.consolidation()["merges"] == []                     # a thousand different facts: nothing to merge
