@@ -150,6 +150,24 @@ def _agent_parser():
     return ap
 
 
+def _stdin_has_data(explicit: bool) -> bool:
+    """Piped input is read when asked for with `-p -`, or when a pipe or file already has data waiting. A terminal, a
+    closed stdin or an open pipe nobody writes to is never waited on."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return False
+        if explicit:
+            return True
+        import select
+        import stat
+        mode = os.fstat(sys.stdin.fileno()).st_mode
+        if stat.S_ISREG(mode):
+            return True
+        return stat.S_ISFIFO(mode) and bool(select.select([sys.stdin], [], [], 0.3)[0])
+    except Exception:  # noqa: BLE001  (pytest's captured stdin, Windows pipes)
+        return False
+
+
 def _no_console() -> bool:
     """Windows: this process has no console (the app, or the app restarted after an update)."""
     try:
@@ -191,7 +209,7 @@ def main(argv=None):
             os.environ["MH_MODEL"] = a.model
         from meshpool_harness.agent.tui import main as agent_main
         prompt = a.prompt
-        if prompt is not None and not sys.stdin.isatty():       # cat notes.txt | meshpool -p "summarise this"
+        if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
         return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=a.json_out)

@@ -123,6 +123,6 @@ def test_cli_routes_bare_command_to_agent(monkeypatch, tmp_path):
     from meshpool_harness import cli
     seen = {}
     import meshpool_harness.agent.tui as tui
-    monkeypatch.setattr(tui, "main", lambda *a: seen.setdefault("args", a) and 0)
+    monkeypatch.setattr(tui, "main", lambda *a, **k: seen.setdefault("args", a) and 0)
     cli.main(["--auto", "-p", "hi"])
     assert seen["args"][1] == "hi" and seen["args"][2] is True
