@@ -524,14 +524,16 @@ def _check_task(t: dict) -> dict:
     if t.get("kind") not in ("cowork", "code"):
         t["kind"] = "cowork"
     t["name"] = str(t.get("name") or t["prompt"].splitlines()[0])[:80]
+    t["only_on_change"] = bool(t.get("only_on_change", False))     # "Only tell me when something changed"
     return t
 
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
-             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork") -> dict:
+             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
+             only_on_change: bool = False) -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     with _tasks_lock():
         rows = tasks()
@@ -546,7 +548,8 @@ def update_task(tid: str, **kw) -> dict:
         for n, t in enumerate(rows):
             if t["id"] == tid:
                 new = dict(t)
-                for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled"):
+                for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
+                          "only_on_change"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
                 _check_task(new)                                     # same rules as add_task; nothing saved on error

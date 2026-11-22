@@ -127,7 +127,11 @@ window.runInsightAction = async function (a, ctx) {
   if (!a) return;
   const p = a.payload || {};
   const kind = {draft_skill: "skill", make_project: "project", new_chat: "rerun", set_default: "route", teach_accept: "teach"}[a.kind] || a.kind;
-  if (kind === "schedule") { S.prefillTask = p; openSettings("scheduled"); return; }
+  if (kind === "schedule") {                     // the form opens prefilled; nothing is saved until Create task
+    const v = await taskDialog({name: p.name || "", prompt: p.prompt || "", when: p.when || "daily", time: p.time || "09:00", day: p.day || "mon", minutes: p.minutes || 60, only_on_change: p.only_on_change !== false});
+    if (v && await taskSave(v)) { toast("Task created.", 8000, {label: "Open", fn: () => goPage("scheduled")}); }
+    return;
+  }
   if (kind === "project") {
     const r = await post("/api/pj", {name: p.name || "New project", description: "", instructions: p.instructions || ""}).catch(e => toast(e.message));
     if (r?.id) {

@@ -103,6 +103,7 @@ function taskDialog(t = {}) {
       <label class="field" id="tkTimeF"><span>Time</span><input id="tkTime" type="time" value="${esc(t.time || "09:00")}"></label>
       <label class="field" id="tkMinF"><span>Minutes</span><input id="tkMin" type="number" min="15" value="${t.minutes || 60}"></label>
       <label class="field" id="tkAtF"><span>Date and time</span><input id="tkAt" type="datetime-local" value="${esc(t.at || "")}"></label></div>
+      <label class="switchrow"><input type="checkbox" id="tkChange" ${t.only_on_change ? "checked" : ""}> Only tell me when something changed</label>
       <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">${t.id ? "Save task" : "Create task"}</button></div></div>`;
     document.body.appendChild(sc);
     const show = () => { const w = $("#tkWhen", sc).value; $("#tkDayF", sc).hidden = w !== "weekly"; $("#tkTimeF", sc).hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tkMinF", sc).hidden = w !== "every"; $("#tkAtF", sc).hidden = w !== "once"; };
@@ -113,7 +114,7 @@ function taskDialog(t = {}) {
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(null); });
     $("[data-a='0']", sc).onclick = () => done(null);
     $("[data-a='1']", sc).onclick = () => {
-      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value};
+      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value, only_on_change: $("#tkChange", sc).checked};
       if (!v.prompt) { $("#tkPrompt", sc).focus(); return; }
       done(v);
     };

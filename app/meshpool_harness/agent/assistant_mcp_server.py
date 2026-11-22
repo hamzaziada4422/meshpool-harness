@@ -38,10 +38,10 @@ def memory_forget(text: str) -> str:
 
 
 def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", day: str = "mon", at: str = "",
-                  minutes: int = 60, folder: str = "", mode: str = "cowork") -> str:
+                  minutes: int = 60, folder: str = "", mode: str = "cowork", only_on_change: bool = False) -> str:
     import os
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
-                   "", mode)
+                   "", mode, only_on_change)
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
             "can change or delete it in Settings, Scheduled tasks.")
 
@@ -91,7 +91,9 @@ TOOLS = {
                           {"prompt": {"type": "string"}, "when": {"type": "string", "enum": list(A.WHEN)},
                            "name": {"type": "string"}, "time": {"type": "string"}, "day": {"type": "string"},
                            "at": {"type": "string"}, "minutes": {"type": "integer"},
-                           "mode": {"type": "string", "enum": ["cowork", "code"]}}, ["prompt", "when"]),
+                           "mode": {"type": "string", "enum": ["cowork", "code"]},
+                           "only_on_change": {"type": "boolean", "description": "Only tell the user when the result "
+                                              "changed from the last run."}}, ["prompt", "when"]),
     "list_scheduled_tasks": Tool(list_scheduled_tasks, "List the scheduled tasks."),
     "delete_scheduled_task": Tool(_wrap(delete_scheduled_task), "Delete a scheduled task by id or name.",
                                   {"id": {"type": "string"}}, ["id"]),
