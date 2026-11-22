@@ -2344,14 +2344,14 @@ async function drawMcpLibrary(b) {
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
-  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Codex, Cursor and other apps...</div>`;
+  box.innerHTML = `<div class="res">Looking…</div>`;
   let f;
   try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
   const rows = [...f.skills, ...f.mcp];
-  if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
+  if (!rows.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
   const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
   box.innerHTML = `<div class="impsel"><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div>${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
-    ${f.mcp.length ? `<h3 class="onb-h">Tools from other apps (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">They keep their settings from the other app and stay on this computer.</p>` : ""}
+    ${f.mcp.length ? `<h3 class="onb-h">Tools (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div>` : ""}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button></div><div class="res" id="impRes"></div>`;
   $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
   $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
@@ -2363,7 +2363,7 @@ async function importPanel(box, onDone) {
       const r = await post("/api/import", {keys});
       await loadSkills(); S.connCache = null;
       $("#impRes", box).className = "res " + (r.errors.length ? "bad" : "ok");
-      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"} and ${r.mcp.length} MCP server${r.mcp.length === 1 ? "" : "s"}. Every agent can use them in new chats.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
+      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
       box.dataset.done = "1"; onDone?.(r);
     } catch (e) { $("#impRes", box).className = "res bad"; $("#impRes", box).textContent = e.message; }
     $("#impGo", box).disabled = false;

@@ -220,7 +220,7 @@ async function memExport(kind) {
 
 /* "Your work" page: the module is yourwork.js; this is the shell glue. */
 window.pageYourWork = function () {
-  shell0(`<header class="gh"><h1>Your work</h1></header><div id="mwBox"></div>`);
+  shell0(`<div id="mwBox"></div>`);
   if (window.MeshYourWork) window.MeshYourWork.render($("#mwBox"));
 };
 /* A suggestion on the "Your work" page (or a card) acts here: the same actions the insight cards use. */

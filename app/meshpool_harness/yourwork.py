@@ -23,7 +23,8 @@ BUILTIN_SERVERS = {"browser", "computer-use", "playwright"}
 _STOP = set("""a an the and or of to for in on with my me i is it this that be please can you do what how make get use
 about from into at as are was were will would should could have has had not no yes new just also more most some any all
 your our their its then than them they we us one two three file files chat chats work need want help create write give
-show tell let using used looks look like add changes change""".split())
+show tell let using used looks look like add changes change against over under between after before across
+draft outline explain check compare estimate review plan rewrite analyze analyse summarize summarise numbers""".split())
 _SPEC_LABELS = {"docs.slides": "Slides", "docs.sheets": "Spreadsheets", "docs.word": "Documents", "docs": "Documents",
                 "code": "Code", "data": "Data analysis", "research": "Research", "debug": "Debugging",
                 "build": "Building", "write": "Writing", "browse": "Browsing", "lead": "Lead generation",

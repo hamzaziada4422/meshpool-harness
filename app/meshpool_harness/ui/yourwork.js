@@ -66,7 +66,7 @@
 
   function draw(box, d) {
     if (d.empty) {
-      box.innerHTML = `<div class="gempty"><b>Nothing to look back on yet.</b><span>Once you have chatted for a while, this page shows what you worked on, what you made and which agents did it. It never includes incognito chats.</span></div>`;
+      box.innerHTML = `<div class="gempty"><b>Nothing to look back on yet.</b><span>Nothing yet. Incognito chats are never counted.</span></div>`;
       return;
     }
     const t = d.totals, u = d.usage, w = d.when;
@@ -129,7 +129,7 @@
     render(container) {
       css();
       container.innerHTML = `<div class="gal mw"><header class="gh"><h1>Your work</h1></header>
-        <p class="mw-sub">A look back over your chats, files and what you taught Meshpool. It stays on this computer.</p>
+        <p class="mw-sub">Your last months of work. Private, on this computer.</p>
         <div class="gbar"><div class="gtabs" role="tablist">${RANGES.map(([n, l]) => `<button role="tab" data-mw-range="${n}" aria-selected="${n === state.range}">${l}</button>`).join("")}</div></div>
         <div id="mwBody"></div></div>`;
       const box = container.querySelector("#mwBody");

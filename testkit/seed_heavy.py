@@ -16,11 +16,32 @@ from meshpool_harness import config as C  # noqa: E402
 
 corp = F.heavy_use()
 runs = C.runs_dir()
+delta = time.time() - F.NOW - 3600                    # fixtures live at a fixed date: move them to just before now
+
+
+def shift(ch):
+    for k in ("ts", "created"):
+        if k in ch:
+            ch[k] += delta
+    return ch
+
+
+import json  # noqa: E402
+
+
+def write(ch):
+    F.write_chat(runs, shift(ch))
+    f = runs / "sessions" / ch["id"] / "session.json"        # real sessions start with the system message
+    d = json.loads(f.read_text(encoding="utf-8"))
+    d["messages"].insert(0, {"role": "system", "content": "system"})
+    f.write_text(json.dumps(d), encoding="utf-8")
+
+
 for ch in corp.chats:
-    F.write_chat(runs, ch)
+    write(ch)
 extra = F.weekly(5, "Make the weekly sales summary deck from the Q3 sales workbook", prefix="wk")
 for ch in extra:
-    F.write_chat(runs, ch)
+    write(ch)
 t = A.add_task("Price watch", "Check supplier prices and tell me what moved", "daily", only_on_change=True)
 rows = A.tasks()
 sid = corp.chats[0]["id"]
