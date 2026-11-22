@@ -210,6 +210,12 @@ def check(report_md: str, corpus: Corpus, min_sources: int = 4) -> list[dict]:
             if missing:
                 bad("R6 sources list incomplete", None, f"Sources section misses {', '.join(missing)}; rerun "
                     "R.finalize")
+    try:                                             # visible checks: the sources that were verified (no-op when idle)
+        from meshpool_harness import checks
+        if indep:
+            (checks.passed if not probs else checks.failed)("sources", "sources", len(indep))
+    except Exception:  # noqa: BLE001
+        pass
     return probs
 
 
