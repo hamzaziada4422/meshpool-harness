@@ -118,7 +118,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
 
 
 def _agent_parser():
@@ -238,6 +238,18 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "run-due":
+        from meshpool_harness import scheduler_os as SO
+        print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
+        os._exit(0)                              # agent helper threads and servers must not keep a background job alive
+    if argv[0] == "scheduler" and len(argv) > 1 and argv[1] in ("install", "uninstall"):
+        from meshpool_harness import scheduler_os as SO
+        try:
+            print(SO.install() if argv[1] == "install" else SO.uninstall())
+        except RuntimeError as e:
+            print(str(e))
+            return 1
+        return 0
     if argv[0] == "import" and len(argv) > 1 and argv[1] == "agents":
         # meshpool import agents [--dry-run] [--yes] [--from claude,codex]: skills, tools, memories and instructions
         from meshpool_harness import agent_import as AI

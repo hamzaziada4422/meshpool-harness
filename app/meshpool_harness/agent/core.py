@@ -787,12 +787,8 @@ class Agent:
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
                      "which project functions run. After an edit, use probe to see what still fails.")
-        for name in PROJECT_FILES:
-            p = self.root / name
-            if p.is_file():
-                body = p.read_text(encoding="utf-8", errors="replace")[:20000]
-                text += f"\n\nProject instructions from {name} (follow them):\n{body}"
-                break
+        from meshpool_harness.agent import extras as EX
+        text += EX.instruction_text(self.root)          # home, parent folders and the project, with @imports
         try:
             from meshpool_harness import skills as SK
             text += SK.catalog_text(getattr(self, "_route_text", ""),
@@ -973,6 +969,21 @@ class Agent:
         self._stop = False
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
+        from meshpool_harness.agent import extras as EX
+        cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
+        if cmd:
+            text = cmd
+        blocked, note = EX.run_hooks(self.root, "UserPromptSubmit", {"prompt": text})
+        if blocked:
+            self.emit({"type": "error", "text": "A hook stopped this message: " + note})
+            return ""
+        if len(self.messages) <= 2:
+            _, started = EX.run_hooks(self.root, "SessionStart", {})
+            if started:
+                text += "\n\n[Session start hook]\n" + started
+        if note:
+            text += "\n\n[Hook]\n" + note
+        text = EX.expand_mentions(text, self.root)          # @file attaches the file
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
@@ -1232,6 +1243,11 @@ class Agent:
             except Exception:  # noqa: BLE001 - a receipt must never break a turn
                 pass
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
+            try:
+                from meshpool_harness.agent import extras as EX
+                EX.run_hooks(self.root, "Stop", {"reply": str(final)[:2000]})
+            except Exception:  # noqa: BLE001
+                pass
             self._running = False
             self.save()
         return final
@@ -1306,6 +1322,23 @@ class Agent:
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
+        out = self._guarded_tool_inner(c, g, cut)
+        try:
+            from meshpool_harness.agent import extras as EX
+            f = c.get("function", {})
+            try:
+                a = json.loads(f.get("arguments") or "{}")
+            except ValueError:
+                a = {}
+            _, note = EX.run_hooks(self.root, "PostToolUse", {"result": str(out)[:2000]}, tool=f.get("name", ""),
+                                   args=a if isinstance(a, dict) else {})
+            if note:
+                out = f"{out}\n[Hook] {note}"
+        except Exception:  # noqa: BLE001 - a hook never breaks a tool call
+            pass
+        return out
+
+    def _guarded_tool_inner(self, c: dict, g: dict, cut: bool = False) -> str:
         """Run one tool call unless it repeats itself with nothing changed in between. The eval traces had runs of
         30-50 near-identical inspection commands (byte dumps of an unchanged file) that a note alone never stopped;
         refusing the repeat, with the reason, is what breaks the loop. An edit in between resets the count, so
@@ -2102,6 +2135,10 @@ class Agent:
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
                 name, args = "apply_patch", {"input": hit[0]}
+        from meshpool_harness.agent import extras as EX
+        blocked, why = EX.run_hooks(self.root, "PreToolUse", {}, tool=name, args=args)
+        if blocked:
+            return False, f"Blocked by a hook: {why}"
         rules = _rules(self.root)
         hit = _rule_hit(rules["deny"], name, args)
         if hit:

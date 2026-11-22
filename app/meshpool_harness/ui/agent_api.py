@@ -427,6 +427,9 @@ class Session:
             pass
 
     def approve(self, kind, title, detail, options=None):
+        if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
+            return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
+                          "and say in your summary what needed the user.")
         with self.lock:
             self._n += 1
             p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),

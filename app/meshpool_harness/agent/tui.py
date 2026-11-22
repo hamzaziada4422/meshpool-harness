@@ -1016,6 +1016,9 @@ class Session:
         arg = arg.strip()
         names = [c[0] for c in COMMANDS]
         if cmd not in names:
+            from meshpool_harness.agent import extras as EX
+            if cmd in EX.commands(self.agent.root):          # a command file in .meshpool/commands
+                return self.send(text)
             near = [n for n in names if n.startswith(cmd)] if cmd else []
             if len(near) == 1:
                 cmd = near[0]
