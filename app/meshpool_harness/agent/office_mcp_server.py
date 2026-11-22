@@ -340,6 +340,10 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 if op == "replace_text":
                     n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
+                elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
+                    ok = _tracked(_docx_paragraphs(doc), op, o.get("find", ""), o.get("replace", o.get("text", "")), o.get("author") or "Meshpool")
+                    (done if ok else errors).append(f"{op}: tracked change made" if ok else
+                                                    f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use replace_text, or a shorter phrase)")
                 elif op == "append_paragraph":
                     doc.add_paragraph(o.get("text", ""), style=o.get("style") or None)
                     done.append("appended a paragraph")
@@ -399,6 +403,64 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
         return f"Could not edit {p.name}: {e}", True
     msg = f"{'Changed' if in_place else 'Saved a copy as'} {out}. " + "; ".join(done)
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
+
+
+def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
+    """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
+    import copy
+    import datetime as _dt
+
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    if not find:
+        return False
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rid = int(_dt.datetime.now().timestamp() * 1000) % 100000000
+    for pp in paragraphs:
+        for r in pp.runs:
+            if find not in r.text:
+                continue
+            i = r.text.index(find)
+            before, after = r.text[:i], r.text[i + len(find):]
+            base = r._r
+
+            def run_like(text, deleted=False):
+                el = copy.deepcopy(base)
+                for ch in list(el):
+                    if ch.tag != qn("w:rPr"):
+                        el.remove(ch)
+                t = OxmlElement("w:delText" if deleted else "w:t")
+                t.set(qn("xml:space"), "preserve")
+                t.text = text
+                el.append(t)
+                return el
+
+            def wrap(tag, child, n):
+                w = OxmlElement(tag)
+                w.set(qn("w:id"), str(rid + n))
+                w.set(qn("w:author"), author)
+                w.set(qn("w:date"), stamp)
+                w.append(child)
+                return w
+            pieces = []
+            if before:
+                pieces.append(run_like(before))
+            if op == "tracked_insert_after":
+                pieces.append(run_like(find))
+                pieces.append(wrap("w:ins", run_like(new), 1))
+            else:
+                pieces.append(wrap("w:del", run_like(find, deleted=True), 1))
+                if op == "tracked_replace":
+                    pieces.append(wrap("w:ins", run_like(new), 2))
+            if after:
+                pieces.append(run_like(after))
+            parent = base.getparent()
+            at = parent.index(base)
+            parent.remove(base)
+            for k, el in enumerate(pieces):
+                parent.insert(at + k, el)
+            return True
+    return False
 
 
 def _docx_paragraphs(doc):
@@ -650,8 +712,9 @@ TOOLS = {
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
     "edit_office_file": (edit_office_file, "Change an existing Word, Excel or PowerPoint file in place of rebuilding it: "
                          "formatting, formulas and layout stay as they are, and LibreOffice is not needed. `operations` is a "
-                         "list. Word: {op:replace_text, find, replace}, {op:append_paragraph, text}, {op:add_comment, find, "
-                         "text}. Excel: {op:set_cell, sheet, cell, value (or a formula like =SUM(A1:A9))}, {op:add_row, "
+                         "list. Word: {op:replace_text, find, replace}, {op:tracked_replace, find, replace} and "
+                         "{op:tracked_delete, find} and {op:tracked_insert_after, find, text} (real Word tracked changes "
+                         "the user accepts or rejects), {op:append_paragraph, text}, {op:add_comment, find, text}. Excel: {op:set_cell, sheet, cell, value (or a formula like =SUM(A1:A9))}, {op:add_row, "
                          "values}, {op:add_comment, sheet, cell, text}. PowerPoint: {op:replace_text, find, replace}, "
                          "{op:set_notes, slide, text}. Saved as '<name> (edited)' next to the file unless in_place is true.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,

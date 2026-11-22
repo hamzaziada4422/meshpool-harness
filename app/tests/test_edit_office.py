@@ -53,3 +53,22 @@ def test_the_tool_is_registered_and_refuses_other_files(tmp_path):
     assert "edit_office_file" in O.TOOLS
     (tmp_path / "x.txt").write_text("hi", encoding="utf-8")
     assert O.edit_office_file("x.txt", [{"op": "replace_text"}])[1] is True
+
+
+def test_word_tracked_changes_are_real_revisions(tmp_path):
+    d = Document()
+    d.add_paragraph().add_run("The fee is 100 EGP per month and renews yearly.")
+    d.save(str(tmp_path / "t.docx"))
+    msg, err = O.edit_office_file("t.docx", [{"op": "tracked_replace", "find": "100 EGP", "replace": "120 EGP", "author": "Lawyer"},
+                                             {"op": "tracked_delete", "find": " and renews yearly"},
+                                             {"op": "tracked_insert_after", "find": "per month", "text": " (excluding VAT)"}])
+    assert not err and "Not done" not in msg
+    xml = Document(str(tmp_path / "t (edited).docx")).element.xml
+    assert xml.count("<w:del ") == 2 and xml.count("<w:ins ") == 2 and 'w:author="Lawyer"' in xml
+    assert "<w:delText" in xml and "100 EGP" in xml and "120 EGP" in xml
+    assert "The fee is " in Document(str(tmp_path / "t (edited).docx")).paragraphs[0].text
+    import subprocess
+    from engines.forge.common import find_soffice
+    if find_soffice():                                         # Word's own engine can open it
+        subprocess.run([find_soffice(), "--headless", "--convert-to", "pdf", "--outdir", str(tmp_path), str(tmp_path / "t (edited).docx")], capture_output=True, timeout=120)
+        assert (tmp_path / "t (edited).pdf").exists()
