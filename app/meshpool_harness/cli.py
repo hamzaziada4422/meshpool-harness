@@ -142,6 +142,7 @@ def _agent_parser():
     ap.add_argument("-p", "--print", dest="prompt", help="answer one request, print the reply and exit")
     ap.add_argument("--dir", help="project folder (default: the current folder)")
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
+    ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
@@ -189,7 +190,11 @@ def main(argv=None):
         if a.model:
             os.environ["MH_MODEL"] = a.model
         from meshpool_harness.agent.tui import main as agent_main
-        return agent_main(a.dir, a.prompt, a.auto, a.resume, a.session, a.no_mcp, a.request)
+        prompt = a.prompt
+        if prompt is not None and not sys.stdin.isatty():       # cat notes.txt | meshpool -p "summarise this"
+            piped = sys.stdin.read()
+            prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
+        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=a.json_out)
     if argv[0] == "agent":
         return main(argv[1:] or [])
     if argv[0] == "acp":

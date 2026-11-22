@@ -49,3 +49,19 @@ def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, mon
     V.texts[f] = "Quarterly revenue 12 percent"
     out = V.reading([("page 1", f)])
     assert "Quarterly revenue" in out and "picture itself was not seen" in out
+
+
+def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    (tmp_path / ".meshpool").mkdir()
+    (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps(
+        {"allow": ["bash:npm test*", "mcp__browser__*"], "deny": ["bash:git push*", "web_search"]}), encoding="utf-8")
+    a = core.Agent(str(tmp_path), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._permit("bash", {"command": "npm test -- --watch=false"}) == (True, "")
+    assert a._permit("mcp__browser__ui_audit", {})[0] is True
+    ok, why = a._permit("bash", {"command": "git push origin main"})
+    assert not ok and "saved rule" in why
+    assert not a._permit("web_search", {})[0]
+    assert not a._permit("bash", {"command": "ls"})[0]                      # no rule: asks, and the answer here is no
+    assert not a._permit("bash", {"command": "npm test && rm -rf /"})[0]            # an allow rule never covers a destructive command

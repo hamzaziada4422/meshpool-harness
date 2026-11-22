@@ -1238,11 +1238,14 @@ def _notices(agent, mcp) -> list[str]:
 
 
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
-         session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False) -> int:
+         session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
+         json_out: bool = False) -> int:
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.agent.mcp import Manager
     C.load_into_env()
     term = Terminal(print_mode=prompt is not None)
+    if json_out:
+        term.out = sys.stderr                    # headless JSON: only the final object reaches stdout
     st = term.st
     wd = workdir or os.getcwd()
     from meshpool_harness import harnesses as HR
@@ -1298,6 +1301,17 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     sess = Session(term, agent, mcp, sub)
     try:
         if prompt is not None:
+            if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
+                import contextlib
+                import json as _json
+                with contextlib.redirect_stdout(sys.stderr):
+                    sess.send(prompt)
+                reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
+                              and isinstance(m.get("content"), str) and m.get("content").strip()), "")
+                sys.stdout.write(_json.dumps({"ok": not term.failed, "result": reply, "session_id": agent.id,
+                                              "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])},
+                                             ensure_ascii=False) + "\n")
+                return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0
         term.notices = _notices(agent, mcp)

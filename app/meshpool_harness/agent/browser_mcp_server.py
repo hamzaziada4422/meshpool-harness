@@ -553,9 +553,23 @@ def _exit_cleanly():
                 pass
 
 
+def _prewarm():
+    """Source and terminal installs: fetch Chromium in the background as the server starts, so the first page the agent
+    opens does not wait on a download (which would run past the call's time limit on a slow connection)."""
+    try:
+        from meshpool_harness import bundled
+        if bundled.packaged() or BU.mode() != "meshpool" or BU.find_playwright_chromium():
+            return
+        load_playwright()
+        B._install_chromium()
+    except Exception:  # noqa: BLE001 - the first real call reports a failure in plain words
+        pass
+
+
 def main():
     _fix_type_args()
     _exit_cleanly()
+    threading.Thread(target=_prewarm, daemon=True).start()
     serve("meshpool-browser", TOOLS, instructions="Use browser_open, then act on the [eN] numbers from the snapshot.")
     _close_for_exit()                       # stdin closed: the agent is done with us
 

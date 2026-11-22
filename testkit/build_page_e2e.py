@@ -18,6 +18,7 @@ def call(p, body=None, t=120):
 PROMPT = ("Build me a landing page for my bakery, Rye & Co, in Cairo. We bake sourdough, rye loaves and cardamom buns every "
           "morning from 6am, sell at our shop on 26 July Street, and take pre-orders by WhatsApp on +20 122 555 7890. "
           "Make it look professional and make sure it works well on a phone. Save it as index.html in the current folder.")
+PROMPT = __import__("os").environ.get("E2E_PROMPT") or PROMPT
 WORK = sys.argv[4] if len(sys.argv) > 4 else "/tmp/lp-work"
 v = call("/api/agent", {"workdir": WORK, "harness": "meshpool-code", "kind": "code", "mode": "auto"})
 sid = v["id"]

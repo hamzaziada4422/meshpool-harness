@@ -473,6 +473,13 @@ def _env_snapshot(root: Path) -> str:
         lines.append("Project folder: " + ", ".join(names[:40]) + (f" (+{len(names) - 40} more)" if len(names) > 40 else ""))
     except OSError:
         pass
+    try:
+        sh = C.find_bash() if os.name == "nt" else shutil.which("bash")
+    except Exception:  # noqa: BLE001
+        sh = None
+    import platform
+    lines.append(f"System: {platform.system()} {platform.release()}; shell: " + (
+        "bash (use && and heredocs)" if sh else "PowerShell or cmd (no bash: use ; not &&, and PowerShell cmdlets)"))
     vers = []
     for tool, arg in (("python3", "--version"), ("python", "--version"), ("node", "--version"), ("git", "--version"),
                       ("go", "version"), ("cargo", "--version"), ("java", "-version"), ("docker", "--version")):
@@ -656,6 +663,33 @@ _DESTRUCTIVE = re.compile(
     r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
     r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
     re.I)
+
+
+def _rules(root) -> dict:
+    """Saved allow and deny rules: ~/.meshpool/permissions.json and <project>/.meshpool/permissions.json, each
+    {"allow": [...], "deny": [...]}. A rule is a tool name ("edit", "mcp__browser__ui_audit"), or "bash:" and a command
+    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
+    out = {"allow": [], "deny": []}
+    for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for k in out:
+            out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
+    return out
+
+
+def _rule_hit(rules: list, name: str, args: dict) -> str:
+    import fnmatch
+    cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or []))).strip()
+    for r in rules:
+        if r.startswith("bash:"):
+            if cmd and fnmatch.fnmatchcase(cmd, r[5:].strip()):
+                return r
+        elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
+            return r
+    return ""
 
 
 def _destructive(args: dict) -> bool:
@@ -2068,6 +2102,12 @@ class Agent:
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
                 name, args = "apply_patch", {"input": hit[0]}
+        rules = _rules(self.root)
+        hit = _rule_hit(rules["deny"], name, args)
+        if hit:
+            return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+        if _rule_hit(rules["allow"], name, args) and not _destructive(args):
+            return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
