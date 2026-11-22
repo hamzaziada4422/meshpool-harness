@@ -32,7 +32,8 @@ LINUX_SYSTEM_PREFIXES = ("libc.so", "libm.so", "libdl.so", "libpthread.so", "lib
                          "libgssapi", "libk5crypto", "libcom_err", "libresolv", "libnsl", "libutil", "libselinux",
                          "libpcre", "libgpg", "libgcrypt", "libidn", "libldap", "liblber", "libsasl", "libwayland",
                          "libdrm", "libgbm", "libxkbcommon", "libatk", "libgdk", "libgtk", "libpango", "libwebp",
-                         "libtiff", "libboost", "libmariadb", "libpq", "liblcms", "libfribidi", "libjbig", "libXss")
+                         "libtiff", "libboost", "libmariadb", "libpq", "liblcms", "libfribidi", "libjbig", "libXss",
+                         "libavahi")      # Impress links Avahi; every desktop Linux has it (docs/SETUP.md, Linux)
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

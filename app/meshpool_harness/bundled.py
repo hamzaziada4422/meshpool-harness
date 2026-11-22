@@ -82,7 +82,7 @@ def use_bundled_tools() -> None:
     front = [str(p) for p in git_dirs()]
     if node_dir().is_dir():
         front.insert(0, str(node_dir() if os.name == "nt" else node_dir() / "bin"))
-    lo = vendor_dir("libreoffice") / ("program" if os.name == "nt" else "LibreOffice.app/Contents/MacOS")
+    lo = vendor_dir("libreoffice") / ("LibreOffice.app/Contents/MacOS" if sys.platform == "darwin" else "program")
     if lo.is_dir():                                   # so vendored skills that look for `soffice` find ours
         front.append(str(lo))
     cur = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in front]

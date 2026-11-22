@@ -1,0 +1,15 @@
+#!/bin/bash
+# The meshpool terminal command, using the Python inside the Meshpool folder (Linux download).
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"; SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+export MESHPOOL_HOME="${MESHPOOL_HOME:-${XDG_CONFIG_HOME:-$HOME/.config}/meshpool}"
+export PATH="$ROOT/python/bin:$PATH"
+export PYTHONPATH="$ROOT/app" PYTHONUTF8=1 PYTHONNOUSERSITE=1 PYTHONIOENCODING=utf-8
+export PYTHONDONTWRITEBYTECODE=1   # bytecode is precompiled in the download; never write into it
+export MESHPOOL_CLI="$ROOT/meshpool"
+# -P: never import modules from the folder the command is typed in (a json.py in a project must not run).
+exec "$ROOT/python/bin/python3" -P -m meshpool_harness "$@"

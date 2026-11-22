@@ -1,0 +1,8 @@
+#!/bin/bash
+# The Meshpool desktop app (Linux download): the same as `meshpool app`.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"; SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+exec "$(cd -P "$(dirname "$SOURCE")" && pwd)/meshpool" app "$@"

@@ -9,6 +9,7 @@ About five minutes. Meshpool is in beta and is not yet signed by Apple or Micros
 | Mac with Apple silicon (M1, M2, M3, M4) | Apple menu → About This Mac shows **Chip: Apple M…** | [Meshpool.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool.dmg) |
 | Mac with Intel | About This Mac shows **Processor: … Intel** | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+| Linux, 64-bit Intel or AMD | `uname -m` prints **x86_64** | [Meshpool-Linux-x64.tar.gz](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Linux-x64.tar.gz) |
 
 Macs, Apple silicon and Intel, need macOS 11 Big Sur or later (browser use needs macOS 13).
 
@@ -56,6 +57,26 @@ Or with one command in PowerShell (Start → type PowerShell → Enter):
 ```
 
 Pictures of the macOS and Windows prompts are illustrations; the wording on your computer may differ slightly.
+
+## 3b. Install on Linux
+
+1. Download **Meshpool-Linux-x64.tar.gz** (64-bit Intel or AMD; Ubuntu 22.04, Debian 12, Fedora 38 or newer, or any
+   desktop Linux with glibc 2.35 or later).
+2. Unpack it where you keep apps and set it up:
+
+   ```sh
+   tar -xzf ~/Downloads/Meshpool-Linux-x64.tar.gz -C ~/.local/share
+   ~/.local/share/Meshpool/install.sh
+   ```
+
+   This adds Meshpool to your applications menu and the `meshpool` command to `~/.local/bin`, for your user only.
+   `install.sh --uninstall` removes both; your data in `~/.config/meshpool` stays.
+3. Open **Meshpool** from the menu. It opens in its own window, using the browser engine that ships inside it.
+
+LibreOffice, Chromium, Node.js, Git and Python ship inside the folder. Meshpool uses the graphics, font and printing
+libraries every desktop Linux has (X11 or XWayland, fontconfig, NSS, GLib, Cairo, Pango, ALSA, CUPS and Avahi). On a
+server with no desktop, install those first. Updates: Meshpool tells you when a new version is out; download the new
+file and unpack it over the old folder.
 
 ## 4. First launch
 

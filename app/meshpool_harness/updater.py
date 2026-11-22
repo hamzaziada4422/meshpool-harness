@@ -70,7 +70,7 @@ def _get(url: str, timeout: float = 20):
 
 
 def kind() -> str:
-    """How this copy was installed: dev, mac-app, win-app or cli."""
+    """How this copy was installed: dev, mac-app, win-app, linux-app or cli."""
     if (APP.parent / ".git").exists():
         return "dev"
     # The command-line install (~/.meshpool-cli) keeps its virtual environment beside the app. It may also hold a
@@ -79,7 +79,7 @@ def kind() -> str:
     if (APP.parent / "venv").is_dir() or (APP / "meshpool_launch.py").is_file():
         return "cli"
     if C.packaged():
-        return "mac-app" if sys.platform == "darwin" else "win-app"
+        return "mac-app" if sys.platform == "darwin" else "win-app" if os.name == "nt" else "linux-app"
     return "cli"
 
 
@@ -301,6 +301,10 @@ def install(auto: bool = False) -> dict:
     k = v["kind"]
     if k == "dev":
         return {"ok": False, "error": "This copy runs from a git checkout. Run git pull in it to update."}
+    if k == "linux-app":                       # the Linux download updates by hand for now (no in-place swap yet)
+        return {"ok": False, "error": f"Meshpool {v['latest']} is available. Download Meshpool-Linux-x64.tar.gz from the "
+                                      "release page and unpack it in place of this folder; your data is kept.",
+                "url": v["url"]}
     if k in ("mac-app", "win-app"):
         from meshpool_harness import autoupdate as AU
         r = AU.manual_install(v) if not auto else None

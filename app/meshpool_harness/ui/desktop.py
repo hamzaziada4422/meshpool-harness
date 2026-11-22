@@ -58,6 +58,14 @@ def _app_candidates() -> list[list[str]]:
                 if r and (Path(r) / rel).exists():
                     out.append([str(Path(r) / rel), *flags])
     else:
+        try:                                     # the Linux download: its own Chromium as the app window first, so
+            from meshpool_harness import bundled  # the app looks the same on every desktop (no GTK or Qt needed)
+            if bundled.packaged():
+                own = sorted(bundled.browsers_dir().glob("chromium-*/chrome-linux*/chrome"))
+                if own:
+                    out.append([str(own[-1]), *flags])
+        except Exception:  # noqa: BLE001  the browsers below still work
+            pass
         for b in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge"):
             p = shutil.which(b)
             if p:
