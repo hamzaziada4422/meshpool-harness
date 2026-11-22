@@ -195,6 +195,8 @@ def set_memory(text: str):
 def remember(fact: str, kind: str = "stated", source: dict | None = None, scope: str = "everywhere") -> str:
     """Save one fact. Raises ValueError for what memory refuses. Never drops older facts when memory is large:
     the memory page proposes a consolidation instead."""
+    if _MS().incognito_active():
+        raise ValueError("An incognito chat is working, so memory is paused. Nothing is saved until it finishes.")
     f, made = _MS().add(fact, kind=kind, source=source or {"type": "chat"}, scope=scope)
     return "Saved to memory." if made else "Already in memory."
 
@@ -277,6 +279,8 @@ def remember_project(root: str, note: str) -> str:
         raise ValueError("A project note needs the project folder and the note.")
     if BAD.search(note):
         raise ValueError("Memory does not store secrets or instructions about the system.")
+    if _MS().incognito_active():
+        raise ValueError("An incognito chat is working, so memory is paused. Nothing is saved until it finishes.")
     try:                                                 # a chat in a project: the note goes to that project's memory
         from meshpool_harness import project_store as PS
         pid = PS.for_root(root)

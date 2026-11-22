@@ -1110,3 +1110,29 @@ def search(q: str, rows: list[dict] | None = None) -> list[dict]:
         if all(t in hay for t in toks):
             out.append(f)
     return out
+
+
+# ---------- incognito turns ---------------------------------------------------------------------------------------------
+def _inc_dir() -> Path:
+    return mdir() / "incognito"
+
+
+def incognito_begin(chat_id: str) -> None:
+    d = _inc_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / re.sub(r"[^\w-]", "_", chat_id)[:80]).write_text(str(now()))
+
+
+def incognito_end(chat_id: str) -> None:
+    with contextlib.suppress(OSError):
+        (_inc_dir() / re.sub(r"[^\w-]", "_", chat_id)[:80]).unlink()
+
+
+def incognito_active() -> bool:
+    """An incognito chat is working right now. The memory tools every harness shares refuse to save meanwhile, so
+    nothing said in it can reach memory (the tools run in another process and cannot see which chat is calling)."""
+    d = _inc_dir()
+    try:
+        return any(time.time() - f.stat().st_mtime < 7200 for f in d.iterdir())
+    except OSError:
+        return False

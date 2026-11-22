@@ -322,3 +322,13 @@ def test_a_thousand_facts_stay_fast(home):
     for _ in range(5):
         A.context_block("topic 3")
     assert (time.time() - t) / 5 < 0.5
+
+
+def test_an_incognito_turn_pauses_memory_writes_from_every_harness(home):
+    MS.incognito_begin("inc-1")
+    with pytest.raises(ValueError, match="incognito"):
+        A.remember("Prefers dark mode")
+    with pytest.raises(ValueError, match="incognito"):
+        A.remember_project(str(home), "tests run with make")
+    MS.incognito_end("inc-1")
+    assert A.remember("Prefers dark mode") == "Saved to memory."
