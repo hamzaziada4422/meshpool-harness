@@ -22,6 +22,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **It can build interfaces properly.** A new Build a UI skill starts from a tested page, keeps one design system and fixes what the audit finds. Method adapted from the open Taste Skill (MIT).
 - **Twenty-two more ready-made skills** for sites, games, apps, dashboards, charts, diagrams, logos, PDFs, images, resumes, invoices, newsletters, study packs, citations, databases, transcripts and more.
 - **Safer by default.** Keys you saved in Meshpool are hidden from commands the agent runs. "Always allow" never covers deleting recursively, force-pushing, wiping a disk or piping a download into a shell. A chat is saved while it works, so a crash loses nothing. A single turn stops after 2,000 steps instead of running forever.
+- **Power-user controls.** Hooks, saved allow and deny rules, instruction files from your home and parent folders, your own `/commands`, `@file` mentions, `meshpool -p --output-format stream-json`, tasks that run while the app is closed, notebook cell editing, and in-place edits of Word, Excel and PowerPoint files.
 - **Long tasks hold together.** Older steps are summarised into a note, /compact does it on demand, and long commands can run in the background.
 
 **New in 0.0.9**

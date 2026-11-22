@@ -23,7 +23,8 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you d
 ENGINES = ("Every slide and every spreadsheet goes through the Meshpool office tools: make_deck for a deck, add_slides "
            "to add slides to a deck the user has, make_spreadsheet (or office_task) for a workbook or model. Never "
            "write a .pptx or .xlsx by hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs. Decks come out in a "
-           "top strategy firm's style without being asked; pass the user's facts and files in the request.")
+           "top strategy firm's style without being asked; pass the user's facts and files in the request. To change a file the user already has (.docx, .xlsx, .pptx), "
+           "use edit_office_file: it keeps their formatting and formulas.")
 
 import contextlib
 import difflib
