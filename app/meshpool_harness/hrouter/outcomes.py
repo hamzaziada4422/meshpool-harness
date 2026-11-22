@@ -1,7 +1,8 @@
 """The outcome log: what each routed turn cost and whether it held up, so the routing table is refit from facts.
 
 One JSON line per turn in <Meshpool data folder>/routing/outcomes.jsonl:
-  {ts, chat, spec, lane, language, harness, model, secs, tokens_in, tokens_cached, tokens_out, calls, error, stopped}
+  {ts, chat, spec, lane, language, harness, model, secs, tokens_in, tokens_cached, tokens_out, calls, reason, error,
+  stopped}
 
 A later undo, retry or "that's wrong" on the same chat marks the turn as failed (mark()). Nothing leaves the
 computer. refit() summarises the log per spec and harness: the numbers a routing.json update starts from.
@@ -45,6 +46,8 @@ def log_turn(session, route, usage_before: dict) -> None:
              "chat_spec": getattr(getattr(a, "route", None), "spec", None), "harness": session.harness.get("id"),
              "model": model, "secs": round(time.time() - session.t_turn, 1), "tokens_in": d["in"],
              "tokens_cached": d["cached"], "tokens_out": d["out"], "calls": d["calls"],
+             "reason": (getattr(session, "auto_reason", "") or getattr(route, "harness_reason", "")
+                        or getattr(route, "reason", "") or "")[:300],
              "error": any(e.get("type") == "error" for e in ev),
              "stopped": any(e.get("type") == "interrupted" for e in ev)})
 
