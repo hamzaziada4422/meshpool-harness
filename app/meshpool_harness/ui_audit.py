@@ -34,6 +34,11 @@ AUDIT_JS = r"""
   const clipped = e => { for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) { const s = getComputedStyle(a); if (/(hidden|auto|scroll|clip)/.test(s.overflowX) && a.getBoundingClientRect().right <= vw + 1) return true; } return false; };
   const all = [...document.querySelectorAll("body *")].filter(vis);
 
+  // notes to the owner or filler left on the page
+  const body = document.body.innerText || "";
+  const left = body.match(/lorem ipsum|PHONE_NUMBER_?\d*|EMAIL_?\w*_\d+|\bTODO\b|\bTBD\b|your (name|company|email|text) here|I (do not|don't) know (these|this)|placeholder|\bXXX+\b|\[(?:insert|your)[^\]]*\]/i);
+  if (left) add("left-over-text", "must", `the page still holds filler or a note to its owner: "${left[0]}". Visitors must never see it. Remove it, or leave that section out and tell the owner in your reply`, document.body);
+
   // layout
   const over = document.scrollingElement.scrollWidth - vw;
   if (over > 1) add("sideways-scroll", "must", `the page scrolls sideways by ${over}px`, document.body);
