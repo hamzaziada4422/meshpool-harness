@@ -4,7 +4,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **See what Meshpool knows.** A new Memory page shows every fact, filed by category, with where it came from and which chats it was given to. Edit, pin, move or archive any of them, and every change has Undo.
 - **Meshpool asks before it remembers.** Facts it notices wait in a "Meshpool thinks" tray. Nothing reaches an agent until you say yes. Two facts that disagree are shown side by side.
 - **Nothing is lost.** Your old memory is copied to a backup and moved over safely. When memory fills up, Meshpool proposes a tidy-up instead of dropping the oldest facts.
-- **Know what an answer used.** A small chip under a reply lists the memories it was given. A new "What the agent sees" button shows the exact background, and lets you leave a fact out of one chat.
+- **See what a reply was given.** A small chip under a reply lists the memories it was given. A new "What the agent sees" button shows the exact background, and lets you leave a fact out of one chat.
 - **Incognito chats.** Press Ctrl+Shift+N. Nothing is remembered, learned or logged.
 - **A quiet nudge, only when it helps.** One short line above the message box, such as "Run this every week?". It never appears while Meshpool works, at most two a day, and never twice for the same idea.
 - **Next steps in one click.** After a deck, a workbook or a report, a few ideas appear under the reply.

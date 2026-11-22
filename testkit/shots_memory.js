@@ -17,7 +17,7 @@ const [port, out] = process.argv.slice(2);
     await p.evaluate(() => { document.querySelector("#conv").scrollTop = 760; }); await p.waitForTimeout(300);
     await p.screenshot({path: `${out}/memory-list-${theme}.png`});
     await p.evaluate(() => { document.querySelector("#conv").scrollTop = 0; });
-    if (theme === "light") {
+    {
       await p.click('[data-mtab="projects"]'); await p.waitForTimeout(300); await p.screenshot({path: `${out}/memory-projects-${theme}.png`});
       await p.click('[data-mtab="history"]'); await p.waitForTimeout(400); await p.screenshot({path: `${out}/memory-history-${theme}.png`});
       await p.click('[data-mtab="memory"]'); await p.waitForTimeout(300);

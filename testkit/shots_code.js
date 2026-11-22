@@ -23,7 +23,7 @@ const B = `http://127.0.0.1:${port}`;
     if (theme === "dark") await p.evaluate(() => document.documentElement.setAttribute("data-theme", "dark"));
     await p.click("#modeCode"); await p.waitForTimeout(1500);
     const groups = await p.$$eval(".cghd .cgn", e => e.map(x => x.textContent));
-    if (theme === "light") {
+    {
       ck("sessions are grouped by folder by default", groups.length === 3 && groups[0].length > 0, groups.join(","));
       ck("alpha has a Show more row", await p.$('[data-cgmore]') !== null);
       await p.click(".cghd >> nth=1"); await p.waitForTimeout(300);

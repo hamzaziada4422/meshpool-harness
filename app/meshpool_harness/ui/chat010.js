@@ -109,6 +109,7 @@ function insightCard010(c) {
 }
 function nextNudge010() {
   if ($(".nudge010") || !nudgeQ010.length) return;
+  if (S.cur && S.cur.busy) { clearTimeout(nextNudge010.t); nextNudge010.t = setTimeout(nextNudge010, 1500); return; }   // never while a turn runs
   const wrap = $(".composer-wrap"); if (!wrap) return;
   const c = nudgeQ010.shift();
   const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");

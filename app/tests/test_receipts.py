@@ -91,3 +91,9 @@ def test_log_turn_stores_the_reason():
     OUT.log_turn(S(), None, {})
     assert json.loads(OUT.path().read_text().splitlines()[-1])["reason"] == "chosen for decks"
     assert RC.receipt_for("c7")["reason"] == "chosen for decks"
+
+
+def test_the_router_note_reads_in_plain_words():
+    assert R.plain_reason("docs words (1)") == "chosen for documents"
+    assert R.plain_reason("Fits documents best.") == "fits documents best"
+    assert R.plain_reason("") == ""

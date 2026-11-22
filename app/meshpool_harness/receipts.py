@@ -7,6 +7,8 @@ shows its session cost from). Without them the receipt shows measured tokens and
 """
 from __future__ import annotations
 
+import re
+
 import json
 import os
 
@@ -112,6 +114,21 @@ def receipt_for(chat_id: str, turn_index: int | None = None) -> dict | None:
     return out
 
 
+_KINDS = {"docs": "documents", "doc": "documents", "code": "code", "data": "data", "research": "research",
+          "slides": "slides", "sheets": "spreadsheets", "general": "general work"}
+
+
+def plain_reason(reason: str) -> str:
+    """The router's note in plain words: "docs words (1)" becomes "chosen for documents"; prose is kept as written."""
+    t = (reason or "").strip().rstrip(".")
+    if not t:
+        return ""
+    m = re.match(r"(?i)^(\w+) words?(?: \(\d+\))?(?:, .*)?$", t)
+    if m:
+        return "chosen for " + _KINDS.get(m.group(1).lower(), m.group(1).lower())
+    return t[:1].lower() + t[1:]
+
+
 def line(r: dict) -> str:
     """The one line: "42 s · $0.03 · Meshpool Work on deepseek-v4.1-flash, chosen because it fits documents"."""
     bits = []
@@ -123,6 +140,6 @@ def line(r: dict) -> str:
         bits.append(f"{_fmt_tokens(r['tokens_in'] + r['tokens_out'])} tokens, cost not measured")
     who = " on ".join(x for x in (r.get("harness_name"), r.get("model")) if x)
     if who:
-        why = (r.get("reason") or "").strip().rstrip(".")
-        bits.append(who + (f", {why[:1].lower() + why[1:]}" if why else ""))
+        why = plain_reason(r.get("reason") or "")
+        bits.append(who + (f", {why}" if why else ""))
     return " · ".join(bits)

@@ -1,7 +1,8 @@
 // 0.0.10 journeys against running apps on the mock model (no paid calls).
 // Usage: node journeys_010.js MAIN_PORT HEAVY_PORT EMPTY_PORT UPGRADE_PORT
 // MAIN has seeded memory (seed_memory.py), HEAVY is seed_heavy.py + seed_memory.py, EMPTY is a fresh home with no files,
-// UPGRADE has only a 0.0.9 memory.md.
+// UPGRADE has only a 0.0.9 memory.md. The journeys accept and dismiss cards and archive facts, so start each run on freshly
+// seeded homes (seed_memory.py, seed_heavy.py).
 const {chromium} = require("playwright");
 const [MAIN, HEAVY, EMPTY, UPG] = process.argv.slice(2).map(p => `http://127.0.0.1:${p}`);
 const res = []; const ck = (n, ok, d = "") => { res.push(!!ok); console.log((ok ? "PASS " : "FAIL ") + n + (ok ? "" : " -> " + String(d).slice(0, 200))); };
@@ -76,7 +77,7 @@ async function chat(call, text, extra = {}) {
     ck("J42 accepting a schedule card prefills the task with only-on-change on", a.action.kind === "schedule" && a.action.payload.only_on_change === true && a.action.payload.prompt);
     await heavy("/api/assistant", {action: "task_add", ...a.action.payload, name: a.action.payload.name || "Weekly", only_on_change: true});
     ck("J42 the task exists with the option", (await heavy("/api/assistant")).tasks.some(t => t.only_on_change === true));
-  } else ck("J42 (no schedule card today: covered by test_insights)", true);
+  } else ck("J42 the heavy fixture was built to show a schedule card", false, JSON.stringify(pool.map(c => c.type)));
   const other = (await heavy("/api/insights?where=home")).cards[0];
   if (other) { await heavy("/api/insights/act", {id: other.id, event: "dismissed"}); ck("J43 a dismissed card never returns", !(await heavy("/api/insights?where=home")).cards.some(c => c.id === other.id)); }
   else ck("J43 (nothing left to dismiss)", true);
@@ -87,7 +88,7 @@ async function chat(call, text, extra = {}) {
 
   // J46 Your work and recap
   const w = await heavy("/api/work?range=3");
-  ck("J46 Your work has topics and counts", w && (w.stats || w.totals || w.topics || w.chats !== undefined));
+  ck("J46 Your work has topics and counts", w && !w.empty && w.totals && w.totals.chats > 0, JSON.stringify(w).slice(0, 120));
   const png = await (await fetch(HEAVY + "/api/work/recap.png?range=3", {headers: {"X-Meshpool-Token": await tok(HEAVY)}})).arrayBuffer();
   ck("J46 the recap is a PNG", new Uint8Array(png).slice(0, 4).join(",") === "137,80,78,71");
 
