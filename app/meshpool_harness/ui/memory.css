@@ -161,3 +161,4 @@
 
 .mermaid-box{margin:10px 0;overflow-x:auto}.mermaid-box.rendered svg{max-width:100%;height:auto}.mm-err{display:block;color:var(--ink-3)}
 .mathsrc[data-display="1"]{display:block;margin:8px 0;overflow-x:auto}
+.closedapp{margin:20px 0 0;padding:12px 4px;border-top:1px solid var(--line,#ddd)}.closedapp small{display:block;color:var(--ink-3);margin-top:4px}

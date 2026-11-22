@@ -138,6 +138,7 @@ async function pageScheduled() {
     bindHead("scheduled", () => draw());
     const add = async preset => { const v = await taskDialog(preset); if (v && await taskSave(v)) { await loadAccount(); pageScheduled(); } };
     $("#tkNew").onclick = () => add();
+    if (tab === "yours") closedApp011();
     $("#tkNew2")?.addEventListener("click", () => add());
     $$(".gcard.tpl").forEach(c => c.onclick = () => add(d.templates[+c.dataset.id.slice(1)]));
     $$(".gcard.task:not(.tpl)").forEach(c => {
@@ -196,4 +197,16 @@ async function pagePlugins() {
     });
   };
   draw();
+}
+
+/* "Also run when Meshpool is closed": registers the system job (cron, launchd or Task Scheduler) */
+async function closedApp011() {
+  let st; try { st = await api("/api/scheduler"); } catch (e) { return; }
+  if (!st.available || $("#closedApp")) return;
+  const host = $(".ggrid, .gempty")?.parentElement;
+  if (!host) return;
+  const row = document.createElement("div"); row.id = "closedApp"; row.className = "closedapp";
+  row.innerHTML = `<label class="switchrow"><input type="checkbox" ${st.installed ? "checked" : ""}> Also run tasks when Meshpool is closed</label><small>${st.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."}</small>`;
+  host.appendChild(row);
+  $("input", row).onchange = async e => { try { const r = await post("/api/scheduler", {on: e.target.checked}); toast(r.message || "Saved"); $("small", row).textContent = r.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."; } catch (err) { toast(err.message); e.target.checked = !e.target.checked; } };
 }

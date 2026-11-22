@@ -67,6 +67,26 @@ def uninstall(run=_run, platform: str | None = None, home: Path | None = None) -
     return "Removed. Scheduled tasks run only while Meshpool is open."
 
 
+def installed(run=_run, platform: str | None = None, home: Path | None = None) -> bool:
+    plat = platform or sys.platform
+    try:
+        if plat.startswith("win"):
+            return run(["schtasks", "/Query", "/TN", "Meshpool scheduler"]).returncode == 0
+        if plat == "darwin":
+            return ((home or Path.home()) / "Library" / "LaunchAgents" / f"{PLIST}.plist").exists()
+        cur = run(["crontab", "-l"])
+        return cur.returncode == 0 and TAG in cur.stdout
+    except OSError:
+        return False
+
+
+def available(platform: str | None = None) -> bool:
+    """Whether this computer has the tool the registration needs (cron on Linux, always on macOS and Windows)."""
+    import shutil
+    plat = platform or sys.platform
+    return True if plat.startswith("win") or plat == "darwin" else bool(shutil.which("crontab"))
+
+
 def run_due() -> int:
     """Run every task that is due, one after another, and wait for each to finish. Returns how many ran."""
     import time

@@ -43,7 +43,8 @@ def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", d
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
                    "", mode, only_on_change)
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
-            "can change or delete it in Settings, Scheduled tasks.")
+            "can change or delete it in Settings, Scheduled tasks. To also run it while Meshpool is closed, they can turn on "
+            "\"Also run tasks when Meshpool is closed\" on the Scheduled tasks page.")
 
 
 def list_scheduled_tasks() -> str:
