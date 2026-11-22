@@ -282,8 +282,9 @@ def import_context_text(text: str) -> dict:
     saved, skipped = 0, []
     for f in facts:
         try:
-            r = AS.remember(f[:400])
-            saved += r.startswith("Saved")
+            from meshpool_harness import memstore as MS       # imported facts wait in the review tray first
+            _, made = MS.add(f[:400], kind="stated", status="pending", source={"type": "import"}, by="meshpool")
+            saved += bool(made)
         except ValueError as e:
             skipped.append(f"{f[:60]}: {e}")
     return {"instructions": added_ins, "memory": saved, "skipped": skipped}

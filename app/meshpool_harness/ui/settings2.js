@@ -7,14 +7,14 @@
 // Navigation: [page, label, icon, [the sections it holds]]. A page with several sections gets tabs under the header.
 const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
-  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "web"]],
+  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
   [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
-const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
+const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
   about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options"};
@@ -278,9 +278,13 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       const n = nset();
       b.innerHTML = `${close}<h3>Notifications</h3><p class="lead">Hear from Meshpool when you have switched to another window. Nothing shows while you are looking at Meshpool.</p>
         <ul class="rows2">${toggleRow("done", "When a chat finishes", "A notification when a long task is done.", n.done)}${toggleRow("wait", "When Meshpool needs you", "A notification when it asks a question or waits for your OK.", n.wait)}${toggleRow("sound", "Play a sound", "A short tone with each notification.", n.sound)}</ul>
+        <h3 style="font-size:16px;margin:20px 0 4px">Quiet hours</h3><p class="lead">During these hours Meshpool shows no suggestion cards and no next-step chips beyond the reply, and sends no suggestion notifications.</p><div id="qhBox"></div>
         <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="nTest">Send a test notification</button></div><div class="res" id="nRes"></div>`;
+      window.renderQuietHours?.($("#qhBox", b));
       $$("[data-t]", b).forEach(x => x.onchange = () => { const v = nset(); v[x.dataset.t] = x.checked; store("notify", v); });
       $("#nTest").onclick = () => { post("/api/notify", {title: "Meshpool", body: "This is a test notification."}).then(() => res("nRes", "ok", "Sent. If nothing appeared, allow notifications for Meshpool in your system settings.")).catch(e => res("nRes", "bad", e.message)); if (nset().sound) { const keep = document.hidden; try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(); o.connect(a.destination); o.frequency.value = 660; o.start(); o.stop(a.currentTime + .25); } catch (e) { /* no audio */ } } };
+    } else if (sec === "suggest") {
+      await window.renderSuggestSettings?.(b, close);
     } else if (sec === "caps") {
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
       const mode = get0("MH_AGENT_PERMISSIONS") || "ask";

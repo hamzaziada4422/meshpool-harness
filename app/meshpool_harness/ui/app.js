@@ -2220,43 +2220,39 @@ async function contextPanel(box) {
   try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
   const srcs = Object.entries(local).filter(([, v]) => v.found);
   const n = x => Number(x || 0).toLocaleString();
-  box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
-    <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Your files stay on this computer; to write those, the titles and first messages of up to 80 chats are sent once to your model.</p>
+  box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
+    <p class="muted">It all stays on this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Your ChatGPT chats and other assistants</b>
-        <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
-        <small class="muted">ChatGPT: Settings, Data controls, Export data. Other assistants: look for Export data in their settings. Both email you a link, usually within minutes.</small>
-        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
-        <small class="muted">Every conversation comes over with its original date. Projects from other apps become skills, and lasting facts about you become memory.</small></li>
-      ${srcs.length ? `<li><b>Sessions on this computer</b>
-        <p>Each session opens in its project folder, so you can carry on with any agent.</p>
-        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
-      <li><b>What your assistant knows about you</b>
-        <p>Copy the prompt into ChatGPT or another assistant, then paste its whole answer here. It becomes your instructions and memory.</p>
-        <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
-        <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
-        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
-      <li><b>A custom GPT or assistant project you rely on</b>
-        <p>Paste its instructions to keep them as a skill every agent can use.</p>
-        <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
-        <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
-        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></li>
+      <li><b>ChatGPT or Claude chats</b>
+        <div class="ctx-acts"><button class="btn" data-ext="https://chatgpt.com/#settings/DataControls">1. Get your ChatGPT export</button><button class="btn" data-ext="https://claude.ai/settings/data-privacy-controls">1. Get your Claude export</button></div>
+        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">2. Drop the .zip here<input type="file" id="ctxZip" accept=".zip" hidden></div></li>
+      ${srcs.length ? `<li><b>On this computer</b>
+        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
+      <li><b>What an assistant knows about you</b>
+        <div class="ctx-acts"><button class="btn" id="ctxCopy">1. Copy this prompt</button></div>
+        <textarea id="ctxText" rows="3" placeholder="2. Paste its answer here"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">3. Add to memory</button></div></li>
+      <li><details><summary><b>A custom GPT's instructions</b></summary>
+        <input id="ctxName" placeholder="Name" spellcheck="false">
+        <textarea id="ctxIns" rows="4" placeholder="Paste the instructions"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></details></li>
     </ol><div class="res" id="ctxRes"></div>`;
+  $$("[data-ext]", box).forEach(x => { x.onclick = () => openExternal(x.dataset.ext); });
   const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
   const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
-  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
+  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Copied. Paste it into ChatGPT or Claude, then paste the answer here."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the text in the box, then replace it with the answer."); } };
   $("#ctxGo", box).onclick = async () => {
     const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
-    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : ""), false, true); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {text}); res(`${r.memory} to review in Memory, ${r.instructions} instructions saved.` + (r.skipped?.length ? ` ${r.skipped.length} skipped.` : ""), false, true); if (r.memory) toast("Review what it found.", 9000, {label: "Open Memory", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } goPage("memory"); }}); } catch (e) { res(e.message, true); }
   };
   const upload = async f => {
     if (!f) return;
     if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or another assistant, without unzipping it.", true);
-    res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
+    res(`Importing ${f.name}…`);
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? " Facts about you will appear in Memory to review." : ""), false, true);
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2425,7 +2421,7 @@ function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in ChatGPT, Codex, Cursor or other apps. You can also do this later in Settings.</p>
+    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;

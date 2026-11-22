@@ -93,3 +93,9 @@
 .ic010-ev{margin:0 0 8px 18px;padding:0;color:var(--ink-3);font-size:var(--fs-xs)}
 .ic010-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pill.incog-pill{color:var(--ink-2);cursor:default}
+/* home */
+.away010{border:1px solid var(--line);background:var(--surface);border-radius:var(--r-l);padding:14px 16px;margin:14px auto;max-width:640px;display:flex;flex-direction:column;gap:6px;text-align:left}
+.away010 .a-h{display:flex;justify-content:space-between;align-items:center}
+.a-run{display:flex;flex-direction:column;align-items:flex-start;gap:1px;border:0;background:none;padding:6px 8px;border-radius:var(--r-m);text-align:left;cursor:pointer}.a-run:hover{background:var(--hover)}
+.a-n{font-weight:500;color:var(--ink)}.a-l{color:var(--ink-3);font-size:var(--fs-s)}.a-q{margin:0;color:var(--ink-3);font-size:var(--fs-xs)}
+.a-cards{display:flex;flex-direction:column;gap:8px;margin-top:4px}.a-cards:empty{display:none}
