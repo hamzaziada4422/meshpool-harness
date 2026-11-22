@@ -320,3 +320,22 @@ def test_case_classifier():
     assert REG.case_of("Quarterly revenue grew twelve percent") == "sentence"
     assert REG.case_of("QUARTERLY REVENUE GREW") == "upper"
     assert REG.case_of("Revenue grew") == ""
+
+
+def test_an_edited_deck_reaches_the_home_screen_as_a_teach_card_and_accepting_teaches(home):
+    """Journey: edit a deck Meshpool made -> insights shows the card -> accept -> learned facts with source edit."""
+    from meshpool_harness import insights as I
+    from meshpool_harness.ui import insights_api as IA
+    p = home / "deck.pptx"
+    _deck(p)
+    REG.register(p, "chat-1")
+    _edit_deck(p, lambda i, s: setattr(s.shapes.title, "text", _sentence(TITLES[i])))
+    cards = [c for c in I.cards_for("home") if c["type"] == "teach"]
+    assert len(cards) == 1 and "sentence case" in cards[0]["title"].lower() + cards[0]["body"].lower()
+    st, r = IA.handle_post("/api/insights/act", {"id": cards[0]["id"], "event": "accepted"})
+    assert st == 200 and r["action"]["kind"] == "teach"
+    st, out = IA.handle_post("/api/insights/accept", {"action": r["action"]})
+    assert st == 200
+    learned = [f for f in MS.facts(status="active", kind="learned") if f["source"]["type"] == "edit"]
+    assert learned and learned[0]["source"]["file"].endswith("deck.pptx")
+    assert "sentence case" in " ".join(f["text"].lower() for f in learned)

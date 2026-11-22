@@ -662,7 +662,7 @@ def detect_teach(c: Corpus) -> list[dict]:
                          [{"text": f"{t.get('count')} of {t.get('total', t.get('count'))} changed the same way",
                            "file": t.get("file"), "chat_id": t.get("chat_id")}],
                          {"kind": "teach", "label": "Make these defaults",
-                          "payload": {"rules": t["rules"], "file": t.get("file"), "chat_id": t.get("chat_id"),
+                          "payload": {"rules": t.get("rules_raw") or t["rules"], "file": t.get("file"), "chat_id": t.get("chat_id"),
                                       "type": t.get("kind")}},
                          min(1.0, 0.6 + 0.4 * t.get("count", 0) / max(1, t.get("total", t.get("count", 1)))), c,
                          "teach:" + _key(t.get("file"), sorted(t["rules"]))))

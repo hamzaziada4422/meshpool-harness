@@ -49,6 +49,8 @@ def handle_get(path: str, query: dict | None = None) -> tuple[int, dict]:
         m = _range(query)
         return 200, {"_bytes": YW.recap_png(m), "content_type": "image/png",
                      "filename": f"meshpool-recap-{m}m.png", "download": _q(query, "download") == "1"}
+    if path == "/api/summaries/chats":                      # every chat's one-liner, for the sidebar hover
+        return 200, {"summaries": {sid: r.get("summary", "") for sid, r in S._all().items() if r.get("summary")}}
     if path in ("/api/summaries/chat", "/api/summaries/project"):
         sid = _q(query, "id")
         if not ID.fullmatch(sid):

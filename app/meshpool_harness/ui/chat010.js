@@ -202,3 +202,15 @@ const _status010 = new MutationObserver(() => {
   });
 });
 window.addEventListener("load", () => { const c = $("#col"); if (c) _status010.observe(c, {childList: true, subtree: true}); });
+
+/* ---------- one-line chat summaries on sidebar hover ---------- */
+window.SUMM010 = {};
+async function loadSummaries010() {
+  try { SUMM010 = (await api("/api/summaries/chats")).summaries || {}; } catch (e) { return; }
+  document.querySelectorAll(".th[data-id]").forEach(li => {
+    const sm = SUMM010[li.dataset.id];
+    if (sm && !li.dataset.sm) { li.dataset.sm = "1"; li.title = (li.title ? li.title + "\n" : "") + sm; }
+  });
+}
+window.addEventListener("load", () => setTimeout(loadSummaries010, 2500));
+setInterval(() => { if (document.visibilityState === "visible") loadSummaries010(); }, 60000);

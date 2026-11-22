@@ -241,6 +241,19 @@ def detect_edits(incognito: bool = False, only: list[str] | None = None, grace: 
     return cards
 
 
+def detect() -> list[dict]:
+    """The shape insights.detect_teach reads: one candidate per edited file, rules as phrases plus the raw rules that
+    accept() writes. Registered files only."""
+    out = []
+    for c in detect_edits():
+        pl = c["action"]["payload"]
+        raw = pl["rules"]
+        out.append({"file": pl["file"], "chat_id": pl.get("chat_id", ""), "kind": Path(pl["file"]).suffix.lstrip("."),
+                    "count": min(r["count"] for r in raw), "total": max(r["of"] for r in raw),
+                    "rules": [r["phrase"] for r in raw], "rules_raw": raw, "label": c["title"]})
+    return out
+
+
 def os_off() -> bool:
     import os
     return os.environ.get("MH_INSIGHTS", "1") == "0"

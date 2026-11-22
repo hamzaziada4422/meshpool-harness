@@ -199,6 +199,11 @@ def search(q: str, tab: str = "all") -> dict:
 
     if want("sessions") or want("code"):
         full = {h["id"]: h for h in A.search(q)}
+        try:
+            from meshpool_harness import summaries as SU
+            boost = SU.search_boost(q)                       # a chat is also found by its one-line summary
+        except Exception:  # noqa: BLE001
+            SU, boost = None, {}
         seen = set()
         for key, label, pool, on in (("sessions", "Chats", chats, want("sessions")), ("code", "Code sessions", codes, want("code"))):
             if not on:
@@ -206,9 +211,12 @@ def search(q: str, tab: str = "all") -> dict:
             items = []
             for r in pool:
                 hit = full.get(r["id"])
-                if q in r["title"].lower() or hit:
+                if q in r["title"].lower() or hit or r["id"] in boost:
                     seen.add(r["id"])
-                    items.append(_thread_item(r, (hit or {}).get("snippet", "") if q not in r["title"].lower() else ""))
+                    sub = (hit or {}).get("snippet", "") if q not in r["title"].lower() else ""
+                    if not sub and SU is not None:
+                        sub = SU.summary_for(r["id"])
+                    items.append(_thread_item(r, sub))
             add(key, label, items[:12])
     if want("projects"):
         from meshpool_harness import project_store as PS
