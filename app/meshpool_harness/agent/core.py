@@ -53,7 +53,7 @@ PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__slide_layouts"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
               "ask_user"]
-BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_start", "bash_output", "bash_stop", "bash_many", "fetch_url", "web_search",
+BUILTIN = ["read_file", "grep", "glob", "edit", "notebook_edit", "write_file", "bash", "bash_start", "bash_output", "bash_stop", "bash_many", "fetch_url", "web_search",
            "web_research", "todo_write", "use_skill", "ask_user"]
 # Harness v3 (benchmarked 2026-11-12, run C): bash_many, todo follow-through, loop and stall breakers, a turn-budget
 # note and an environment snapshot. MH_AGENT_V3=0 turns them off.
@@ -669,7 +669,8 @@ def _rules(root) -> dict:
     """Saved allow and deny rules: ~/.meshpool/permissions.json and <project>/.meshpool/permissions.json, each
     {"allow": [...], "deny": [...]}. A rule is a tool name ("edit", "mcp__browser__ui_audit"), or "bash:" and a command
     pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
-    out = {"allow": [], "deny": []}
+    out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
+           "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
     for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
@@ -2148,12 +2149,12 @@ class Agent:
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
-        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch"):
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
-        group = ("edit" if name in ("edit", "write_file", "apply_patch")
+        group = ("edit" if name in ("edit", "write_file", "apply_patch", "notebook_edit")
                  else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name

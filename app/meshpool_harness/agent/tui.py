@@ -1307,11 +1307,20 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
                 import contextlib
                 import json as _json
+                if json_out == "stream-json":     # one event per line while it works, then the final object
+                    _emit = agent.emit
+
+                    def _stream(ev, _emit=_emit):
+                        _emit(ev)
+                        if isinstance(ev, dict) and ev.get("type") not in ("token", "delta", "thinking"):
+                            sys.__stdout__.write(_json.dumps(ev, ensure_ascii=False, default=str) + "\n")
+                            sys.__stdout__.flush()
+                    agent.emit = _stream
                 with contextlib.redirect_stdout(sys.stderr):
                     sess.send(prompt)
                 reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
                               and isinstance(m.get("content"), str) and m.get("content").strip()), "")
-                sys.stdout.write(_json.dumps({"ok": not term.failed, "result": reply, "session_id": agent.id,
+                sys.__stdout__.write(_json.dumps({"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
                                               "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])},
                                              ensure_ascii=False) + "\n")
                 return 1 if term.failed else 0

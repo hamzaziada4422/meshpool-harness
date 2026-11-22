@@ -147,6 +147,12 @@ SCHEMAS = {
                 {"pattern": S, "path": S, "glob": S, "context": I, "before": I, "after": I,
                  "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
                  "head_limit": I, "ignore_case": {"type": "boolean"}, "multiline": {"type": "boolean"}}, ["pattern"]),
+    "notebook_edit": _fn("notebook_edit", "Edit a Jupyter notebook (.ipynb) by cell. mode replace (change cell `cell`'s "
+                         "source), insert (new cell before index `cell`; use the cell count to add at the end) or "
+                         "delete. Cells are numbered from 0; read the notebook first to see them. Outputs of a "
+                         "replaced code cell are cleared.",
+                         {"path": S, "cell": I, "source": S, "mode": {"type": "string", "enum": ["replace", "insert", "delete"]},
+                          "cell_type": {"type": "string", "enum": ["code", "markdown"]}}, ["path", "cell"]),
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
     "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file (or every occurrence with "
@@ -860,6 +866,43 @@ class Workspace:
         lines = [f"edited {len(plans)} files: {total} edits applied"]
         lines += [f"- {pl[0]}: {pl[6]} edit{'s' if pl[6] != 1 else ''}" for pl in plans]
         return "\n".join(lines)
+
+    def notebook_edit(self, path=None, cell=None, source="", mode="replace", cell_type="code"):
+        if not path or cell is None:
+            raise ToolError("notebook_edit needs `path` and `cell`")
+        p = self._path(path, write=True)
+        if not p.is_file():
+            raise ToolError(f"{path} does not exist")
+        try:
+            nb = json.loads(read_src(p)[0])
+            cells = nb["cells"]
+        except (ValueError, KeyError):
+            raise ToolError(f"{path} is not a notebook (.ipynb JSON with cells)")
+        n, i = len(cells), int(cell)
+        lines = (source or "").splitlines(keepends=True)
+        if mode == "insert":
+            if not 0 <= i <= n:
+                raise ToolError(f"cell {i} is out of range: the notebook has {n} cells (0 to {n} for insert)")
+            new = {"cell_type": cell_type, "metadata": {}, "source": lines}
+            if cell_type == "code":
+                new.update({"execution_count": None, "outputs": []})
+            cells.insert(i, new)
+            did = f"inserted a {cell_type} cell at {i}"
+        else:
+            if not 0 <= i < n:
+                raise ToolError(f"cell {i} is out of range: the notebook has {n} cells (0 to {n - 1})")
+            if mode == "delete":
+                cells.pop(i)
+                did = f"deleted cell {i}"
+            elif mode == "replace":
+                cells[i]["source"] = lines
+                if cells[i].get("cell_type") == "code":
+                    cells[i]["outputs"], cells[i]["execution_count"] = [], None
+                did = f"replaced cell {i}"
+            else:
+                raise ToolError("mode must be replace, insert or delete")
+        self.write_file(path, json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
+        return f"{did} in {path}; it now has {len(cells)} cells"
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:

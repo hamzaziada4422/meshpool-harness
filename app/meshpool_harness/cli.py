@@ -143,6 +143,10 @@ def _agent_parser():
     ap.add_argument("--dir", help="project folder (default: the current folder)")
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
+    ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
+    ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
+    ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
+    ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
@@ -212,7 +216,14 @@ def main(argv=None):
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
-        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=a.json_out)
+        if a.max_turns:
+            os.environ["MH_MAX_STEPS"] = str(a.max_turns)
+        if a.allowed_tools:
+            os.environ["MH_ALLOW"] = a.allowed_tools
+        if a.disallowed_tools:
+            os.environ["MH_DENY"] = a.disallowed_tools
+        fmt = a.output_format or ("json" if a.json_out else "")
+        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
     if argv[0] == "agent":
         return main(argv[1:] or [])
     if argv[0] == "acp":
