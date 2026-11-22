@@ -34,6 +34,12 @@ while time.time() - t0 < MAX:
         if e["type"] == "approval":
             call(f"/api/agent/{sid}/answer", {"id": e["id"], "decision": "always"})
             approved += 1
+        if e["type"] == "question":              # the real model asked something: answer as a busy owner would
+            qs = e.get("questions") or [{}]
+            opts = qs[0].get("options") or []
+            call(f"/api/agent/{sid}/answer", {"id": e.get("id"), "decision": (opts[0].get("id") if opts and isinstance(opts[0], dict) else "yes"),
+                                              "note": "Leave the phone number off the page and tell me what to add."})
+            print("question answered:", str(qs[0].get("question", ""))[:80], flush=True)
         if e["type"] == "tool_start":
             print("tool:", e.get("name"), str(e.get("summary", ""))[:90], flush=True)
     seen = len(v["events"])

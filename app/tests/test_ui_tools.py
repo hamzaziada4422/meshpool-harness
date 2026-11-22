@@ -100,3 +100,14 @@ def test_the_browser_server_offers_both_tools():
     from meshpool_harness.harnesses.safe_tools import SAFE_MCP
     assert {"ui_audit", "view_output"} <= set(BM.TOOLS)
     assert {"mcp__browser__ui_audit", "mcp__browser__view_output"} <= SAFE_MCP
+
+
+def test_the_audit_catches_filler_text_and_placeholder_links(pw, tmp_path):
+    f = tmp_path / "p.html"
+    f.write_text('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><title>t</title></head>'
+                 '<body><main><h1>Shop</h1><p>I don\'t know the hours yet.</p>'
+                 '<a href="https://wa.me/PHONE_NUMBER" style="display:inline-block;min-height:48px;min-width:48px">Order</a></main></body></html>',
+                 encoding="utf-8")
+    r = UA.audit(pw, str(f), views=("desktop",), schemes=("light",))
+    rules = {x["rule"] for x in r["findings"]}
+    assert {"left-over-text", "placeholder-link"} <= rules
