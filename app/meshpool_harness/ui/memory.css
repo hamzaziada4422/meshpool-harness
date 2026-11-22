@@ -158,3 +158,6 @@
   .sgmore summary{min-height:44px;display:flex;align-items:center}
 }
 .sgmore{margin:6px 0}.sgmore summary{cursor:pointer;color:var(--ink-3);font-size:var(--fs-s)}
+
+.mermaid-box{margin:10px 0;overflow-x:auto}.mermaid-box.rendered svg{max-width:100%;height:auto}.mm-err{display:block;color:var(--ink-3)}
+.mathsrc[data-display="1"]{display:block;margin:8px 0;overflow-x:auto}

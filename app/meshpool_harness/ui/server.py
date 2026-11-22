@@ -301,6 +301,10 @@ class Handler(BaseHTTPRequestHandler):
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
+        m = re.fullmatch(r"/ui/vendor/((?:fonts/)?[A-Za-z0-9_.-]+\.(?:js|css|woff2))", u.path)
+        if m and (HERE / "vendor" / m.group(1)).is_file():           # Mermaid and KaTeX, bundled so diagrams and maths work offline
+            ct = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8", "woff2": "font/woff2"}[m.group(1).rsplit(".", 1)[1]]
+            return self._send(200, (HERE / "vendor" / m.group(1)).read_bytes(), ct, {"Cache-Control": "max-age=86400"})
         if u.path == "/oauth/callback":          # the browser comes back here after signing in to a connector
             from meshpool_harness import mcp_apps as CN
             q = parse_qs(u.query)

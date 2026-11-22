@@ -1044,8 +1044,12 @@ function md(src) {
   return parts.map((p, i) => {
     if (i % 2) {
       const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), pre = `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+      if (lang === "mermaid" && i < parts.length - 1) { const src = p.replace(/^[\w+.#-]*\n/, ""); return `<div class="mermaid-box" data-mermaid="${esc(src)}"><pre><code>${esc(src)}</code></pre></div>`; }
       return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
     }
+    const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
+    p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
+      .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
     const flushL = () => { if (list) { out += `<${list.t}${list.t === "ol" && list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
@@ -1061,7 +1065,7 @@ function md(src) {
       else { flushL(); para.push(ln); }
     }
     flushP(); flushL(); flushT(); return out;
-  }).join("");
+  }).join("").replace(/\u0001([Mm])([A-Za-z0-9+\/=]+)\u0002/g, (_, k, b) => `<span class="mathsrc" data-display="${k === "M" ? 1 : 0}" data-tex="${b}"></span>`);
 }
 function diffLines(d) { return String(d || "").split("\n").map(l => { const c = l.startsWith("+++") || l.startsWith("---") ? "d-hunk" : l.startsWith("+") ? "d-add" : l.startsWith("-") ? "d-del" : l.startsWith("@@") ? "d-hunk" : ""; return c ? `<span class="${c}">${esc(l)}</span>` : esc(l); }).join("\n"); }
 

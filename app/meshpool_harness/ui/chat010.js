@@ -296,3 +296,36 @@ document.addEventListener("click", async e => {
 }, true);
 const _ev010b = ev010;
 ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText); };
+
+
+/* ---------- diagrams and maths in chat: Mermaid and KaTeX are bundled and load only when a reply uses them ---------- */
+const _load010 = {};
+function script010(src) { return _load010[src] || (_load010[src] = new Promise((ok, no) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => no(new Error("could not load " + src)); document.head.appendChild(s); })); }
+const unb64 = b => decodeURIComponent(escape(atob(b)));
+async function rich010(node) {
+  const boxes = $$(".mermaid-box:not([data-done])", node), maths = $$(".mathsrc:not([data-done])", node);
+  if (boxes.length) {
+    try {
+      await script010("/ui/vendor/mermaid.min.js");
+      if (!window._mm010) { window.mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: (matchMedia("(prefers-color-scheme: dark)").matches || document.documentElement.dataset.theme === "dark") ? "dark" : "default"}); window._mm010 = 1; }
+      for (const b of boxes) {
+        b.dataset.done = "1";
+        try { const r = await window.mermaid.render("mm" + Math.random().toString(36).slice(2), b.dataset.mermaid); b.innerHTML = r.svg; b.classList.add("rendered"); }
+        catch (e) { b.insertAdjacentHTML("beforeend", `<small class="mm-err">This diagram could not be drawn, so its source is shown.</small>`); $$("[id^=dmm]").forEach(x => x.parentNode && x.parentNode.removeChild(x)); }
+      }
+    } catch (e) { /* the source stays visible */ }
+  }
+  if (maths.length) {
+    try {
+      if (!$("link[href*=katex]")) { const l = document.createElement("link"); l.rel = "stylesheet"; l.href = "/ui/vendor/katex.min.css"; document.head.appendChild(l); }
+      await script010("/ui/vendor/katex.min.js");
+      for (const m of maths) {
+        m.dataset.done = "1";
+        const tex = unb64(m.dataset.tex);
+        try { window.katex.render(tex, m, {displayMode: m.dataset.display === "1", throwOnError: true, trust: false}); } catch (e) { m.textContent = tex; }
+      }
+    } catch (e) { maths.forEach(m => { if (!m.dataset.done) m.textContent = unb64(m.dataset.tex); }); }
+  }
+}
+const _mdRender010 = mdRender;
+mdRender = function (node, text) { const r = _mdRender010.apply(this, arguments); rich010(node); return r; };
