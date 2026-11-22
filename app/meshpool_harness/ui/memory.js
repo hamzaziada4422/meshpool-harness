@@ -217,3 +217,11 @@ async function memExport(kind) {
   const blob = await r.blob(), a = document.createElement("a");
   a.href = URL.createObjectURL(blob); a.download = kind === "md" ? "what-meshpool-knows.md" : "how-i-work.md"; document.body.appendChild(a); a.click(); a.remove();
 }
+
+/* "Your work" page: the module is yourwork.js; this is the shell glue. */
+window.pageYourWork = function () {
+  shell0(`<header class="gh"><h1>Your work</h1></header><div id="mwBox"></div>`);
+  if (window.MeshYourWork) window.MeshYourWork.render($("#mwBox"));
+};
+/* A suggestion on the "Your work" page (or a card) acts here: the same actions the insight cards use. */
+document.addEventListener("meshpool:work-action", e => { const a = e.detail && e.detail.action; if (a && window.runInsightAction) window.runInsightAction(a, e.detail); });

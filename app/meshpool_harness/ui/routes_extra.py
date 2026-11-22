@@ -22,6 +22,12 @@ def handle(method: str, u, body: bytes = b""):
             from urllib.parse import parse_qs
             import json
             if method == "GET":
-                return m.handle_get(u.path, parse_qs(u.query))
-            return m.handle_post(u.path, json.loads(body.decode("utf-8")) if body else {})
+                res = m.handle_get(u.path, parse_qs(u.query))
+            else:
+                res = m.handle_post(u.path, json.loads(body.decode("utf-8")) if body else {})
+            st, out = res[0], res[1]
+            if isinstance(out, dict) and "_bytes" in out:          # a file answer (the recap image)
+                extra = {"Content-Disposition": f'attachment; filename="{out.get("filename", "file")}"'} if out.get("download") else {}
+                return st, out["_bytes"], out.get("content_type", "application/octet-stream"), extra
+            return st, out
     return 404, {"error": "not found"}
