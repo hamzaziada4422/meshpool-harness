@@ -95,6 +95,10 @@ def patch_from_shell(argv):
     return m.group("body"), cd
 
 
+class AllStr(str):
+    """An `old` text that edit replaces everywhere (replace_all)."""
+
+
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
         "type": "object", "properties": props, "required": req, "additionalProperties": False}}}
@@ -108,16 +112,22 @@ SCHEMAS = {
                      "notebooks and email files come back as readable text; images and scanned PDFs are read with "
                      "OCR in many languages. For a PDF, start/end pick pages.",
                      {"path": S, "start": I, "end": I}, ["path"]),
-    "grep": _fn("grep", "Search file contents with a regular expression. Returns path:line:text.",
-                {"pattern": S, "path": S, "glob": S}, ["pattern"]),
+    "grep": _fn("grep", "Search file contents with a regular expression. Returns path:line:text. Options: `context` "
+                        "(lines around each match, or `before` and `after`), `output_mode` (content, files_with_matches "
+                        "or count), `head_limit` (most results, default 400), `ignore_case`, `multiline` (a pattern may "
+                        "span lines).",
+                {"pattern": S, "path": S, "glob": S, "context": I, "before": I, "after": I,
+                 "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
+                 "head_limit": I, "ignore_case": {"type": "boolean"}, "multiline": {"type": "boolean"}}, ["pattern"]),
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
-    "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file. Fails if `old` is missing, "
+    "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file (or every occurrence with "
+                        "`replace_all`, to rename something). Fails if `old` is missing, "
                         "not unique, the same as `new`, or the file changed since you last read it. To make several "
                         "changes, put them all in one call: `edits` for one file, `changes` for several files "
                         "(all-or-nothing).",
-                {"path": S, "old": S, "new": S,
-                 "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S},
+                {"path": S, "old": S, "new": S, "replace_all": {"type": "boolean"},
+                 "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S, "replace_all": {"type": "boolean"}},
                                                       "required": ["old", "new"]}},
                  "changes": {"type": "array", "items": {"type": "object", "properties": {
                      "path": S, "old": S, "new": S,
@@ -440,21 +450,34 @@ class Workspace:
         except (OSError, ValueError):
             return False
 
-    def grep(self, pattern, path=".", glob=None, inside_only=False):
+    def grep(self, pattern, path=".", glob=None, inside_only=False, context=0, before=0, after=0,
+             output_mode="content", head_limit=400, ignore_case=False, multiline=False):
         """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved;
-        a list of folders instead of True allows those folders as well."""
+        a list of folders instead of True allows those folders as well. context/before/after: lines around a match.
+        output_mode: content, files_with_matches or count. head_limit: most results returned."""
+        try:
+            head = max(1, min(int(head_limit or 400), 2000))
+            before = max(0, min(int(before or context or 0), 20))
+            after = max(0, min(int(after or context or 0), 20))
+        except (TypeError, ValueError):
+            raise ToolError("context, before, after and head_limit must be whole numbers")
+        if output_mode not in ("content", "files_with_matches", "count"):
+            raise ToolError("output_mode must be content, files_with_matches or count")
         if self.container and not self.mounted:
             inc = f"--include='{glob}'" if glob else ""
-            out, _ = self._run(f"grep -rnE {inc} --exclude-dir=.git --exclude-dir=node_modules -e {json.dumps(pattern)} "
-                               f"{json.dumps(path)} | head -400", 60, "grep", record=False)
+            ctx = f"-B{before} -A{after}" if (before or after) and output_mode == "content" else ""
+            mode = {"files_with_matches": "-l", "count": "-c"}.get(output_mode, "")
+            case = "-i" if ignore_case else ""
+            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=node_modules -e "
+                               f"{json.dumps(pattern)} {json.dumps(path)} | head -{head}", 60, "grep", record=False)
             return out
         try:
-            rx = re.compile(pattern)
+            rx = re.compile(pattern, (re.I if ignore_case else 0) | (re.M | re.S if multiline else 0))
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
-        out = []
+        out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
             if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
@@ -464,16 +487,42 @@ class Workspace:
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
-                for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
-                    if rx.search(line):
-                        out.append(f"{rel}:{i}:{line[:300]}")
-                        if len(out) >= 400:
-                            break
+                text = f.read_text(errors="ignore")
             except (OSError, UnicodeDecodeError):
                 continue
-            if len(out) >= 400:
-                out.append("... more matches truncated; narrow the pattern")
+            lines = text.splitlines()
+            hits: list[int] = []                                   # 1-based line numbers that start a match
+            if multiline:
+                for m in rx.finditer(text):
+                    hits.append(text.count("\n", 0, m.start()) + 1)
+            else:
+                hits = [i for i, line in enumerate(lines, 1) if rx.search(line)]
+            if not hits:
+                continue
+            matched += 1
+            if output_mode == "files_with_matches":
+                out.append(str(rel))
+            elif output_mode == "count":
+                out.append(f"{rel}:{len(hits)}")
+            else:
+                shown: set[int] = set()
+                last = 0
+                for h in hits:
+                    lo, hi = max(1, h - before), min(len(lines), h + after)
+                    if (before or after) and last and lo > last + 1:
+                        out.append("--")
+                    for n in range(lo, hi + 1):
+                        if n in shown:
+                            continue
+                        shown.add(n)
+                        out.append(f"{rel}{':' if n in hits else '-'}{n}{':' if n in hits else '-'}{lines[n - 1][:300]}")
+                    last = max(last, hi)
+            if len(out) >= head:
+                truncated = True
+                out = out[:head]
                 break
+        if truncated:
+            out.append("... more results truncated; narrow the pattern or raise head_limit")
         return self._cap("\n".join(out) or "no matches", "grep")
 
     def glob(self, pattern, inside_only=False):
@@ -657,10 +706,12 @@ class Workspace:
 
     @staticmethod
     def _edit_items(spec: dict, where: str) -> list[tuple[str, str]]:
-        """The (old, new) pairs of one edit spec: its own old/new first, then its `edits` list, in order."""
+        """The (old, new) pairs of one edit spec: its own old/new first, then its `edits` list, in order. An `old`
+        with replace_all set comes back as an AllStr, which _plan_many replaces everywhere."""
         items = []
         if spec.get("old") is not None or spec.get("new") is not None:
-            items.append((spec.get("old"), spec.get("new")))
+            o = spec.get("old")
+            items.append((AllStr(o) if spec.get("replace_all") and isinstance(o, str) else o, spec.get("new")))
         extra = spec.get("edits")
         if extra is not None:
             if not isinstance(extra, list):
@@ -668,7 +719,8 @@ class Workspace:
             for j, it in enumerate(extra, 1):
                 if not isinstance(it, dict):
                     raise ToolError(f"edit {j} for {where} must be an object with `old` and `new`")
-                items.append((it.get("old"), it.get("new")))
+                o = it.get("old")
+                items.append((AllStr(o) if it.get("replace_all") and isinstance(o, str) else o, it.get("new")))
         if not items:
             raise ToolError(f"nothing to edit in {where}: give `old` and `new`, or an `edits` list")
         for j, (o, n) in enumerate(items, 1):
@@ -684,11 +736,15 @@ class Workspace:
             tag = f"edit {j} of {n} in {path}: " if n > 1 else ""
             if old == new:
                 raise ToolError(tag + self.NOOP_EDIT.format(path=path))
-            if unread and text.count(old) != 1:
+            if unread and (text.count(old) != 1 or isinstance(old, AllStr)):
                 raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
                                 f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
+            if isinstance(old, AllStr) and text.count(old) > 1:        # replace_all: every occurrence, counted
+                notes.append(f"replaced {text.count(old)} occurrences")
+                text = text.replace(str(old), new)
+                continue
             try:
-                text, note = self._plan_edit(text, old, new, path)
+                text, note = self._plan_edit(text, str(old), new, path)
             except ToolError as e:
                 raise ToolError(tag + str(e) + (f"\nNothing was written; {path} is unchanged." if n > 1 else "")) from None
             notes.append(note)
@@ -704,7 +760,7 @@ class Workspace:
         text, eol, bom = read_src(p)
         return str(p), text, p, (eol, bom)
 
-    def edit(self, path=None, old=None, new=None, edits=None, changes=None):
+    def edit(self, path=None, old=None, new=None, edits=None, changes=None, replace_all=False):
         if changes is not None:
             if not isinstance(changes, list) or not changes or not all(isinstance(c, dict) for c in changes):
                 raise ToolError("`changes` must be a non-empty list of {path, old, new} or {path, edits} objects")
@@ -714,7 +770,7 @@ class Workspace:
         elif path is None:
             raise ToolError("edit needs `path` with `old` and `new` (or `edits`), or `changes` for several files")
         else:
-            specs = [{"path": path, "old": old, "new": new, "edits": edits}]
+            specs = [{"path": path, "old": old, "new": new, "edits": edits, "replace_all": bool(replace_all)}]
         grouped: dict[str, list] = {}
         for sp in specs:
             pth = sp.get("path")
