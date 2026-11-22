@@ -1003,7 +1003,8 @@ class Workspace:
                     env["CHERE_INVOKING"] = "1"
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc([bash, "-c", command], env, timeout_s, cwd=cwd)
+                    from meshpool_harness.core import sandbox as _SB
+                    r = self._proc(_SB.wrap([bash, "-c", command], self.root), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],

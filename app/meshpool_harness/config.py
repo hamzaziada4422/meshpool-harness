@@ -63,6 +63,7 @@ FIELDS = [
     ("SERPER_API_KEY", "Serper API key", "", "Optional. Google results through serper.dev."),
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
+    ("MH_SANDBOX", "Sandbox for commands", "", "Optional. 1 = commands can write only in the project and temporary folders (Linux needs bubblewrap; macOS has it built in)."),
 ]
 SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
