@@ -23,7 +23,7 @@ HEAD, TAIL = 3000, 3000
 _CAP_LOCK = threading.Lock()
 
 _RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg", "wc", "file", "stat", "which",
-             "type", "echo", "printf", "pwd", "env", "printenv", "uname", "du", "df", "tree", "nl", "sort", "uniq",
+             "type", "echo", "printf", "pwd", "uname", "du", "df", "tree", "nl", "sort", "uniq",
              "cut", "tr", "diff", "cmp", "md5sum", "sha256sum", "sha1sum", "xxd", "od", "hexdump", "strings", "jq",
              "readlink", "realpath", "basename", "dirname", "id", "whoami", "date", "ps", "true", "column", "less",
              "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
@@ -946,7 +946,7 @@ class Workspace:
             if _C.packaged():                                       # the user's own tools, not Meshpool's Python
                 env = _C.user_env()
             else:
-                env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")  # stale .pyc after same-size edits hides fixes
+                env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))  # stale .pyc after same-size edits hides fixes
                 proj = str(Path(__file__).resolve().parents[2])      # engine helper libraries importable anywhere
                 env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             if self.container and not command.lstrip().startswith("docker "):
@@ -1008,7 +1008,7 @@ class Workspace:
         if _C.packaged():
             env = _C.user_env()
         else:
-            env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+            env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
             proj = str(Path(__file__).resolve().parents[2])
             env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env.setdefault("PYTHONUTF8", "1")

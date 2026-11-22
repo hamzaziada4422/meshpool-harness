@@ -18,6 +18,11 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Simpler import.** Three steps and direct links to your old assistant's export page.
 - **Browser use works the first time.** Playwright is now a normal part of the install. From a terminal or source install it sets itself up when first needed, and it uses a Chromium already on the computer before downloading a second one. This is what lets Meshpool open your app and click through it for UI and UX checks.
 - **Bring your other agents.** Meshpool finds Claude Code, Codex, Cursor, OpenClaw and Hermes on your computer and lists their skills, tools, memories and instructions. You tick what you want and can preview first. Passwords and keys are never read, and tools come over without their secrets. Memories wait for your yes. From a terminal: `meshpool import agents --dry-run`.
+- **Meshpool looks at what it makes.** A page, slide, chart, logo, PDF, document or workbook is turned into pictures and checked before Meshpool says it is done. Web pages are also audited at desktop, tablet and phone width, light and dark. Models that cannot see images get the text and measurements instead.
+- **It can build interfaces properly.** A new Build a UI skill starts from a tested page, keeps one design system and fixes what the audit finds. Method adapted from the open Taste Skill (MIT).
+- **Twenty-two more ready-made skills** for sites, games, apps, dashboards, charts, diagrams, logos, PDFs, images, resumes, invoices, newsletters, study packs, citations, databases, transcripts and more.
+- **Safer by default.** Keys you saved in Meshpool are hidden from commands the agent runs. "Always allow" never covers deleting recursively, force-pushing, wiping a disk or piping a download into a shell. A chat is saved while it works, so a crash loses nothing. A single turn stops after 800 steps instead of running forever.
+- **Long tasks hold together.** Older steps are summarised into a note, /compact does it on demand, and long commands can run in the background.
 
 **New in 0.0.9**
 - **Meshpool for Linux.** A download for 64-bit Linux with everything inside (LibreOffice, Chromium, Node.js, Git and Python), tested in a bare Ubuntu 22.04 before it is published.

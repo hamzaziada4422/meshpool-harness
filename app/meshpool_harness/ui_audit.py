@@ -133,10 +133,41 @@ def _norm(path_or_url: str) -> str:
     return p.resolve().as_uri()
 
 
+def _serve(url: str):
+    """A page on disk is opened through a throwaway local server rooted at its folder, so root-relative files
+    (/style.css) and fetch() calls work as they will on a real site. Returns (address, stop)."""
+    if not url.startswith("file://"):
+        return url, lambda: None
+    import functools
+    import http.server
+    import threading
+    from urllib.parse import unquote, urlparse
+    path = Path(unquote(urlparse(url).path))
+    if path.drive if hasattr(path, "drive") else False:
+        pass
+    root = path.parent if path.is_file() else path
+
+    class Quiet(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, *a):  # noqa: D102
+            pass
+
+        def do_GET(self):  # noqa: N802, D102  a page with no icon is not an error
+            if self.path.startswith("/favicon.ico") and not (root / "favicon.ico").exists():
+                self.send_response(204)
+                self.end_headers()
+                return
+            super().do_GET()
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(Quiet, directory=str(root)))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    name = path.name if path.is_file() else ""
+    return f"http://127.0.0.1:{srv.server_address[1]}/{name}", srv.shutdown
+
+
 def audit(pw, url: str, views=("desktop", "tablet", "phone"), schemes=("light", "dark"), shots_dir: Path | None = None,
           launch=None) -> dict:
     """Run the audit. `launch` (optional) opens the browser (so the caller can pick its Chromium); default is Playwright's."""
-    url = _norm(url)
+    shown = _norm(url)
+    url, stop = _serve(shown)
     browser = (launch or launcher(pw))()
     merged: dict = {}
     outline, shots, runs = [], [], []
@@ -179,6 +210,8 @@ def audit(pw, url: str, views=("desktop", "tablet", "phone"), schemes=("light", 
                 ctx.close()
     finally:
         browser.close()
+        stop()
+    url = shown
     findings = sorted(merged.values(), key=lambda f: (f["sev"] != "must", f["rule"]))
     return {"url": url, "findings": findings, "outline": outline, "shots": shots, "runs": runs,
             "text": report(url, findings, outline, shots, runs)}

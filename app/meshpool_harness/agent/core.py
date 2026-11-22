@@ -649,6 +649,19 @@ def _apply_refused(body: dict) -> dict:
     return body
 
 
+_DESTRUCTIVE = re.compile(
+    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
+    r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
+    r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
+    re.I)
+
+
+def _destructive(args: dict) -> bool:
+    """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo."""
+    return bool(_DESTRUCTIVE.search(str(args.get("command") or args.get("cmd") or "")
+                                    + " " + " ".join(map(str, args.get("commands") or []))))
+
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
 
@@ -669,7 +682,7 @@ class Agent:
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
         # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
-        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0)
+        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 800     # a runaway turn stops; the next message continues
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
@@ -1021,6 +1034,10 @@ class Agent:
             for step in (range(self.max_steps) if self.max_steps else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
+                if time.time() - getattr(self, "_saved_at", 0) > 4:        # a crash or power loss keeps the work so far
+                    self._saved_at = time.time()
+                    self._running = True                  # saved as unfinished: a crash here is resumed, not lost
+                    self.save()
                 self._maybe_compact()
                 if self.pace_deadline and not wrapped and step and (
                         time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
@@ -1179,6 +1196,7 @@ class Agent:
             except Exception:  # noqa: BLE001 - a receipt must never break a turn
                 pass
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
+            self._running = False
             self.save()
         return final
 
@@ -2060,8 +2078,8 @@ class Agent:
                  else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
-        if group in self.always:
-            return True, ""
+        if group in self.always and not (group == "bash" and _destructive(args)):
+            return True, ""                    # "always" never covers a command that destroys or sends things away
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky:
@@ -2447,15 +2465,17 @@ class Agent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            tmp = self.dir / "session.json.tmp"
+            tmp.write_text(json.dumps({
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "model": self.current_model(), "model_choice": self.model, "plan": self.plan,
                 "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
                 "kind": "cowork" if self.profile == "work" else "code",
-                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False)),
+                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False) or getattr(self, "_running", False)),
                 "route": self.route.to_dict() if getattr(self, "route", None) is not None else None,
                 "route_text": getattr(self, "_route_text", ""),
                 "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.dir / "session.json")      # a crash mid-write never leaves half a session
         except OSError:
             pass
 

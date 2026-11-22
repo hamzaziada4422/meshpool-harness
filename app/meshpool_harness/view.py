@@ -50,6 +50,9 @@ def _pick(pages, n: int) -> list[int]:
     return [p - 1 for p in dict.fromkeys(want) if 0 < p <= n][:MAX_PAGES]
 
 
+texts: dict = {}          # picture file -> the text the file itself holds, for models that cannot see
+
+
 def _pdf_pages(pdf: Path, pages, out: Path, stem: str, width: int = 1200) -> tuple[list, list]:
     import pypdfium2 as pdfium
     doc = pdfium.PdfDocument(str(pdf))
@@ -61,6 +64,10 @@ def _pdf_pages(pdf: Path, pages, out: Path, stem: str, width: int = 1200) -> tup
             f = out / f"{stem}-p{i + 1:02d}.png"
             page.render(scale=width / page.get_width()).to_pil().convert("RGB").save(f, optimize=True)
             shots.append((f"page {i + 1} of {n}", f))
+            try:
+                texts[f] = page.get_textpage().get_text_range().strip()
+            except Exception:  # noqa: BLE001
+                pass
         notes = [f"{n} page{'s' if n != 1 else ''} in all."] + ([f"Showing the first {MAX_PAGES}; ask for others with pages."] if n > MAX_PAGES and not pages else [])
         return shots, notes
     finally:
@@ -86,6 +93,10 @@ def _screenshot_page(launch, url: str, out_file: Path, width: int, full: bool = 
         page.goto(url, wait_until="load", timeout=20000)
         page.wait_for_timeout(400)
         page.screenshot(path=str(out_file), full_page=full)
+        try:
+            texts[out_file] = page.inner_text("body", timeout=3000).strip()
+        except Exception:  # noqa: BLE001
+            pass
         ctx.close()
     finally:
         browser.close()
@@ -102,6 +113,7 @@ def render(path: str, pages=None, out_dir: Path | None = None, launch=None, widt
     if not k:
         raise ValueError(f"I can't draw a {p.suffix or 'file like this'}. It works for web pages, SVG, images, PDF, "
                          "slides, documents, workbooks and CSV.")
+    texts.clear()
     out = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="view_"))
     out.mkdir(parents=True, exist_ok=True)
     stem = p.stem
@@ -144,14 +156,22 @@ def render(path: str, pages=None, out_dir: Path | None = None, launch=None, widt
 
 
 def reading(shots: list) -> str:
-    """The text in each picture (OCR), for models that cannot see images. Empty when OCR is not installed."""
+    """What a model that cannot see images gets instead of the picture: the text read out of it (OCR) or, when OCR is
+    not installed, the text the file itself holds. It says plainly when the picture itself was not seen."""
+    ocr = None
     try:
-        from meshpool_harness import ocr
-        if not ocr.available():
-            return ""
+        from meshpool_harness import ocr as _o
+        ocr = _o if _o.available() else None
     except Exception:  # noqa: BLE001
-        return ""
+        ocr = None
     parts = []
     for label, f in shots[:MAX_PAGES]:
-        parts.append(f"[{label}] " + ocr.describe(f, Path(f).name))
+        if ocr:
+            parts.append(f"[{label}] " + ocr.describe(f, Path(f).name))
+        elif texts.get(f):
+            parts.append(f"[{label}] Text on it (from the file, not from the picture):\n" + texts[f][:2500])
+        else:
+            parts.append(f"[{label}] No text could be read from it.")
+    if not ocr and parts:
+        parts.append("Note: the picture itself was not seen, only its text. Say so rather than claiming the look was checked.")
     return "\n".join(parts)

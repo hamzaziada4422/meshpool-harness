@@ -233,6 +233,18 @@ def _write(values: dict, path: Path) -> Path:
     return path
 
 
+_INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
+
+
+def scrub_env(env: dict) -> dict:
+    """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
+    writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
+    for k in list(env):
+        if k == "MESHPOOL_API_KEY" or (k in SECRET and k in _INJECTED):
+            env.pop(k, None)
+    return env
+
+
 def load_into_env(override: bool = False) -> dict:
     """Copy config values into os.environ (shell values win unless override). Empty values are skipped."""
     vals = read()
@@ -241,6 +253,7 @@ def load_into_env(override: bool = False) -> dict:
             continue
         if override or k not in os.environ:
             os.environ[k] = v
+            _INJECTED.add(k)
     from meshpool_harness import bundled
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
     return vals
@@ -348,7 +361,7 @@ def user_env(base: dict | None = None) -> dict:
     """Environment for the user's own commands (the agent's shell, the terminal panel). Inside the app, drop the
     variables that point Python at Meshpool's bundled runtime, so the user's python3, pip and tools behave as in
     their own terminal."""
-    env = dict(os.environ if base is None else base)
+    env = scrub_env(dict(os.environ if base is None else base))
     if packaged():
         for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX", "PYTHONDONTWRITEBYTECODE",
                   "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
