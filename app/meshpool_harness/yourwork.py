@@ -395,7 +395,7 @@ def recap_png(months: int = 3, now: float | None = None, inputs: dict | None = N
         d.rounded_rectangle([420, y + 4, 420 + max(w, 12), y + 36], radius=10, fill="#1F6FD0")
         d.text((420 + max(w, 12) + 16, y), str(k["count"]), font=_font(26), fill="#9FB3CC")
         y += 62
-    y = max(y + 30, 900)
+    y += 40
     d.text((72, y), "Agents", font=_font(32, True), fill="#FFFFFF")
     ag = ", ".join(a["name"] for a in r["agents"]) or "None yet"
     d.text((72, y + 54), ag[:60], font=_font(28), fill="#9FB3CC")

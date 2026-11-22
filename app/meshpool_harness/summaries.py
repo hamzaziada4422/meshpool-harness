@@ -259,7 +259,7 @@ def touch_opened(pid: str, ts: float | None = None) -> float:
     with _LOCK:
         d = _read_json(_opened_file(), {})
         prev = float(d.get(pid) or 0)
-        d[pid] = round(ts or time.time(), 1)
+        d[pid] = round(ts or time.time(), 3)
         _write_json(_opened_file(), d)
     return prev
 
