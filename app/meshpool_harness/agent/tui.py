@@ -1277,7 +1277,12 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     if not no_mcp and not sub:                   # an ACP agent gets the MCP servers through ACP itself
         if prompt is None:
             term.spin.start("Starting MCP servers")
-        mcp = Manager(roots=[wd]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
+        try:
+            from meshpool_harness.harnesses.acp import office_extra
+            extra = office_extra(wd)                 # the same office tools the app's agents have
+        except Exception:  # noqa: BLE001
+            extra = None
+        mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
     pm = os.environ.get("MH_PERMISSION_MODE", "")
     mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)

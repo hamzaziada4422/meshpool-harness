@@ -194,7 +194,7 @@ when the user asks for it. Use Python through bash for quick calculations.
 5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish. \
 Research budget: when the request or its files already hold sourced research, use it and only look up what they \
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
-stop researching once each number you need has a source. Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
+stop researching once each number you need has a source. To change text, cells, comments or tracked changes in a Word, Excel or PowerPoint file the user already has, call edit_office_file (it keeps their formatting; never rewrite the file's XML by hand). Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
 user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
 with python-pptx code. If an engine call returns a job id, \
@@ -986,6 +986,12 @@ class Agent:
         if note:
             text += "\n\n[Hook]\n" + note
         text = EX.expand_mentions(text, self.root)          # @file attaches the file
+        try:                                                # a message about an office file brings the office tools
+            from meshpool_harness import capabilities as CAP
+            if re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", text, re.I) or CAP.needs(text):
+                self.office_on = True
+        except Exception:  # noqa: BLE001
+            pass
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
