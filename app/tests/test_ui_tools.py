@@ -111,3 +111,12 @@ def test_the_audit_catches_filler_text_and_placeholder_links(pw, tmp_path):
     r = UA.audit(pw, str(f), views=("desktop",), schemes=("light",))
     rules = {x["rule"] for x in r["findings"]}
     assert {"left-over-text", "placeholder-link"} <= rules
+
+
+def test_the_audit_flags_made_up_phone_numbers(pw, tmp_path):
+    f = tmp_path / "q.html"
+    f.write_text('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><title>t</title></head>'
+                 '<body><main><h1>Shop</h1><a href="https://wa.me/201234567890" style="display:inline-block;min-height:48px;min-width:48px">Order</a></main></body></html>',
+                 encoding="utf-8")
+    r = UA.audit(pw, str(f), views=("desktop",), schemes=("light",))
+    assert any(x["rule"] == "placeholder-link" for x in r["findings"])
