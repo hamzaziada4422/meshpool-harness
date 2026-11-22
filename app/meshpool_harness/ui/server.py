@@ -28,6 +28,9 @@ APP = C.APP
 HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
+EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
+                  "/api/checks", "/api/firstrun", "/api/away")
+
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
@@ -214,6 +217,17 @@ class Handler(BaseHTTPRequestHandler):
         raw = self._body()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
+    def _extra(self, u):
+        from meshpool_harness.ui import routes_extra as RX
+        try:
+            return self._send(*RX.handle(self.command, u, self._body() if self.command == "POST" else b""))
+        except (ValueError, KeyError) as e:
+            return self._send(400, {"error": str(e).strip("'\"")})
+        except (BrokenPipeError, ConnectionResetError):
+            return None
+        except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
     def _company(self, u):
         from meshpool_harness.ui import company_api as CO
         try:
@@ -378,6 +392,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
             return self._company(u)
+        if u.path.startswith(EXTRA_PREFIXES):        # 0.0.10: memory page, insights, summaries, receipts
+            return self._extra(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, get_settings())
@@ -548,6 +564,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
             return self._company(u)
+        if u.path.startswith(EXTRA_PREFIXES):        # 0.0.10: memory page, insights, summaries, receipts
+            return self._extra(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
