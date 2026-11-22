@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Meshpool
+Comment=One desktop agent for code, documents, spreadsheets, decks and research
+Exec=__EXEC__
+Icon=__ICON__
+Terminal=false
+Categories=Development;Office;
+StartupWMClass=Meshpool
+X-Meshpool-Version=@VERSION@

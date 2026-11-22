@@ -1,4 +1,4 @@
-"""Assemble the Meshpool app for Apple silicon, Intel Macs and Windows. One package per platform: the desktop app
+"""Assemble the Meshpool app for Apple silicon, Intel Macs, Windows and Linux (x64). One package per platform: the desktop app
 with the meshpool terminal command, browser use, computer use, Office output, Pi and Hermes inside.
 
 The version has one source, __version__ in app/meshpool_harness/__init__.py: this script stamps it into Info.plist and
@@ -36,9 +36,11 @@ IGN = shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache")
 PKG = ROOT / "packaging"
 WIN_LAUNCH = DEPS / "win/Meshpool"                        # Meshpool.exe built from packaging/win/launcher
 PI = DEPS / "pi/node_modules"                             # Pi coding agent (npm), platform-neutral JS + wasm
-NODE = {"mac-arm64": DEPS / "node-mac-arm64", "mac-x64": DEPS / "node-mac-x64", "win": DEPS / "node-win"}
-PI_NATIVE = {"mac-arm64": "darwin-arm64", "mac-x64": "darwin-x64", "win": "win32-x64"}
-RT = {"mac-arm64": DEPS / "rt-mac/python", "mac-x64": DEPS / "rt-macx64/python", "win": DEPS / "rt-win/python"}
+NODE = {"mac-arm64": DEPS / "node-mac-arm64", "mac-x64": DEPS / "node-mac-x64", "win": DEPS / "node-win",
+        "linux": DEPS / "node-linux-x64"}
+PI_NATIVE = {"mac-arm64": "darwin-arm64", "mac-x64": "darwin-x64", "win": "win32-x64", "linux": "linux-x64"}
+RT = {"mac-arm64": DEPS / "rt-mac/python", "mac-x64": DEPS / "rt-macx64/python", "win": DEPS / "rt-win/python",
+      "linux": DEPS / "rt-linux/python"}
 # The oldest macOS each Mac app opens on (Info.plist's LSMinimumSystemVersion): 11 Big Sur on both. Node 22, Chromium and
 # LibreOffice need it, so the Intel app no longer promises 10.15. The launcher and packaging/mac/check_minos.py use the
 # same number (.github/workflows/release.yml, packaging/mac/repack.sh).
@@ -116,7 +118,7 @@ def _bt():
     return mod
 
 
-LO_KEY = {"mac-arm64": "mac-arm64", "mac-x64": "mac-x64", "win": "win-x64"}
+LO_KEY = {"mac-arm64": "mac-arm64", "mac-x64": "mac-x64", "win": "win-x64", "linux": "linux-x64"}
 CACHE = DEPS / "download-cache"                           # downloads are kept here between builds (hash-checked each time)
 
 
@@ -149,7 +151,7 @@ def libreoffice(app_dir: Path, plat: str):
     dest = app_dir / "vendor" / "libreoffice"
     bt.fetch_libreoffice(LO_KEY[plat], CACHE, dest)
     full = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file() and not f.is_symlink()) // 1_000_000
-    _lo_prune().prune(dest, "win" if plat == "win" else "mac")
+    _lo_prune().prune(dest, "win" if plat == "win" else "linux" if plat == "linux" else "mac")
     mb = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file() and not f.is_symlink()) // 1_000_000
     print(f"build_all: LibreOffice {bt.LO_VERSION} for {plat}: {full} MB unpacked, {mb} MB after pruning")
 
@@ -157,7 +159,7 @@ def libreoffice(app_dir: Path, plat: str):
 # Playwright's names for its downloads. Its current Chromium only exists for macOS 14 and later hosts (mac11, mac12 and mac13
 # are refused: "Playwright does not support chromium on mac11"), and the binary itself needs macOS 13. mac14 only picks the
 # download (Chrome for Testing, arm64 or x64), it does not make the app need macOS 14.
-PW_PLATFORM = {"mac-arm64": "mac14-arm64", "mac-x64": "mac14", "win": "win64"}
+PW_PLATFORM = {"mac-arm64": "mac14-arm64", "mac-x64": "mac14", "win": "win64", "linux": "ubuntu22.04-x64"}
 
 
 def chromium(app_dir: Path, plat: str):
@@ -170,7 +172,8 @@ def chromium(app_dir: Path, plat: str):
     import subprocess
     dest = app_dir / "vendor" / "browsers"
     exe = RT[plat] / ("python.exe" if plat == "win" else "bin/python3")
-    host_ok = (plat == "win") == (os.name == "nt") and (plat == "win" or sys.platform == "darwin")
+    host_ok = ((plat == "win") == (os.name == "nt") and (plat == "win" or sys.platform == "darwin")) if plat != "linux" \
+        else sys.platform.startswith("linux")
     py = str(exe) if host_ok and exe.exists() else sys.executable
     env = dict(os.environ, PLAYWRIGHT_BROWSERS_PATH=str(dest), PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=PW_PLATFORM[plat])
     import time
@@ -244,7 +247,8 @@ def pi_and_node(app_dir: Path, node_dst: Path, plat: str):
         if "/prebuilds" in d.replace("\\", "/") and d.rstrip("/").endswith("prebuilds"):
             out |= {n for n in names if n != keep}
         if d.replace("\\", "/").endswith("pi-tui/native"):
-            out |= {n for n in names if n != {"darwin-arm64": "darwin", "darwin-x64": "darwin", "win32-x64": "win32"}[keep]}
+            out |= {n for n in names if n != {"darwin-arm64": "darwin", "darwin-x64": "darwin", "win32-x64": "win32",
+                                               "linux-x64": "linux"}[keep]}
         return out
     shutil.copytree(PI, app_dir / "vendor" / "pi" / "node_modules", ignore=ign, symlinks=True)
     shutil.copytree(NODE[plat], node_dst, symlinks=True, ignore=shutil.ignore_patterns("corepack*", "include", "share"))
@@ -290,6 +294,43 @@ def mac_app(arch: str):
     shutil.copy2(PKG / "mac/launcher/main.c", OUT / f"app-{arch}" / "launcher.c")
 
 
+def git_linux(root: Path):
+    """Git for Linux into <app root>/git (bin/git, libexec/git-core). deps/git-linux if present, else built from the
+    pinned source tarball by packaging/linux/build_git.sh (on a Linux build host)."""
+    src = DEPS / "git-linux"
+    if not src.is_dir():
+        import subprocess
+        if not sys.platform.startswith("linux"):
+            sys.exit(f"build_all: {src} is missing. Build it on Linux: packaging/linux/build_git.sh {src}")
+        subprocess.run(["bash", str(PKG / "linux/build_git.sh"), str(src)], check=True)
+    shutil.copytree(src, root / "git", symlinks=True)
+
+
+def linux_app():
+    """Linux x64: one folder, Meshpool/, packed as Meshpool-Linux-x64.tar.gz. The `meshpool` command and the
+    `Meshpool` app launcher sit at its top with install.sh (a menu entry and the command on PATH); the runtime, app
+    code, Node, Git, LibreOffice and Chromium sit beside them, the same layout as the Windows app."""
+    root = OUT / "app-linux" / "Meshpool"
+    root.mkdir(parents=True)
+    for name in ("meshpool", "Meshpool", "install.sh"):
+        shutil.copy2(PKG / "linux" / name, root / name)
+        (root / name).chmod(0o755)
+    stamp(PKG / "linux/meshpool.desktop", root / "meshpool.desktop")
+    shutil.copy2(PKG / "icons/icon-256.png", root / "meshpool.png")
+    shutil.copytree(RT["linux"], root / "python", symlinks=True, ignore=IGN)
+    git_linux(root)
+    app_code(root / "app")
+    pi_and_node(root / "app", root / "node", "linux")
+    libreoffice(root / "app", "linux")
+    chromium(root / "app", "linux")
+    docs(root / "harness-docs")
+    # Playwright's own Node needs libatomic, which a desktop may lack: it runs on the app's Node 22 instead (as on macOS)
+    drv = next((root / "python" / "lib").glob("python3.*/site-packages/playwright/driver"), None)
+    if drv and (drv / "node").exists():
+        (drv / "node").unlink()
+        (drv / "node").symlink_to(os.path.relpath(root / "node" / "bin" / "node", drv))
+
+
 def win_app():
     root = OUT / "app-win" / "Meshpool"
     root.mkdir(parents=True)
@@ -331,5 +372,7 @@ if __name__ == "__main__":
             mac_app(a)
     if "win" in only.split(","):
         win_app()
+    if "linux" in only.split(","):
+        linux_app()
     for p in sorted(OUT.iterdir()):
         print(p.name)

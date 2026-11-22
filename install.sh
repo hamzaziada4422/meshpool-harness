@@ -79,7 +79,7 @@ sha256() {
 # opens normally. This is how Homebrew and rustup install, and it is the stopgap until the app is signed and
 # notarized (then the download button works on its own and this is just a second way in).
 app_mac() {
-  [ "$(uname -s)" = Darwin ] || die "The app is for macOS. On Linux, install the terminal version: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh"
+  [ "$(uname -s)" = Darwin ] || die "--app installs the macOS app. On Linux, download Meshpool-Linux-x64.tar.gz from https://github.com/$REPO/releases/latest (unpack it, run its install.sh), or install the terminal version: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | sh"
   command -v hdiutil >/dev/null 2>&1 || die "hdiutil is missing, so the disk image cannot be opened."
 
   case "$(uname -m)" in

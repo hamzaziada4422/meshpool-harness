@@ -1,6 +1,7 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
 **New in 0.0.9**
+- **Meshpool for Linux.** A download for 64-bit Linux with everything inside (LibreOffice, Chromium, Node.js, Git and Python), tested in a bare Ubuntu 22.04 before it is published.
 - **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.
 - **Slides that point the way.** Each numbered point beside a chart marks the bar it explains with the same number. A pointer leads from the evidence to its so-what. Difference arrows and target lines never print over the chart's labels.
 - **Cleaner pages, checked on decks written by the real model.** Footnotes go one per line and are never cut. Table columns are sized to their content. A layout that does not fit is never kept. There is no takeaway box with a bar down its side, and bullets are never cut mid-sentence. In blind reviews against a BCG deck, decks from four new briefs scored level with it.
@@ -51,6 +52,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 | Mac with Apple silicon | Meshpool.dmg |
 | Mac with Intel (macOS 11 or later) | Meshpool-Intel.dmg |
 | Windows 10 or 11 | Meshpool-Setup.exe |
+| Linux, 64-bit (glibc 2.35 or later) | Meshpool-Linux-x64.tar.gz |
 
 **Setup guide** ([full guide](https://github.com/hamzaziada4422/meshpool-harness/blob/main/docs/SETUP.md))
 
@@ -73,6 +75,14 @@ curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/mai
 
 
 *Windows:* run Meshpool-Setup.exe. If "Windows protected your PC" appears, click **More info**, then **Run anyway**.
+
+*Linux:* unpack the download and run its installer, which adds Meshpool to your applications menu and the `meshpool` command to your PATH:
+
+```sh
+tar -xzf ~/Downloads/Meshpool-Linux-x64.tar.gz -C ~/.local/share && ~/.local/share/Meshpool/install.sh
+```
+
+LibreOffice, Chromium, Node.js, Git and Python ship inside the folder; it uses the desktop libraries every Linux desktop has. To update, unpack the new download over the old folder. Its checksum is in Meshpool-Linux-x64.tar.gz.sha256.
 
 <img src="https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/docs/setup/windows-smartscreen.png" alt="Click More info" width="300"> <img src="https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/docs/setup/windows-smartscreen-run-anyway.png" alt="Click Run anyway" width="300">
 

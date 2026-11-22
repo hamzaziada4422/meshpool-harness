@@ -254,6 +254,7 @@ def test_a_node_already_last_on_path_is_moved_to_the_front(app, monkeypatch):
 
 def test_libreoffice_folder_is_on_path_for_vendored_skills(app, monkeypatch):
     monkeypatch.setattr("os.name", "posix")
+    monkeypatch.setattr(bundled.sys, "platform", "darwin")             # Linux has its own test (test_linux_download)
     mac = app / "vendor" / "libreoffice" / "LibreOffice.app" / "Contents" / "MacOS"
     mac.mkdir(parents=True)
     monkeypatch.setenv("PATH", "/usr/bin")
@@ -312,6 +313,7 @@ def test_publish_step_still_attaches_files_to_a_release_published_by_hand():
     """A release published on GitHub (what starts the workflow) is already public but has no files yet: only a public
     release that already carries SHA256SUMS.txt is left alone. And the Mac Git must not install 140 hard links."""
     text = (ROOT / ".github/workflows/release.yml").read_text()
+    text = text[text.index("\n  publish:"):]                       # the full release, not the Linux attach job
     i = text.index("isDraft -q .isDraft")
     cond = text[i:i + 400]
     assert "grep -qx SHA256SUMS.txt" in cond, "the already-public branch must also require the uploaded SHA256SUMS.txt"

@@ -43,10 +43,12 @@ LO_PINNED = {
                 "26a830205c617cc624b2a83783ef46434a4d6c337c3a873f79c43012171f83de", 308070986),
     "win-x64": ("win/x86_64", f"LibreOffice_{LO_BUILD}_Win_x86-64.msi",
                 "480fecf759fc6393bd614fbf43753eb95a8198fc1a065d41b727e3b664cd1e59", 373121024),
+    "linux-x64": ("deb/x86_64", f"LibreOffice_{LO_BUILD}_Linux_x86-64_deb.tar.gz",
+                  "8cd04a88396a9230264ff784ec89cc090cbfd0960c192483ba2b80fa53939416", 218569368),
 }
 LO_SOURCE_URL = f"https://downloadarchive.documentfoundation.org/libreoffice/old/{LO_BUILD}/src/"     # libreoffice-{LO_BUILD}.tar.xz
 LO_EXE = {"mac-arm64": "LibreOffice.app/Contents/MacOS/soffice", "mac-x64": "LibreOffice.app/Contents/MacOS/soffice",
-          "win-x64": "program/soffice.exe"}
+          "win-x64": "program/soffice.exe", "linux-x64": "program/soffice"}
 
 # ------------------------------------------------------------------------------------------------ Git (GPL-2.0)
 # Windows: MinGit from Git for Windows (zip, already how the release workflow gets it). Pin it by filling in the two
@@ -140,13 +142,61 @@ def _run(cmd: list[str], timeout: int = 1800) -> None:
         raise BundleError(f"{cmd[0]} failed: {(r.stderr or r.stdout)[-400:]}")
 
 
+def _deb_members(deb: Path) -> dict:
+    """The members of a .deb (an ar archive): {name: bytes}. Pure Python, so no dpkg-deb or ar is needed."""
+    data = deb.read_bytes()
+    if not data.startswith(b"!<arch>\n"):
+        raise BundleError(f"{deb.name} is not a Debian package")
+    out, pos = {}, 8
+    while pos + 60 <= len(data):
+        head = data[pos:pos + 60]
+        name = head[:16].decode().strip().rstrip("/")
+        size = int(head[48:58].decode().strip())
+        out[name] = data[pos + 60:pos + 60 + size]
+        pos += 60 + size + (size & 1)
+    return out
+
+
+def _extract_debs(archive: Path, work: Path, dest: Path) -> None:
+    """Linux: the pinned release is a tarball of .deb packages. Every package's files go under one tree, and its
+    opt/libreoffice<version>/ folder (program/, share/, presets/) becomes dest."""
+    import io
+    import tarfile
+    def untar(t, path, flt):
+        try:
+            t.extractall(path, filter=flt)
+        except TypeError:                                    # a Python without extraction filters
+            t.extractall(path)
+    with tarfile.open(archive) as t:
+        untar(t, work / "t", "data")
+    tree = work / "root"
+    tree.mkdir()
+    debs = sorted((work / "t").rglob("*.deb"))
+    if not debs:
+        raise BundleError("no .deb packages in the LibreOffice tarball")
+    for deb in debs:
+        members = _deb_members(deb)
+        name = next((n for n in members if n.startswith("data.tar")), None)
+        if not name:
+            raise BundleError(f"{deb.name} has no data.tar")
+        with tarfile.open(fileobj=io.BytesIO(members[name])) as t:
+            untar(t, tree, "tar")
+    root = next((p for p in (tree / "opt").glob("libreoffice*") if (p / "program" / "soffice").exists()), None)
+    if not root:
+        raise BundleError("program/soffice not found after unpacking the packages")
+    for item in root.iterdir():
+        shutil.move(str(item), str(dest / item.name))
+
+
 def extract(archive: Path, dest: Path, key: str) -> Path:
     """Unpack a pinned download into dest so that dest/LO_EXE[key] exists. macOS: copy LibreOffice.app out of the dmg.
     Windows: msiexec /a (administrative extract). Non-Windows hosts use msiextract or 7z for the msi."""
     dest.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="lo-extract-", dir=str(dest.parent)))
     try:
-        if key.startswith("mac"):
+        if key.startswith("linux"):
+            _extract_debs(archive, work, dest)
+        elif key.startswith("mac"):
             if shutil.which("hdiutil"):
                 mnt = work / "mnt"
                 mnt.mkdir()

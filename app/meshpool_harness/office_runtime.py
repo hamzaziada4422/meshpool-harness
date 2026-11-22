@@ -16,7 +16,7 @@ import sys
 from pathlib import Path
 
 VERSION = "26.2.7"          # the release packaging/bundled_tools.py bundles (tests/test_bundled_tools.py keeps them equal)
-_EXE = {"darwin": "LibreOffice.app/Contents/MacOS/soffice", "win32": "program/soffice.exe"}
+_EXE = {"darwin": "LibreOffice.app/Contents/MacOS/soffice", "win32": "program/soffice.exe", "linux": "program/soffice"}
 
 
 def is_packaged() -> bool:

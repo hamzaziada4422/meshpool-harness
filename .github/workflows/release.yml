@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), or both. Publishing needs both. probe: only report which macOS runners this repository is given."
+        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), linux, or both (all platforms). Publishing needs both. linux-publish: build Linux and attach it to the current version's public release (main only). probe: only report which macOS runners this repository is given."
         type: choice
-        options: [windows, mac, both, probe]
+        options: [windows, mac, linux, both, linux-publish, probe]
         default: windows
 
 permissions:
@@ -328,8 +328,117 @@ jobs:
           name: windows
           path: out/Meshpool-Setup.exe
 
+  linux:
+    # Linux x64: one folder (Meshpool/) packed as Meshpool-Linux-x64.tar.gz. Built on Ubuntu 22.04, so it runs on glibc
+    # 2.35 and later. Before anything is published it is unpacked in a bare Ubuntu 22.04 container that has only the
+    # system libraries a desktop has (no LibreOffice, Chromium, Node, Git or Python of its own), and
+    # packaging/linux/selfcheck.py proves the app uses only the copies inside the folder.
+    if: github.event_name == 'release' || inputs.platforms == 'linux' || inputs.platforms == 'linux-publish' || inputs.platforms == 'both'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Third-party runtimes
+        run: |
+          set -euo pipefail
+          retry() { local i; for i in 1 2 3 4; do "$@" && return 0; echo "retry $i/4 in $((i * 15)) s: $*"; sleep $((i * 15)); done; return 1; }
+          sudo apt-get update -q && sudo apt-get install -y -q libcurl4-openssl-dev zlib1g-dev   # to build Git
+          mkdir -p deps && cd deps
+          PBS=$(retry gh release view --repo astral-sh/python-build-standalone --json tagName -q .tagName)
+          assets=$(retry gh release view "$PBS" --repo astral-sh/python-build-standalone --json assets -q '.assets[].name')
+          asset=$(printf '%s\n' "$assets" | grep -E "^cpython-3\.12\.[0-9]+\+[0-9]+-x86_64-unknown-linux-gnu-install_only\.tar\.gz$" | head -1)
+          retry gh release download "$PBS" --repo astral-sh/python-build-standalone -p "$asset" --clobber
+          mkdir -p rt-linux && tar -xzf "$asset" -C rt-linux && rm "$asset"
+          PY=rt-linux/python/bin/python3
+          clone_hermes() { rm -rf vendor-hermes; git -c core.autocrlf=false clone -q https://github.com/NousResearch/hermes-agent vendor-hermes; }
+          retry clone_hermes
+          (cd vendor-hermes && git checkout -q "$HERMES_COMMIT" && git apply --ignore-whitespace ../../packaging/hermes-acp-server.patch && rm -rf .git)
+          "$PY" ../packaging/hermes_requirements.py vendor-hermes > hermes-req.txt
+          retry "$PY" -m pip install -q --retries 10 --timeout 60 --prefer-binary -r ../packaging/requirements-cli.txt -r hermes-req.txt $RUNTIME_EXTRAS
+          CURL=(curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 --connect-timeout 30)
+          sums=$(retry "${CURL[@]}" https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt)
+          NODE=$(printf '%s\n' "$sums" | grep -oE 'node-v22\.[0-9.]+-linux-x64\.tar\.gz' | head -1)
+          retry "${CURL[@]}" -o node.tar.gz "https://nodejs.org/dist/latest-v22.x/$NODE"
+          echo "$(printf '%s\n' "$sums" | grep " $NODE\$" | cut -d' ' -f1)  node.tar.gz" | sha256sum -c -
+          mkdir -p node-linux-x64 && tar -xzf node.tar.gz -C node-linux-x64 --strip-components=1 && rm node.tar.gz
+          mkdir -p pi && retry npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
+      - name: Build the app folder
+        run: python3 packaging/build_all.py --only=linux
+      - name: Check the folder (LibreOffice converts; nothing it needs is missing)
+        run: |
+          set -euo pipefail
+          rm -rf deps/download-cache
+          M=dist-src/app-linux/Meshpool
+          "$M/python/bin/python3" -m compileall -q -j0 "$M/app" >/dev/null || true     # faster first start
+          "$M/python/bin/python3" packaging/verify_lo_prune.py "$M/app/vendor/libreoffice/program/soffice"
+          python3 packaging/lo_deps_check.py "$M/app/vendor/libreoffice" linux
+      - name: Pack
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          tar -C dist-src/app-linux -czf out/Meshpool-Linux-x64.tar.gz Meshpool
+          (cd out && sha256sum Meshpool-Linux-x64.tar.gz > Meshpool-Linux-x64.tar.gz.sha256)
+          ls -la out; rm -rf dist-src
+      - name: Smoke test the download in a bare Ubuntu 22.04 (what a user unpacks) before anything is published
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          docker run --rm -v "$PWD:/w:ro" -e VER="$VER" ubuntu:22.04 bash -euo pipefail -c '
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -q >/dev/null
+            # what a desktop has: the graphics, font and security libraries (no LibreOffice, Chromium, Node, Git, Python)
+            apt-get install -y -q --no-install-recommends ca-certificates fontconfig libfreetype6 libnss3 libnspr4 \
+              libx11-6 libx11-xcb1 libxcb1 libxext6 libxrender1 libxinerama1 libxrandr2 libxcomposite1 libxdamage1 \
+              libxfixes3 libxkbcommon0 libsm6 libice6 libdbus-1-3 libglib2.0-0 libcups2 libavahi-client3 libcairo2 \
+              libpango-1.0-0 libatk1.0-0 libatk-bridge2.0-0 libdrm2 libgbm1 libasound2 libcurl4 >/dev/null
+            for t in soffice libreoffice chromium chrome node git python3; do
+              if command -v "$t" >/dev/null; then echo "this container has $t, so the check would prove nothing"; exit 1; fi
+            done
+            cd /tmp && tar -xzf /w/out/Meshpool-Linux-x64.tar.gz
+            env -i HOME=/root PATH=/usr/bin:/bin LANG=C.UTF-8 /tmp/Meshpool/python/bin/python3 -P /w/packaging/linux/selfcheck.py /tmp/Meshpool
+            env -i HOME=/root PATH=/usr/bin:/bin LANG=C.UTF-8 /tmp/Meshpool/python/bin/python3 /w/packaging/smoke.py --app /tmp/Meshpool/app --version "$VER"
+            # `meshpool check` exits 1 here because no API key is set; what matters is where each tool comes from
+            out=$(env -i HOME=/root PATH=/usr/bin:/bin /tmp/Meshpool/meshpool check || true); echo "$out"
+            for t in "Git " "Node.js " "LibreOffice "; do
+              echo "$out" | grep -E "\[ok\] $t.*/tmp/Meshpool/.*ships with Meshpool" >/dev/null || { echo "meshpool check: $t is not the bundled copy"; exit 1; }
+            done
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            out/Meshpool-Linux-x64.tar.gz
+            out/Meshpool-Linux-x64.tar.gz.sha256
+
+  linux-attach:
+    # Adds the Linux download to the CURRENT version's release once it is public (the version Linux joined after its
+    # Mac and Windows files were published). Only the Linux file and its own checksum file are uploaded: the
+    # installers, update-manifest.json and SHA256SUMS.txt that the Mac and Windows updaters check stay exactly as
+    # published. From the next version on, Linux is part of the full release (publish, below).
+    needs: [linux]
+    if: inputs.platforms == 'linux-publish' && github.ref == 'refs/heads/main' && needs.linux.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: built
+      - name: Attach the Linux download
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          TAG="v$VER"
+          gh release view "$TAG" --json isDraft -q .isDraft | grep -qx false || { echo "::error::$TAG is not a public release"; exit 1; }
+          (cd built && sha256sum -c Meshpool-Linux-x64.tar.gz.sha256)
+          gh release upload "$TAG" built/Meshpool-Linux-x64.tar.gz built/Meshpool-Linux-x64.tar.gz.sha256 --clobber
+          gh release edit "$TAG" --notes-file packaging/release-notes.md
+          mkdir -p check && gh release download "$TAG" --dir check --pattern 'Meshpool-Linux-x64.tar.gz*'
+          (cd check && sha256sum -c Meshpool-Linux-x64.tar.gz.sha256)
+          gh release view "$TAG" --json assets -q '.assets[].name' | sort
+
   publish:
-    needs: [mac, windows]
+    needs: [mac, windows, linux]
     # Only a full build publishes: a one-platform trial run builds and checks, and stops there. always(): the Apple
     # silicon leg of `mac` may end without a runner (see the mac job); what has to exist is checked below, by file.
     if: always() && (github.event_name == 'release' || inputs.platforms == 'both') && needs.windows.result == 'success'
@@ -353,6 +462,12 @@ jobs:
           for d in built/mac-arm64-macos-26 built/mac-arm64-macos-15; do
             if [ -s "$d/Meshpool.dmg" ]; then cp "$d/Meshpool.dmg" dist/; echo "Apple silicon build from ${d#built/mac-arm64-}"; break; fi
           done
+          # Linux: in the release when its job built and checked it (a failed Linux leg never stops Mac and Windows)
+          if [ -s built/linux/Meshpool-Linux-x64.tar.gz ]; then
+            cp built/linux/Meshpool-Linux-x64.tar.gz dist/
+          else
+            echo "::warning::No Linux build in this run (${{ needs.linux.result }}): this release has no Linux download."
+          fi
           if [ ! -s dist/Meshpool.dmg ]; then
             echo "::warning::No Apple silicon build in this run (${{ needs.mac.result }}): Meshpool.dmg is the Intel app, which Apple silicon Macs run under Rosetta."
             cp dist/Meshpool-Intel.dmg dist/Meshpool.dmg
@@ -378,7 +493,8 @@ jobs:
             --runtime-file packaging/requirements-cli.txt --runtime-file packaging/mac/constraints.txt \
             --runtime-file packaging/hermes_requirements.py --runtime-file packaging/hermes-acp-server.patch \
             --previous prev/update-manifest.json -o dist/update-manifest.json
-          (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz update-manifest.json > SHA256SUMS.txt)
+          LINUX=(); [ -s dist/Meshpool-Linux-x64.tar.gz ] && LINUX=(Meshpool-Linux-x64.tar.gz)
+          (cd dist && sha256sum Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe "${LINUX[@]}" Meshpool-src.tar.gz update-manifest.json > SHA256SUMS.txt)
           # Updates check every download against SHA256SUMS.txt, so a release users can see must never be half
           # uploaded or have its files swapped one by one (a new installer next to the old checksums fails every
           # update until the last file lands). A new version is built as a draft, which the updater ignores, and made
@@ -395,10 +511,10 @@ jobs:
             gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "Meshpool $VER beta" --notes-file packaging/release-notes.md
           fi
           gh release edit "$TAG" --notes-file packaging/release-notes.md
-          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe dist/Meshpool-src.tar.gz dist/update-manifest.json dist/SHA256SUMS.txt --clobber
+          gh release upload "$TAG" dist/Meshpool.dmg dist/Meshpool-Intel.dmg dist/Meshpool-Setup.exe ${LINUX[@]/#/dist/} dist/Meshpool-src.tar.gz dist/update-manifest.json dist/SHA256SUMS.txt --clobber
           # every file is up and matches the checksums before anyone can see the release
           gh release view "$TAG" --json assets -q '.assets[].name' | sort > uploaded.txt
-          printf '%s\n' Meshpool-Intel.dmg Meshpool-Setup.exe Meshpool-src.tar.gz Meshpool.dmg SHA256SUMS.txt update-manifest.json | sort | diff - uploaded.txt
+          printf '%s\n' Meshpool-Intel.dmg Meshpool-Setup.exe "${LINUX[@]}" Meshpool-src.tar.gz Meshpool.dmg SHA256SUMS.txt update-manifest.json | sed '/^$/d' | sort | diff - uploaded.txt
           mkdir -p check && gh release download "$TAG" --dir check --pattern 'SHA256SUMS.txt' --pattern 'Meshpool-src.tar.gz'
           (cd check && grep Meshpool-src.tar.gz SHA256SUMS.txt | sha256sum -c -)
           gh release edit "$TAG" --draft=false --latest
