@@ -144,6 +144,8 @@ def _agent_parser():
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
+    ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
+    ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
     ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
@@ -218,6 +220,12 @@ def main(argv=None):
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
         if a.max_turns:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
+        if a.append_system_prompt:
+            os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if a.permission_mode:
+            os.environ["MH_PERMISSION_MODE"] = a.permission_mode
+            if a.permission_mode == "auto":
+                a.auto = True
         if a.allowed_tools:
             os.environ["MH_ALLOW"] = a.allowed_tools
         if a.disallowed_tools:

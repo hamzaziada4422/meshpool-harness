@@ -1279,7 +1279,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             term.spin.start("Starting MCP servers")
         mcp = Manager(roots=[wd]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
-    mode = "auto" if auto else None
+    pm = os.environ.get("MH_PERMISSION_MODE", "")
+    mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
     kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode)
     if sub:
         from meshpool_harness.harnesses.acp import ACPAgent
@@ -1300,6 +1301,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             term.p(st.red(str(e)))
             return 1
     term.agent = agent
+    if pm == "plan" and hasattr(agent, "plan"):
+        agent.plan = True                        # read only: investigate, then reply with a plan
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
     sess = Session(term, agent, mcp, sub)
     try:

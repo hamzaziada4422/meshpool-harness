@@ -24,7 +24,7 @@ from meshpool_harness import config as C
 
 FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 MAX_FILE, MAX_ALL = 20000, 40000
-EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart")
+EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart", "PreCompact", "SubagentStop")
 
 
 # ---------------------------------------------------------------- instructions
@@ -114,12 +114,15 @@ def _tool_matches(matcher: str, name: str, args: dict) -> bool:
     return False
 
 
-def run_hooks(root: Path, event: str, payload: dict, tool: str = "", args: dict | None = None, timeout: int = 30):
-    """Run the hooks for an event. Returns (blocked, message): blocked is True when a hook exited with code 2 (only
-    PreToolUse and UserPromptSubmit can block); message is what it printed (stderr when blocking, else stdout)."""
+def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: dict | None = None, timeout: int = 30) -> dict:
+    """Run the hooks for an event. Returns {"blocked", "allow", "message"}. A hook blocks with exit code 2 (stderr is
+    the reason) or by printing JSON {"decision": "block", "reason": "..."}; it can also print {"decision": "allow"} to
+    skip the question for this call (never for destructive commands), or {"additionalContext": "..."} to add a note
+    the agent sees. Only PreToolUse and UserPromptSubmit can block."""
+    out = {"blocked": False, "allow": False, "message": ""}
     hs = hooks(root)[event]
     if not hs:
-        return False, ""
+        return out
     data = json.dumps(dict(payload, event=event, tool=tool, args=args or {}, cwd=str(root)), ensure_ascii=False, default=str)
     notes = []
     for h in hs:
@@ -131,11 +134,36 @@ def run_hooks(root: Path, event: str, payload: dict, tool: str = "", args: dict 
         except (subprocess.TimeoutExpired, OSError) as e:
             notes.append(f"[hook {h['command'][:40]} failed: {e}]")
             continue
-        if r.returncode == 2 and event in ("PreToolUse", "UserPromptSubmit"):
-            return True, (r.stderr or r.stdout).strip() or "A hook blocked this."
-        if r.stdout.strip():
-            notes.append(r.stdout.strip()[:2000])
-    return False, "\n".join(notes)
+        can_block = event in ("PreToolUse", "UserPromptSubmit")
+        if r.returncode == 2 and can_block:
+            out.update(blocked=True, message=(r.stderr or r.stdout).strip() or "A hook blocked this.")
+            return out
+        text = r.stdout.strip()
+        if text.startswith("{"):
+            try:
+                d = json.loads(text)
+            except ValueError:
+                d = None
+            if isinstance(d, dict):
+                dec = str(d.get("decision") or "").lower()
+                if dec == "block" and can_block:
+                    out.update(blocked=True, message=str(d.get("reason") or "A hook blocked this."))
+                    return out
+                if dec == "allow" and event == "PreToolUse":
+                    out["allow"] = True
+                if d.get("additionalContext"):
+                    notes.append(str(d["additionalContext"])[:2000])
+                continue
+        if text:
+            notes.append(text[:2000])
+    out["message"] = "\n".join(notes)
+    return out
+
+
+def run_hooks(root: Path, event: str, payload: dict, tool: str = "", args: dict | None = None, timeout: int = 30):
+    """(blocked, message): see run_hooks_full."""
+    r = run_hooks_full(root, event, payload, tool, args, timeout)
+    return r["blocked"], r["message"]
 
 
 # ---------------------------------------------------------------- custom commands

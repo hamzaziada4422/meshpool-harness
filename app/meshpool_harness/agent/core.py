@@ -801,7 +801,8 @@ class Agent:
             from meshpool_harness.hrouter.route import addon
             text += addon(route)
         from meshpool_harness.assistant import HONESTY, PLAIN
-        return text + "\n\n" + PLAIN + "\n\n" + HONESTY
+        extra = os.environ.get("MH_APPEND_PROMPT", "").strip()
+        return text + "\n\n" + PLAIN + "\n\n" + HONESTY + (("\n\n" + extra) if extra else "")
 
     def set_route(self, route, text: str = "") -> None:
         """Run this chat as a specialised harness (hrouter). Only before the first message: afterwards the system
@@ -1509,6 +1510,11 @@ class Agent:
     def compact_now(self):
         """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
         from meshpool_harness.agent import compaction
+        try:
+            from meshpool_harness.agent import extras as EX
+            EX.run_hooks(self.root, "PreCompact", {"messages": len(self.messages)})
+        except Exception:  # noqa: BLE001
+            pass
         r = compaction.compact_history(self.messages)
         if r:
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
@@ -2137,9 +2143,11 @@ class Agent:
             if hit:                            # apply_patch through the shell is an edit like any other
                 name, args = "apply_patch", {"input": hit[0]}
         from meshpool_harness.agent import extras as EX
-        blocked, why = EX.run_hooks(self.root, "PreToolUse", {}, tool=name, args=args)
-        if blocked:
-            return False, f"Blocked by a hook: {why}"
+        hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
+        if hk["blocked"]:
+            return False, f"Blocked by a hook: {hk['message']}"
+        if hk["allow"] and not _destructive(args):
+            return True, ""
         rules = _rules(self.root)
         hit = _rule_hit(rules["deny"], name, args)
         if hit:

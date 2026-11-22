@@ -57,3 +57,22 @@ def test_at_mentions_attach_files_inside_the_project_only(tmp_path):
     (tmp_path / "src" / "a.py").write_text("print('hi')", encoding="utf-8")
     out = EX.expand_mentions("Explain @src/a.py and @src and email me@example.com and @../../etc/passwd", tmp_path)
     assert "print('hi')" in out and "folder contents: a.py" in out and "root:" not in out and "example.com" in out
+
+
+def test_hooks_can_decide_in_json_and_add_context(tmp_path, monkeypatch):
+    _home(monkeypatch, tmp_path)
+    (tmp_path / ".meshpool").mkdir()
+    (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({
+        "PreToolUse": [{"matcher": "bash:ls*", "command": "echo '{\"decision\": \"allow\"}'"},
+                       {"matcher": "bash:curl*", "command": "echo '{\"decision\": \"block\", \"reason\": \"no network in this project\"}'"}],
+        "PostToolUse": [{"matcher": "*", "command": "echo '{\"additionalContext\": \"remember to run the linter\"}'"}],
+        "PreCompact": [{"command": "echo saved > compact.flag"}]}), encoding="utf-8")
+    assert EX.run_hooks_full(tmp_path, "PreToolUse", {}, tool="bash", args={"command": "ls -la"})["allow"] is True
+    r = EX.run_hooks_full(tmp_path, "PreToolUse", {}, tool="bash", args={"command": "curl x"})
+    assert r["blocked"] and "no network" in r["message"]
+    assert EX.run_hooks(tmp_path, "PostToolUse", {}, tool="edit", args={}) == (False, "remember to run the linter")
+    a = Agent(str(tmp_path), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._permit("bash", {"command": "ls -la"}) == (True, "")                  # the hook answered the question
+    assert a._permit("bash", {"command": "rm -rf build"})[0] is False             # but never for a destructive command
+    EX.run_hooks(tmp_path, "PreCompact", {})
+    assert (tmp_path / "compact.flag").exists()

@@ -16,7 +16,7 @@ import re
 
 KEEP_RECENT = 10                 # messages kept word for word at the end
 MAX_LOG = 60_000                 # characters of older steps shown to the summariser
-MAX_NOTE = 7_000                 # characters of summary kept
+MAX_NOTE = 12_000                # characters of summary kept
 SYSTEM = ("You write a handoff note for an AI agent that will continue a long task after its earlier messages are "
           "removed to save space. Use only facts in the log. Plain sentences, no flattery, no em dashes. Keep exact "
           "file paths, names, numbers, error messages and decisions. Use these headings: Done, Learned (facts, "
@@ -124,7 +124,7 @@ def summarize(middle: list, task: str, client=None, model: str | None = None) ->
         r = client.chat(model=model, messages=[
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": f"The task:\n{task[:3000]}\n\nThe log of earlier steps:\n{render(middle)}"}],
-            max_tokens=1600, temperature=0.1, task_id="compact", role="worker")
+            max_tokens=2800, temperature=0.1, task_id="compact", role="worker")
         return (r["choices"][0]["message"].get("content") or "").strip()[:MAX_NOTE]
     except Exception:  # noqa: BLE001 - a failed summary must never stop the task
         return ""
