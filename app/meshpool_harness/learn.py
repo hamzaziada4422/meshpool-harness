@@ -32,6 +32,7 @@ a document, nothing about the system. Each is one short sentence about the user,
 MAX_PENDING = 6
 _LOCK = threading.Lock()
 _PENDING: dict[str, list[str]] = {}
+LAST_IDS: dict[str, list[str]] = {}          # fact ids of the last "Noted for next time", for its Undo
 
 
 def _on() -> bool:
@@ -78,19 +79,24 @@ def after_turn(chat_id: str, text: str, reply: str = "", client=None, model: str
         from meshpool_harness.core.client import LiveClient
         client = LiveClient("learn")
     model = model or os.environ.get("MH_MODEL_FAST") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    from meshpool_harness import memstore as MS
     have = [x for x in A.memory().splitlines() if x.strip()]
-    added = []
+    added, ids = [], []
     for p in extract(text, reply, client, model):
         if _known(p, have + added):
             continue
-        try:
-            if A.remember(p) == "Saved to memory.":
+        try:                                                 # learned: active at once, with the chat as its source
+            f, made = MS.add(p, kind="learned", source={"type": "correction", "chat_id": chat_id,
+                                                        "quote": text.split("\u200b")[0][:200]}, by="meshpool")
+            if made:
                 added.append(p)
+                ids.append(f["id"])
         except ValueError:                                   # a task or anything memory refuses is not kept
             continue
     if added:
         with _LOCK:
             _PENDING[chat_id] = (_PENDING.get(chat_id, []) + added)[-MAX_PENDING:]
+            LAST_IDS[chat_id] = ids
     return added
 
 
