@@ -532,7 +532,8 @@ def detect_project(c: Corpus) -> list[dict]:
                                           "chat_ids": [ch["id"] for ch in chs]}},
                              min(1.0, 0.65 + 0.1 * (len(mem) - 3)), c, "project:para:" + k))
     for k, mem in by_file.items():
-        if len(mem) >= MIN_CHATS and not any(k in (x["dedupe_key"] for x in out)):
+        covered = {i for x in out for i in x["action"]["payload"]["chat_ids"]}      # a pasted-background card has them
+        if len(mem) >= MIN_CHATS and not set(mem) <= covered:
             chs = [x[1] for x in mem.values()]
             name = next(iter(mem.values()))[0]
             out.append(_card("project", "Make this a project?",
@@ -587,7 +588,9 @@ def detect_route(c: Corpus) -> list[dict]:
     return out
 
 
-_SERVICES = [("jira", re.compile(r"atlassian\.net/browse/|\b(?!(?:COVID|ISO|UTF|SHA|HTTP|RFC|ANSI|IEEE|GPT|USB|MD|PEP|CVE)-)"
+# Jira keys alone (OPS-12) look like part numbers and invoice ids, so they count only beside a word that says tickets.
+_JIRA_WORD = re.compile(r"(?i)\b(jira|tickets?|issues?|sprint|epic|stories|story|backlog|blocked|blockers?)\b")
+_SERVICES = [("jira", re.compile(r"atlassian\.net/browse/|\b(?!(?:COVID|ISO|UTF|SHA|HTTP|RFC|ANSI|IEEE|GPT|USB|MD|PEP|CVE|INV)-)"
                                  r"([A-Z][A-Z0-9]{1,9})-\d{1,6}\b.*?\b\1-\d{1,6}\b", re.S)),
              ("notion", re.compile(r"notion\.(?:so|site)/[\w\-/]{6,}")),
              ("linear", re.compile(r"linear\.app/[\w\-]+/issue/[\w\-]+")),
@@ -597,7 +600,8 @@ _SERVICES = [("jira", re.compile(r"atlassian\.net/browse/|\b(?!(?:COVID|ISO|UTF|
 def detect_connect(c: Corpus) -> list[dict]:
     out = []
     for svc, rx in _SERVICES:
-        hit = [ch for ch in c.chats if any(rx.search(t) for t in ch["texts"])]
+        hit = [ch for ch in c.chats if any(rx.search(t) and (svc != "jira" or "atlassian.net" in t or _JIRA_WORD.search(t))
+                                           for t in ch["texts"])]
         if len(hit) < 2:
             continue
         st = c.connector(svc)
@@ -665,8 +669,8 @@ def detect_teach(c: Corpus) -> list[dict]:
     return out
 
 
-_COLLAB = re.compile(r"(?:\b(?i:email|ask|message|tell|meeting with|call with|cc|send (?:it )?to|for|with|from)\s+)"
-                     r"([A-Z][a-z]{2,}(?:\s[A-Z][a-z]{2,})?)\b")
+_COLLAB = re.compile(r"(?:\b(?i:email|ask|message|tell|meeting with|call with|cc|send (?:it )?to)\s+)"
+                     r"([A-Z][a-z]{2,}(?:\s[A-Z][a-z]{2,})?)\b")           # people, not places: "for Dubai" is not a person
 _NOT_NAMES = {"The", "This", "That", "Please", "Make", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday",
               "Saturday", "Sunday", "January", "February", "March", "April", "June", "July", "August", "September",
               "October", "November", "December", "Excel", "Word", "Python", "Google", "Notion", "Slack", "Jira",
@@ -693,7 +697,8 @@ def detect_remember(c: Corpus) -> list[dict]:
                                   "payload": {"text": f"Works regularly with {n}", "category": "people", "evidence": ev}},
                              min(0.9, 0.4 + 0.1 * len(mem)), c, f"remember:person:{n.lower()}"))
     for tool in _TOOLS:
-        hit = [ch for ch in c.chats if any(re.search(r"(?<![a-z])" + tool + r"(?![a-z])", t.lower()) for t in ch["texts"])]
+        use = r"\b(?:in|on|from|to|using|use|update|open|export|via|into|my|our|the)\s+(?:\w+\s+)?" + re.escape(tool) + r"(?![a-z])"
+        hit = [ch for ch in c.chats if any(re.search(use, t.lower()) for t in ch["texts"])]
         if len(hit) >= 5:
             ev = [{"text": f"Used {tool} in “{_clip(ch['title'] or ch['texts'][0], 40)}”", "chat_id": ch["id"], "ts": ch["ts"]}
                   for ch in hit[-4:]]
@@ -724,7 +729,9 @@ _EXT_KIND = {"pptx": "deck", "ppt": "deck", "xlsx": "workbook", "xls": "workbook
 def output_kind(chat: dict) -> str:
     """What a finished turn produced: deck, workbook, document, research, code or ""."""
     exts = [o.rsplit(".", 1)[-1].lower() for o in chat.get("outputs", []) if "." in o]
-    for e in exts:
+    if chat.get("kind") == "code":                            # a README or a spec PDF in a coding chat is still code
+        exts = [e for e in exts if e not in ("md", "pdf")]
+    for e in reversed(exts):                                  # the latest thing made decides
         if _EXT_KIND.get(e) in ("deck", "workbook", "document"):
             return _EXT_KIND[e]
     if any(t in ("web_research", "research", "deep_research") for t in chat.get("tools", [])) or \

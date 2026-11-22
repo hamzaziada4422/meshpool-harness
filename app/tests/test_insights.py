@@ -482,3 +482,16 @@ def test_heavy_use_has_a_card_for_each_planted_pattern(monkeypatch):
     use(monkeypatch, heavy_use())
     got = {x["type"] for x in I.scan(force=True)}
     assert {"project", "connect", "rerun", "teach"} <= got
+
+
+def test_default_on_matches_the_measured_precision(tmp_path, monkeypatch):
+    """Types ship on only when precision on the labelled situations is 0.8 or better (docs/plan/0.0.10-precision.md)."""
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("insights_precision", Path(__file__).resolve().parents[2] / "testkit" / "insights_precision.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    res = mod.evaluate()
+    for t in I.TYPES:
+        assert I.DEFAULT_ON[t] == (res[t]["precision"] >= 0.8), (t, res[t])
+        assert res[t]["n"] >= 29
