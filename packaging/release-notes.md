@@ -16,6 +16,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Learns from your edits.** Change every slide title of a deck Meshpool made, and it offers to make that your default.
 - **Code sessions by folder.** Sessions are grouped by folder, with a new-session button on each, search, and a dot when one needs you.
 - **Simpler import.** Three steps and direct links to your old assistant's export page.
+- **Browser use works the first time.** Playwright is now a normal part of the install. From a terminal or source install it sets itself up when first needed, and it uses a Chromium already on the computer before downloading a second one. This is what lets Meshpool open your app and click through it for UI and UX checks.
 - **Bring your other agents.** Meshpool finds Claude Code, Codex, Cursor, OpenClaw and Hermes on your computer and lists their skills, tools, memories and instructions. You tick what you want and can preview first. Passwords and keys are never read, and tools come over without their secrets. Memories wait for your yes. From a terminal: `meshpool import agents --dry-run`.
 
 **New in 0.0.9**

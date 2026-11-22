@@ -279,7 +279,12 @@ def main(argv=None):
         return _check(a.live)
     if a.cmd == "install-browser":
         import subprocess
+        from meshpool_harness import browser_use as BU
         r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright>=1.40"])
+        have = BU.find_playwright_chromium()
+        if r.returncode == 0 and have:
+            print(f"browser engine ready (using the Chromium already at {have})")
+            return 0
         if r.returncode == 0:
             r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
         print("browser engine ready" if r.returncode == 0 else "browser install failed (see above)")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import ntpath
 import os
+import re
 import posixpath
 import shutil
 import sys
@@ -98,6 +99,38 @@ def find_installed(platform: str | None = None, env: dict | None = None, exists=
         if path:
             out.append({"key": key, "name": label, "path": path})
     return out
+
+
+def find_playwright_chromium(platform: str | None = None, env: dict | None = None, home: str | None = None,
+                             glob=None) -> str:
+    """The newest Chromium that a Playwright install already left on this computer ("" when none). The Python package
+    wants one exact revision, so a computer that has another revision (a container image, another project's cache)
+    would download a second copy; this finds the one that is there. Arguments exist for tests with fake folders."""
+    import glob as _glob
+    glob = glob or _glob.glob
+    platform = platform or sys.platform
+    env = os.environ if env is None else env
+    home = home or os.path.expanduser("~")
+    roots = []
+    if env.get("PLAYWRIGHT_BROWSERS_PATH") and env["PLAYWRIGHT_BROWSERS_PATH"] != "0":
+        roots.append(env["PLAYWRIGHT_BROWSERS_PATH"])
+    if platform == "darwin":
+        roots.append(posixpath.join(home, "Library", "Caches", "ms-playwright"))
+        pats = ["chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium"]
+    elif platform.startswith("win"):
+        if env.get("LOCALAPPDATA"):
+            roots.append(ntpath.join(env["LOCALAPPDATA"], "ms-playwright"))
+        pats = ["chromium-*/chrome-win*/chrome.exe"]
+    else:
+        roots += [posixpath.join(home, ".cache", "ms-playwright"), "/opt/pw-browsers", "/ms-playwright"]
+        pats = ["chromium-*/chrome-linux*/chrome"]
+    hits = []
+    for r in roots:
+        for pat in pats:
+            for path in glob(os.path.join(r, pat)):
+                m = re.search(r"chromium-(\d+)", path)
+                hits.append((int(m.group(1)) if m else 0, path))
+    return max(hits)[1] if hits else ""
 
 
 def pick_installed(**kw) -> dict | None:

@@ -8,6 +8,7 @@ lxml>=5.0
 Pillow>=10.0
 cairosvg>=2.7
 reportlab>=4.0
+playwright>=1.40     # browser use: Chromium is fetched on first use if the computer has none
 # tests
 pytest>=8.0
 ddgs>=9.0

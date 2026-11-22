@@ -62,6 +62,29 @@ for _flag in ("MH_BROWSER_READONLY", "MH_BROWSER_SETTLE", "MH_BROWSER_STATES", "
 SNAPSHOT_JS = SNAPSHOT_JS.replace("__STATES__", STATES_JS)
 
 
+def load_playwright():
+    """The Playwright API. When the package is missing (a source or terminal install from before it was a dependency),
+    it is installed once, here, instead of failing: browser use works the first time it is asked for."""
+    import importlib
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        pass
+    from meshpool_harness import bundled
+    if bundled.packaged():
+        raise ToolFailed("Browser use is missing from this install. Reinstall Meshpool.")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", "playwright>=1.40"],
+                       capture_output=True, text=True, timeout=600)
+    importlib.invalidate_caches()
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        raise ToolFailed("Browser use needs the playwright package and it could not be installed "
+                         f"({(r.stderr or r.stdout or 'no output')[-200:].strip()}). Run: meshpool install-browser")
+
+
 def _home() -> Path:
     return Path(os.environ.get("MESHPOOL_HOME") or Path.home() / ".meshpool")
 
@@ -95,11 +118,26 @@ class Browser:
         return box["r"]
 
     # ---------- start ----------------------------------------------------------------------------------------------
+    def _use_cached_chromium(self, headless: bool) -> bool:
+        """A Chromium already on this computer (any revision): used instead of downloading a second copy."""
+        path = BU.find_playwright_chromium()
+        if not path:
+            return False
+        try:
+            self.ctx = self._launch(_home() / "browser-profile" / "chromium-cached", headless=headless, executable_path=path)
+        except Exception:  # noqa: BLE001 - it may be unusable (missing system libraries): fall through to the download
+            self.ctx = None
+            return False
+        self.channel = "chromium:cached"
+        return True
+
     def _install_chromium(self):
         # Installs where the Playwright driver looks (the process's PLAYWRIGHT_BROWSERS_PATH, else its default
         # cache): the driver reads that variable once, at start.
-        r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], capture_output=True, text=True,
-                           env=dict(os.environ), timeout=900)
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+        if sys.platform == "linux" and hasattr(os, "geteuid") and os.geteuid() == 0:
+            cmd.insert(4, "--with-deps")                    # a server or container: the system libraries too
+        r = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ), timeout=900)
         if r.returncode != 0:
             raise ToolFailed("Could not download the browser engine: " + (r.stderr or r.stdout)[-400:])
 
@@ -128,7 +166,7 @@ class Browser:
         if own:
             # before the driver starts: it reads this once, so setting it later would never reach it
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled.browsers_dir())
-        from playwright.sync_api import sync_playwright
+        sync_playwright = load_playwright()
         if self.pw is None:
             self.pw = sync_playwright().start()
         headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"
@@ -166,6 +204,8 @@ class Browser:
             # Download Chromium only when it is missing (never when the profile is merely in use), and never in the
             # packaged app: Chromium ships inside it.
             if attempt == 0 and not own and "xecutable doesn't exist" in str(last):
+                if self._use_cached_chromium(headless):     # one is already here: no download
+                    return
                 self._install_chromium()
                 channels = [""]
             else:

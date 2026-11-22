@@ -310,8 +310,11 @@ def system_check() -> list[dict]:
         rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 13 or later",
                      "fix": why})
     else:
-        rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
-                     "fix": "Run: meshpool install-browser"})
+        from meshpool_harness import browser_use as BU
+        have = bundled.packaged() or bool(BU.find_playwright_chromium())
+        rows.append({"name": "Browser use", "ok": True,
+                     "detail": ("ready" if pw and have else "sets itself up the first time it is used"),
+                     "fix": "To do it now, run: meshpool install-browser"})
     try:
         from meshpool_harness.agent import computer_mcp_server as CU
         st = CU.computer_status()
