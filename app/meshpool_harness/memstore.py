@@ -870,9 +870,9 @@ def review_queue(days: int = REVIEW_DAYS) -> list[dict]:
     for f in load():
         if f["status"] != "active" or f["kind"] == "noticed" and False:
             continue
-        if _expired(f):
+        if _expired(f) and (f.get("reviewed") or 0) < time.time() - 86400:
             out.append(dict(f, review_reason="expired"))
-        elif f["created"] < cut and (f["last_given"] or 0) < cut and not f["pinned"]:
+        elif f["created"] < cut and (f["last_given"] or 0) < cut and (f.get("reviewed") or 0) < cut and not f["pinned"]:
             out.append(dict(f, review_reason="unused"))
     return out
 
@@ -930,7 +930,28 @@ def apply_consolidation(merges: list | None = None, archive_ids: list | None = N
 
 def history(limit: int = 200) -> list[dict]:
     rows = _read_lines(log_path())[-limit:]
-    return list(reversed([{k: r.get(k) for k in ("ts", "action", "id", "by", "reason", "text")} for r in rows]))
+    out = []
+    for r in reversed(rows):
+        row = {k: r.get(k) for k in ("ts", "action", "id", "by", "reason", "text")}
+        row["before_text"] = (r.get("before") or {}).get("text") if isinstance(r.get("before"), dict) else None
+        out.append(row)
+    return out
+
+
+def still_true(fid: str) -> dict:
+    """Yes on a "Still true?" card: kept, not asked again for a while; an expired fact stops expiring."""
+    with _lock():
+        rows = load()
+        f = next((x for x in rows if x["id"] == fid), None)
+        if f is None:
+            raise KeyError("That memory does not exist.")
+        f["reviewed"] = now()
+        if _expired(f):
+            f["valid_until"] = None
+        f["history"].append({"ts": now(), "text": f["text"], "by": "you", "reason": "You said it is still true"})
+        _save(rows)
+        _log("reviewed", fid, "you", "Still true", text=f["text"])
+        return f
 
 
 # ---------- export -------------------------------------------------------------------------------------------------------------

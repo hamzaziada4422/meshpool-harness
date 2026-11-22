@@ -141,16 +141,30 @@ def _tasks_lock():
     return _locked(C.home() / "schedules.lock")
 
 
+QUIET_DEFAULT = {"on": False, "start": "22:00", "end": "07:00"}
+
+
 def settings() -> dict:
     d = json.loads(_read(_dir() / "settings.json") or "{}")
-    return {"memory_on": d.get("memory_on", True), "instructions_on": d.get("instructions_on", True)}
+    q = d.get("quiet_hours") if isinstance(d.get("quiet_hours"), dict) else {}
+    return {"memory_on": d.get("memory_on", True), "instructions_on": d.get("instructions_on", True),
+            "learn_from_edits": d.get("learn_from_edits", True), "insights_on": d.get("insights_on", True),
+            "quiet_hours": {**QUIET_DEFAULT, **{k: q[k] for k in QUIET_DEFAULT if k in q}}}
 
 
 def save_settings(**kw) -> dict:
-    d = settings()
-    d.update({k: bool(v) for k, v in kw.items() if k in ("memory_on", "instructions_on")})
+    d = json.loads(_read(_dir() / "settings.json") or "{}")
+    for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on"):
+        if k in kw:
+            d[k] = bool(kw[k])
+    if isinstance(kw.get("quiet_hours"), dict):
+        q = {**QUIET_DEFAULT, **(d.get("quiet_hours") or {})}
+        for k in QUIET_DEFAULT:
+            if k in kw["quiet_hours"]:
+                q[k] = bool(kw["quiet_hours"][k]) if k == "on" else str(kw["quiet_hours"][k])[:5]
+        d["quiet_hours"] = q
     _write(_dir() / "settings.json", json.dumps(d))
-    return d
+    return settings()
 
 
 # ---------- instructions and memory --------------------------------------------------------------------------------

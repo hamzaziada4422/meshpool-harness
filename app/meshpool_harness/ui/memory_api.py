@@ -219,6 +219,10 @@ def act(b: dict) -> dict:
         p = MS.consolidation()
         return MS.apply_consolidation(p["merges"] if b.get("merges", True) else [],
                                       p["archive"] if b.get("archive", True) else [])
+    if a == "still_true":
+        return {"fact": row(MS.still_true(b["id"]))}
+    if a == "restore_text":                # Restore on a history row: put the text back
+        return {"fact": row(MS.update(b["id"], reason="Restored from history", text=b.get("text", ""), status="active"))}
     if a == "undo_noted":                  # Undo on "Noted for next time"
         n = 0
         for i in b.get("ids", []):
@@ -229,7 +233,7 @@ def act(b: dict) -> dict:
         f, made = MS.add(b.get("text", ""), kind="stated", status="pending", source={"type": "import"}, by="meshpool")
         return {"fact": row(f), "created": made}
     if a == "settings":
-        return {"settings": AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on") if k in b})}
+        return {"settings": AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})}
     if a == "refresh_portrait":
         return MS.portrait(force=True)
     raise ValueError("Unknown action.")

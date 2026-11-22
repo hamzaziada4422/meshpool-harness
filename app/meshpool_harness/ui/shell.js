@@ -171,7 +171,7 @@ const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "
 
 /* ================================== sidebar ================================== */
 const NAV = {
-  chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["plugins", "Plugins", "plug"]],
+  chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["memory", "Memory", "brain"], ["work", "Your work", "star"], ["plugins", "Plugins", "plug"]],
   code: [["new", "New", "plus"], ["search", "Search", "search"], ["artifacts", "Artifacts", "cube"], ["plugins", "Plugins", "plug"], ["more", "More", "more"]],
 };
 // A chat's state as the sidebar draws it: running (brand dot), waiting for you (amber), finished and unread (blue).
