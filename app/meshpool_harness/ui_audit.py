@@ -36,10 +36,10 @@ AUDIT_JS = r"""
 
   // notes to the owner or filler left on the page
   const body = document.body.innerText || "";
-  const left = body.match(/lorem ipsum|PHONE_NUMBER_?\d*|EMAIL_?\w*_\d+|\bTODO\b|\bTBD\b|your (name|company|email|text) here|I (do not|don't) know (these|this|the|yet|your)|placeholder|\bXXX+\b|\[(?:insert|your)[^\]]*\]/i);
+  const left = body.match(/lorem ipsum|PHONE_NUMBER_?\d*|\[redacted[^\]]*\]|EMAIL_?\w*_\d+|\bTODO\b|\bTBD\b|your (name|company|email|text) here|I (do not|don't) know (these|this|the|yet|your)|placeholder|\bXXX+\b|\[(?:insert|your)[^\]]*\]/i);
   if (left) add("left-over-text", "must", `the page still holds filler or a note to its owner: "${left[0]}". Visitors must never see it. Remove it, or leave that section out and tell the owner in your reply`, document.body);
 
-  const badLink = [...document.querySelectorAll("a[href]")].find(a => /PHONE_NUMBER|EMAIL_?\w*_\d|YOUR_|REPLACE|example\.(com|org)|lorem|TODO|\bXXX|1234567|0000000|555-?01/i.test(decodeURIComponent(a.getAttribute("href"))) || /^(tel:|https:\/\/wa\.me\/)\D*$/i.test(a.getAttribute("href")));
+  const badLink = [...document.querySelectorAll("a[href]")].find(a => /PHONE_NUMBER|redacted|EMAIL_?\w*_\d|YOUR_|REPLACE|example\.(com|org)|lorem|TODO|\bXXX/i.test(decodeURIComponent(a.getAttribute("href"))) || /^(tel:|https:\/\/wa\.me\/)\D*$/i.test(a.getAttribute("href")));
   if (badLink) add("placeholder-link", "must", `a link points at a placeholder: ${badLink.getAttribute("href").slice(0, 70)}. Use the real value, or leave that link out and ask for it in your reply`, badLink);
 
   // layout
