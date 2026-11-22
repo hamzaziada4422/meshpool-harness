@@ -1,5 +1,22 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.10**
+- **See what Meshpool knows.** A new Memory page shows every fact, filed by category, with where it came from and which chats it was given to. Edit, pin, move or archive any of them, and every change has Undo.
+- **Meshpool asks before it remembers.** Facts it notices wait in a "Meshpool thinks" tray. Nothing reaches an agent until you say yes. Two facts that disagree are shown side by side.
+- **Nothing is lost.** Your old memory is copied to a backup and moved over safely. When memory fills up, Meshpool proposes a tidy-up instead of dropping the oldest facts.
+- **Know what an answer used.** A small chip under a reply lists the memories it was given. A new "What the agent sees" button shows the exact background, and lets you leave a fact out of one chat.
+- **Incognito chats.** Press Ctrl+Shift+N. Nothing is remembered, learned or logged.
+- **A quiet nudge, only when it helps.** One short line above the message box, such as "Run this every week?". It never appears while Meshpool works, at most two a day, and never twice for the same idea.
+- **Next steps in one click.** After a deck, a workbook or a report, a few ideas appear under the reply.
+- **A first run built from your files.** Meshpool reads only file names and offers real starters, or runs a sample.
+- **While you were away.** Finished scheduled runs, and only real changes for tasks set to "Only tell me when something changed".
+- **Receipts you can trust.** Each reply shows the time, the cost where it is known, and why Meshpool picked that agent. Decks and reports list the checks that actually ran.
+- **Your work.** A look back over 1, 3, 6 or 12 months, ending in things you can do, plus a recap image with counts only.
+- **Summaries.** A one-line summary for each chat, and a living brief for each project with Catch me up.
+- **Learns from your edits.** Change every slide title of a deck Meshpool made, and it offers to make that your default.
+- **Code sessions by folder.** Sessions are grouped by folder, with a new-session button on each, search, and a dot when one needs you.
+- **Simpler import.** Three steps and direct links to your old assistant's export page.
+
 **New in 0.0.9**
 - **Meshpool for Linux.** A download for 64-bit Linux with everything inside (LibreOffice, Chromium, Node.js, Git and Python), tested in a bare Ubuntu 22.04 before it is published.
 - **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.

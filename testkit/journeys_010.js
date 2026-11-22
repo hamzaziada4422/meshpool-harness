@@ -108,7 +108,7 @@ async function chat(call, text, extra = {}) {
   ck("J36 UI: inline edit saves", (await p.textContent(".mem-row .mem-text")).includes("(CFO)"));
   await p.focus(".mem-row"); await p.keyboard.press("Backspace"); await p.waitForTimeout(500);
   ck("J36 UI: Backspace archives with an Undo toast", await p.$(".toast .tact") !== null);
-  await p.click(".toast .tact"); await p.waitForTimeout(600);
+  await p.click(".toast:last-child .tact"); await p.waitForTimeout(700);
   await p.fill("#memQ", "layla"); await p.waitForTimeout(500);
   ck("J36 UI: Undo restores it", (await p.$$(".mem-row")).length === 1);
   ck("no page errors", errs.length === 0, errs.join("|"));

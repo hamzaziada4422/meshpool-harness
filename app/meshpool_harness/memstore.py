@@ -456,8 +456,9 @@ def update(fid: str, by: str = "you", reason: str = "", **fields) -> dict:
         f["history"].append({"ts": f["updated"], "text": f["text"], "by": by,
                              "reason": reason or ("Edited: " + ", ".join(what))})
         _save(rows)
-        action = "archived" if f["status"] == "archived" and before["status"] != "archived" else (
-            "edited" if "text" in what else "changed")
+        action = ("archived" if f["status"] == "archived" and before["status"] != "archived" else
+                  "restored" if before["status"] == "archived" and f["status"] == "active" else
+                  "edited" if "text" in what else "changed")
         _log(action, fid, by, reason or ", ".join(what), before=before, after=f, text=f["text"])
         return f
 

@@ -39,6 +39,22 @@ and the mock model (no paid calls). The set-up is at the end of this page.
 | 30 | Nothing jumps or flickers: layout stays still while a task runs and settles in one step on every click; scroll, menus and typing survive live updates | all | `jitter.js` |
 | 31 | Update from inside the app: the update bar appears, Update now installs, Restart comes back on the new version | n/a | `update_flow.sh` |
 | 32 | Real tasks on the real model (paid, about $1): code fixes, a web page, Word, Excel, PowerPoint, PDF, editing a contract, invoices to Excel, letters | Code, Work, Pi, Hermes, Auto | `practical/practical.py` |
+| 35 | Upgrade from 0.0.9: old memory becomes facts, the old files are backed up, nothing is lost | all | `journeys_010.js` (upgrade app), `app/tests/test_memory_v3.py` |
+| 36 | Memory page: browse, search, edit inline, pin, change scope, archive with Undo, restore from history | n/a | `journeys_010.js`, `shots_memory.js`, `app/tests/test_memory_api.py` |
+| 37 | A noticed fact waits in "Meshpool thinks"; Yes makes it active, No archives it and it is not suggested again | all | `journeys_010.js`, `test_memory_v3.py` |
+| 38 | A reply shows how many memories it was given, with Edit and Wrong on each | Code, Work | `shots_chat.js`, `journeys_010.js` |
+| 39 | "What the agent will see" matches the context the agent received; a fact can be left out of one chat | all | `journeys_010.js`, `shots_chat.js` |
+| 40 | Incognito chat reads and writes no memory, learns nothing, logs nothing for suggestions or summaries | all | `journeys_010.js`, `test_memory_v3.py` |
+| 41 | First run: starters from the user's own file names, or sample files in an empty folder | n/a | `journeys_010.js`, `app/tests/test_firstrun_away.py`, `shots_home.js` |
+| 42 | Accept a schedule suggestion: the form opens prefilled, "Only tell me when something changed" is on | n/a | `journeys_010.js`, `app/tests/test_insights.py` |
+| 43 | Dismiss and mute a suggestion; a dismissed one never returns; at most two on the home screen, one per type | n/a | `journeys_010.js`, `test_insights.py` |
+| 44 | Next-step chips under a reply; they go on the next message | n/a | `test_insights.py` |
+| 45 | While you were away: finished runs, and only real changes for tasks set to tell you on change | n/a | `journeys_010.js`, `test_firstrun_away.py` |
+| 46 | Your work page and the recap image (counts only, no chat text) | n/a | `journeys_010.js`, `shots_home.js`, `app/tests/test_yourwork.py` |
+| 47 | Edit a deck Meshpool made: a "make these your defaults" suggestion, accepting writes learned facts | n/a | `app/tests/test_teach.py` |
+| 48 | Suggestions off hides everything | n/a | `journeys_010.js`, `test_insights.py` |
+| 49 | Code sessions grouped by folder: collapse, search, new session in a folder, group by date | Code | `shots_code.js` |
+| 50 | Turn latency is not slower than 0.0.9 | all | `latency.py` |
 
 Not testable in this Linux container, so checked by other means:
 
