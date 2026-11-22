@@ -1194,7 +1194,7 @@ class Session:
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
-                "style": self.style_id() or _default_style(),
+                "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1301,6 +1301,8 @@ def create(body: dict) -> dict:
         except (KeyError, ValueError):
             pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    if body.get("memory_exclude"):                  # facts left out before the first message (the context X-ray)
+        write_meta(s.id, memory_exclude=[str(i) for i in body["memory_exclude"]][:200])
     if body.get("incognito"):                       # no memory read or written, no learning, nothing logged for insights
         s.incognito = True
         write_meta(s.id, incognito=True)

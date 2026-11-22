@@ -145,12 +145,14 @@ function renderBar() {
     <button class="pill icon" id="attBtn" aria-haspopup="menu" data-tip="Add files and more" data-kbd="${MOD}U" data-tip-pos="above" aria-label="Add files and more">${ICON.plus}</button>
     ${c.plan ? `<button class="pill planchip" id="planChip" data-tip="Plan first is on. Click to turn it off." aria-label="Plan first is on">${ICON.list}<span>Plan first</span></button>` : ""}
     ${styleId() !== "normal" ? `<button class="pill stylechip" id="styleChip" aria-haspopup="menu" data-tip="Writing style: ${esc(styleOf(styleId()).name)}. Click to change." data-tip-pos="above" aria-label="Writing style: ${esc(styleOf(styleId()).name)}">${ICON.pencil}<span class="lbl">${esc(clip(styleOf(styleId()).name, 24))}</span></button>` : ""}
+    ${window.cbar010 ? cbar010() : ""}
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" data-tip="Stop" data-kbd="Esc" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" data-tip="Stop what it is doing and send this instead" data-kbd="${MOD}Enter" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
     <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
     $("#planChip")?.addEventListener("click", () => setPlan(false));
+    window.cbar010bind?.();
     $("#styleChip")?.addEventListener("click", e => styleMenu(e.currentTarget));
     $("#sendBtn")?.addEventListener("click", () => sendNow(false));
     $("#stopBtn")?.addEventListener("click", stopNow);
