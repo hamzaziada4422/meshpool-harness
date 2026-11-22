@@ -35,7 +35,11 @@ def test_pasted_answer_becomes_instructions_and_memory(tmp_path, monkeypatch):
 - Monthly board update deck with a one-page summary""")
     assert r["instructions"] == 1 and r["memory"] == 2 and len(r["skipped"]) == 1      # the secret is refused
     assert "British English" in AS.instructions()
-    assert "corporate development" in AS.memory() and "sk-123" not in AS.memory()
+    from meshpool_harness import memstore as MS          # imported facts wait in the review tray, not in context
+    assert "corporate development" not in AS.memory()
+    pend = [f["text"] for f in MS.facts(status="pending")]
+    assert any("corporate development" in t for t in pend) and not any("sk-123" in t for t in pend)
+    assert all(f["source"]["type"] == "import" and f["kind"] == "stated" for f in MS.facts(status="pending"))
     again = IM.import_context_text("## Instructions\n- Answer in British English, short paragraphs")
     assert again["instructions"] == 0                                                  # no duplicates
 
