@@ -111,3 +111,12 @@ def test_the_audit_catches_filler_text_and_placeholder_links(pw, tmp_path):
     r = UA.audit(pw, str(f), views=("desktop",), schemes=("light",))
     rules = {x["rule"] for x in r["findings"]}
     assert {"left-over-text", "placeholder-link"} <= rules
+
+
+def test_the_audit_catches_chart_labels_cut_off_at_the_edge(pw, tmp_path):
+    f = tmp_path / "c.html"
+    f.write_text('<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width"><title>t</title></head>'
+                 '<body><main><h1>Chart</h1><svg width="300" height="100" viewBox="0 0 300 100"><text x="270" y="50" font-size="16">Oct 2026</text></svg></main></body></html>',
+                 encoding="utf-8")
+    r = UA.audit(pw, str(f), views=("desktop",), schemes=("light",))
+    assert any(x["rule"] == "chart-text-cut-off" for x in r["findings"])

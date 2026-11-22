@@ -42,6 +42,15 @@ AUDIT_JS = r"""
   const badLink = [...document.querySelectorAll("a[href]")].find(a => /PHONE_NUMBER|redacted|EMAIL_?\w*_\d|YOUR_|REPLACE|example\.(com|org)|lorem|TODO|\bXXX/i.test(decodeURIComponent(a.getAttribute("href"))) || /^(tel:|https:\/\/wa\.me\/)\D*$/i.test(a.getAttribute("href")));
   if (badLink) add("placeholder-link", "must", `a link points at a placeholder: ${badLink.getAttribute("href").slice(0, 70)}. Use the real value, or leave that link out and ask for it in your reply`, badLink);
 
+  // text inside a chart drawn past the edge of its own drawing
+  let nt = 0;
+  for (const t of document.querySelectorAll("svg text")) {
+    const svg = t.ownerSVGElement; if (!svg || !(t.textContent || "").trim()) continue;
+    const a = t.getBoundingClientRect(), b = svg.getBoundingClientRect();
+    if (a.width && (a.right > b.right + 1.5 || a.left < b.left - 1.5 || a.top < b.top - 1.5 || a.bottom > b.bottom + 1.5) && nt++ < 4)
+      add("chart-text-cut-off", "must", `the chart label "${t.textContent.trim().slice(0, 20)}" is cut off at the edge of its chart. Leave more margin inside the chart`, t);
+  }
+
   // layout
   const over = document.scrollingElement.scrollWidth - vw;
   if (over > 1) add("sideways-scroll", "must", `the page scrolls sideways by ${over}px`, document.body);

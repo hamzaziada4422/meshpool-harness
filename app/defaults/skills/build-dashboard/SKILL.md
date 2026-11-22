@@ -7,6 +7,7 @@ description: Build a dashboard of numbers as a web page with charts and tables. 
 
 1. Read the build-ui skill first. Lead with the three to five numbers that matter, then charts, then a table.
 2. One HTML file with the data embedded as JSON from the user's real file. Charts as inline SVG drawn by small JavaScript; no external libraries or network calls so it works offline.
+3. Keep a margin of at least 48 px on the right and 32 px elsewhere inside each SVG chart so the last axis label and value are never cut off.
 3. Every chart has a title that states the takeaway, labelled axes and a table fallback. Numbers are right-aligned and formatted.
 4. Run ui_audit until it reports no problems, then view_output the screenshots.
 
