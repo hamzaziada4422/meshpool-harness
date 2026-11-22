@@ -94,6 +94,6 @@ def test_log_turn_stores_the_reason():
 
 
 def test_the_router_note_reads_in_plain_words():
-    assert R.plain_reason("docs words (1)") == "chosen for documents"
-    assert R.plain_reason("Fits documents best.") == "fits documents best"
-    assert R.plain_reason("") == ""
+    assert RC.plain_reason("docs words (1)") == "chosen for documents"
+    assert RC.plain_reason("Fits documents best.") == "fits documents best"
+    assert RC.plain_reason("") == ""
