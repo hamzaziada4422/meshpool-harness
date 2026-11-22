@@ -59,6 +59,7 @@
     renderTop(); renderBar(); renderSide(); renderPanel();
     $("#col").classList.remove("loading");
     await drawProject(pid);
+    if (window.MeshBrief && $("#pjBrief")) { window.MeshBrief.render($("#pjBrief"), pid).then(() => post("/api/summaries/opened", {id: pid}).catch(() => {})); }
     restoreDraft();
     if (focus) $("#input").focus();
   };
@@ -83,6 +84,7 @@
           ${chats.length ? `<ul class="threads pjchats">${chats.map(t => thHTML(t)).join("")}</ul>` : `<div class="pjempty"><b>No chats yet.</b><span>Type a message below to start the first chat in this project. It will follow the instructions and use the files and memory on the right.</span></div>`}
         </section>
         <aside class="pjside">
+          <section class="card" id="pjBrief" aria-label="Project brief"></section>
           <section class="card" aria-label="Instructions"><div class="chd"><span class="ci">${ICON.pencil}</span><h3>Instructions</h3><button class="linkbtn" id="pjInsEdit">${d.instructions ? "Edit" : "Add"}</button></div>
             ${d.instructions ? `<p class="clamp">${esc(d.instructions)}</p>` : `<p class="muted">Tell Meshpool how to work here: the tone, the format, what to avoid. Every chat in this project follows it.</p>`}</section>
           <section class="card" aria-label="Files"><div class="chd"><span class="ci">${ICON.book}</span><h3>Files</h3><span class="cnt">${d.knowledge.length || ""}</span><button class="linkbtn" id="pjAddFiles">Add files</button></div>

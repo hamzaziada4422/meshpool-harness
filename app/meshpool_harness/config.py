@@ -63,6 +63,7 @@ FIELDS = [
     ("SERPER_API_KEY", "Serper API key", "", "Optional. Google results through serper.dev."),
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
+    ("MH_SANDBOX", "Sandbox for commands", "", "Optional. 1 = commands can write only in the project and temporary folders (Linux needs bubblewrap; macOS has it built in)."),
 ]
 SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
@@ -233,6 +234,18 @@ def _write(values: dict, path: Path) -> Path:
     return path
 
 
+_INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
+
+
+def scrub_env(env: dict) -> dict:
+    """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
+    writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
+    for k in list(env):
+        if k == "MESHPOOL_API_KEY" or (k in SECRET and k in _INJECTED):
+            env.pop(k, None)
+    return env
+
+
 def load_into_env(override: bool = False) -> dict:
     """Copy config values into os.environ (shell values win unless override). Empty values are skipped."""
     vals = read()
@@ -241,6 +254,7 @@ def load_into_env(override: bool = False) -> dict:
             continue
         if override or k not in os.environ:
             os.environ[k] = v
+            _INJECTED.add(k)
     from meshpool_harness import bundled
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
     return vals
@@ -310,8 +324,11 @@ def system_check() -> list[dict]:
         rows.append({"name": "Browser use", "optional": True, "ok": False, "detail": "needs macOS 13 or later",
                      "fix": why})
     else:
-        rows.append({"name": "Browser use", "ok": pw, "detail": "built in" if pw else "not available",
-                     "fix": "Run: meshpool install-browser"})
+        from meshpool_harness import browser_use as BU
+        have = bundled.packaged() or bool(BU.find_playwright_chromium())
+        rows.append({"name": "Browser use", "ok": True,
+                     "detail": ("ready" if pw and have else "sets itself up the first time it is used"),
+                     "fix": "To do it now, run: meshpool install-browser"})
     try:
         from meshpool_harness.agent import computer_mcp_server as CU
         st = CU.computer_status()
@@ -345,7 +362,7 @@ def user_env(base: dict | None = None) -> dict:
     """Environment for the user's own commands (the agent's shell, the terminal panel). Inside the app, drop the
     variables that point Python at Meshpool's bundled runtime, so the user's python3, pip and tools behave as in
     their own terminal."""
-    env = dict(os.environ if base is None else base)
+    env = scrub_env(dict(os.environ if base is None else base))
     if packaged():
         for k in ("PYTHONHOME", "PYTHONPATH", "PYTHONNOUSERSITE", "PYTHONPYCACHEPREFIX", "PYTHONDONTWRITEBYTECODE",
                   "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):

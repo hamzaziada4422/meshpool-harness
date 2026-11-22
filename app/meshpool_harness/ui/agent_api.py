@@ -37,7 +37,7 @@ RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
-         "checkpoint", "status", "plan"}
+         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight"}
 
 
 def _transcript(sid: str) -> dict | None:
@@ -221,6 +221,9 @@ def _last_reply(agent) -> str:
     return ""
 
 class Session:
+    incognito = False          # class defaults: tests and old callers build a Session without __init__
+    _ck_run, _ck_n, _ck_stop = "", 0, None
+
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
         self.events: list[dict] = []
@@ -232,6 +235,7 @@ class Session:
         self.state = "starting"
         self.queue: list = []                       # messages sent while a harness without mid-turn input works
         self.ctx_pending = not resume_id             # instructions and memory go with the first message
+        self.incognito = bool(resume_id and read_meta(resume_id).get("incognito"))   # no memory, learning or insights
         self.scheduled: dict | None = None           # the scheduled task that started this thread
         self.pendings: dict = {}                     # open approvals by id: harnesses may ask several at once
         self.mcp = None
@@ -423,6 +427,9 @@ class Session:
             pass
 
     def approve(self, kind, title, detail, options=None):
+        if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
+            return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
+                          "and say in your summary what needed the user.")
         with self.lock:
             self._n += 1
             p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
@@ -661,6 +668,112 @@ class Session:
         self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
                    "handoff": {"harness": hid, "reason": why}})
 
+    # ---- 0.0.10: checks, receipts, memory tracking, learning and insights around a turn. None of it may slow or
+    # fail a turn: the slow parts run on a thread, every call is guarded.
+    def _turn_begin(self):
+        self._ck_run, self._ck_n = f"{self.id}:{int(self.t_turn)}", 0
+        try:
+            from meshpool_harness import checks as CK
+            CK.begin(self._ck_run)
+            self._ck_stop = threading.Event()
+
+            def watch(run=self._ck_run, stop=self._ck_stop):
+                while not stop.wait(0.8):
+                    self._emit_checks(run)
+            threading.Thread(target=watch, daemon=True, name="meshpool-checks").start()
+        except Exception:  # noqa: BLE001
+            self._ck_run = ""
+        if self.incognito:
+            try:
+                from meshpool_harness import memstore as MS
+                MS.incognito_begin(self.id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _emit_checks(self, run):
+        try:
+            from meshpool_harness import checks as CK
+            evs = CK.events_for(run, since=self._ck_n)
+            self._ck_n += len(evs)
+            for e in evs:
+                self.emit(e)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _turn_finish(self):
+        run = getattr(self, "_ck_run", "")
+        if getattr(self, "_ck_stop", None):
+            self._ck_stop.set()
+        if run:
+            try:
+                from meshpool_harness import checks as CK
+                self._emit_checks(run)
+                CK.end(run)
+                line = CK.final_line(run)
+                if line:
+                    self.emit({"type": "checks_line", "text": line, "items": CK.summary(run).get("items", [])})
+            except Exception:  # noqa: BLE001
+                pass
+            self._ck_run = ""
+        if self.incognito:
+            try:
+                from meshpool_harness import memstore as MS
+                MS.incognito_end(self.id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _after_turn(self, text: str, ev0: int, t0: float):
+        text0 = text.split("\u200b")[0]
+        if not self.incognito:
+            try:                                    # facts an agent saved this turn: this chat is their source
+                from meshpool_harness import memstore as MS
+                MS.attribute_since(t0, self.id, text0)
+            except Exception:  # noqa: BLE001
+                pass
+            try:                                    # the learning loop: what the user taught goes to memory,
+                from meshpool_harness import learn as LRN   # for this chat's next turn and every new chat
+                LRN.after_turn_async(self.id, text, _last_reply(self.agent), on_learned=lambda got: self.emit(
+                    {"type": "status", "text": "Noted for next time: " + "; ".join(got),
+                     "undo": {"ids": list(LRN.LAST_IDS.get(self.id, []))}}))
+            except Exception:  # noqa: BLE001 - learning never touches the turn
+                pass
+        try:                                        # the receipt: time, cost and the agent Auto chose
+            from meshpool_harness import receipts as RC
+            r = RC.receipt_for(self.id)
+            if r:
+                self.emit({"type": "task_receipt", **r})
+        except Exception:  # noqa: BLE001
+            pass
+        threading.Thread(target=self._post_turn, args=(ev0,), daemon=True, name="meshpool-after-turn").start()
+
+    def _post_turn(self, ev0: int):
+        """Off the turn's path: register files made, summarise an idle chat, look for an insight to show."""
+        try:
+            if not self.incognito:
+                from meshpool_harness import artifacts_registry as AR
+                from meshpool_harness.ui import workbench as W
+                root = Path(self.workdir).resolve()
+                with self.lock:
+                    evs = list(self.events[ev0:])
+                for o in W.outputs_from(evs, [], root):
+                    if o["path"].lower().endswith((".pptx", ".xlsx", ".docx")):
+                        AR.register(str(root / o["path"]), self.id, incognito=self.incognito)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from meshpool_harness import summaries as SU
+            if not self.incognito:
+                SU.on_idle_async(self.id)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            from meshpool_harness import insights as IN
+            if not self.incognito and hasattr(IN, "scan_after_turn"):
+                for c in IN.scan_after_turn(self.id) or []:
+                    self.emit({"type": "insight", "card": c})
+        except Exception:  # noqa: BLE001
+            pass
+
     def _start_turn(self, text: str, images: list | None):
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
@@ -745,8 +858,12 @@ class Session:
                     self.ctx_pending = False
                     try:
                         from meshpool_harness import assistant as AS
-                        pid = read_meta(self.id).get("project_id") or ""
-                        body += "\n\n\u200b" + AS.context_block(text, self.workdir, pid)
+                        m0 = read_meta(self.id)
+                        pid = m0.get("project_id") or ""
+                        ex = list(m0.get("memory_exclude") or [])
+                        body += "\n\n\u200b" + AS.context_block(text, self.workdir, pid, chat_id=self.id,
+                                                               incognito=self.incognito, exclude=ex)
+                        write_meta(self.id, memory_exclude_sent=ex)
                         if pid:
                             write_meta(self.id, project_ctx=pid)
                     except Exception:  # noqa: BLE001
@@ -757,12 +874,25 @@ class Session:
                         pid = m.get("project_id") or ""
                         if pid and m.get("project_ctx") != pid:
                             from meshpool_harness import assistant as AS
-                            pb = AS.project_block(pid, text)
+                            pb = AS.project_block(pid, text, m.get("memory_exclude") or [])
                             if pb:
                                 body += "\n\n\u200b" + pb
                             write_meta(self.id, project_ctx=pid)
                     except Exception:  # noqa: BLE001
                         pass
+                try:                                    # facts the user left out of this chat after its start
+                    if not self.ctx_pending:
+                        m1 = read_meta(self.id)
+                        ex, sent = list(m1.get("memory_exclude") or []), list(m1.get("memory_exclude_sent") or [])
+                        if set(ex) - set(sent):
+                            from meshpool_harness import memstore as MS
+                            gone = [f["text"] for f in map(MS.get, set(ex) - set(sent)) if f]
+                            if gone:
+                                body += ("\n\n\u200b" + "The user left these out of this chat. Ignore them from now on:\n"
+                                         + "\n".join("- " + g for g in gone))
+                            write_meta(self.id, memory_exclude_sent=ex)
+                except Exception:  # noqa: BLE001
+                    pass
                 try:                                    # preferences learned after the last turn apply now
                     from meshpool_harness import learn as LRN
                     pend = LRN.pending(self.id)
@@ -775,6 +905,7 @@ class Session:
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
                                                               "above; send it again to run it."})
                     return
+                self._turn_begin()
                 if images:
                     self.agent.send(body, images=images)
                 else:
@@ -784,13 +915,9 @@ class Session:
                     OUT.log_turn(self, getattr(self, "_turn_route", None), u0)
                 except Exception:  # noqa: BLE001
                     pass
-                try:                                    # the learning loop: what the user taught goes to memory,
-                    from meshpool_harness import learn as LRN   # for this chat's next turn and every new chat
-                    LRN.after_turn_async(self.id, text, _last_reply(self.agent), on_learned=lambda got: self.emit(
-                        {"type": "status", "text": "Noted for next time: " + "; ".join(got)}))
-                except Exception:  # noqa: BLE001 - learning never touches the turn
-                    pass
+                self._after_turn(text, ev0, self.t_turn)
             finally:
+                self._turn_finish()
                 with _ACTIVE_LOCK:
                     _ACTIVE.get(root, set()).discard(self)
                 if self._turn_shared and self._turn_n is not None:
@@ -1073,7 +1200,7 @@ class Session:
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
-                "style": self.style_id() or _default_style(),
+                "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1180,6 +1307,11 @@ def create(body: dict) -> dict:
         except (KeyError, ValueError):
             pass
     write_meta(s.id, project_id=pid or "", scratch=bool(scratch))
+    if body.get("memory_exclude"):                  # facts left out before the first message (the context X-ray)
+        write_meta(s.id, memory_exclude=[str(i) for i in body["memory_exclude"]][:200])
+    if body.get("incognito"):                       # no memory read or written, no learning, nothing logged for insights
+        s.incognito = True
+        write_meta(s.id, incognito=True)
     try:
         from meshpool_harness import styles as ST
         picked = str(body.get("style") or "")

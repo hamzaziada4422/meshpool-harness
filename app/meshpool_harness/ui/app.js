@@ -535,8 +535,8 @@ async function sendNow(interrupt) {
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text});
-      S.draft.style = ""; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
+      S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
@@ -575,6 +575,10 @@ const SLASH = [
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
+  ["/compact", "Summarize the earlier steps to free up room, so a long task can keep going", async () => {
+    if (!S.cur) return toast("Open a chat first.");
+    try { const r = await post(`/api/agent/${S.cur.id}/compact`, {}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
+  }],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
   ["/terminal", "Open the terminal", () => togglePanel("term", true)],
@@ -583,7 +587,8 @@ const SLASH = [
   ["/skills", "Manage skills", () => openSettings("skills")],
   ["/connectors", "Connect GitHub, Jira, Notion, Apollo and more", () => openSettings("connectors")],
   ["/schedule", "Scheduled tasks", () => goPage("scheduled")],
-  ["/memory", "Instructions and memory", () => openSettings("personal")],
+  ["/memory", "What Meshpool knows: every memory, where it came from and where it was used", () => goPage("memory")],
+  ["/instructions", "Instructions for every chat", () => openSettings("personal")],
   ["/steps", "Show or fold every step", () => toggleSteps()],
   ["/settings", "Open settings", () => openSettings()],
 ];
@@ -1039,8 +1044,12 @@ function md(src) {
   return parts.map((p, i) => {
     if (i % 2) {
       const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), pre = `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+      if (lang === "mermaid" && i < parts.length - 1) { const src = p.replace(/^[\w+.#-]*\n/, ""); return `<div class="mermaid-box" data-mermaid="${esc(src)}"><pre><code>${esc(src)}</code></pre></div>`; }
       return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
     }
+    const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
+    p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
+      .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
     const flushL = () => { if (list) { out += `<${list.t}${list.t === "ol" && list.start > 1 ? ` start="${list.start}"` : ""}>${list.items.map(x => `<li>${inline(x)}</li>`).join("")}</${list.t}>`; list = null; } };
@@ -1056,7 +1065,7 @@ function md(src) {
       else { flushL(); para.push(ln); }
     }
     flushP(); flushL(); flushT(); return out;
-  }).join("");
+  }).join("").replace(/\u0001([Mm])([A-Za-z0-9+\/=]+)\u0002/g, (_, k, b) => `<span class="mathsrc" data-display="${k === "M" ? 1 : 0}" data-tex="${b}"></span>`);
 }
 function diffLines(d) { return String(d || "").split("\n").map(l => { const c = l.startsWith("+++") || l.startsWith("---") ? "d-hunk" : l.startsWith("+") ? "d-add" : l.startsWith("-") ? "d-del" : l.startsWith("@@") ? "d-hunk" : ""; return c ? `<span class="${c}">${esc(l)}</span>` : esc(l); }).join("\n"); }
 
@@ -1186,7 +1195,7 @@ function applyEv(ev) {
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
-      add(esc(ev.text), "note"); break; }
+      { const nn = add(esc(ev.text), "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
@@ -1833,21 +1842,23 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Instructions and memory</h3><p class="lead">Every agent reads these at the start of each new chat, so you do not repeat yourself.</p>
       <label class="field" style="max-width:none"><span>Instructions for every chat</span><textarea id="paIns" rows="6" placeholder="For example: Be direct and concise. No em dashes. I work in strategy and finance in the GCC.">${esc(a.instructions)}</textarea><small>How you want answers: tone, format, what to avoid, context about your work.</small></label>
       <label class="switchrow"><input type="checkbox" id="paInsOn" ${a.settings.instructions_on ? "checked" : ""}> Use these instructions</label>
-      <label class="field" style="max-width:none;margin-top:14px"><span>Memory</span><textarea id="paMem" rows="8" placeholder="Agents add facts here when you tell them something lasting, or ask them to remember.">${esc(a.memory)}</textarea><small>One fact per line. Edit or delete anything. Agents never save keys or passwords.</small></label>
+      <div class="field" style="max-width:none;margin-top:14px"><span>Memory</span><p class="lead" style="margin:4px 0 8px">${a.memory.split("\n").filter(x => x.trim()).length} things remembered.</p><button class="btn" id="paMemPage">Open What Meshpool knows</button></div>
       <label class="switchrow"><input type="checkbox" id="paMemOn" ${a.settings.memory_on ? "checked" : ""}> Let agents use and add to memory</label>
+      <label class="switchrow"><input type="checkbox" id="paEdits" ${a.settings.learn_from_edits ? "checked" : ""}> Learn from my edits to files Meshpool makes</label>
       <div style="display:flex;gap:8px;margin-top:12px"><button class="btn primary" id="paSave">Save</button></div><div class="res" id="paRes"></div>
       <p class="lead" style="margin-top:18px">Coming from ChatGPT, Codex or another assistant? <button class="linkbtn" id="paImport">Import your chats and context</button></p>`;
     $("#paImport").onclick = () => renderSection("import");
+    $("#paMemPage").onclick = () => { closeSettings?.(); goPage("memory"); };
     $("#paSave").onclick = async () => {
       try {
         await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
-        await post("/api/assistant", {action: "memory", text: $("#paMem").value});
-        await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked});
+        await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked, learn_from_edits: $("#paEdits").checked});
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New chats use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
   } else if (sec === "import") {
-    b.innerHTML = `${close}<div id="impBox"></div>`;
+    b.innerHTML = `${close}<div id="impAgents"></div><div id="impBox"></div>`;
+    importPanel($("#impAgents", b));
     await contextPanel($("#impBox", b));
   } else if (sec === "scheduled") {
     const draw = a => {
@@ -1860,11 +1871,11 @@ async function renderSection(sec) {
         <div class="sform">
           <input id="tsName" placeholder="Name, for example Morning AI news" spellcheck="false">
           <textarea id="tsPrompt" rows="3" placeholder="What should it do? For example: Find the 5 most important AI infrastructure news stories from the last 24 hours and summarize each in two sentences with links."></textarea>
-          <div class="srow"><select id="tsWhen"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option></select>
-          <select id="tsDay">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(d => `<option value="${d}">${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select>
-          <input id="tsTime" type="time" value="08:30"><input id="tsAt" type="datetime-local">
-          <select id="tsKind"><option value="cowork">Work</option><option value="code">Code</option></select>
-          <select id="tsFolder"><option value="">Default folder</option>${proj}</select></div>
+          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option></select>
+          <select id="tsDay" aria-label="Day">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(d => `<option value="${d}">${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select>
+          <input id="tsTime" aria-label="Time" type="time" value="08:30"><input id="tsAt" aria-label="Date and time" type="datetime-local">
+          <select id="tsKind" aria-label="Mode"><option value="cowork">Work</option><option value="code">Code</option></select>
+          <select id="tsFolder" aria-label="Folder"><option value="">Default folder</option>${proj}</select></div>
           <button class="btn primary" id="tsAdd">Add task</button></div><div class="res" id="tsRes"></div>`;
       done();
       const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; };
@@ -2213,48 +2224,44 @@ function showOnboarding() {
    custom GPT / project instructions as skills. */
 async function contextPanel(box) {
   if (!box) return;
-  let prompt = "", local = {};
-  try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
+  let prompt = "", local = {}, links = [];
+  try { const ic = await api("/api/import-context"); prompt = ic.prompt; links = ic.links || []; } catch (e) { /* the server is older: hide the panel */ return; }
   try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
   const srcs = Object.entries(local).filter(([, v]) => v.found);
   const n = x => Number(x || 0).toLocaleString();
-  box.innerHTML = `<h3 class="onb-h">Bring your chats and context</h3>
-    <p class="muted">Your old chats come over as chats you can search and continue here. What your assistant knows about you becomes instructions and memory. Your files stay on this computer; to write those, the titles and first messages of up to 80 chats are sent once to your model.</p>
+  box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
+    <p class="muted">It all stays on this computer.</p>
     <ol class="ctx-steps">
-      <li><b>Your ChatGPT chats and other assistants</b>
-        <p>Ask for your data export, then drop the .zip here when it arrives. Keep it zipped.</p>
-        <small class="muted">ChatGPT: Settings, Data controls, Export data. Other assistants: look for Export data in their settings. Both email you a link, usually within minutes.</small>
-        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">Drop the export .zip here, or click to choose it<input type="file" id="ctxZip" accept=".zip" hidden></div>
-        <small class="muted">Every conversation comes over with its original date. Projects from other apps become skills, and lasting facts about you become memory.</small></li>
-      ${srcs.length ? `<li><b>Sessions on this computer</b>
-        <p>Each session opens in its project folder, so you can carry on with any agent.</p>
-        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}${v.imported ? `, ${n(v.imported)} already here` : ""}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
-      <li><b>What your assistant knows about you</b>
-        <p>Copy the prompt into ChatGPT or another assistant, then paste its whole answer here. It becomes your instructions and memory.</p>
-        <div class="ctx-acts"><button class="btn" id="ctxCopy">Copy the prompt</button></div>
-        <textarea id="ctxText" rows="6" placeholder="Paste the answer here"></textarea>
-        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">Import the answer</button></div></li>
-      <li><b>A custom GPT or assistant project you rely on</b>
-        <p>Paste its instructions to keep them as a skill every agent can use.</p>
-        <input id="ctxName" placeholder="Name, e.g. board-memo-writer" spellcheck="false">
-        <textarea id="ctxIns" rows="5" placeholder="Paste the instructions"></textarea>
-        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></li>
+      <li><b>Chats from another assistant</b>
+        <div class="ctx-acts">${links.map(l => `<button class="btn" data-ext="${esc(l.url)}">1. Get your ${esc(l.name)} export</button>`).join("")}</div>
+        <div class="dropzone" id="ctxDrop" tabindex="0" role="button">2. Drop the .zip here<input type="file" id="ctxZip" accept=".zip" hidden></div></li>
+      ${srcs.length ? `<li><b>On this computer</b>
+        ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
+      <li><b>What an assistant knows about you</b>
+        <div class="ctx-acts"><button class="btn" id="ctxCopy">1. Copy this prompt</button></div>
+        <textarea id="ctxText" rows="3" placeholder="2. Paste its answer here"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxGo">3. Add to memory</button></div></li>
+      <li><details><summary><b>A custom GPT's instructions</b></summary>
+        <input id="ctxName" placeholder="Name" spellcheck="false">
+        <textarea id="ctxIns" rows="4" placeholder="Paste the instructions"></textarea>
+        <div class="ctx-acts end"><button class="btn primary" id="ctxSkill">Save as a skill</button></div></details></li>
     </ol><div class="res" id="ctxRes"></div>`;
+  $$("[data-ext]", box).forEach(x => { x.onclick = () => openExternal(x.dataset.ext); });
   const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
   const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
-  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Prompt copied. Paste it into your assistant, then paste its answer above."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the prompt from the box, then replace it with the answer."); } };
+  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Copied. Paste it into your assistant, then paste the answer here."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the text in the box, then replace it with the answer."); } };
   $("#ctxGo", box).onclick = async () => {
     const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
-    try { const r = await post("/api/import-context", {text}); res(`Imported ${r.memory} facts into memory and ${r.instructions} instructions.` + (r.skipped?.length ? ` Skipped ${r.skipped.length} (secrets or system instructions).` : ""), false, true); } catch (e) { res(e.message, true); }
+    try { const r = await post("/api/import-context", {text}); res(`${r.memory} to review in Memory, ${r.instructions} instructions saved.` + (r.skipped?.length ? ` ${r.skipped.length} skipped.` : ""), false, true); if (r.memory) toast("Review what it found.", 9000, {label: "Open Memory", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } goPage("memory"); }}); } catch (e) { res(e.message, true); }
   };
   const upload = async f => {
     if (!f) return;
     if (!/\.zip$/i.test(f.name)) return res("Choose the .zip file from ChatGPT or another assistant, without unzipping it.", true);
-    res(`Importing ${f.name} (${(f.size / 1048576).toFixed(0)} MB)… large exports take a minute.`);
+    res(`Importing ${f.name}…`);
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? ` Meshpool is now learning what they say about you${r.kind === "claude" ? " and adding your projects as skills" : ""}; that shows up in Instructions and memory in a minute.` : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? " Facts about you will appear in Memory to review." : ""), false, true);
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2346,28 +2353,31 @@ async function drawMcpLibrary(b) {
 
 /* Bring your setup: skills and MCP servers from Claude, Codex, Cursor and other apps on this computer. */
 async function importPanel(box, onDone) {
-  box.innerHTML = `<div class="res">Looking for skills and MCP servers in Codex, Cursor and other apps...</div>`;
+  box.innerHTML = `<div class="res">Looking…</div>`;
   let f;
-  try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
-  const rows = [...f.skills, ...f.mcp];
-  if (!rows.length) { box.innerHTML = `<div class="res">No skills or MCP servers found in other apps on this computer. You can add skills and servers any time in Settings.</div>`; onDone?.(null); return; }
-  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
-  box.innerHTML = `<div class="impsel"><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div>${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
-    ${f.mcp.length ? `<h3 class="onb-h">Tools from other apps (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div><p class="lead" style="font-size:12px">They keep their settings from the other app and stay on this computer.</p>` : ""}
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button></div><div class="res" id="impRes"></div>`;
-  $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
-  $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
+  try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const agents = f.agents.filter(a => a.items.length);
+  if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
+  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions"};
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
+  const sum = a => ["skill", "mcp", "memory", "instructions"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
+  box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
+    ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
+  const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
+  const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
+  const text = (r, dry) => `${dry ? "Would import" : "Imported"} ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}, ${r.memory} to review in Memory, ${r.instructions} instruction file${r.instructions === 1 ? "" : "s"}.`
+    + (r.stripped.length ? ` Keys left out of ${r.stripped.map(x => x.server).join(", ")}: add them in Settings.` : "") + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
+  $("#impDry", box).onclick = async () => { const k = keys(); if (!k.length) return say("Nothing selected."); try { say(text(await post("/api/import-agents", {keys: k, dry_run: true}), true)); } catch (e) { say(e.message, "bad"); } };
   $("#impGo", box).onclick = box._import = async () => {
-    const keys = $$("[data-key]", box).filter(x => x.checked).map(x => x.dataset.key);
-    if (!keys.length) { $("#impRes", box).className = "res"; $("#impRes", box).textContent = "Nothing selected."; return; }
+    const k = keys(); if (!k.length) return say("Nothing selected.");
     $("#impGo", box).disabled = true;
     try {
-      const r = await post("/api/import", {keys});
+      const r = await post("/api/import-agents", {keys: k});
       await loadSkills(); S.connCache = null;
-      $("#impRes", box).className = "res " + (r.errors.length ? "bad" : "ok");
-      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"} and ${r.mcp.length} MCP server${r.mcp.length === 1 ? "" : "s"}. Every agent can use them in new chats.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
-      box.dataset.done = "1"; onDone?.(r);
-    } catch (e) { $("#impRes", box).className = "res bad"; $("#impRes", box).textContent = e.message; }
+      say(text(r, false), r.errors.length ? "bad" : "ok"); box.dataset.done = "1"; onDone?.(r);
+      if (r.memory) toast("Review what it found.", 9000, {label: "Open Memory", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } goPage("memory"); }});
+    } catch (e) { say(e.message, "bad"); }
     $("#impGo", box).disabled = false;
   };
 }
@@ -2423,7 +2433,7 @@ function setupStep(o, prev) {
   prev?.remove();
   const card = document.createElement("div"); card.className = "onb-card"; card.id = "onbSetup"; o.appendChild(card);
   card.innerHTML = `<img class="logo mlogo" src="${logoSrc()}" alt="Meshpool">
-    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. Use what you already have in ChatGPT, Codex, Cursor or other apps. You can also do this later in Settings.</p>
+    ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;

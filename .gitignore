@@ -42,3 +42,7 @@ deps/
 .env.kb
 /meshpool_kb/
 /slide_engine_kb/
+/checks/
+/insights/
+/summaries/
+/artifacts/

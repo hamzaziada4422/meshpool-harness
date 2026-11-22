@@ -171,7 +171,7 @@ const projName = p => (S.projects.find(x => x.path === p) || {}).name || (p || "
 
 /* ================================== sidebar ================================== */
 const NAV = {
-  chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["plugins", "Plugins", "plug"]],
+  chat: [["new", "New", "plus"], ["search", "Search", "search"], ["projects", "Projects", "stack"], ["artifacts", "Artifacts", "cube"], ["scheduled", "Scheduled", "clock"], ["memory", "Memory", "brain"], ["work", "Your work", "star"], ["plugins", "Plugins", "plug"]],
   code: [["new", "New", "plus"], ["search", "Search", "search"], ["artifacts", "Artifacts", "cube"], ["plugins", "Plugins", "plug"], ["more", "More", "more"]],
 };
 // A chat's state as the sidebar draws it: running (brand dot), waiting for you (amber), finished and unread (blue).
@@ -200,6 +200,26 @@ function thHTML(t, o = {}) {
   const icons = code ? `${t.pr ? `<span class="si pr" data-prtip="${esc(t.id)}" aria-label="Pull request #${t.pr.number}">${ICON.pr}</span>` : ""}${isMgd(t.workdir) ? `<span class="si" title="GitHub workspace">${ICON.cloud}</span>` : ""}${t.state === "waiting" ? `<span class="si warn" title="Waiting for you">${ICON.warn}</span>` : ""}` : "";
   return `<li class="th ${S.view === "chat" && S.cur?.id === t.id ? "on" : ""}" data-id="${esc(t.id)}" data-nav tabindex="0" title="${esc(t.title + (pj ? " · " + pj.name : ""))}">${t.scheduled ? `<span class="pi bolt" title="Started by a scheduled task">${ICON.bolt}</span>` : ""}<span class="tt">${esc(t.title)}${false && pj ? `<small class="tf">${esc(pj.name)}</small>` : ""}</span><span class="end">${icons}<span class="dot ${st}"></span><button class="iconbtn more" data-tmenu="${esc(t.id)}" aria-label="Options for ${esc(t.title)}" aria-haspopup="menu">${ICON.more}</button></span></li>`;
 }
+
+/* Code sessions grouped by folder: the folder with the newest activity first, pinned sessions on top, each folder
+   collapsible (remembered), with its own "new session" button and a dot when something in it needs you. */
+function codeGroupsHTML(list) {
+  const pinned = list.filter(t => t.pinned), rest = list.filter(t => !t.pinned);
+  const groups = new Map();
+  for (const t of rest) { const k = t.workdir || ""; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(t); }
+  const rows = [...groups.entries()].map(([k, ts]) => ({k, ts, at: Math.max(...ts.map(t => Number(t.updated) || 0))})).sort((a, z) => z.at - a.at);
+  const curDir = S.cur?.view?.workdir || "";
+  let out = pinned.length ? `<div class="cgl">Pinned</div><ul class="threads">${pinned.map(t => thHTML(t)).join("")}</ul>` : "";
+  S.cgAll = S.cgAll || new Set();
+  for (const g of rows) {
+    const key = "cg:" + g.k, shut = S.collapsed.has(key) && g.k !== curDir, name = g.k ? projName(g.k) : "No folder";
+    const wait = g.ts.some(t => t.state === "waiting"), run = g.ts.some(t => t.state === "working");
+    const many = g.ts.length > 6 && !S.cgAll.has(g.k) && !(S.codeQ || "").trim();
+    out += `<div class="cg ${shut ? "shut" : ""}"><button class="cghd" data-cgtog="${esc(g.k)}" aria-expanded="${!shut}" title="${esc(g.k || "Sessions without a folder")}"><span class="chev">${ICON.chev}</span><span class="cgn">${esc(name)}</span><span class="cnt">${g.ts.length}</span>${wait ? `<i class="cgdot wait" aria-label="Waiting for you"></i>` : run ? `<i class="cgdot run" aria-label="Running"></i>` : ""}</button>${g.k ? `<button class="iconbtn cgnew" data-cgnew="${esc(g.k)}" data-tip="New session in ${esc(name)}" aria-label="New session in ${esc(name)}">${ICON.plus}</button>` : ""}</div>`
+      + (shut ? "" : `<ul class="threads sub cgl2">${(many ? g.ts.slice(0, 6) : g.ts).map(t => thHTML(t)).join("")}${many ? `<li class="vall" data-cgmore="${esc(g.k)}" tabindex="0">Show ${g.ts.length - 6} more</li>` : ""}</ul>`);
+  }
+  return out;
+}
 function renderSide() {
   const el = $("#sideList"); if (!el) return;
   if (S.renaming) return;                              // never rebuild the list under a name being typed
@@ -210,10 +230,16 @@ function renderSide() {
   const open = k => !S.collapsed.has(k);
   let html = navHTML();
   if (code) {
-    const fl = S.codeFilter || "all";
-    const list = mine.filter(t => fl === "all" || (fl === "waiting" && t.state === "waiting") || (fl === "unread" && t.unread) || (fl === "pr" && t.pr));
-    html += secHead("recents", "Recents", `<button class="iconbtn flt ${fl !== "all" ? "on" : ""}" id="codeFilter" data-tip="Filter sessions" aria-label="Filter sessions">${ICON.filter}</button>`)
-      + (open("recents") ? (list.length ? `<ul class="threads">${list.map(t => thHTML(t)).join("")}</ul>` : `<div class="empty-side">${mine.length ? "No sessions match this filter." : "Coding sessions show up here. Start one with New."}</div>`) : "");
+    const fl = S.codeFilter || "all", by = store("code_group") || "folder", q = (S.codeQ || "").trim().toLowerCase();
+    const list = mine.filter(t => (fl === "all" || (fl === "waiting" && t.state === "waiting") || (fl === "unread" && t.unread) || (fl === "pr" && t.pr))
+      && (!q || (t.title + " " + projName(t.workdir || "")).toLowerCase().includes(q)));
+    const tools = `<button class="iconbtn flt ${S.codeFind || q ? "on" : ""}" id="codeFind" data-tip="Search sessions" aria-label="Search sessions">${ICON.search}</button><button class="iconbtn flt ${fl !== "all" || by !== "folder" ? "on" : ""}" id="codeFilter" data-tip="Group and filter" aria-label="Group and filter sessions">${ICON.filter}</button>`;
+    const waiting = mine.filter(t => t.state === "waiting");
+    html += (waiting.length && fl !== "waiting" ? `<button class="cwait" data-cfilter="waiting"><span class="dot wait"></span>${waiting.length} waiting for you</button>` : "")
+      + secHead("recents", by === "folder" ? "Sessions by folder" : "Recents", tools)
+      + (S.codeFind || q ? `<div class="cfind"><input id="codeQ" value="${esc(S.codeQ || "")}" placeholder="Search sessions" aria-label="Search sessions" autocomplete="off" spellcheck="false"></div>` : "");
+    if (open("recents")) html += list.length ? (by === "folder" ? codeGroupsHTML(list) : `<ul class="threads">${list.map(t => thHTML(t)).join("")}</ul>`)
+      : `<div class="empty-side">${mine.length ? "Nothing matches." : "Sessions show up here, grouped by folder. Start one with New."}</div>`;
   } else {
     const pjs = pinnedPj(), pinnedChats = mine.filter(t => t.pinned), rest = mine.filter(t => !t.pinned);
     if (pjs.length || pinnedChats.length) {
@@ -257,7 +283,14 @@ function paintAccount() {
 // One set of listeners for the whole list (it is rebuilt often): click, right-click, keyboard.
 function bindSide() {
   const el = $("#sideList");
+  el.addEventListener("input", e => { if (e.target.id === "codeQ") { S.codeQ = e.target.value; clearTimeout(S.codeQT); S.codeQT = setTimeout(() => { renderSide(); const i = $("#codeQ"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 90); } });
+  el.addEventListener("keydown", e => { if (e.target.id === "codeQ" && e.key === "Escape") { S.codeQ = ""; S.codeFind = false; renderSide(); } });
   el.addEventListener("click", e => {
+    const cgt = e.target.closest("[data-cgtog]"); if (cgt) { const key = "cg:" + cgt.dataset.cgtog; S.collapsed.has(key) ? S.collapsed.delete(key) : S.collapsed.add(key); store("collapsed", [...S.collapsed]); return renderSide(); }
+    const cgn = e.target.closest("[data-cgnew]"); if (cgn) { e.stopPropagation(); return newThread(cgn.dataset.cgnew); }
+    const cgm = e.target.closest("[data-cgmore]"); if (cgm) { (S.cgAll = S.cgAll || new Set()).add(cgm.dataset.cgmore); return renderSide(); }
+    const cfl = e.target.closest("[data-cfilter]"); if (cfl) { S.codeFilter = cfl.dataset.cfilter; return renderSide(); }
+    if (e.target.closest("#codeFind")) { S.codeFind = !S.codeFind; if (!S.codeFind) S.codeQ = ""; renderSide(); if (S.codeFind) $("#codeQ")?.focus(); return; }
     const more = e.target.closest("[data-tmenu]"); if (more) { e.stopPropagation(); return threadMenu({type: "click", currentTarget: more}, more.dataset.tmenu); }
     const pm = e.target.closest("[data-pmenu]"); if (pm) { e.stopPropagation(); return projMenu({type: "click", currentTarget: pm}, pm.dataset.pmenu); }
     const nvAdd = e.target.closest("[data-nv-add]"); if (nvAdd) { e.stopPropagation(); return newArtifact?.(); }
@@ -310,8 +343,14 @@ const moreMenu = anchor => ctxMenu({type: "click", currentTarget: anchor}, [
   {label: "Projects", icon: ICON.stack, fn: () => goPage("projects")},
 ]);
 function codeFilterMenu(anchor) {
-  const cur = S.codeFilter || "all", pick = v => () => { S.codeFilter = v; renderSide(); };
-  ctxMenu({type: "click", currentTarget: anchor}, [["all", "All sessions"], ["waiting", "Waiting for you"], ["unread", "Unread"], ["pr", "With a pull request"]].map(([v, l]) => ({label: l, checked: v === cur ? true : undefined, fn: pick(v)})));
+  const cur = S.codeFilter || "all", by = store("code_group") || "folder", pick = v => () => { S.codeFilter = v; renderSide(); };
+  const groupBy = v => () => { store("code_group", v); renderSide(); };
+  const allFolders = () => { const ks = [...new Set(chatList().filter(isCodeThread).map(t => "cg:" + (t.workdir || "")))]; const shut = ks.every(k => S.collapsed.has(k)); ks.forEach(k => shut ? S.collapsed.delete(k) : S.collapsed.add(k)); store("collapsed", [...S.collapsed]); renderSide(); };
+  ctxMenu({type: "click", currentTarget: anchor}, [
+    {head: "Group by"}, {label: "Folder", checked: by === "folder" ? true : undefined, fn: groupBy("folder")}, {label: "Date", checked: by === "date" ? true : undefined, fn: groupBy("date")},
+    {sep: true}, {head: "Show"},
+    ...[["all", "All sessions"], ["waiting", "Waiting for you"], ["unread", "Unread"], ["pr", "With a pull request"]].map(([v, l]) => ({label: l, checked: v === cur ? true : undefined, fn: pick(v)})),
+    ...(by === "folder" ? [{sep: true}, {label: "Collapse or expand all folders", fn: allFolders}] : [])]);
 }
 /* the pull request card on a code session's row: title, state, repository, number and the size of the diff */
 function closePrCard() { $("#prcard")?.remove(); }

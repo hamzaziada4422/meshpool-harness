@@ -23,7 +23,8 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you d
 ENGINES = ("Every slide and every spreadsheet goes through the Meshpool office tools: make_deck for a deck, add_slides "
            "to add slides to a deck the user has, make_spreadsheet (or office_task) for a workbook or model. Never "
            "write a .pptx or .xlsx by hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs. Decks come out in a "
-           "top strategy firm's style without being asked; pass the user's facts and files in the request.")
+           "top strategy firm's style without being asked; pass the user's facts and files in the request. To change a file the user already has (.docx, .xlsx, .pptx), "
+           "use edit_office_file: it keeps their formatting and formulas.")
 
 import contextlib
 import difflib
@@ -141,16 +142,30 @@ def _tasks_lock():
     return _locked(C.home() / "schedules.lock")
 
 
+QUIET_DEFAULT = {"on": False, "start": "22:00", "end": "07:00"}
+
+
 def settings() -> dict:
     d = json.loads(_read(_dir() / "settings.json") or "{}")
-    return {"memory_on": d.get("memory_on", True), "instructions_on": d.get("instructions_on", True)}
+    q = d.get("quiet_hours") if isinstance(d.get("quiet_hours"), dict) else {}
+    return {"memory_on": d.get("memory_on", True), "instructions_on": d.get("instructions_on", True),
+            "learn_from_edits": d.get("learn_from_edits", True), "insights_on": d.get("insights_on", True),
+            "quiet_hours": {**QUIET_DEFAULT, **{k: q[k] for k in QUIET_DEFAULT if k in q}}}
 
 
 def save_settings(**kw) -> dict:
-    d = settings()
-    d.update({k: bool(v) for k, v in kw.items() if k in ("memory_on", "instructions_on")})
+    d = json.loads(_read(_dir() / "settings.json") or "{}")
+    for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on"):
+        if k in kw:
+            d[k] = bool(kw[k])
+    if isinstance(kw.get("quiet_hours"), dict):
+        q = {**QUIET_DEFAULT, **(d.get("quiet_hours") or {})}
+        for k in QUIET_DEFAULT:
+            if k in kw["quiet_hours"]:
+                q[k] = bool(kw["quiet_hours"][k]) if k == "on" else str(kw["quiet_hours"][k])[:5]
+        d["quiet_hours"] = q
     _write(_dir() / "settings.json", json.dumps(d))
-    return d
+    return settings()
 
 
 # ---------- instructions and memory --------------------------------------------------------------------------------
@@ -163,49 +178,28 @@ def set_instructions(text: str):
     _write(_dir() / "instructions.md", (text or "").strip()[:8000] + "\n")
 
 
+def _MS():
+    from meshpool_harness import memstore as MS
+    return MS
+
+
 def memory() -> str:
-    """Saved facts. Lines that are tasks or plans rather than facts about the user (saved before memory refused
-    them) and dashes are cleaned out the first time they are read."""
-    raw = _read(_dir() / "memory.md").strip()
-    keep = [dashless(x) for x in raw.splitlines() if x.strip() and not WORK_ITEM.search(x)]
-    text = "\n".join(keep)
-    if text != raw and raw:
-        try:
-            set_memory(text)
-        except OSError:
-            pass
-    return text
+    """Saved facts for every chat: the active, everywhere-scope facts, one "- fact" line each (Memory v3 store)."""
+    return _MS().text("everywhere")
 
 
 def set_memory(text: str):
-    _write(_dir() / "memory.md", (text or "").strip()[:MAX_MEMORY] + "\n")
+    """Replace the memory with this text: lines added become facts, lines removed are archived (never lost)."""
+    _MS().replace_scope_text("everywhere", (text or "").strip())
 
 
-def remember(fact: str) -> str:
-    fact = re.sub(r"\s+", " ", (fact or "")).strip().lstrip("-• ").strip()
-    if len(fact) < 4:
-        raise ValueError("Say what to remember in a short sentence.")
-    if len(fact) > 400:
-        raise ValueError("Keep it under 400 characters: one fact per call.")
-    if BAD.search(fact):
-        raise ValueError("Memory does not store secrets or instructions about the system.")
-    if WORK_ITEM.search(fact):
-        raise ValueError("Memory keeps lasting facts about the user (role, company, preferences), not tasks, to-dos, "
-                         "bugs, feature requests or release plans. Keep those in the chat or in a file in the project.")
-    fact = dashless(fact)
-    with _memory_lock():
-        cur = memory()
-        lines = [x for x in cur.splitlines() if x.strip()]
-        key = _norm_fact(fact)
-        if any(_norm_fact(x) == key for x in lines):    # whole lines: "likes tea" is not "Dislikes tea"
-            return "Already in memory."
-        lines.append(f"- {fact}")
-        text = "\n".join(lines)
-        while len(text) > MAX_MEMORY and len(lines) > 1:       # drop the oldest lines when full
-            lines.pop(0)
-            text = "\n".join(lines)
-        set_memory(text)
-    return "Saved to memory."
+def remember(fact: str, kind: str = "stated", source: dict | None = None, scope: str = "everywhere") -> str:
+    """Save one fact. Raises ValueError for what memory refuses. Never drops older facts when memory is large:
+    the memory page proposes a consolidation instead."""
+    if _MS().incognito_active():
+        raise ValueError("An incognito chat is working, so memory is paused. Nothing is saved until it finishes.")
+    f, made = _MS().add(fact, kind=kind, source=source or {"type": "chat"}, scope=scope)
+    return "Saved to memory." if made else "Already in memory."
 
 
 def _norm_fact(line: str) -> str:
@@ -213,26 +207,28 @@ def _norm_fact(line: str) -> str:
 
 
 def forget(text: str) -> str:
-    """Remove the memory lines that say exactly this; if none does, the one line that matches it best."""
+    """Archive the memory lines that say exactly this; if none does, the one line that matches it best. They stay
+    on the memory page, in Archived, so nothing is lost for good."""
     key = _norm_fact(text or "")
     if not key:
         raise ValueError("Say what to forget.")
-    with _memory_lock():
-        lines = memory().splitlines()
-        facts = [(i, _norm_fact(x)) for i, x in enumerate(lines) if _norm_fact(x)]
-        drop = {i for i, f in facts if f == key}
+    MS = _MS()
+    with MS._lock():
+        rows = [f for f in MS.load() if f["scope"] == "everywhere" and f["status"] == "active"]
+        facts = [(f, _norm_fact(f["text"])) for f in rows]
+        drop = [f for f, n in facts if n == key]
         if not drop:
-            near = [(difflib.SequenceMatcher(None, key, f).ratio(), i) for i, f in facts if key in f]
+            near = [(difflib.SequenceMatcher(None, key, n).ratio(), f["id"], f) for f, n in facts if key in n]
             if not near:
-                near = [(r, i) for r, i in ((difflib.SequenceMatcher(None, key, f).ratio(), i) for i, f in facts)
-                        if r >= 0.6]
+                near = [(r, f["id"], f) for r, f in ((difflib.SequenceMatcher(None, key, n).ratio(), f)
+                                                       for f, n in facts) if r >= 0.6]
             if near:
-                drop = {max(near)[1]}
+                drop = [max(near, key=lambda t: (t[0], t[1]))[2]]
         if not drop:
             return "Nothing in memory matched that."
-        removed = [lines[i].strip() for i in sorted(drop)]
-        set_memory("\n".join(x for i, x in enumerate(lines) if i not in drop))
-    return f"Removed {len(removed)} line(s) from memory:\n" + "\n".join(removed)
+        for f in drop:
+            MS.archive(f["id"], by="you", reason="Forgotten on request")
+    return f"Removed {len(drop)} line(s) from memory:\n" + "\n".join("- " + f["text"] for f in drop)
 
 
 # ---------- memory v2: relevant recall, project memory, fencing (after Hermes' memory layer, MIT) -------------------
@@ -254,22 +250,10 @@ def _terms(t: str) -> set:
             if w not in _STOPW and len(w) > 2}
 
 
-def recall(task: str = "", limit: int = RECALL_CHARS) -> str:
-    """The user's facts worth bringing into a chat about `task`: core facts first, then the best matches."""
-    lines = [l.strip() for l in memory().splitlines() if l.strip()]
-    if sum(len(l) + 1 for l in lines) <= limit:
-        return "\n".join(lines)                         # a small memory goes in whole
-    core = [l for l in lines if CORE.search(l)][:8]
-    q = _terms(task)
-    scored = sorted(((len(q & _terms(l)), -i, l) for i, l in enumerate(lines) if l not in core), reverse=True)
-    picked, used = list(core), sum(len(l) + 1 for l in core)
-    for score, _, l in scored:
-        if score <= 0 or used + len(l) + 1 > limit:
-            continue
-        picked.append(l)
-        used += len(l) + 1
-    order = {l: i for i, l in enumerate(lines)}
-    return "\n".join(sorted(picked, key=lambda l: order[l]))
+def recall(task: str = "", limit: int = RECALL_CHARS, exclude=(), project_id: str = "", harness: str = "") -> str:
+    """The user's facts worth bringing into a chat about `task`: pinned and core facts first, then the best matches.
+    Pending, archived, expired and conflict-losing facts never appear."""
+    return "\n".join("- " + f["text"] for f in _MS().select(task, project_id, harness, exclude, limit))
 
 
 def _project_file(root: str) -> Path:
@@ -283,8 +267,11 @@ def project_memory(root: str) -> str:
     Meshpool data folder, never inside the user's project."""
     if not root:
         return ""
-    raw = _read(_project_file(root))
-    return "\n".join(l for l in raw.splitlines() if not l.startswith("# ")).strip()
+    return _MS().text(_folder_scope(root))
+
+
+def _folder_scope(root: str) -> str:
+    return "project:folder-" + _project_file(root).stem
 
 
 def remember_project(root: str, note: str) -> str:
@@ -293,6 +280,8 @@ def remember_project(root: str, note: str) -> str:
         raise ValueError("A project note needs the project folder and the note.")
     if BAD.search(note):
         raise ValueError("Memory does not store secrets or instructions about the system.")
+    if _MS().incognito_active():
+        raise ValueError("An incognito chat is working, so memory is paused. Nothing is saved until it finishes.")
     try:                                                 # a chat in a project: the note goes to that project's memory
         from meshpool_harness import project_store as PS
         pid = PS.for_root(root)
@@ -300,17 +289,8 @@ def remember_project(root: str, note: str) -> str:
             return PS.memory_add(pid, note)
     except Exception:  # noqa: BLE001 - never lose the note: fall back to the folder's own notes
         pass
-    p = _project_file(root)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with _memory_lock():
-        cur = project_memory(root)
-        if note.lower() in cur.lower():
-            return "Already in this project's memory."
-        lines = (cur.splitlines() if cur else []) + [note]
-        while sum(len(l) + 1 for l in lines) > PROJECT_MAX and len(lines) > 1:
-            lines.pop(0)                                 # the oldest notes go first when full
-        _write(p, f"# {Path(root).expanduser().resolve()}\n" + "\n".join(lines) + "\n")
-    return "Saved to this project's memory."
+    f, made = _MS().add(note[:400], scope=_folder_scope(root), source={"type": "chat"}, check=False)
+    return "Saved to this project's memory." if made else "Already in this project's memory."
 
 
 def fence(text: str) -> str:
@@ -362,25 +342,35 @@ class StreamScrubber:
         return out
 
 
-def project_block(project_id: str, task: str = "") -> str:
+def project_block(project_id: str, task: str = "", exclude=()) -> str:
     """The part of context_block that belongs to a project: its instructions (the user's directions), then its memory
     and knowledge files inside the memory fence. Empty when there is no such project."""
     if not project_id:
         return ""
     from meshpool_harness import project_store as PS
     st = settings()
-    ins, back = PS.context_parts(project_id, task, st["instructions_on"], st["memory_on"])
+    ins, back = PS.context_parts(project_id, task, st["instructions_on"], st["memory_on"], exclude=exclude)
     parts = [ins] if ins else []
     if back:
         parts.append(fence(back))
     return "\n\n".join(parts)
 
 
-def context_block(task: str = "", root: str = "", project_id: str = "") -> str:
+def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
+                  exclude=(), record: bool = True) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
-    project's instructions, memory and knowledge files (see project_store)."""
+    project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
+    With a chat_id, the facts given are recorded (so a reply can show its sources)."""
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record)["text"]
+
+
+def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
+                  exclude=(), record: bool = False) -> dict:
+    """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray."""
     st = settings()
+    mem_on = st["memory_on"] and not incognito
+    MS = _MS()
     if not project_id and root:
         try:
             from meshpool_harness import project_store as PS
@@ -388,41 +378,65 @@ def context_block(task: str = "", root: str = "", project_id: str = "") -> str:
         except Exception:  # noqa: BLE001
             project_id = ""
     now = datetime.now().astimezone()
+    sections = []
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
              f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY, PLAIN]
+    sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
         note = SV.profile_note()
         if note:
             parts.append(note)
+            sections.append({"title": "Your profile", "text": note, "ids": []})
     except Exception:  # noqa: BLE001
         pass
+    ids: list[str] = []
     ins = instructions() if st["instructions_on"] else ""
-    mem = memory() if st["memory_on"] else ""
     if ins:
-        parts.append("The user's instructions for every chat (follow them):\n" + ins[:6000])
-    if mem or (st["memory_on"] and root and not project_id):
-        about = recall(task) if mem else ""
-        proj = project_memory(root) if st["memory_on"] and not project_id else ""
+        t = "The user's instructions for every chat (follow them):\n" + ins[:6000]
+        parts.append(t)
+        sections.append({"title": "Your instructions", "text": ins[:6000], "ids": []})
+    gfacts = MS.select(task, project_id, "", exclude) if mem_on else []
+    folder_notes: list = []
+    if mem_on and root and not project_id:
+        folder_notes = MS.select(scope=_folder_scope(root), exclude=exclude)
+    if gfacts or folder_notes:
+        about = "\n".join("- " + f["text"] for f in gfacts)
+        proj = "\n".join(f["text"] for f in folder_notes)
         body = (("About the user:\n" + about) if about else "") + (
             ("\n\nAbout this project (" + Path(root).name + "):\n" + proj[-2500:]) if proj else "")
         if body.strip():
             parts.append(fence(body.strip()))
-    pb = project_block(project_id, task)
+            sections.append({"title": "What Meshpool remembers about you", "text": body.strip(),
+                             "ids": [f["id"] for f in gfacts + folder_notes]})
+        ids += [f["id"] for f in gfacts + folder_notes]
+    pb = project_block(project_id, task, exclude) if not incognito or True else ""
+    if incognito and project_id:
+        from meshpool_harness import project_store as PS
+        ins2, _ = PS.context_parts(project_id, task, st["instructions_on"], False)
+        pb = ins2 or ""
     if pb:
         parts.append(pb)
+        pf = MS.project_facts(project_id, exclude) if (project_id and mem_on) else []
+        sections.append({"title": "This project (instructions, notes, files)", "text": pb, "ids": [f["id"] for f in pf]})
+        ids += [f["id"] for f in pf]
     parts.append("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser. "
-                 "Cite sources with links. "
+                 "Cite sources with links. When you build anything visual, a web page, app screen or slide, check it with the view_output or ui_audit tool and fix what they show before you say it is done; for a page or screen, use the build-ui skill. "
                  + ("If the user asks you to remember something, or states a lasting fact or preference about "
                     "themselves or their work, save it with memory_save (facts about the user, never tasks, "
                     "to-dos, bugs, feature requests or plans). When you learn something durable about this project "
                     "that would save the next chat time (the command that runs its tests, a convention, where a "
-                    "thing lives), save it with project_note. " if st["memory_on"] else "")
+                    "thing lives), save it with project_note. " if mem_on else "")
+                 + ("This chat is incognito: nothing from it is saved to memory, so do not call memory_save or "
+                    "project_note. " if incognito else "")
                  + "If the user asks for something to happen later or on a schedule, use schedule_task. "
                  "For a large job with independent parts (research many companies, review many files), hand the "
                  "parts to sub-agents with delegate_task (or run_subtasks where delegate_task is not available) "
                  "so they run in parallel. " + ENGINES)
-    return "\n\n".join(parts)
+    text = "\n\n".join(parts)
+    if record and chat_id and ids and not incognito:
+        MS.record_given(chat_id, 0, ids, text)
+    return {"text": text, "facts": ids, "sections": sections, "project_id": project_id}
 
 
 # ---------- scheduled tasks ------------------------------------------------------------------------------------------
@@ -511,14 +525,16 @@ def _check_task(t: dict) -> dict:
     if t.get("kind") not in ("cowork", "code"):
         t["kind"] = "cowork"
     t["name"] = str(t.get("name") or t["prompt"].splitlines()[0])[:80]
+    t["only_on_change"] = bool(t.get("only_on_change", False))     # "Only tell me when something changed"
     return t
 
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
-             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork") -> dict:
+             minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
+             only_on_change: bool = False) -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     with _tasks_lock():
         rows = tasks()
@@ -533,7 +549,8 @@ def update_task(tid: str, **kw) -> dict:
         for n, t in enumerate(rows):
             if t["id"] == tid:
                 new = dict(t)
-                for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled"):
+                for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
+                          "only_on_change"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
                 _check_task(new)                                     # same rules as add_task; nothing saved on error

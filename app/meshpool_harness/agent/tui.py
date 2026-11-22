@@ -1016,6 +1016,9 @@ class Session:
         arg = arg.strip()
         names = [c[0] for c in COMMANDS]
         if cmd not in names:
+            from meshpool_harness.agent import extras as EX
+            if cmd in EX.commands(self.agent.root):          # a command file in .meshpool/commands
+                return self.send(text)
             near = [n for n in names if n.startswith(cmd)] if cmd else []
             if len(near) == 1:
                 cmd = near[0]
@@ -1105,11 +1108,13 @@ class Session:
             return t.p(st.dim("  /compact is not available for this agent."))
         from meshpool_harness.agent import core as A
         before = A._context_size(self.agent.messages)
+        done = self.agent.compact_now() if hasattr(self.agent, "compact_now") else None
         A._shrink_context(self.agent.messages, max(1, int(before * 0.4)), hard=True)
         after = A._context_size(self.agent.messages)
         if before:
             t.ctx_tokens = int(t.ctx_tokens * after / before)
-        t.p(st.dim(f"  Shortened old tool output: {before // 1000}k to {after // 1000}k characters of context."))
+        t.p(st.dim(f"  {'Summarized earlier steps and shortened' if done else 'Shortened'} old tool output: "
+                   f"{before // 1000}k to {after // 1000}k characters of context."))
 
     def cmd_status(self, arg):
         t, st, a = self.term, self.term.st, self.agent
@@ -1236,11 +1241,14 @@ def _notices(agent, mcp) -> list[str]:
 
 
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
-         session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False) -> int:
+         session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
+         json_out: bool = False) -> int:
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.agent.mcp import Manager
     C.load_into_env()
     term = Terminal(print_mode=prompt is not None)
+    if json_out:
+        term.out = sys.stderr                    # headless JSON: only the final object reaches stdout
     st = term.st
     wd = workdir or os.getcwd()
     from meshpool_harness import harnesses as HR
@@ -1269,9 +1277,15 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     if not no_mcp and not sub:                   # an ACP agent gets the MCP servers through ACP itself
         if prompt is None:
             term.spin.start("Starting MCP servers")
-        mcp = Manager(roots=[wd]).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
+        try:
+            from meshpool_harness.harnesses.acp import office_extra
+            extra = office_extra(wd)                 # the same office tools the app's agents have
+        except Exception:  # noqa: BLE001
+            extra = None
+        mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
-    mode = "auto" if auto else None
+    pm = os.environ.get("MH_PERMISSION_MODE", "")
+    mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
     kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode)
     if sub:
         from meshpool_harness.harnesses.acp import ACPAgent
@@ -1292,10 +1306,32 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             term.p(st.red(str(e)))
             return 1
     term.agent = agent
+    if pm == "plan" and hasattr(agent, "plan"):
+        agent.plan = True                        # read only: investigate, then reply with a plan
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
     sess = Session(term, agent, mcp, sub)
     try:
         if prompt is not None:
+            if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
+                import contextlib
+                import json as _json
+                if json_out == "stream-json":     # one event per line while it works, then the final object
+                    _emit = agent.emit
+
+                    def _stream(ev, _emit=_emit):
+                        _emit(ev)
+                        if isinstance(ev, dict) and ev.get("type") not in ("token", "delta", "thinking"):
+                            sys.__stdout__.write(_json.dumps(ev, ensure_ascii=False, default=str) + "\n")
+                            sys.__stdout__.flush()
+                    agent.emit = _stream
+                with contextlib.redirect_stdout(sys.stderr):
+                    sess.send(prompt)
+                reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
+                              and isinstance(m.get("content"), str) and m.get("content").strip()), "")
+                sys.__stdout__.write(_json.dumps({"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
+                                              "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])},
+                                             ensure_ascii=False) + "\n")
+                return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0
         term.notices = _notices(agent, mcp)

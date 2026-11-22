@@ -1,5 +1,30 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.10**
+- **See what Meshpool knows.** A new Memory page shows every fact, filed by category, with where it came from and which chats it was given to. Edit, pin, move or archive any of them, and every change has Undo.
+- **Meshpool asks before it remembers.** Facts it notices wait in a "Meshpool thinks" tray. Nothing reaches an agent until you say yes. Two facts that disagree are shown side by side.
+- **Nothing is lost.** Your old memory is copied to a backup and moved over safely. When memory fills up, Meshpool proposes a tidy-up instead of dropping the oldest facts.
+- **See what a reply was given.** A small chip under a reply lists the memories it was given. A new "What the agent sees" button shows the exact background, and lets you leave a fact out of one chat.
+- **Incognito chats.** Press Ctrl+Shift+N. Nothing is remembered, learned or logged.
+- **A quiet nudge, only when it helps.** One short line above the message box, such as "Run this every week?". It never appears while Meshpool works, at most two a day, and never twice for the same idea.
+- **Next steps in one click.** After a deck, a workbook or a report, a few ideas appear under the reply.
+- **A first run built from your files.** Meshpool reads only file names and offers real starters, or runs a sample.
+- **While you were away.** Finished scheduled runs, and only real changes for tasks set to "Only tell me when something changed".
+- **Receipts you can trust.** Each reply shows the time, the cost where it is known, and why Meshpool picked that agent. Decks and reports list the checks that actually ran.
+- **Your work.** A look back over 1, 3, 6 or 12 months, ending in things you can do, plus a recap image with counts only.
+- **Summaries.** A one-line summary for each chat, and a living brief for each project with Catch me up.
+- **Learns from your edits.** Change every slide title of a deck Meshpool made, and it offers to make that your default.
+- **Code sessions by folder.** Sessions are grouped by folder, with a new-session button on each, search, and a dot when one needs you.
+- **Simpler import.** Three steps and direct links to your old assistant's export page.
+- **Browser use works the first time.** Playwright is now a normal part of the install. From a terminal or source install it sets itself up when first needed, and it uses a Chromium already on the computer before downloading a second one. This is what lets Meshpool open your app and click through it for UI and UX checks.
+- **Bring your other agents.** Meshpool finds Claude Code, Codex, Cursor, OpenClaw and Hermes on your computer and lists their skills, tools, memories and instructions. You tick what you want and can preview first. Passwords and keys are never read, and tools come over without their secrets. Memories wait for your yes. From a terminal: `meshpool import agents --dry-run`.
+- **Meshpool looks at what it makes.** A page, slide, chart, logo, PDF, document or workbook is turned into pictures and checked before Meshpool says it is done. Web pages are also audited at desktop, tablet and phone width, light and dark. Models that cannot see images get the text and measurements instead.
+- **It can build interfaces properly.** A new Build a UI skill starts from a tested page, keeps one design system and fixes what the audit finds. Method adapted from the open Taste Skill (MIT).
+- **Twenty-two more ready-made skills** for sites, games, apps, dashboards, charts, diagrams, logos, PDFs, images, resumes, invoices, newsletters, study packs, citations, databases, transcripts and more.
+- **Safer by default.** Keys you saved in Meshpool are hidden from commands the agent runs. "Always allow" never covers deleting recursively, force-pushing, wiping a disk or piping a download into a shell. A chat is saved while it works, so a crash loses nothing. A single turn stops after 2,000 steps instead of running forever.
+- **Power-user controls.** Hooks, saved allow and deny rules, instruction files from your home and parent folders, your own `/commands`, `@file` mentions, `meshpool -p --output-format stream-json`, tasks that run while the app is closed, notebook cell editing, Mermaid diagrams and maths in chat, Word tracked changes, an optional sandbox for commands, a switch to run tasks while Meshpool is closed, and in-place edits of Word, Excel and PowerPoint files.
+- **Long tasks hold together.** Older steps are summarised into a note, /compact does it on demand, and long commands can run in the background.
+
 **New in 0.0.9**
 - **Meshpool for Linux.** A download for 64-bit Linux with everything inside (LibreOffice, Chromium, Node.js, Git and Python), tested in a bare Ubuntu 22.04 before it is published.
 - **Decks built to the consulting standard.** Slides follow the BCG and McKinsey grammar. "From → to" rows show the old way and its cost, then the new way and its cost. Evidence lists put a company's logo next to one line of proof. Panel headings read as one argument from left to right. A callout adds the so-what.

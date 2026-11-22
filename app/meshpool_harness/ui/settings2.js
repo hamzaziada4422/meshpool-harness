@@ -7,14 +7,14 @@
 // Navigation: [page, label, icon, [the sections it holds]]. A page with several sections gets tabs under the header.
 const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
-  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "web"]],
+  [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
   [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
 const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);       // kept for company.js and old callers
-const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
+const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
   about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options"};
@@ -236,7 +236,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
   const base = renderSection;
   const toggleRow = (id, name, desc, on, extra = "", disabled = false) => `<li><span class="tg"><b>${esc(name)}</b><small>${esc(desc)}</small>${extra}</span><label class="switch"><input type="checkbox" data-t="${esc(id)}" ${on ? "checked" : ""} ${disabled ? "disabled" : ""} aria-label="${esc(name)}"><span></span></label></li>`;
   const LANGS = ["English", "Spanish", "French", "German", "Portuguese", "Italian", "Arabic", "Chinese", "Japanese", "Korean", "Hindi", "Turkish", "Dutch", "Russian"];
-  const NOTIFY_DEFAULT = {done: true, wait: true, sound: false};
+  const NOTIFY_DEFAULT = {done: true, wait: true, sound: false, suggest: false};
   const nset = () => Object.assign({}, NOTIFY_DEFAULT, store("notify") || {});
 
   // Notifications: told by the sidebar poll when a chat finishes or needs an answer while the window is in the background.
@@ -277,10 +277,14 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
     } else if (sec === "notify") {
       const n = nset();
       b.innerHTML = `${close}<h3>Notifications</h3><p class="lead">Hear from Meshpool when you have switched to another window. Nothing shows while you are looking at Meshpool.</p>
-        <ul class="rows2">${toggleRow("done", "When a chat finishes", "A notification when a long task is done.", n.done)}${toggleRow("wait", "When Meshpool needs you", "A notification when it asks a question or waits for your OK.", n.wait)}${toggleRow("sound", "Play a sound", "A short tone with each notification.", n.sound)}</ul>
+        <ul class="rows2">${toggleRow("done", "When a chat finishes", "A notification when a long task is done.", n.done)}${toggleRow("wait", "When Meshpool needs you", "A notification when it asks a question or waits for your OK.", n.wait)}${toggleRow("suggest", "A suggestion", "At most one a day, never in quiet hours.", n.suggest)}${toggleRow("sound", "Play a sound", "A short tone with each notification.", n.sound)}</ul>
+        <h3 style="font-size:16px;margin:20px 0 4px">Quiet hours</h3><p class="lead">No suggestions during these hours.</p><div id="qhBox"></div>
         <div style="display:flex;gap:8px;margin-top:12px"><button class="btn" id="nTest">Send a test notification</button></div><div class="res" id="nRes"></div>`;
+      window.renderQuietHours?.($("#qhBox", b));
       $$("[data-t]", b).forEach(x => x.onchange = () => { const v = nset(); v[x.dataset.t] = x.checked; store("notify", v); });
       $("#nTest").onclick = () => { post("/api/notify", {title: "Meshpool", body: "This is a test notification."}).then(() => res("nRes", "ok", "Sent. If nothing appeared, allow notifications for Meshpool in your system settings.")).catch(e => res("nRes", "bad", e.message)); if (nset().sound) { const keep = document.hidden; try { const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(); o.connect(a.destination); o.frequency.value = 660; o.start(); o.stop(a.currentTime + .25); } catch (e) { /* no audio */ } } };
+    } else if (sec === "suggest") {
+      await window.renderSuggestSettings?.(b, close);
     } else if (sec === "caps") {
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
       const mode = get0("MH_AGENT_PERMISSIONS") || "ask";

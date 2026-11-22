@@ -198,6 +198,11 @@ def delete(pid: str) -> None:
     """Remove the project and what it holds. Its chats stay, as plain chats. A linked folder is never touched."""
     with _LOCK:
         d = _exists(pid)
+        try:
+            from meshpool_harness import memstore as MS
+            MS.on_project_deleted(pid)                  # its facts are archived, never lost with the project
+        except Exception:  # noqa: BLE001
+            pass
         shutil.rmtree(d, ignore_errors=True)
 
 
@@ -230,34 +235,34 @@ def legacy_map() -> dict:
 
 # ---------- memory ---------------------------------------------------------------------------------------------------
 def memory(pid: str) -> str:
-    d = _exists(pid)
-    return "\n".join(l for l in _read(d / "memory.md").splitlines() if l.strip() and not l.startswith("# ")).strip()
+    from meshpool_harness import memstore as MS
+    _exists(pid)
+    return MS.text(f"project:{pid}")
 
 
 def memory_set(pid: str, text: str) -> str:
+    from meshpool_harness import memstore as MS
     with _LOCK:
-        d = _exists(pid)
-        lines = [" ".join(l.split()) for l in str(text or "").splitlines() if l.strip()]
-        while sum(len(l) + 1 for l in lines) > MEM_MAX and len(lines) > 1:
-            lines.pop(0)
-        _write(d / "memory.md", ("\n".join(lines) + "\n") if lines else "")
+        _exists(pid)
+        MS.replace_scope_text(f"project:{pid}", text)
         touch(pid)
         return memory(pid)
 
 
 def memory_add(pid: str, note: str) -> str:
     from meshpool_harness import assistant as AS
+    from meshpool_harness import memstore as MS
     note = " ".join((note or "").split())
     if not note:
         raise ValueError("A project note needs the note.")
     if AS.BAD.search(note):
         raise ValueError("Memory does not store secrets or instructions about the system.")
     with _LOCK:
-        cur = memory(pid)
-        if note.lower() in cur.lower():
-            return "Already in this project's memory."
-        memory_set(pid, (cur + "\n" if cur else "") + note)
-    return "Saved to this project's memory."
+        _exists(pid)
+        f, made = MS.add(note[:400], scope=f"project:{pid}", source={"type": "chat"}, check=False)
+        if made:
+            touch(pid)
+    return "Saved to this project's memory." if made else "Already in this project's memory."
 
 
 def memory_clear(pid: str) -> None:
@@ -425,7 +430,8 @@ def knowledge_context(pid: str, task: str = "") -> str:
 
 
 # ---------- the text a project adds to a chat's first message ----------------------------------------------------------
-def context_parts(pid: str, task: str = "", instructions_on: bool = True, memory_on: bool = True) -> tuple[str, str]:
+def context_parts(pid: str, task: str = "", instructions_on: bool = True, memory_on: bool = True,
+                  exclude=()) -> tuple[str, str]:
     """(instructions, background): the user's directions for this project, and the data (memory and knowledge) the
     app puts inside the memory fence. Both may be empty."""
     try:
@@ -442,7 +448,8 @@ def context_parts(pid: str, task: str = "", instructions_on: bool = True, memory
         text += ("\nThe user's instructions for every chat in this project (follow them; where they differ from the "
                  "general instructions, these win):\n" + ins[:INSTR_MAX])
     back = []
-    mem = memory(pid) if memory_on else ""
+    from meshpool_harness import memstore as MS
+    mem = MS.project_text(pid, exclude) if memory_on else ""
     if mem:
         back.append("About this project:\n" + mem[-2500:])
     k = knowledge_context(pid, task)
@@ -554,7 +561,7 @@ def migrate(extra_paths=()) -> list[dict]:
             proj = create(name, link=link, legacy_path=rp)
             old = AS.project_memory(rp)
             if old:
-                _write(root() / proj["id"] / "memory.md", old + "\n")
+                memory_set(proj["id"], old)
             seen[rp] = proj["id"]
             made.append(proj)
         _write(_migrated_file(), json.dumps({"version": 1, "paths": seen}, indent=1))

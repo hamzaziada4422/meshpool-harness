@@ -62,6 +62,29 @@ for _flag in ("MH_BROWSER_READONLY", "MH_BROWSER_SETTLE", "MH_BROWSER_STATES", "
 SNAPSHOT_JS = SNAPSHOT_JS.replace("__STATES__", STATES_JS)
 
 
+def load_playwright():
+    """The Playwright API. When the package is missing (a source or terminal install from before it was a dependency),
+    it is installed once, here, instead of failing: browser use works the first time it is asked for."""
+    import importlib
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        pass
+    from meshpool_harness import bundled
+    if bundled.packaged():
+        raise ToolFailed("Browser use is missing from this install. Reinstall Meshpool.")
+    r = subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "-q", "playwright>=1.40"],
+                       capture_output=True, text=True, timeout=600)
+    importlib.invalidate_caches()
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        raise ToolFailed("Browser use needs the playwright package and it could not be installed "
+                         f"({(r.stderr or r.stdout or 'no output')[-200:].strip()}). Run: meshpool install-browser")
+
+
 def _home() -> Path:
     return Path(os.environ.get("MESHPOOL_HOME") or Path.home() / ".meshpool")
 
@@ -95,11 +118,26 @@ class Browser:
         return box["r"]
 
     # ---------- start ----------------------------------------------------------------------------------------------
+    def _use_cached_chromium(self, headless: bool) -> bool:
+        """A Chromium already on this computer (any revision): used instead of downloading a second copy."""
+        path = BU.find_playwright_chromium()
+        if not path:
+            return False
+        try:
+            self.ctx = self._launch(_home() / "browser-profile" / "chromium-cached", headless=headless, executable_path=path)
+        except Exception:  # noqa: BLE001 - it may be unusable (missing system libraries): fall through to the download
+            self.ctx = None
+            return False
+        self.channel = "chromium:cached"
+        return True
+
     def _install_chromium(self):
         # Installs where the Playwright driver looks (the process's PLAYWRIGHT_BROWSERS_PATH, else its default
         # cache): the driver reads that variable once, at start.
-        r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], capture_output=True, text=True,
-                           env=dict(os.environ), timeout=900)
+        cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+        if sys.platform == "linux" and hasattr(os, "geteuid") and os.geteuid() == 0:
+            cmd.insert(4, "--with-deps")                    # a server or container: the system libraries too
+        r = subprocess.run(cmd, capture_output=True, text=True, env=dict(os.environ), timeout=900)
         if r.returncode != 0:
             raise ToolFailed("Could not download the browser engine: " + (r.stderr or r.stdout)[-400:])
 
@@ -128,7 +166,7 @@ class Browser:
         if own:
             # before the driver starts: it reads this once, so setting it later would never reach it
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(bundled.browsers_dir())
-        from playwright.sync_api import sync_playwright
+        sync_playwright = load_playwright()
         if self.pw is None:
             self.pw = sync_playwright().start()
         headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"
@@ -166,6 +204,8 @@ class Browser:
             # Download Chromium only when it is missing (never when the profile is merely in use), and never in the
             # packaged app: Chromium ships inside it.
             if attempt == 0 and not own and "xecutable doesn't exist" in str(last):
+                if self._use_cached_chromium(headless):     # one is already here: no download
+                    return
                 self._install_chromium()
                 channels = [""]
             else:
@@ -399,6 +439,55 @@ def browser_close() -> str:
     return B.run(go)
 
 
+def _outputs_dir(sub: str) -> Path:
+    return Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / sub
+
+
+def _launcher():
+    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window)."""
+    from meshpool_harness import ui_audit as UA
+    return UA.launcher(B.pw)
+
+
+def _images(shots, limit: int = 4) -> list:
+    out = []
+    for s in list(shots)[:limit]:
+        try:
+            out.append(image_png(Path(s).read_bytes()))
+        except OSError:
+            pass
+    return out
+
+
+def ui_audit(url: str, views: str = "") -> list:
+    from meshpool_harness import ui_audit as UA
+
+    def go():
+        B.ensure()
+        v = tuple(x.strip() for x in views.split(",") if x.strip() in UA.VIEWS) or tuple(UA.VIEWS)
+        res = UA.audit(B.pw, url, views=v, shots_dir=_outputs_dir("ui-audit"), launch=_launcher())
+        return [text(res["text"])] + _images(res["shots"])
+    return B.run(go, timeout=300)
+
+
+def view_output(path: str, pages: str = "") -> list:
+    from meshpool_harness import view as V
+
+    def go():
+        k = V.kind(path)
+        if k in ("web", "table"):
+            B.ensure()
+        try:
+            res = V.render(path, pages or None, _outputs_dir("views"), launch=_launcher() if k in ("web", "table") else None)
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            raise ToolFailed(str(e))
+        files = [str(f) for _, f in res["shots"]]
+        head = f"{Path(res['file']).name}: " + " ".join(res["notes"]) + "\nPictures saved: " + ", ".join(files)
+        ocr_text = V.reading(res["shots"])
+        return [text(head + ("\n" + ocr_text if ocr_text else ""))] + _images(files)
+    return B.run(go, timeout=300)
+
+
 S = {"type": "string"}
 TOOLS = {
     "browser_open": Tool(browser_open, "Open a web address in the browser window and describe the page.", {"url": S}, ["url"]),
@@ -423,6 +512,15 @@ TOOLS = {
     "browser_wait": Tool(browser_wait, "Wait a few seconds for the page to finish something, then describe it.",
                          {"seconds": {"type": "number"}}),
     "browser_close": Tool(browser_close, "Close the browser window."),
+    "ui_audit": Tool(ui_audit, "Check a web page you built (a file path or address) on a wide screen, a tablet and a "
+                     "phone, in light and dark. Lists what is broken in plain words (sideways scroll, text too faint, "
+                     "tiny buttons, unnamed controls, broken images, console errors), prints the layout, saves "
+                     "screenshots and returns them. Run it after every change to a page; it is done at 'No problems found'.",
+                     {"url": S, "views": S}, ["url"]),
+    "view_output": Tool(view_output, "Look at any visual file you made: a web page, SVG, image, PDF, slides, document, "
+                        "workbook or CSV. Returns pictures of the pages, plus the text read from them for models "
+                        "that cannot see images. Use pages to pick some, like \"1,3\" or \"2-4\".",
+                        {"path": S, "pages": S}, ["path"]),
 }
 
 
@@ -455,9 +553,23 @@ def _exit_cleanly():
                 pass
 
 
+def _prewarm():
+    """Source and terminal installs: fetch Chromium in the background as the server starts, so the first page the agent
+    opens does not wait on a download (which would run past the call's time limit on a slow connection)."""
+    try:
+        from meshpool_harness import bundled
+        if bundled.packaged() or BU.mode() != "meshpool" or BU.find_playwright_chromium():
+            return
+        load_playwright()
+        B._install_chromium()
+    except Exception:  # noqa: BLE001 - the first real call reports a failure in plain words
+        pass
+
+
 def main():
     _fix_type_args()
     _exit_cleanly()
+    threading.Thread(target=_prewarm, daemon=True).start()
     serve("meshpool-browser", TOOLS, instructions="Use browser_open, then act on the [eN] numbers from the snapshot.")
     _close_for_exit()                       # stdin closed: the agent is done with us
 

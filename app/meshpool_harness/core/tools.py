@@ -23,7 +23,7 @@ HEAD, TAIL = 3000, 3000
 _CAP_LOCK = threading.Lock()
 
 _RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg", "wc", "file", "stat", "which",
-             "type", "echo", "printf", "pwd", "env", "printenv", "uname", "du", "df", "tree", "nl", "sort", "uniq",
+             "type", "echo", "printf", "pwd", "uname", "du", "df", "tree", "nl", "sort", "uniq",
              "cut", "tr", "diff", "cmp", "md5sum", "sha256sum", "sha1sum", "xxd", "od", "hexdump", "strings", "jq",
              "readlink", "realpath", "basename", "dirname", "id", "whoami", "date", "ps", "true", "column", "less",
              "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
@@ -95,6 +95,38 @@ def patch_from_shell(argv):
     return m.group("body"), cd
 
 
+_BG_ALL: set = set()
+
+
+def _kill_tree(p) -> None:
+    """End a process and everything it started."""
+    import signal
+    if p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
+        else:
+            os.killpg(p.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _kill_all_background() -> None:
+    for p in list(_BG_ALL):
+        _kill_tree(p)
+
+
+__import__("atexit").register(_kill_all_background)
+
+
+class AllStr(str):
+    """An `old` text that edit replaces everywhere (replace_all)."""
+
+
 def _fn(name, desc, props, req):
     return {"type": "function", "function": {"name": name, "description": desc, "parameters": {
         "type": "object", "properties": props, "required": req, "additionalProperties": False}}}
@@ -108,16 +140,28 @@ SCHEMAS = {
                      "notebooks and email files come back as readable text; images and scanned PDFs are read with "
                      "OCR in many languages. For a PDF, start/end pick pages.",
                      {"path": S, "start": I, "end": I}, ["path"]),
-    "grep": _fn("grep", "Search file contents with a regular expression. Returns path:line:text.",
-                {"pattern": S, "path": S, "glob": S}, ["pattern"]),
+    "grep": _fn("grep", "Search file contents with a regular expression. Returns path:line:text. Options: `context` "
+                        "(lines around each match, or `before` and `after`), `output_mode` (content, files_with_matches "
+                        "or count), `head_limit` (most results, default 400), `ignore_case`, `multiline` (a pattern may "
+                        "span lines).",
+                {"pattern": S, "path": S, "glob": S, "context": I, "before": I, "after": I,
+                 "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
+                 "head_limit": I, "ignore_case": {"type": "boolean"}, "multiline": {"type": "boolean"}}, ["pattern"]),
+    "notebook_edit": _fn("notebook_edit", "Edit a Jupyter notebook (.ipynb) by cell. mode replace (change cell `cell`'s "
+                         "source), insert (new cell before index `cell`; use the cell count to add at the end) or "
+                         "delete. Cells are numbered from 0; read the notebook first to see them. Outputs of a "
+                         "replaced code cell are cleared.",
+                         {"path": S, "cell": I, "source": S, "mode": {"type": "string", "enum": ["replace", "insert", "delete"]},
+                          "cell_type": {"type": "string", "enum": ["code", "markdown"]}}, ["path", "cell"]),
     "glob": _fn("glob", "List files matching a glob pattern relative to the workdir, e.g. '**/*.py'.",
                 {"pattern": S}, ["pattern"]),
-    "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file. Fails if `old` is missing, "
+    "edit": _fn("edit", "Replace exactly one occurrence of `old` with `new` in a file (or every occurrence with "
+                        "`replace_all`, to rename something). Fails if `old` is missing, "
                         "not unique, the same as `new`, or the file changed since you last read it. To make several "
                         "changes, put them all in one call: `edits` for one file, `changes` for several files "
                         "(all-or-nothing).",
-                {"path": S, "old": S, "new": S,
-                 "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S},
+                {"path": S, "old": S, "new": S, "replace_all": {"type": "boolean"},
+                 "edits": {"type": "array", "items": {"type": "object", "properties": {"old": S, "new": S, "replace_all": {"type": "boolean"}},
                                                       "required": ["old", "new"]}},
                  "changes": {"type": "array", "items": {"type": "object", "properties": {
                      "path": S, "old": S, "new": S,
@@ -128,6 +172,16 @@ SCHEMAS = {
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
     "bash": _fn("bash", "Run a shell command in the workdir. Output is capped; full output is saved to a file.",
                 {"command": S, "timeout_s": I}, ["command"]),
+    "bash_start": _fn("bash_start", "Start a long-running command in the background (a dev server, a watcher, a slow "
+                                    "build) and return at once with an id. Read what it prints with bash_output and end "
+                                    "it with bash_stop. It keeps running between turns until stopped or Meshpool closes.",
+                      {"command": S, "name": S}, ["command"]),
+    "bash_output": _fn("bash_output", "Read the new output of a background command started with bash_start, and say "
+                                      "whether it is still running (or its exit code). `wait_s` waits up to that many "
+                                      "seconds for output first. Without an id, lists every background command.",
+                       {"id": S, "wait_s": I}, []),
+    "bash_stop": _fn("bash_stop", "Stop a background command (and everything it started). Without an id, stops all of them.",
+                     {"id": S}, []),
     "bash_many": _fn("bash_many", "Run several independent shell commands in ONE call (for example: read 3-5 file "
                                   "ranges, grep several patterns, check versions). Each runs on its own, even if an "
                                   "earlier one fails; you get every output, labelled.",
@@ -440,21 +494,34 @@ class Workspace:
         except (OSError, ValueError):
             return False
 
-    def grep(self, pattern, path=".", glob=None, inside_only=False):
+    def grep(self, pattern, path=".", glob=None, inside_only=False, context=0, before=0, after=0,
+             output_mode="content", head_limit=400, ignore_case=False, multiline=False):
         """inside_only: skip files that resolve outside the project (a symlink), before anything is read or saved;
-        a list of folders instead of True allows those folders as well."""
+        a list of folders instead of True allows those folders as well. context/before/after: lines around a match.
+        output_mode: content, files_with_matches or count. head_limit: most results returned."""
+        try:
+            head = max(1, min(int(head_limit or 400), 2000))
+            before = max(0, min(int(before or context or 0), 20))
+            after = max(0, min(int(after or context or 0), 20))
+        except (TypeError, ValueError):
+            raise ToolError("context, before, after and head_limit must be whole numbers")
+        if output_mode not in ("content", "files_with_matches", "count"):
+            raise ToolError("output_mode must be content, files_with_matches or count")
         if self.container and not self.mounted:
             inc = f"--include='{glob}'" if glob else ""
-            out, _ = self._run(f"grep -rnE {inc} --exclude-dir=.git --exclude-dir=node_modules -e {json.dumps(pattern)} "
-                               f"{json.dumps(path)} | head -400", 60, "grep", record=False)
+            ctx = f"-B{before} -A{after}" if (before or after) and output_mode == "content" else ""
+            mode = {"files_with_matches": "-l", "count": "-c"}.get(output_mode, "")
+            case = "-i" if ignore_case else ""
+            out, _ = self._run(f"grep -rnE {case} {mode} {ctx} {inc} --exclude-dir=.git --exclude-dir=node_modules -e "
+                               f"{json.dumps(pattern)} {json.dumps(path)} | head -{head}", 60, "grep", record=False)
             return out
         try:
-            rx = re.compile(pattern)
+            rx = re.compile(pattern, (re.I if ignore_case else 0) | (re.M | re.S if multiline else 0))
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
-        out = []
+        out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
             if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
@@ -464,16 +531,42 @@ class Workspace:
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
-                for i, line in enumerate(f.read_text(errors="ignore").splitlines(), 1):
-                    if rx.search(line):
-                        out.append(f"{rel}:{i}:{line[:300]}")
-                        if len(out) >= 400:
-                            break
+                text = f.read_text(errors="ignore")
             except (OSError, UnicodeDecodeError):
                 continue
-            if len(out) >= 400:
-                out.append("... more matches truncated; narrow the pattern")
+            lines = text.splitlines()
+            hits: list[int] = []                                   # 1-based line numbers that start a match
+            if multiline:
+                for m in rx.finditer(text):
+                    hits.append(text.count("\n", 0, m.start()) + 1)
+            else:
+                hits = [i for i, line in enumerate(lines, 1) if rx.search(line)]
+            if not hits:
+                continue
+            matched += 1
+            if output_mode == "files_with_matches":
+                out.append(str(rel))
+            elif output_mode == "count":
+                out.append(f"{rel}:{len(hits)}")
+            else:
+                shown: set[int] = set()
+                last = 0
+                for h in hits:
+                    lo, hi = max(1, h - before), min(len(lines), h + after)
+                    if (before or after) and last and lo > last + 1:
+                        out.append("--")
+                    for n in range(lo, hi + 1):
+                        if n in shown:
+                            continue
+                        shown.add(n)
+                        out.append(f"{rel}{':' if n in hits else '-'}{n}{':' if n in hits else '-'}{lines[n - 1][:300]}")
+                    last = max(last, hi)
+            if len(out) >= head:
+                truncated = True
+                out = out[:head]
                 break
+        if truncated:
+            out.append("... more results truncated; narrow the pattern or raise head_limit")
         return self._cap("\n".join(out) or "no matches", "grep")
 
     def glob(self, pattern, inside_only=False):
@@ -657,10 +750,12 @@ class Workspace:
 
     @staticmethod
     def _edit_items(spec: dict, where: str) -> list[tuple[str, str]]:
-        """The (old, new) pairs of one edit spec: its own old/new first, then its `edits` list, in order."""
+        """The (old, new) pairs of one edit spec: its own old/new first, then its `edits` list, in order. An `old`
+        with replace_all set comes back as an AllStr, which _plan_many replaces everywhere."""
         items = []
         if spec.get("old") is not None or spec.get("new") is not None:
-            items.append((spec.get("old"), spec.get("new")))
+            o = spec.get("old")
+            items.append((AllStr(o) if spec.get("replace_all") and isinstance(o, str) else o, spec.get("new")))
         extra = spec.get("edits")
         if extra is not None:
             if not isinstance(extra, list):
@@ -668,7 +763,8 @@ class Workspace:
             for j, it in enumerate(extra, 1):
                 if not isinstance(it, dict):
                     raise ToolError(f"edit {j} for {where} must be an object with `old` and `new`")
-                items.append((it.get("old"), it.get("new")))
+                o = it.get("old")
+                items.append((AllStr(o) if it.get("replace_all") and isinstance(o, str) else o, it.get("new")))
         if not items:
             raise ToolError(f"nothing to edit in {where}: give `old` and `new`, or an `edits` list")
         for j, (o, n) in enumerate(items, 1):
@@ -684,11 +780,15 @@ class Workspace:
             tag = f"edit {j} of {n} in {path}: " if n > 1 else ""
             if old == new:
                 raise ToolError(tag + self.NOOP_EDIT.format(path=path))
-            if unread and text.count(old) != 1:
+            if unread and (text.count(old) != 1 or isinstance(old, AllStr)):
                 raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
                                 f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
+            if isinstance(old, AllStr) and text.count(old) > 1:        # replace_all: every occurrence, counted
+                notes.append(f"replaced {text.count(old)} occurrences")
+                text = text.replace(str(old), new)
+                continue
             try:
-                text, note = self._plan_edit(text, old, new, path)
+                text, note = self._plan_edit(text, str(old), new, path)
             except ToolError as e:
                 raise ToolError(tag + str(e) + (f"\nNothing was written; {path} is unchanged." if n > 1 else "")) from None
             notes.append(note)
@@ -704,7 +804,7 @@ class Workspace:
         text, eol, bom = read_src(p)
         return str(p), text, p, (eol, bom)
 
-    def edit(self, path=None, old=None, new=None, edits=None, changes=None):
+    def edit(self, path=None, old=None, new=None, edits=None, changes=None, replace_all=False):
         if changes is not None:
             if not isinstance(changes, list) or not changes or not all(isinstance(c, dict) for c in changes):
                 raise ToolError("`changes` must be a non-empty list of {path, old, new} or {path, edits} objects")
@@ -714,7 +814,7 @@ class Workspace:
         elif path is None:
             raise ToolError("edit needs `path` with `old` and `new` (or `edits`), or `changes` for several files")
         else:
-            specs = [{"path": path, "old": old, "new": new, "edits": edits}]
+            specs = [{"path": path, "old": old, "new": new, "edits": edits, "replace_all": bool(replace_all)}]
         grouped: dict[str, list] = {}
         for sp in specs:
             pth = sp.get("path")
@@ -766,6 +866,43 @@ class Workspace:
         lines = [f"edited {len(plans)} files: {total} edits applied"]
         lines += [f"- {pl[0]}: {pl[6]} edit{'s' if pl[6] != 1 else ''}" for pl in plans]
         return "\n".join(lines)
+
+    def notebook_edit(self, path=None, cell=None, source="", mode="replace", cell_type="code"):
+        if not path or cell is None:
+            raise ToolError("notebook_edit needs `path` and `cell`")
+        p = self._path(path, write=True)
+        if not p.is_file():
+            raise ToolError(f"{path} does not exist")
+        try:
+            nb = json.loads(read_src(p)[0])
+            cells = nb["cells"]
+        except (ValueError, KeyError):
+            raise ToolError(f"{path} is not a notebook (.ipynb JSON with cells)")
+        n, i = len(cells), int(cell)
+        lines = (source or "").splitlines(keepends=True)
+        if mode == "insert":
+            if not 0 <= i <= n:
+                raise ToolError(f"cell {i} is out of range: the notebook has {n} cells (0 to {n} for insert)")
+            new = {"cell_type": cell_type, "metadata": {}, "source": lines}
+            if cell_type == "code":
+                new.update({"execution_count": None, "outputs": []})
+            cells.insert(i, new)
+            did = f"inserted a {cell_type} cell at {i}"
+        else:
+            if not 0 <= i < n:
+                raise ToolError(f"cell {i} is out of range: the notebook has {n} cells (0 to {n - 1})")
+            if mode == "delete":
+                cells.pop(i)
+                did = f"deleted cell {i}"
+            elif mode == "replace":
+                cells[i]["source"] = lines
+                if cells[i].get("cell_type") == "code":
+                    cells[i]["outputs"], cells[i]["execution_count"] = [], None
+                did = f"replaced cell {i}"
+            else:
+                raise ToolError("mode must be replace, insert or delete")
+        self.write_file(path, json.dumps(nb, indent=1, ensure_ascii=False) + "\n")
+        return f"{did} in {path}; it now has {len(cells)} cells"
 
     def write_file(self, path, content, append=False):
         if self.container and not self.mounted:
@@ -852,7 +989,7 @@ class Workspace:
             if _C.packaged():                                       # the user's own tools, not Meshpool's Python
                 env = _C.user_env()
             else:
-                env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")  # stale .pyc after same-size edits hides fixes
+                env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))  # stale .pyc after same-size edits hides fixes
                 proj = str(Path(__file__).resolve().parents[2])      # engine helper libraries importable anywhere
                 env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
             if self.container and not command.lstrip().startswith("docker "):
@@ -866,7 +1003,8 @@ class Workspace:
                     env["CHERE_INVOKING"] = "1"
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc([bash, "-c", command], env, timeout_s, cwd=cwd)
+                    from meshpool_harness.core import sandbox as _SB
+                    r = self._proc(_SB.wrap([bash, "-c", command], self.root), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
@@ -899,6 +1037,93 @@ class Workspace:
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
+
+    # ---- background commands: started now, read and stopped later (a dev server, a watcher)
+    MAX_BG = 6
+    BG_KEEP = 400_000                      # characters of output kept per command
+
+    def bash_start(self, command, name=None):
+        if self.container and not self.mounted:
+            raise ToolError("background commands run on this computer, not inside a container")
+        bg = self.__dict__.setdefault("_bg", {})
+        if sum(1 for e in bg.values() if e["p"].poll() is None) >= self.MAX_BG:
+            raise ToolError(f"{self.MAX_BG} background commands are already running; stop one with bash_stop first")
+        from meshpool_harness import config as _C
+        if _C.packaged():
+            env = _C.user_env()
+        else:
+            env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+            proj = str(Path(__file__).resolve().parents[2])
+            env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env.setdefault("PYTHONUTF8", "1")
+        env["PYTHONUNBUFFERED"] = "1"
+        bash = _bash()
+        kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
+        if bash:
+            args, shell = [bash, "-c", command], False
+        elif os.name == "nt":
+            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
+        else:
+            args, shell = command, True
+        p = subprocess.Popen(args, shell=shell, cwd=self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, text=True, errors="replace", **kw)
+        _BG_ALL.add(p)
+        n = self.__dict__["_bg_n"] = self.__dict__.get("_bg_n", 0) + 1
+        bid = f"bg{n}"
+        entry = {"p": p, "command": command.strip(), "name": (name or "").strip()[:40], "text": [], "size": 0,
+                 "read": 0, "t0": time.time(), "lock": threading.Lock()}
+        bg[bid] = entry
+
+        def pump():
+            for line in p.stdout:
+                with entry["lock"]:
+                    entry["text"].append(line)
+                    entry["size"] += len(line)
+                    while entry["size"] > self.BG_KEEP and len(entry["text"]) > 1:      # keep the newest output
+                        entry["size"] -= len(entry["text"].pop(0))
+                        entry["read"] = max(0, entry["read"] - 1)
+        threading.Thread(target=pump, daemon=True).start()
+        time.sleep(0.4)                                            # a command that fails at once says so now
+        return (f"started {bid}{' (' + entry['name'] + ')' if entry['name'] else ''}, pid {p.pid}. "
+                f"Read its output with bash_output id={bid}; stop it with bash_stop id={bid}.\n" + self._bg_read(bid, entry))
+
+    def _bg_read(self, bid, entry):
+        with entry["lock"]:
+            new = "".join(entry["text"][entry["read"]:])
+            entry["read"] = len(entry["text"])
+        rc = entry["p"].poll()
+        state = "running" if rc is None else f"exited with code {rc}"
+        return f"[{bid} {state}]\n" + (self._cap(new, "bash") if new else "(no new output)")
+
+    def bash_output(self, id=None, wait_s=0):
+        bg = self.__dict__.get("_bg", {})
+        if not id:
+            if not bg:
+                return "no background commands"
+            return "\n".join(f"{b}: {'running' if e['p'].poll() is None else 'exited ' + str(e['p'].poll())}  "
+                             f"{e['name'] or e['command'][:60]}" for b, e in bg.items())
+        e = bg.get(id)
+        if e is None:
+            raise ToolError(f"no background command {id}. Running: {', '.join(bg) or 'none'}")
+        try:
+            wait = max(0, min(int(wait_s or 0), 60))
+        except (TypeError, ValueError):
+            wait = 0
+        end = time.time() + wait
+        while wait and time.time() < end and e["p"].poll() is None and e["read"] >= len(e["text"]):
+            time.sleep(0.2)
+        return self._bg_read(id, e)
+
+    def bash_stop(self, id=None):
+        bg = self.__dict__.get("_bg", {})
+        ids = [id] if id else list(bg)
+        if id and id not in bg:
+            raise ToolError(f"no background command {id}. Running: {', '.join(bg) or 'none'}")
+        stopped = []
+        for b in ids:
+            _kill_tree(bg[b]["p"])
+            stopped.append(b)
+        return ("stopped " + ", ".join(stopped)) if stopped else "no background commands"
 
     def bash_many(self, commands, timeout_s=None):
         """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style).

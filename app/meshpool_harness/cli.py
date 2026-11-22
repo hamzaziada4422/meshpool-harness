@@ -118,7 +118,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
 
 
 def _agent_parser():
@@ -142,11 +142,36 @@ def _agent_parser():
     ap.add_argument("-p", "--print", dest="prompt", help="answer one request, print the reply and exit")
     ap.add_argument("--dir", help="project folder (default: the current folder)")
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
+    ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
+    ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
+    ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
+    ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
+    ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
+    ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
+    ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     return ap
+
+
+def _stdin_has_data(explicit: bool) -> bool:
+    """Piped input is read when asked for with `-p -`, or when a pipe or file already has data waiting. A terminal, a
+    closed stdin or an open pipe nobody writes to is never waited on."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return False
+        if explicit:
+            return True
+        import select
+        import stat
+        mode = os.fstat(sys.stdin.fileno()).st_mode
+        if stat.S_ISREG(mode):
+            return True
+        return stat.S_ISFIFO(mode) and bool(select.select([sys.stdin], [], [], 0.3)[0])
+    except Exception:  # noqa: BLE001  (pytest's captured stdin, Windows pipes)
+        return False
 
 
 def _no_console() -> bool:
@@ -189,7 +214,24 @@ def main(argv=None):
         if a.model:
             os.environ["MH_MODEL"] = a.model
         from meshpool_harness.agent.tui import main as agent_main
-        return agent_main(a.dir, a.prompt, a.auto, a.resume, a.session, a.no_mcp, a.request)
+        prompt = a.prompt
+        if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
+            piped = sys.stdin.read()
+            prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
+        if a.max_turns:
+            os.environ["MH_MAX_STEPS"] = str(a.max_turns)
+        if a.append_system_prompt:
+            os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if a.permission_mode:
+            os.environ["MH_PERMISSION_MODE"] = a.permission_mode
+            if a.permission_mode == "auto":
+                a.auto = True
+        if a.allowed_tools:
+            os.environ["MH_ALLOW"] = a.allowed_tools
+        if a.disallowed_tools:
+            os.environ["MH_DENY"] = a.disallowed_tools
+        fmt = a.output_format or ("json" if a.json_out else "")
+        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
     if argv[0] == "agent":
         return main(argv[1:] or [])
     if argv[0] == "acp":
@@ -215,6 +257,22 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "run-due":
+        from meshpool_harness import scheduler_os as SO
+        print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
+        os._exit(0)                              # agent helper threads and servers must not keep a background job alive
+    if argv[0] == "scheduler" and len(argv) > 1 and argv[1] in ("install", "uninstall"):
+        from meshpool_harness import scheduler_os as SO
+        try:
+            print(SO.install() if argv[1] == "install" else SO.uninstall())
+        except RuntimeError as e:
+            print(str(e))
+            return 1
+        return 0
+    if argv[0] == "import" and len(argv) > 1 and argv[1] == "agents":
+        # meshpool import agents [--dry-run] [--yes] [--from claude,codex]: skills, tools, memories and instructions
+        from meshpool_harness import agent_import as AI
+        return AI.cli(argv[2:])
     if argv[0] == "import":
         from meshpool_harness.agent import onboard
         from meshpool_harness.agent.tui import Style, _enable_ansi
@@ -275,7 +333,12 @@ def main(argv=None):
         return _check(a.live)
     if a.cmd == "install-browser":
         import subprocess
+        from meshpool_harness import browser_use as BU
         r = subprocess.run([sys.executable, "-m", "pip", "install", "playwright>=1.40"])
+        have = BU.find_playwright_chromium()
+        if r.returncode == 0 and have:
+            print(f"browser engine ready (using the Chromium already at {have})")
+            return 0
         if r.returncode == 0:
             r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"])
         print("browser engine ready" if r.returncode == 0 else "browser install failed (see above)")

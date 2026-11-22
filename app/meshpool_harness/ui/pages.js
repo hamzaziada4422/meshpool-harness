@@ -2,7 +2,7 @@
    optional banner, then a grid of cards. Loaded before app.js; each page draws into #col when it is opened. */
 "use strict";
 
-const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins"};
+const PAGE_TITLE = {projects: "Projects", artifacts: "Artifacts", scheduled: "Scheduled tasks", plugins: "Plugins", memory: "What Meshpool knows", work: "Your work"};
 function relDate(t) {
   t = Number(t) > 1e12 ? Number(t) / 1000 : Number(t); if (!t) return "";
   const d = Math.floor((Date.now() / 1000 - t) / 86400);
@@ -24,7 +24,8 @@ function bindHead(name, redraw) {
 }
 function drawPage(name) {
   if (S.view !== "page" || S.page !== name) return;
-  ({projects: pageProjects, artifacts: pageArtifacts, scheduled: pageScheduled, plugins: pagePlugins})[name]?.();
+  ({projects: pageProjects, artifacts: pageArtifacts, scheduled: pageScheduled, plugins: pagePlugins,
+    memory: window.pageMemory, work: window.pageYourWork})[name]?.();
 }
 const shell0 = html => { const c = $("#col"); if (c) c.innerHTML = `<div class="gal">${html}</div>`; };
 const gcard = (id, inner, cls = "") => `<div class="gcard ${cls}" tabindex="0" data-id="${esc(id)}">${inner}</div>`;
@@ -102,6 +103,7 @@ function taskDialog(t = {}) {
       <label class="field" id="tkTimeF"><span>Time</span><input id="tkTime" type="time" value="${esc(t.time || "09:00")}"></label>
       <label class="field" id="tkMinF"><span>Minutes</span><input id="tkMin" type="number" min="15" value="${t.minutes || 60}"></label>
       <label class="field" id="tkAtF"><span>Date and time</span><input id="tkAt" type="datetime-local" value="${esc(t.at || "")}"></label></div>
+      <label class="switchrow"><input type="checkbox" id="tkChange" ${t.only_on_change ? "checked" : ""}> Only tell me when something changed</label>
       <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">${t.id ? "Save task" : "Create task"}</button></div></div>`;
     document.body.appendChild(sc);
     const show = () => { const w = $("#tkWhen", sc).value; $("#tkDayF", sc).hidden = w !== "weekly"; $("#tkTimeF", sc).hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tkMinF", sc).hidden = w !== "every"; $("#tkAtF", sc).hidden = w !== "once"; };
@@ -112,7 +114,7 @@ function taskDialog(t = {}) {
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(null); });
     $("[data-a='0']", sc).onclick = () => done(null);
     $("[data-a='1']", sc).onclick = () => {
-      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value};
+      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value, only_on_change: $("#tkChange", sc).checked};
       if (!v.prompt) { $("#tkPrompt", sc).focus(); return; }
       done(v);
     };
@@ -136,6 +138,7 @@ async function pageScheduled() {
     bindHead("scheduled", () => draw());
     const add = async preset => { const v = await taskDialog(preset); if (v && await taskSave(v)) { await loadAccount(); pageScheduled(); } };
     $("#tkNew").onclick = () => add();
+    if (tab === "yours") closedApp011();
     $("#tkNew2")?.addEventListener("click", () => add());
     $$(".gcard.tpl").forEach(c => c.onclick = () => add(d.templates[+c.dataset.id.slice(1)]));
     $$(".gcard.task:not(.tpl)").forEach(c => {
@@ -194,4 +197,16 @@ async function pagePlugins() {
     });
   };
   draw();
+}
+
+/* "Also run when Meshpool is closed": registers the system job (cron, launchd or Task Scheduler) */
+async function closedApp011() {
+  let st; try { st = await api("/api/scheduler"); } catch (e) { return; }
+  if (!st.available || $("#closedApp")) return;
+  const host = $(".ggrid, .gempty")?.parentElement;
+  if (!host) return;
+  const row = document.createElement("div"); row.id = "closedApp"; row.className = "closedapp";
+  row.innerHTML = `<label class="switchrow"><input type="checkbox" ${st.installed ? "checked" : ""}> Also run tasks when Meshpool is closed</label><small>${st.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."}</small>`;
+  host.appendChild(row);
+  $("input", row).onchange = async e => { try { const r = await post("/api/scheduler", {on: e.target.checked}); toast(r.message || "Saved"); $("small", row).textContent = r.installed ? "On. Your computer checks every 10 minutes." : "Off. Tasks run only while Meshpool is open."; } catch (err) { toast(err.message); e.target.checked = !e.target.checked; } };
 }

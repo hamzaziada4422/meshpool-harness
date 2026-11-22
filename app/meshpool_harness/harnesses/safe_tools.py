@@ -14,4 +14,6 @@ SAFE_MCP = frozenset({
     "mcp__meshpool_office__check_workbook", "mcp__meshpool_office__measure_office_file",
     "mcp__meshpool_office__check_document", "mcp__meshpool_office__find_icon",
     "mcp__meshpool_office__slide_layouts",
+    # they draw in their own headless browser and only write pictures into Meshpool outputs
+    "mcp__browser__ui_audit", "mcp__browser__view_output",
 })

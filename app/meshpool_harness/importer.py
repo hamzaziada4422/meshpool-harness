@@ -83,9 +83,11 @@ def import_skill(path: str) -> str:
     dst = SK.folder() / SK.slug(meta.get("name") or src.name)
     if dst.exists():
         shutil.rmtree(dst)
+    from meshpool_harness import agent_import as AI
+
     def skip(d, names):                      # links are left out: one pointing at ~/.ssh copied a private key in
         return {n for n in names if n in (".git", "node_modules", "__pycache__", ".DS_Store")
-                or os.path.islink(os.path.join(d, n))}
+                or os.path.islink(os.path.join(d, n)) or AI.DENY_NAMES.match(n)}   # and never a login file
     shutil.copytree(src, dst, ignore=skip)
     return dst.name
 
@@ -170,6 +172,8 @@ def find_mcp() -> list[dict]:
             spec = _norm(raw)
             if not spec:
                 continue
+            from meshpool_harness import agent_import as AI
+            spec, gone = AI.strip_secrets(spec)           # secret-looking variables, headers and arguments stay behind
             sig = json.dumps(spec, sort_keys=True)
             if sig in seen:
                 continue
@@ -178,7 +182,7 @@ def find_mcp() -> list[dict]:
                 "Runs on this computer"
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
-                        "has_secrets": bool(spec.get("env") or spec.get("headers"))})
+                        "has_secrets": bool(gone), "stripped": gone})
     return out
 
 
@@ -244,6 +248,12 @@ account numbers.)
 (Tasks I ask for again and again, with how I like them done. One per line, starting with "- ".)"""
 
 
+EXPORT_LINKS = [
+    {"name": "ChatGPT", "url": "https://chatgpt.com/#settings/DataControls"},
+    {"name": "Claude", "url": "https://claude.ai/settings/data-privacy-controls"},
+]
+
+
 def context_prompt() -> str:
     return CONTEXT_PROMPT
 
@@ -282,8 +292,9 @@ def import_context_text(text: str) -> dict:
     saved, skipped = 0, []
     for f in facts:
         try:
-            r = AS.remember(f[:400])
-            saved += r.startswith("Saved")
+            from meshpool_harness import memstore as MS       # imported facts wait in the review tray first
+            _, made = MS.add(f[:400], kind="stated", status="pending", source={"type": "import"}, by="meshpool")
+            saved += bool(made)
         except ValueError as e:
             skipped.append(f"{f[:60]}: {e}")
     return {"instructions": added_ins, "memory": saved, "skipped": skipped}

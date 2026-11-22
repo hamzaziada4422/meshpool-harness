@@ -39,7 +39,7 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
-READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
+READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user", "diagnostics", "find_skill", "update_plan"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
@@ -53,7 +53,7 @@ PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__slide_layouts"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
               "ask_user"]
-BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
+BUILTIN = ["read_file", "grep", "glob", "edit", "notebook_edit", "write_file", "bash", "bash_start", "bash_output", "bash_stop", "bash_many", "fetch_url", "web_search",
            "web_research", "todo_write", "use_skill", "ask_user"]
 # Harness v3 (benchmarked 2026-11-12, run C): bash_many, todo follow-through, loop and stall breakers, a turn-budget
 # note and an environment snapshot. MH_AGENT_V3=0 turns them off.
@@ -126,6 +126,8 @@ Rules
 - Long outputs are cut. The full text is saved to a file you can read.
 - Tools whose names start with mcp__ come from MCP servers the user connected. Use them when they fit.
 - To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- If a value in the user's message arrives as a tag like [redacted: phone number #1], PHONE_NUMBER_1 or EMAIL_ADDRESS, it was hidden for privacy. Never invent or use an example value in its place; leave it out and tell the user where to add it.
+- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler. Use Markdown code blocks for code.
 - Between tool calls write nothing, or one short line when it helps: the user sees every call. Do not restate what a \
@@ -192,7 +194,7 @@ when the user asks for it. Use Python through bash for quick calculations.
 5. Check the result: open what you made, verify numbers against their sources, and fix problems before you finish. \
 Research budget: when the request or its files already hold sourced research, use it and only look up what they \
 mark as a gap; otherwise prefer a few authoritative sources (filings, the company's releases) over many pages, and \
-stop researching once each number you need has a source. Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
+stop researching once each number you need has a source. To change text, cells, comments or tracked changes in a Word, Excel or PowerPoint file the user already has, call edit_office_file (it keeps their formatting; never rewrite the file's XML by hand). Never build a deck or a workbook yourself with python-pptx or openpyxl when make_deck, make_spreadsheet or \
 office_task can make it: the engines carry the design system and the checks. To add or change slides in a deck the \
 user already has, use add_slides (it builds them in that deck's look and keeps the original): never write slides \
 with python-pptx code. If an engine call returns a job id, \
@@ -241,6 +243,8 @@ Rules
 - Never print or store secrets such as API keys or tokens.
 - If the user denies a tool call, do not retry it. Take another approach or ask.
 - To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
+- If a value in the user's message arrives as a tag like [redacted: phone number #1], PHONE_NUMBER_1 or EMAIL_ADDRESS, it was hidden for privacy. Never invent or use an example value in its place; leave it out and tell the user where to add it.
+- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler."""
 
@@ -419,8 +423,10 @@ def _summary_of(name: str, args: dict) -> str:
     if name == "update_plan":
         items = args.get("plan") or []
         return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
-    if name == "bash":
+    if name in ("bash", "bash_start"):
         return args.get("command", "")
+    if name in ("bash_output", "bash_stop"):
+        return args.get("id", "") or "all"
     if name == "bash_many":
         return " ; ".join(str(c) for c in args.get("commands") or [])[:400]
     if name == "edit" and isinstance(args.get("changes"), list):     # one call, several files
@@ -467,6 +473,13 @@ def _env_snapshot(root: Path) -> str:
         lines.append("Project folder: " + ", ".join(names[:40]) + (f" (+{len(names) - 40} more)" if len(names) > 40 else ""))
     except OSError:
         pass
+    try:
+        sh = C.find_bash() if os.name == "nt" else shutil.which("bash")
+    except Exception:  # noqa: BLE001
+        sh = None
+    import platform
+    lines.append(f"System: {platform.system()} {platform.release()}; shell: " + (
+        "bash (use && and heredocs)" if sh else "PowerShell or cmd (no bash: use ; not &&, and PowerShell cmdlets)"))
     vers = []
     for tool, arg in (("python3", "--version"), ("python", "--version"), ("node", "--version"), ("git", "--version"),
                       ("go", "version"), ("cargo", "--version"), ("java", "-version"), ("docker", "--version")):
@@ -645,6 +658,47 @@ def _apply_refused(body: dict) -> dict:
     return body
 
 
+_DESTRUCTIVE = re.compile(
+    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
+    r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
+    r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
+    re.I)
+
+
+def _rules(root) -> dict:
+    """Saved allow and deny rules: ~/.meshpool/permissions.json and <project>/.meshpool/permissions.json, each
+    {"allow": [...], "deny": [...]}. A rule is a tool name ("edit", "mcp__browser__ui_audit"), or "bash:" and a command
+    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
+    out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
+           "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
+    for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for k in out:
+            out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
+    return out
+
+
+def _rule_hit(rules: list, name: str, args: dict) -> str:
+    import fnmatch
+    cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or []))).strip()
+    for r in rules:
+        if r.startswith("bash:"):
+            if cmd and fnmatch.fnmatchcase(cmd, r[5:].strip()):
+                return r
+        elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
+            return r
+    return ""
+
+
+def _destructive(args: dict) -> bool:
+    """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo."""
+    return bool(_DESTRUCTIVE.search(str(args.get("command") or args.get("cmd") or "")
+                                    + " " + " ".join(map(str, args.get("commands") or []))))
+
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
 
@@ -665,7 +719,7 @@ class Agent:
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
         # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
-        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0)
+        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 2000    # a runaway turn stops; the next message continues
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
@@ -734,12 +788,8 @@ class Agent:
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
                      "which project functions run. After an edit, use probe to see what still fails.")
-        for name in PROJECT_FILES:
-            p = self.root / name
-            if p.is_file():
-                body = p.read_text(encoding="utf-8", errors="replace")[:20000]
-                text += f"\n\nProject instructions from {name} (follow them):\n{body}"
-                break
+        from meshpool_harness.agent import extras as EX
+        text += EX.instruction_text(self.root)          # home, parent folders and the project, with @imports
         try:
             from meshpool_harness import skills as SK
             text += SK.catalog_text(getattr(self, "_route_text", ""),
@@ -751,7 +801,8 @@ class Agent:
             from meshpool_harness.hrouter.route import addon
             text += addon(route)
         from meshpool_harness.assistant import HONESTY, PLAIN
-        return text + "\n\n" + PLAIN + "\n\n" + HONESTY
+        extra = os.environ.get("MH_APPEND_PROMPT", "").strip()
+        return text + "\n\n" + PLAIN + "\n\n" + HONESTY + (("\n\n" + extra) if extra else "")
 
     def set_route(self, route, text: str = "") -> None:
         """Run this chat as a specialised harness (hrouter). Only before the first message: afterwards the system
@@ -920,6 +971,27 @@ class Agent:
         self._stop = False
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
+        from meshpool_harness.agent import extras as EX
+        cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
+        if cmd:
+            text = cmd
+        blocked, note = EX.run_hooks(self.root, "UserPromptSubmit", {"prompt": text})
+        if blocked:
+            self.emit({"type": "error", "text": "A hook stopped this message: " + note})
+            return ""
+        if len(self.messages) <= 2:
+            _, started = EX.run_hooks(self.root, "SessionStart", {})
+            if started:
+                text += "\n\n[Session start hook]\n" + started
+        if note:
+            text += "\n\n[Hook]\n" + note
+        text = EX.expand_mentions(text, self.root)          # @file attaches the file
+        try:                                                # a message about an office file brings the office tools
+            from meshpool_harness import capabilities as CAP
+            if re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", text, re.I) or CAP.needs(text):
+                self.office_on = True
+        except Exception:  # noqa: BLE001
+            pass
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
@@ -1017,6 +1089,10 @@ class Agent:
             for step in (range(self.max_steps) if self.max_steps else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
+                if time.time() - getattr(self, "_saved_at", 0) > 4:        # a crash or power loss keeps the work so far
+                    self._saved_at = time.time()
+                    self._running = True                  # saved as unfinished: a crash here is resumed, not lost
+                    self.save()
                 self._maybe_compact()
                 if self.pace_deadline and not wrapped and step and (
                         time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
@@ -1175,6 +1251,12 @@ class Agent:
             except Exception:  # noqa: BLE001 - a receipt must never break a turn
                 pass
             self.emit({"type": "turn_end", "turn": turn, "session": dict(self.usage)})
+            try:
+                from meshpool_harness.agent import extras as EX
+                EX.run_hooks(self.root, "Stop", {"reply": str(final)[:2000]})
+            except Exception:  # noqa: BLE001
+                pass
+            self._running = False
             self.save()
         return final
 
@@ -1248,6 +1330,23 @@ class Agent:
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
+        out = self._guarded_tool_inner(c, g, cut)
+        try:
+            from meshpool_harness.agent import extras as EX
+            f = c.get("function", {})
+            try:
+                a = json.loads(f.get("arguments") or "{}")
+            except ValueError:
+                a = {}
+            _, note = EX.run_hooks(self.root, "PostToolUse", {"result": str(out)[:2000]}, tool=f.get("name", ""),
+                                   args=a if isinstance(a, dict) else {})
+            if note:
+                out = f"{out}\n[Hook] {note}"
+        except Exception:  # noqa: BLE001 - a hook never breaks a tool call
+            pass
+        return out
+
+    def _guarded_tool_inner(self, c: dict, g: dict, cut: bool = False) -> str:
         """Run one tool call unless it repeats itself with nothing changed in between. The eval traces had runs of
         30-50 near-identical inspection commands (byte dumps of an unchanged file) that a note alone never stopped;
         refusing the repeat, with the reason, is what breaks the loop. An edit in between resets the count, so
@@ -1411,6 +1510,26 @@ class Agent:
         if _context_size(self.messages) > limit:
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
+            if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
+                self.compact_now()
+
+    def compact_now(self):
+        """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
+        from meshpool_harness.agent import compaction
+        try:
+            from meshpool_harness.agent import extras as EX
+            EX.run_hooks(self.root, "PreCompact", {"messages": len(self.messages)})
+        except Exception:  # noqa: BLE001
+            pass
+        r = compaction.compact_history(self.messages)
+        if r:
+            self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
+                                                 "going" + ("." if r["model"] else " (from the log only).")})
+            try:
+                self.save()
+            except Exception:  # noqa: BLE001
+                pass
+        return r
 
     def _body(self) -> dict:
         from meshpool_harness.profiles import apply, for_model
@@ -1548,7 +1667,9 @@ class Agent:
                 if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
                     shrunk = True
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
-                    # so a screenshot the user just attached still goes with the retry.
+                    # so a screenshot the user just attached still goes with the retry. Older steps are summarized
+                    # first, so the task keeps its thread.
+                    self.compact_now()
                     _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
                     body["model"] = PV.split(body["model"])[1]
@@ -2027,26 +2148,40 @@ class Agent:
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
                 name, args = "apply_patch", {"input": hit[0]}
+        from meshpool_harness.agent import extras as EX
+        hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
+        if hk["blocked"]:
+            return False, f"Blocked by a hook: {hk['message']}"
+        if hk["allow"] and not _destructive(args):
+            return True, ""
+        rules = _rules(self.root)
+        hit = _rule_hit(rules["deny"], name, args)
+        if hit:
+            return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+        if _rule_hit(rules["allow"], name, args) and not _destructive(args):
+            return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
-        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch"):
+        if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
         if name in ("edit", "write_file") and self._exists(args.get("path", "")) and \
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
-        group = ("edit" if name in ("edit", "write_file", "apply_patch")
-                 else "bash" if name in ("bash_many", "probe", "trace", "shell") else name)
+        group = ("edit" if name in ("edit", "write_file", "apply_patch", "notebook_edit")
+                 else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
-        if group in self.always:
-            return True, ""
+        if group in self.always and not (group == "bash" and _destructive(args)):
+            return True, ""                    # "always" never covers a command that destroys or sends things away
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
+        elif name == "bash_start":
+            kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
         elif name == "shell":
             kind, title, detail = "bash", "Run this command?", (
                 (f"cd {args['workdir']} && " if args.get("workdir") else "") + T.shell_script(args.get("command")))
@@ -2424,15 +2559,17 @@ class Agent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            tmp = self.dir / "session.json.tmp"
+            tmp.write_text(json.dumps({
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "model": self.current_model(), "model_choice": self.model, "plan": self.plan,
                 "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
                 "kind": "cowork" if self.profile == "work" else "code",
-                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False)),
+                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False) or getattr(self, "_running", False)),
                 "route": self.route.to_dict() if getattr(self, "route", None) is not None else None,
                 "route_text": getattr(self, "_route_text", ""),
                 "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, self.dir / "session.json")      # a crash mid-write never leaves half a session
         except OSError:
             pass
 

@@ -33,7 +33,7 @@ ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, sch
 _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
                           re.I)
 # office_task counts as a command for sub-agents: its engines run model-written code
-NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests", "office_task"}
+NO_COMMANDS = {"bash", "bash_start", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
 _USAGE_LOCK = threading.Lock()
 
@@ -385,9 +385,9 @@ class Delegation:
         a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
         grep = a.ws.grep
 
-        def grep_in_project(pattern, path=".", glob=None):   # a symlink must not carry a read outside the project
+        def grep_in_project(pattern, path=".", glob=None, **opts):   # a symlink must not carry a read outside the project
             # the places a sub-agent may read: the project, its own folder (full tool outputs), attached files
-            return grep(pattern, path, glob, inside_only=[parent.root, a.dir] + ([_uploads()] if _uploads() else []))
+            return grep(pattern, path, glob, inside_only=[parent.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
         a.ws.grep = grep_in_project
         glob = a.ws.glob
 

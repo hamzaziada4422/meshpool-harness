@@ -315,6 +315,193 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
     return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
 
 
+def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
+    """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
+    LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
+    import shutil
+    p = _resolve(path)
+    if not p.exists():
+        return f"File not found: {p}", True
+    ext = p.suffix.lower()
+    if ext not in (".docx", ".xlsx", ".pptx"):
+        return "This edits .docx, .xlsx and .pptx files.", True
+    if not isinstance(operations, list) or not operations:
+        return "Give `operations`: a list of {op, ...} steps.", True
+    out = p if in_place else (_resolve(output) if output else p.with_name(f"{p.stem} (edited){ext}"))
+    if out != p:
+        shutil.copyfile(p, out)
+    done, errors = [], []
+    try:
+        if ext == ".docx":
+            from docx import Document
+            doc = Document(str(out))
+            for o in operations:
+                op = o.get("op")
+                if op == "replace_text":
+                    n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
+                    (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
+                elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
+                    ok = _tracked(_docx_paragraphs(doc), op, o.get("find", ""), o.get("replace", o.get("text", "")), o.get("author") or "Meshpool")
+                    (done if ok else errors).append(f"{op}: tracked change made" if ok else
+                                                    f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use replace_text, or a shorter phrase)")
+                elif op == "append_paragraph":
+                    doc.add_paragraph(o.get("text", ""), style=o.get("style") or None)
+                    done.append("appended a paragraph")
+                elif op == "add_comment":
+                    hit = next((pp for pp in _docx_paragraphs(doc) if o.get("find", "") in pp.text and pp.runs), None)
+                    if not hit:
+                        errors.append(f"comment anchor not found: {o.get('find', '')[:40]!r}")
+                        continue
+                    doc.add_comment(hit.runs, text=o.get("text", ""), author=o.get("author") or "Meshpool")
+                    done.append("added a comment")
+                else:
+                    errors.append(f"unknown op {op!r} (replace_text, append_paragraph, add_comment)")
+            doc.save(str(out))
+        elif ext == ".xlsx":
+            import openpyxl
+            from openpyxl.comments import Comment
+            wb = openpyxl.load_workbook(str(out))
+            for o in operations:
+                op, ws = o.get("op"), None
+                try:
+                    ws = wb[o["sheet"]] if o.get("sheet") else wb.active
+                except KeyError:
+                    errors.append(f"no sheet {o.get('sheet')!r}: sheets are {wb.sheetnames}")
+                    continue
+                if op == "set_cell":
+                    ws[o["cell"]] = o.get("value")
+                    done.append(f"{ws.title}!{o['cell']} set")
+                elif op == "add_row":
+                    ws.append(o.get("values") or [])
+                    done.append(f"row added to {ws.title}")
+                elif op == "add_comment":
+                    ws[o["cell"]].comment = Comment(o.get("text", ""), o.get("author") or "Meshpool")
+                    done.append(f"comment on {ws.title}!{o['cell']}")
+                else:
+                    errors.append(f"unknown op {op!r} (set_cell, add_row, add_comment)")
+            wb.save(str(out))
+        else:
+            from pptx import Presentation
+            prs = Presentation(str(out))
+            for o in operations:
+                op = o.get("op")
+                if op == "replace_text":
+                    paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
+                    n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
+                    (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
+                elif op == "set_notes":
+                    i = int(o.get("slide", 1)) - 1
+                    if not 0 <= i < len(prs.slides):
+                        errors.append(f"no slide {i + 1}: the deck has {len(prs.slides)}")
+                        continue
+                    prs.slides[i].notes_slide.notes_text_frame.text = o.get("text", "")
+                    done.append(f"notes set on slide {i + 1}")
+                else:
+                    errors.append(f"unknown op {op!r} (replace_text, set_notes)")
+            prs.save(str(out))
+    except Exception as e:  # noqa: BLE001
+        return f"Could not edit {p.name}: {e}", True
+    msg = f"{'Changed' if in_place else 'Saved a copy as'} {out}. " + "; ".join(done)
+    return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
+
+
+def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
+    """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
+    import copy
+    import datetime as _dt
+
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    if not find:
+        return False
+    stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rid = int(_dt.datetime.now().timestamp() * 1000) % 100000000
+    for pp in paragraphs:
+        for r in pp.runs:
+            if find not in r.text:
+                continue
+            i = r.text.index(find)
+            before, after = r.text[:i], r.text[i + len(find):]
+            base = r._r
+
+            def run_like(text, deleted=False):
+                el = copy.deepcopy(base)
+                for ch in list(el):
+                    if ch.tag != qn("w:rPr"):
+                        el.remove(ch)
+                t = OxmlElement("w:delText" if deleted else "w:t")
+                t.set(qn("xml:space"), "preserve")
+                t.text = text
+                el.append(t)
+                return el
+
+            def wrap(tag, child, n):
+                w = OxmlElement(tag)
+                w.set(qn("w:id"), str(rid + n))
+                w.set(qn("w:author"), author)
+                w.set(qn("w:date"), stamp)
+                w.append(child)
+                return w
+            pieces = []
+            if before:
+                pieces.append(run_like(before))
+            if op == "tracked_insert_after":
+                pieces.append(run_like(find))
+                pieces.append(wrap("w:ins", run_like(new), 1))
+            else:
+                pieces.append(wrap("w:del", run_like(find, deleted=True), 1))
+                if op == "tracked_replace":
+                    pieces.append(wrap("w:ins", run_like(new), 2))
+            if after:
+                pieces.append(run_like(after))
+            parent = base.getparent()
+            at = parent.index(base)
+            parent.remove(base)
+            for k, el in enumerate(pieces):
+                parent.insert(at + k, el)
+            return True
+    return False
+
+
+def _docx_paragraphs(doc):
+    out = list(doc.paragraphs)
+    for t in doc.tables:
+        for row in t.rows:
+            for c in row.cells:
+                out += c.paragraphs
+    for sec in doc.sections:
+        out += list(sec.header.paragraphs) + list(sec.footer.paragraphs)
+    return out
+
+
+def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
+    """Replace text keeping the formatting of the run where the match starts (matches may span runs)."""
+    if not find:
+        return 0
+    n = 0
+    for pp in paragraphs:
+        while find in pp.text:
+            runs, pos, start = pp.runs, 0, pp.text.index(find)
+            first = None
+            for r in runs:
+                a, b = pos, pos + len(r.text)
+                if first is None and a <= start < b:
+                    first, off = r, start - a
+                    rest = find
+                    take = min(len(rest), b - start)
+                    r.text = r.text[:off] + replace + r.text[off + take:]
+                    rest = rest[take:]
+                elif first is not None and rest:
+                    take = min(len(rest), len(r.text))
+                    r.text = r.text[take:]
+                    rest = rest[take:]
+                pos = b
+            if first is None:
+                break
+            n += 1
+    return n
+
+
 def _md_inline(s: str) -> str:
     from xml.sax.saxutils import escape
     s = escape(s)
@@ -523,6 +710,15 @@ TOOLS = {
                       "`language` (optional, e.g. ar, ru, ko, hi) forces an OCR language; `ocr` is auto (scanned pages and "
                       "pictures), always (also pages that mix text and scans) or never.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
+    "edit_office_file": (edit_office_file, "Change an existing Word, Excel or PowerPoint file in place of rebuilding it: "
+                         "formatting, formulas and layout stay as they are, and LibreOffice is not needed. `operations` is a "
+                         "list. Word: {op:replace_text, find, replace}, {op:tracked_replace, find, replace} and "
+                         "{op:tracked_delete, find} and {op:tracked_insert_after, find, text} (real Word tracked changes "
+                         "the user accepts or rejects), {op:append_paragraph, text}, {op:add_comment, find, text}. Excel: {op:set_cell, sheet, cell, value (or a formula like =SUM(A1:A9))}, {op:add_row, "
+                         "values}, {op:add_comment, sheet, cell, text}. PowerPoint: {op:replace_text, find, replace}, "
+                         "{op:set_notes, slide, text}. Saved as '<name> (edited)' next to the file unless in_place is true.",
+                         {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
+                          "in_place": {"type": "boolean"}}, ["path", "operations"]),
     "make_pdf": (make_pdf, "Save Markdown as a PDF (headings, paragraphs, lists, tables, code, links).",
                  {"markdown": S, "filename": S, "title": S}, ["markdown"]),
     "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "

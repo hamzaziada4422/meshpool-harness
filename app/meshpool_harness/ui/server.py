@@ -28,6 +28,9 @@ APP = C.APP
 HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
+EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler")
+
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
@@ -121,14 +124,15 @@ def assistant_action(b: dict) -> dict:
     elif act == "memory":
         AS.set_memory(b.get("text", ""))
     elif act == "settings":
-        AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on") if k in b})
+        AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
     elif act == "task_add":
         AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                     b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
-                    b.get("harness", ""), b.get("kind", "cowork"))
+                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")))
     elif act == "task_update":
         AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
-                                                                   "minutes", "folder", "harness", "kind", "enabled")})
+                                                                   "minutes", "folder", "harness", "kind", "enabled",
+                                                                   "only_on_change")})
     elif act == "task_delete":
         AS.delete_task(b.get("id", ""))
     elif act == "task_run":
@@ -214,6 +218,17 @@ class Handler(BaseHTTPRequestHandler):
         raw = self._body()
         return json.loads(raw.decode("utf-8")) if raw else {}
 
+    def _extra(self, u):
+        from meshpool_harness.ui import routes_extra as RX
+        try:
+            return self._send(*RX.handle(self.command, u, self._body() if self.command == "POST" else b""))
+        except (ValueError, KeyError) as e:
+            return self._send(400, {"error": str(e).strip("'\"")})
+        except (BrokenPipeError, ConnectionResetError):
+            return None
+        except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
+            return self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
     def _company(self, u):
         from meshpool_harness.ui import company_api as CO
         try:
@@ -282,10 +297,14 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
+        m = re.fullmatch(r"/ui/vendor/((?:fonts/)?[A-Za-z0-9_.-]+\.(?:js|css|woff2))", u.path)
+        if m and (HERE / "vendor" / m.group(1)).is_file():           # Mermaid and KaTeX, bundled so diagrams and maths work offline
+            ct = {"js": "text/javascript; charset=utf-8", "css": "text/css; charset=utf-8", "woff2": "font/woff2"}[m.group(1).rsplit(".", 1)[1]]
+            return self._send(200, (HERE / "vendor" / m.group(1)).read_bytes(), ct, {"Cache-Control": "max-age=86400"})
         if u.path == "/oauth/callback":          # the browser comes back here after signing in to a connector
             from meshpool_harness import mcp_apps as CN
             q = parse_qs(u.query)
@@ -378,6 +397,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
             return self._company(u)
+        if u.path.startswith(EXTRA_PREFIXES):        # 0.0.10: memory page, insights, summaries, receipts
+            return self._extra(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, get_settings())
@@ -386,12 +407,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
+            if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
+                from meshpool_harness import agent_import as AI
+                return self._send(200, AI.scan())
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 return self._send(200, IM.scan())
             if u.path == "/api/import-context":
                 from meshpool_harness import importer as IM
-                return self._send(200, {"prompt": IM.context_prompt()})
+                return self._send(200, {"prompt": IM.context_prompt(), "links": IM.EXPORT_LINKS})
             if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
                 from meshpool_harness import chat_import as CI
                 return self._send(200, CI.scan_local())
@@ -548,6 +572,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         if u.path.startswith("/api/company"):        # Settings > Company, the company look for decks
             return self._company(u)
+        if u.path.startswith(EXTRA_PREFIXES):        # 0.0.10: memory page, insights, summaries, receipts
+            return self._extra(u)
         try:
             if u.path == "/api/settings":
                 return self._send(200, save_settings(self._json()))
@@ -695,6 +721,13 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import chat_import as CI
                 b = self._json()
                 return self._send(200, dict(CI.import_local(b.get("sources") or None), found=CI.scan_local()))
+            if u.path == "/api/import-agents":        # {keys, dry_run}: writes nothing when dry_run
+                from meshpool_harness import agent_import as AI
+                b = self._json()
+                r = AI.apply(b.get("keys") or [], dry_run=bool(b.get("dry_run")))
+                if not b.get("dry_run"):
+                    C.load_into_env(override=True)
+                return self._send(200, r)
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])
@@ -1000,7 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
@@ -1010,6 +1043,11 @@ class Handler(BaseHTTPRequestHandler):
                     s.stop()
                 elif act == "answer":
                     s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
+                elif act == "compact":
+                    if s.state in ("working", "waiting"):
+                        raise ValueError("Wait for the task to finish or stop it, then compact.")
+                    r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
+                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), compacted=r))
                 else:
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
