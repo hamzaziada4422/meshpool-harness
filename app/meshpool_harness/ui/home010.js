@@ -13,10 +13,8 @@ renderHero = function () {
 async function fresh010(my) {
   if (store("firstrun_done") || (S.threads || []).length > 2) return;          // new users only: the static starters stay otherwise
   const box = $(".starters"); if (!box) return;
-  let folder = S.draft.project || "";
-  if (!folder) { const p = (S.projects || []).find(x => /Meshpool Projects/.test(x.path || "")); folder = p ? p.path : ""; }
   let r = {starters: [], files: 0};
-  if (folder) { try { r = await api("/api/firstrun/scan?folder=" + encodeURIComponent(folder)); } catch (e) { r = {starters: [], files: 0}; } }
+  try { r = await api("/api/firstrun/scan?folder=" + encodeURIComponent(S.draft.project || "")); } catch (e) { r = {starters: [], files: 0}; }
   if (my !== hero010Token || !$(".starters")) return;
   if (r.starters.length) {
     $(".starters").innerHTML = r.starters.map(s => `<button data-s="${esc(s.prompt)}" title="Meshpool has only seen the file's name, not what is inside">${esc(s.prompt.replace(/\.$/, ""))}</button>`).join("") + `<button data-fr="more">Something else</button>`;
@@ -37,15 +35,15 @@ async function fresh010(my) {
 }
 async function away010(my) {
   let a; try { a = await api("/api/away"); } catch (e) { return; }
-  if (my !== hero010Token || a.empty || !$(".hero")) return;
+  if (my !== hero010Token || !$(".hero")) return;
+  for (const c of (a.cards || []).slice(0, 1)) insightCard010(c);          // at most one nudge on the home screen
+  if (!(a.runs || []).length) return;
   const el = document.createElement("section"); el.className = "away010"; el.setAttribute("aria-label", "While you were away");
   el.innerHTML = `<div class="a-h"><b>While you were away</b><button class="linkbtn" id="awayOk">Got it</button></div>
     ${a.runs.map(r => `<button class="a-run" data-open="${esc(r.chat_id)}"><span class="a-n">${esc(r.name)}</span><span class="a-l">${esc(r.line)}</span></button>`).join("")}
-    ${a.quiet && a.quiet.length ? `<p class="a-q">${esc(a.quiet.join(", "))}: nothing changed since the last run.</p>` : ""}<div class="a-cards"></div>`;
+    ${a.quiet && a.quiet.length ? `<p class="a-q">${esc(a.quiet.join(", "))}: no change.</p>` : ""}`;
   const hero = $(".hero"); hero.insertBefore(el, $(".starters") || null);
   $$(".a-run", el).forEach(b => b.onclick = () => openThread(b.dataset.open));
-  const box = $(".a-cards", el);
-  for (const c of a.cards || []) insightCard010(c, (html, cls) => { const d = document.createElement("div"); d.className = cls; d.innerHTML = html; box.appendChild(d); return d; });
   $("#awayOk", el).onclick = async () => { await post("/api/away/seen", {}).catch(() => {}); el.remove(); };
 }
 
@@ -56,7 +54,7 @@ window.renderSuggestSettings = async function (b, close) {
   const v = await api("/api/insights/settings");
   const pct = r => r == null ? "not enough data yet" : Math.round(r * 100) + "% accepted";
   const types = v.types || [];
-  b.innerHTML = `${close}<h3>Suggestions</h3><p class="lead">Meshpool can point out a repeated task, a saved skill or a next step. It speaks up only when a chat ends or you open the app, never while it works, and it shows what it saw. Nothing leaves your computer.</p>
+  b.innerHTML = `${close}<h3>Suggestions</h3><p class="lead">Tips when a chat ends or you open the app. Never while it works.</p>
     <ul class="rows2"><li class="row2"><label class="switchrow"><input type="checkbox" id="sgOn" ${v.insights_on !== false ? "checked" : ""}> Show suggestions</label></li></ul>
     ${(v.notices || []).map(n => `<div class="gbanner"><div><b>${esc(n.title || "Stopped a suggestion type")}</b><span>${esc(n.text || "")}</span></div><button class="btn" data-ack="1">OK</button></div>`).join("")}
     <h3 style="font-size:16px;margin:18px 0 4px">By type</h3><ul class="rows2">${types.map(t => `<li class="row2"><label class="switchrow"><input type="checkbox" data-type="${esc(t.type)}" ${t.on ? "checked" : ""}> ${esc(t.label || TYPE_NAME[t.type] || t.type)}</label><small>${esc(pct(t.rate))}${t.shown ? ` · shown ${t.shown} time${t.shown === 1 ? "" : "s"}` : ""}${t.throttled ? " · stopped automatically" : ""}</small></li>`).join("")}</ul>
@@ -67,7 +65,7 @@ window.renderSuggestSettings = async function (b, close) {
   $$("[data-type]", b).forEach(x => x.onchange = async () => { await post("/api/insights/settings", {type: x.dataset.type, on: x.checked}); re(); });
   $$("[data-undo]", b).forEach(x => x.onclick = async () => { await post("/api/insights/settings", {action: "undo_mute", id: x.dataset.undo}); re(); });
   $$("[data-ack]", b).forEach(x => x.onclick = async () => { await post("/api/insights/settings", {action: "ack_notices"}); re(); });
-  $("#sgReset", b).onclick = async () => { if (await ask({title: "Reset suggestion learning?", text: "Meshpool forgets which suggestions you accepted, dismissed or muted.", ok: "Reset"})) { await post("/api/insights/settings", {action: "reset"}); re(); } };
+  $("#sgReset", b).onclick = async () => { if (await ask({title: "Reset suggestion learning?", text: "Forget what you accepted or dismissed.", ok: "Reset"})) { await post("/api/insights/settings", {action: "reset"}); re(); } };
 };
 window.renderQuietHours = async function (box) {
   const a = await api("/api/insights/settings"), q = a.quiet_hours || {on: false, start: "22:00", end: "07:00"};

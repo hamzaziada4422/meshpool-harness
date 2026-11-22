@@ -60,7 +60,7 @@ def test_skill_fires_on_a_repeated_procedure_and_a_repeated_correction():
     corr = [chat(f"k{i}", NOW - i * 3 * DAY, "Make a deck", texts=["Make a deck", "Never put an eyebrow label above the slide title"])
             for i in range(3)]
     cards = I.detect_skill(corp(corr))
-    assert len(cards) == 1 and "same correction in 3 chats" in cards[0]["body"]
+    assert len(cards) == 1 and "same correction in 3 chats" in cards[0]["body"].lower()
 
 
 def test_skill_stays_silent_on_near_misses():
@@ -97,7 +97,7 @@ def test_route_fires_when_one_agent_keeps_failing_and_another_does_better():
            [turn(20 + i, "docs.slides", "meshpool-code", failed=False) for i in range(4)]
     cards = I.detect_route(corp(outcomes=rows))
     assert len(cards) == 1 and cards[0]["action"]["payload"]["harness"] == "meshpool-code"
-    assert "3 of your last 6" in cards[0]["body"]
+    assert "3 of the last 6" in cards[0]["body"]
 
 
 def test_route_marks_count_as_failures_and_cheaper_equal_quality_fires():
@@ -109,7 +109,7 @@ def test_route_marks_count_as_failures_and_cheaper_equal_quality_fires():
     cheap = [turn(i, "docs.analyze", "meshpool-work", tin=4000, tout=2000) for i in range(10)] + \
             [turn(50 + i, "docs.analyze", "pi", tin=1500, tout=700) for i in range(5)]
     cards = I.detect_route(corp(outcomes=cheap))
-    assert len(cards) == 1 and "fewer tokens" in cards[0]["title"] and "failed no more often" in cards[0]["body"]
+    assert len(cards) == 1 and "fewer tokens" in cards[0]["title"] and "no more failures" in cards[0]["body"]
 
 
 def test_route_stays_silent_on_near_misses():
@@ -228,18 +228,31 @@ def many_cards(n=6):
     return cs
 
 
-def test_home_shows_at_most_three_a_day_and_the_same_three_on_a_second_look(monkeypatch):
-    use(monkeypatch, corp(many_cards(6)))
+def _mixed(n_sched=3):
+    """Several weekly habits (one idea: schedule) plus a pasted background (another idea: project)."""
+    cs = many_cards(n_sched)
+    pj = [chat(f"p{i}", NOW - i * DAY, "x") for i in range(3)]
+    pj = [dict(c, texts=[f"Context for the job.\n\n{BG}\n\nNow draft email {i}"]) for i, c in enumerate(pj)]
+    return cs + pj
+
+
+def test_home_shows_at_most_two_one_per_type_and_the_same_on_a_second_look(monkeypatch):
+    use(monkeypatch, corp(_mixed(4)))
     first = I.cards_for("home", now=NOW)
-    assert len(first) == 3
+    assert 1 <= len(first) <= 2 and len({c["type"] for c in first}) == len(first)      # never two of a kind
     again = I.cards_for("home", now=NOW + 60)
     assert [c["id"] for c in again] == [c["id"] for c in first]                  # stable, not reshuffled
-    assert len([r for r in I._log_rows() if r["event"] == "shown"]) == 3          # logged once each
+    assert len([r for r in I._log_rows() if r["event"] == "shown"]) == len(first)  # logged once each
     for c in first:                                                             # dismissing does not buy more that day
         I.act(c["id"], "dismissed", NOW + 120)
     assert I.cards_for("home", now=NOW + 180) == []
     nxt = I.cards_for("home", now=NOW + DAY)                                     # the next day, new cards, never the old ones
-    assert len(nxt) == 3 and not {c["id"] for c in nxt} & {c["id"] for c in first}
+    assert not {c["id"] for c in nxt} & {c["id"] for c in first} and len(nxt) <= 2
+
+
+def test_nothing_to_suggest_means_nothing_is_shown(monkeypatch):
+    use(monkeypatch, corp([chat("a", NOW - DAY, "Hello there")]))
+    assert I.cards_for("home", now=NOW) == []
 
 
 def test_ranking_prefers_a_type_the_user_accepts(monkeypatch):
@@ -475,7 +488,7 @@ def test_heavy_use_stays_within_budget_and_never_repeats_a_dismissed_card(monkey
             I.act(x["id"], "dismissed", now)
             dismissed.add(x["id"])
         seen |= {x["id"] for x in shown}
-    assert len(seen) >= 4 and "schedule" not in {x["type"] for x in cands}               # the habit was already scheduled
+    assert len(seen) >= 3 and "schedule" not in {x["type"] for x in cands}               # the habit was already scheduled
 
 
 def test_heavy_use_has_a_card_for_each_planted_pattern(monkeypatch):

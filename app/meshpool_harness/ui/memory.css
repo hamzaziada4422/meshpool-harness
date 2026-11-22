@@ -99,3 +99,13 @@
 .a-run{display:flex;flex-direction:column;align-items:flex-start;gap:1px;border:0;background:none;padding:6px 8px;border-radius:var(--r-m);text-align:left;cursor:pointer}.a-run:hover{background:var(--hover)}
 .a-n{font-weight:500;color:var(--ink)}.a-l{color:var(--ink-3);font-size:var(--fs-s)}.a-q{margin:0;color:var(--ink-3);font-size:var(--fs-xs)}
 .a-cards{display:flex;flex-direction:column;gap:8px;margin-top:4px}.a-cards:empty{display:none}
+
+/* a suggestion: one quiet line above the composer */
+.composer-wrap{position:relative}
+.nudge010{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(100% + 6px);width:min(640px,calc(100% - 24px));display:flex;align-items:center;gap:8px;padding:6px 6px 6px 14px;border:1px solid var(--line);background:var(--surface);border-radius:999px;box-shadow:0 4px 18px rgba(0,0,0,.10);font-size:var(--fs-s);z-index:20;animation:nudgein .18s ease-out}
+.nudge010 .n-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+.nudge010 .n-t b{color:var(--ink);font-weight:500}.nudge010 .n-b{color:var(--ink-3)}
+.nudge010 .btn.sm{height:28px;padding:0 12px;border-radius:999px;flex:none}
+@keyframes nudgein{from{opacity:0;transform:translate(-50%,4px)}to{opacity:1;transform:translate(-50%,0)}}
+@media (prefers-reduced-motion:reduce){.nudge010{animation:none}}
+@media (max-width:640px){.nudge010 .n-b{display:none}}

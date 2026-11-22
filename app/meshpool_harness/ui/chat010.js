@@ -20,7 +20,7 @@ window.cbar010bind = function () {
 function setIncognito010(on) {
   if (S.cur) return;
   S.draft.incognito = on; renderBar(); renderTop(); renderHero?.();
-  toast(on ? "Incognito chat. Nothing in it is remembered, learned or logged." : "Incognito is off.");
+  toast(on ? "Incognito: nothing is remembered." : "Incognito is off.");
 }
 document.addEventListener("keydown", e => {
   if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "n") { e.preventDefault(); newThread(); setIncognito010(true); }
@@ -51,10 +51,10 @@ async function xray010(anchor) {
   const q = new URLSearchParams({chat: S.cur?.id || "", text: $("#input").value || "", project: S.cur?.view?.project_id || S.draft.pid || "", workdir: S.cur ? "" : (S.draft.project || ""), incognito: inc010() ? "1" : ""});
   let x; try { x = await api("/api/xray?" + q); } catch (e) { return toast(e.message); }
   const exclude = new Set([...(x.excluded || []).map(f => f.id), ...(S.cur ? [] : (S.draft.exclude || []))]);
-  const draw = () => `<h4>What the agent will see</h4><p class="note">${esc(x.note)} ${x.incognito ? "This chat is incognito, so no memory is included." : x.memory_on ? "" : "Memory is off, so none is included."}</p>
-    ${x.sections.map(sec => `<div class="sec2">${esc(sec.title)}</div>${sec.facts.length ? sec.facts.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}<small>${esc(f.scope_label)}</small></span></label>`).join("") : `<pre>${esc(sec.text.length > 500 ? sec.text.slice(0, 500) + "…" : sec.text)}</pre>`}`).join("")}
+  const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
+    ${x.sections.map(sec => `<div class="sec2">${esc(sec.title)}</div>${sec.facts.length ? sec.facts.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}<small>${esc(f.scope_label)}</small></span></label>`).join("") : `<details><summary class="note">Show</summary><pre>${esc(sec.text.length > 500 ? sec.text.slice(0, 500) + "…" : sec.text)}</pre></details>`}`).join("")}
     ${(x.excluded || []).length ? `<div class="sec2">Left out of this chat</div>${x.excluded.map(f => `<label class="it"><span><input type="checkbox" data-leave="${esc(f.id)}" ${exclude.has(f.id) ? "" : "checked"}> ${esc(f.text)}</span></label>`).join("")}` : ""}
-    <p class="note" style="margin-top:10px">${x.chars.toLocaleString()} characters of background. Untick a fact to leave it out of this chat only. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
+    <p class="note" style="margin-top:10px">Untick to leave a fact out of this chat. <button class="linkbtn" id="xrMem">Open memory</button></p>`;
   const p = popAt(anchor, draw(), "xray");
   const bind = () => {
     $$("[data-leave]", p).forEach(c => c.onchange = async () => {
@@ -99,25 +99,42 @@ function insightUnder010(c) {
     row.appendChild(b); post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
     return;
   }
-  insightCard010(c, under010);
+  insightCard010(c);
 }
-function insightCard010(c, place) {
-  const ev = (c.evidence || []).slice(0, 4);
-  const html = `<div class="ic010-t"><b>${esc(c.title)}</b><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button></div><p>${esc(c.body)}</p>
-    ${ev.length ? `<ul class="ic010-ev">${ev.map(x => `<li>${esc(x.text)}${x.chat_id ? ` <button class="linkbtn" data-ichat="${esc(x.chat_id)}">Open</button>` : ""}</li>`).join("")}</ul>` : ""}
-    <div class="ic010-a"><button class="btn primary" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="btn" data-ic="dismissed">Not now</button><button class="linkbtn" data-ic="muted">Show me less like this</button></div>`;
-  const el = place(html, "ic010 card"); if (!el) return;
+/* A suggestion is one quiet line above the composer: what it is, one button, a way to dismiss. One at a time. */
+const nudgeQ010 = [];
+function insightCard010(c) {
+  if (nudgeQ010.some(x => x.id === c.id) || $(`.nudge010[data-id="${c.id}"]`)) return;
+  nudgeQ010.push(c); nextNudge010();
+}
+function nextNudge010() {
+  if ($(".nudge010") || !nudgeQ010.length) return;
+  const wrap = $(".composer-wrap"); if (!wrap) return;
+  const c = nudgeQ010.shift();
+  const el = document.createElement("div"); el.className = "nudge010"; el.dataset.id = c.id; el.setAttribute("role", "status");
+  el.innerHTML = `<span class="n-t" title="${esc(c.body || "")}"><b>${esc(c.title)}</b> <span class="n-b">${esc(c.body || "")}</span></span><button class="btn primary sm" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="iconbtn" data-ic="more" aria-label="More" aria-haspopup="menu">${ICON.more}</button><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button>`;
+  wrap.appendChild(el);
   post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
+  const done = () => { el.remove(); setTimeout(nextNudge010, 400); };
   el.addEventListener("click", async e => {
-    const ch = e.target.closest("[data-ichat]"); if (ch) return openThread(ch.dataset.ichat);
     const b = e.target.closest("[data-ic]"); if (!b) return;
     const event = b.dataset.ic;
-    el.remove();
+    if (event === "more") {
+      return ctxMenu({type: "click", currentTarget: b}, [
+        {label: "Why this?", fn: () => whyPop010(b, c)},
+        {label: "Not now", fn: async () => { done(); await post("/api/insights/act", {id: c.id, event: "dismissed"}).catch(() => {}); }},
+        {label: "Show me less like this", fn: async () => { done(); const r = await post("/api/insights/act", {id: c.id, event: "muted"}).catch(() => null); toast("Okay, fewer like this.", 7000, {label: "Undo", fn: () => post("/api/insights/settings", {action: "undo_mute", id: r?.mute?.id}).catch(() => {})}); }}]);
+    }
+    done();
     let r = null;
     try { r = await post("/api/insights/act", {id: c.id, event}); } catch (err) { /* the card is gone either way */ }
     if (event === "accepted") runInsightAction(r?.action || c.action, {card: c});
-    if (event === "muted") toast("Okay, fewer suggestions like this.", 7000, {label: "Undo", fn: () => post("/api/insights/settings", {action: "undo_mute", id: r?.mute?.id}).catch(() => {})});
   });
+}
+function whyPop010(anchor, c) {
+  const ev = c.evidence || [];
+  const p = popAt(anchor, `<h4>${esc(c.title)}</h4><p class="note">${esc(c.body || "")}</p>${ev.map(x => `<div class="it"><span>${esc(x.text)}</span>${x.chat_id ? `<button class="linkbtn" data-ichat="${esc(x.chat_id)}">Open</button>` : ""}</div>`).join("")}`, "why");
+  p.onclick = e => { const b = e.target.closest("[data-ichat]"); if (b) { p.close(); openThread(b.dataset.ichat); } };
 }
 window.insightCard010 = insightCard010;
 
@@ -142,7 +159,7 @@ window.runInsightAction = async function (a, ctx) {
   }
   if (kind === "connect") return openSettings("connectors");
   if (kind === "remember") return toast("Added to \"Meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
-  if (kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); if ((p.files || []).length) toast("The new file is named in the message. Attach it with the plus button."); return; }
+  if (kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); if ((p.files || []).length) toast("Attach the new file with +."); return; }
   if (kind === "send") { $("#input").value = p.text || ""; return sendNow(false); }
   if (kind === "route") return openSettings("models");
   if (kind === "skill") {
@@ -176,13 +193,13 @@ async function sources010() {
 }
 async function srcPop010(anchor, id) {
   let d; try { d = await api("/api/memory/sources?chat=" + encodeURIComponent(id)); } catch (e) { return toast(e.message); }
-  const draw = () => `<h4>${d.facts.length} memor${d.facts.length === 1 ? "y" : "ies"} given to the agent</h4><p class="note">${esc(d.wording)}</p>${d.facts.map(f => `<div class="it" data-id="${esc(f.id)}"><span>${esc(f.text)}<small>${esc(f.scope_label)} · ${esc(f.source.text)}</small></span><span class="mem-btns"><button class="linkbtn" data-sedit="${esc(f.id)}">Edit</button><button class="linkbtn" data-swrong="${esc(f.id)}">Wrong</button><button class="linkbtn" data-sopen="1">Open in memory</button></span></div>`).join("")}`;
+  const draw = () => `<h4>${d.facts.length} memor${d.facts.length === 1 ? "y" : "ies"} given</h4><p class="note">${esc(d.wording)}</p>${d.facts.map(f => `<div class="it" data-id="${esc(f.id)}"><span>${esc(f.text)}<small>${esc(f.scope_label)} · ${esc(f.source.text)}</small></span><span class="mem-btns"><button class="linkbtn" data-sedit="${esc(f.id)}">Edit</button><button class="linkbtn" data-swrong="${esc(f.id)}">Wrong</button></span></div>`).join("")}<p class="note" style="margin-top:8px"><button class="linkbtn" data-sopen="1">Open memory</button></p>`;
   const p = popAt(anchor, draw(), "src");
   p.onclick = async e => {
     const t = e.target.closest("button"); if (!t) return; const D = t.dataset;
     if (D.sopen) { p.close(); return goPage("memory"); }
-    if (D.sedit) { const f = d.facts.find(x => x.id === D.sedit); p.close(); const v = await ask({title: "Edit this memory", value: f.text, ok: "Save"}); if (v) { await post("/api/memory", {action: "edit", id: f.id, text: v}); toast("Saved. New chats use the new wording."); } return; }
-    if (D.swrong) { await post("/api/memory", {action: "wrong", id: D.swrong}); toast("Archived, and Meshpool will not suggest it again.", 7000, {label: "Undo", fn: () => post("/api/memory", {action: "unarchive", id: D.swrong})}); p.close(); delete srcCache010[id]; }
+    if (D.sedit) { const f = d.facts.find(x => x.id === D.sedit); p.close(); const v = await ask({title: "Edit this memory", value: f.text, ok: "Save"}); if (v) { await post("/api/memory", {action: "edit", id: f.id, text: v}); toast("Saved."); } return; }
+    if (D.swrong) { await post("/api/memory", {action: "wrong", id: D.swrong}); toast("Archived.", 7000, {label: "Undo", fn: () => post("/api/memory", {action: "unarchive", id: D.swrong})}); p.close(); delete srcCache010[id]; }
   };
 }
 
@@ -214,3 +231,17 @@ async function loadSummaries010() {
 }
 window.addEventListener("load", () => setTimeout(loadSummaries010, 2500));
 setInterval(() => { if (document.visibilityState === "visible") loadSummaries010(); }, 60000);
+
+/* ---------- at chat open: at most one quiet suggestion for this chat ---------- */
+const _openThread010 = openThread;
+openThread = function (id, fresh) {
+  const r = _openThread010.apply(this, arguments);
+  if (!fresh) setTimeout(async () => {
+    try {
+      const d = await api("/api/insights?where=chat:" + encodeURIComponent(id));
+      const c = (d.cards || []).find(x => x.type !== "followup");
+      if (c && S.cur && S.cur.id === id) insightCard010(c);
+    } catch (e) { /* no suggestion is fine */ }
+  }, 1500);
+  return r;
+};

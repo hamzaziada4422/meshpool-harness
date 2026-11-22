@@ -43,7 +43,8 @@ VALUE = {"schedule": 1.0, "skill": 0.9, "project": 0.9, "route": 0.8, "connect":
          "remember": 0.5, "followup": 0.6}
 MEMORY_TYPES = {"remember", "teach"}                  # derived from memory, or writing to it: off with memory
 EXPIRY_S = 7 * 86400
-HOME_PER_DAY = 3
+HOME_PER_DAY = 2                      # fewer is better: a weak or repeated card is worse than none
+MIN_HOME = 0.35                       # below this ranked score a card is not worth the screen
 TURN_CARDS = 1
 OS_PER_DAY = 1
 THROTTLE_MIN_SHOWN = 10
@@ -446,8 +447,7 @@ def detect_schedule(c: Corpus) -> list[dict]:
                    "time": rh["time"], "day": rh["day"], "minutes": int(rh["every_s"] / 60),
                    "only_on_change": True, "source_chats": [m["id"] for m in grp]}
         out.append(_card("schedule", f"Run this {every}?",
-                         f"You asked for “{_clip(text)}” {len(grp)} times, about {rh['label'] if rh['label'] != 'every' else 'regularly'} "
-                         f"({dates}). Schedule it and hear back only when something changed.",
+                         f"Asked {len(grp)} times, about {rh['label'] if rh['label'] != 'every' else 'regularly'}: “{_clip(text, 48)}”",
                          [{"text": f"{_day(m['ts'])}: {_clip(m['texts'][0], 50)}", "chat_id": m["id"], "ts": m["ts"]}
                           for m in grp[-5:]],
                          {"kind": "schedule", "label": "Set up the schedule", "payload": payload}, conf, c,
@@ -467,8 +467,7 @@ def detect_skill(c: Corpus) -> list[dict]:
         text = steps[-1]["texts"][0]
         seen.update(m["id"] for m in steps)
         out.append(_card("skill", "Save this routine as a skill?",
-                         f"You ran “{_clip(text)}” in {len(steps)} chats, each with {min(m['steps'] for m in steps)}+ steps. "
-                         "Meshpool can draft a skill from them for you to review.",
+                         f"Ran in {len(steps)} chats: “{_clip(text, 48)}”",
                          [{"text": _clip(m["texts"][0], 60), "chat_id": m["id"], "ts": m["ts"]} for m in steps[-5:]],
                          {"kind": "draft_skill", "label": "Draft the skill",
                           "payload": {"chat_ids": [m["id"] for m in steps], "hint": _clip(text, 40)}},
@@ -492,7 +491,7 @@ def detect_skill(c: Corpus) -> list[dict]:
             used.update(idx)
             chs = [x[1] for x in mem.values()]
             out.append(_card("skill", "Make this a skill instead of repeating it?",
-                             f"You gave the same correction in {len(mem)} chats: “{_clip(t)}”.",
+                             f"Same correction in {len(mem)} chats: “{_clip(t, 48)}”",
                              [{"text": _clip(x[0], 60), "chat_id": x[1]["id"], "ts": x[1]["ts"]} for x in mem.values()],
                              {"kind": "draft_skill", "label": "Draft the skill",
                               "payload": {"chat_ids": [x["id"] for x in chs], "hint": _clip(t, 40)}},
@@ -524,8 +523,7 @@ def detect_project(c: Corpus) -> list[dict]:
             p = next(iter(mem.values()))[0]
             files = sorted({f for ch in chs for f in ch["inputs"]})[:8]
             out.append(_card("project", "Make this a project?",
-                             f"You pasted the same background ({len(p)} characters) into {len(mem)} chats outside a "
-                             "project. A project keeps it once, for every chat in it.",
+                             f"Same background pasted into {len(mem)} chats.",
                              [{"text": f"Same passage: “{_clip(p, 50)}”", "chat_id": ch["id"], "ts": ch["ts"]} for ch in chs[-4:]],
                              {"kind": "make_project", "label": "Make a project",
                               "payload": {"name": _clip(p, 36), "instructions": p[:1500], "files": files,
@@ -537,8 +535,7 @@ def detect_project(c: Corpus) -> list[dict]:
             chs = [x[1] for x in mem.values()]
             name = next(iter(mem.values()))[0]
             out.append(_card("project", "Make this a project?",
-                             f"“{name}” came into {len(mem)} chats outside a project. A project can keep it as a "
-                             "knowledge file.",
+                             f"“{name}” used in {len(mem)} chats.",
                              [{"text": f"Used {name}", "chat_id": ch["id"], "ts": ch["ts"], "file": name} for ch in chs[-4:]],
                              {"kind": "make_project", "label": "Make a project",
                               "payload": {"name": Path(name).stem[:36], "instructions": "", "files": [name],
@@ -565,8 +562,7 @@ def detect_route(c: Corpus) -> list[dict]:
                 if better:
                     r, g = min(better)
                     out.append(_card("route", f"Try another agent for {spec.split('.')[-1] or spec} work?",
-                                     f"{bad} of your last 6 {spec} turns on {h} were undone, retried or marked wrong. "
-                                     f"On {g}, {sum(1 for y in hs[g] if y['failed'])} of {len(hs[g])} were.",
+                                     f"{bad} of the last 6 on {h} failed. On {g}: {sum(1 for y in hs[g] if y['failed'])} of {len(hs[g])}.",
                                      [{"text": f"{h}: {bad} of 6 failed"}, {"text": f"{g}: {sum(1 for y in hs[g] if y['failed'])} of {len(hs[g])} failed"}],
                                      {"kind": "set_default", "label": f"Use {g} for this",
                                       "payload": {"spec": spec, "harness": g, "lane": last6[-1].get("lane")}},
@@ -578,8 +574,7 @@ def detect_route(c: Corpus) -> list[dict]:
                     a, b = tok(xs), tok(ys)
                     if a > 0 and b <= 0.7 * a:
                         out.append(_card("route", f"Same quality for about {round((1 - b / a) * 100)}% fewer tokens?",
-                                         f"For {spec} work, {g} used about {round((1 - b / a) * 100)}% fewer tokens than "
-                                         f"{h} over {len(ys)} and {len(xs)} turns, and failed no more often.",
+                                         f"{g} used {round((1 - b / a) * 100)}% fewer tokens than {h}, with no more failures.",
                                          [{"text": f"{h}: {len(xs)} turns, {round(a)} tokens each, {sum(1 for x in xs if x['failed'])} failed"},
                                           {"text": f"{g}: {len(ys)} turns, {round(b)} tokens each, {sum(1 for y in ys if y['failed'])} failed"}],
                                          {"kind": "set_default", "label": f"Use {g} for this",
@@ -608,8 +603,7 @@ def detect_connect(c: Corpus) -> list[dict]:
         if not st or st.get("connected"):
             continue
         out.append(_card("connect", f"Connect {st['name']}?",
-                         f"You pasted {st['name']} content into {len(hit)} chats, but it is not connected. "
-                         "Connected, the agent can open those items itself.",
+                         f"You pasted {st['name']} content into {len(hit)} chats.",
                          [{"text": f"{st['name']} content in “{_clip(ch['title'] or ch['texts'][0], 40)}”",
                            "chat_id": ch["id"], "ts": ch["ts"]} for ch in hit[-4:]],
                          {"kind": "connect", "label": f"Connect {st['name']}",
@@ -642,7 +636,7 @@ def detect_rerun(c: Corpus) -> list[dict]:
                 if h1 and h2 and jaccard(set(h1), set(h2)) < 0.6:
                     continue                                        # same name pattern, different structure
                 out.append(_card("rerun", f"Run “{_clip(ch['texts'][0], 40)}” on {f['name']}?",
-                                 f"{f['name']} looks like {old}, which you analyzed on {_day(ch['ts'])}. Same task, new file.",
+                                 f"Looks like {old}, which you used on {_day(ch['ts'])}.",
                                  [{"text": f"Earlier: {_clip(ch['texts'][0], 60)}", "chat_id": ch["id"], "ts": ch["ts"]},
                                   {"text": f"New file: {f['name']}", "file": f["path"], "ts": f["mtime"]}],
                                  {"kind": "new_chat", "label": "Start it",
@@ -658,7 +652,7 @@ def detect_teach(c: Corpus) -> list[dict]:
         if t.get("count", 0) < 2 or not t.get("rules"):
             continue
         out.append(_card("teach", t.get("label") or "Make these your defaults?",
-                         "You edited a file Meshpool made: " + "; ".join(t["rules"][:3]) + ".",
+                         "; ".join(t["rules"][:3]).capitalize() + ".",
                          [{"text": f"{t.get('count')} of {t.get('total', t.get('count'))} changed the same way",
                            "file": t.get("file"), "chat_id": t.get("chat_id")}],
                          {"kind": "teach", "label": "Make these defaults",
@@ -692,7 +686,7 @@ def detect_remember(c: Corpus) -> list[dict]:
             ev = [{"text": f"Named in “{_clip(ch['title'] or ch['texts'][0], 40)}”", "chat_id": ch["id"], "ts": ch["ts"]}
                   for ch in list(mem.values())[-4:]]
             out.append(_card("remember", f"Remember {n}?",
-                             f"{n} came up in {len(mem)} of your chats. Meshpool can note it, for you to confirm first.",
+                             f"Came up in {len(mem)} chats. You confirm before it is saved.",
                              ev, {"kind": "remember", "label": "Add to what Meshpool thinks",
                                   "payload": {"text": f"Works regularly with {n}", "category": "people", "evidence": ev}},
                              min(0.9, 0.4 + 0.1 * len(mem)), c, f"remember:person:{n.lower()}"))
@@ -936,7 +930,14 @@ def cards_for(where: str = "home", chat_id: str | None = None, now: float | None
             shown_today = [x for x in pool if x.get("shown_at") and _today(x["shown_at"]) == _today(now)]
             fresh = [x for x in pool if not x.get("shown_at")]
             fresh.sort(key=lambda x: -x["score"] * _freshness(x, now) * _rate_factor(x["type"], acc))
-            pick = (shown_today + fresh[: max(0, HOME_PER_DAY - used)])[:HOME_PER_DAY]
+            types = {x["type"] for x in shown_today}                 # one card per type: three schedule cards are one idea
+            chosen = []
+            for x in fresh:
+                if x["type"] in types or x["score"] * _freshness(x, now) < MIN_HOME:
+                    continue
+                chosen.append(x)
+                types.add(x["type"])
+            pick = (shown_today + chosen[: max(0, HOME_PER_DAY - used)])[:HOME_PER_DAY]
         else:
             chips = [x for x in cards if x["type"] == "followup" and x.get("chat_id") == chat_id]
             others = [x for x in cards if x["type"] != "followup" and x["where"] == "turn"

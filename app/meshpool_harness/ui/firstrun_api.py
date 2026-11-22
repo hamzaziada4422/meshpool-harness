@@ -62,6 +62,9 @@ KINDS = {".xlsx": "sheet", ".xls": "sheet", ".csv": "sheet", ".docx": "doc", ".d
 
 
 def scan(folder: str, limit: int = 300) -> dict:
+    if not folder:                                   # no folder chosen yet: Meshpool's own project folder
+        from meshpool_harness.ui.desktop import default_project
+        folder = str(default_project())
     p = _allowed(folder)
     if p is None:
         return {"files": 0, "starters": []}

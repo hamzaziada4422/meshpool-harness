@@ -145,15 +145,13 @@ def xray(q: dict) -> dict:
     return {"started": started, "incognito": incog, "memory_on": AS.settings()["memory_on"], "sections": sections,
             "excluded": left_out, "text": ctx["text"], "chars": len(ctx["text"]),
             "snapshot": MS.context_snapshot(cid) if started else "",
-            "note": ("This chat already has its background. Leaving a fact out adds a short note to your next message "
-                     "asking the agent to ignore it." if started else
-                     "This is the background your first message will carry.")}
+            "note": ("Already sent. Unticking asks the agent to ignore it." if started else "Sent with your first message.")}
 
 
 def sources(cid: str) -> dict:
     used = MS.usage_counts(7)
     return {"facts": [_row(f, used) for f in MS.given_for_chat(cid)],
-            "wording": "Given to the agent. Meshpool cannot tell which of these the agent actually used."}
+            "wording": "Given to the agent, not necessarily used."}
 
 
 def _body_fact(b: dict) -> dict:
