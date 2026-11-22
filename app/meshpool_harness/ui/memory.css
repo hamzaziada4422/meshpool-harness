@@ -143,3 +143,8 @@
 .mem-scope{min-height:24px}
 .mem-meta{height:auto;min-height:24px}
 .mem-srcchip{min-height:24px}
+
+/* reply actions */
+.racts010{display:inline-flex;gap:2px;margin-left:6px;opacity:.55;transition:opacity var(--t-hover) ease}
+.turnfoot:hover .racts010,.racts010:focus-within{opacity:1}
+.racts010 .iconbtn{min-width:28px;min-height:28px}.racts010 .iconbtn.on{color:var(--pool-text)}

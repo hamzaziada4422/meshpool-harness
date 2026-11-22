@@ -253,3 +253,46 @@ openThread = function (id, fresh) {
   }, 1500);
   return r;
 };
+
+
+/* ---------- under every reply: copy, try again, thumbs. Edit on your own message rewinds to that point. ---------- */
+const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
+const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
+const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
+function feedback010(outcome) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome}).catch(() => {}); }
+function acts010(n, text) {
+  const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
+  const w = document.createElement("span"); w.className = "racts010";
+  w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
+  f.appendChild(w);
+  w.onclick = async e => {
+    const b = e.target.closest("[data-ra]"); if (!b) return;
+    if (b.dataset.ra === "copy") return navigator.clipboard.writeText(text || "").then(() => toast("Copied"), () => toast("Could not copy."));
+    if (b.dataset.ra === "retry") return retry010(n);
+    const on = b.getAttribute("aria-pressed") !== "true";
+    $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
+    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
+  };
+}
+async function rewind010(n) {
+  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9});
+  renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); await poll(); if (S.panel === "diff") renderPanel();
+}
+async function retry010(n) {
+  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+  if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
+  if (!asked) return toast("Could not find the message to send again.");
+  try { await rewind010(n); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+}
+document.addEventListener("click", async e => {
+  const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
+  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), n = msgs.indexOf(mine) + 1;
+  const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
+  e.stopImmediatePropagation();
+  const fill = () => { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); };
+  if (S.cur.busy || n < 1) { fill(); return toast("Edit it and send to ask again.", 3500); }
+  if (n < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
+  try { await rewind010(n); fill(); toast("Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
+}, true);
+const _ev010b = ev010;
+ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText); };
