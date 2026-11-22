@@ -19,6 +19,7 @@ import io
 import itertools
 import json
 import math
+import os
 import re
 import sys
 import tempfile
@@ -974,6 +975,11 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                           "checked.", status="not_run", severity="info"))
 
     rules_status = summarize(failures, RULES)
+    try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
+        from meshpool_harness import checks
+        checks.rules_ran("deck_rules", "design rules", rules_status, subject=os.path.basename(str(path)))
+    except Exception:  # noqa: BLE001 - the recorder never changes a validation
+        pass
     return {"file": str(path), "sha256": m["sha256"], "rules": rules_status, "failures": failures, "stats": stats,
             "evidence": m["evidence"], "measurement": public(m)}
 

@@ -12,6 +12,7 @@ Exit code 1 when any error-severity failure remains.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -706,7 +707,13 @@ def validate(path: str, rules: dict | None = None, recompute: dict | None = None
              "formula_literals": sum(s["formula_literals"] for s in sheet_stats.values())}
     if changes is not None:
         stats["diff"] = changes[:500]
-    return {"file": str(path), "sha256": file_sha, "rules": summarize(failures, RULES), "failures": failures,
+    rules_status = summarize(failures, RULES)
+    try:                                    # the visible-checks recorder: the rules that ran (no-op when idle)
+        from meshpool_harness import checks
+        checks.rules_ran("workbook_rules", "workbook rules", rules_status, subject=os.path.basename(str(path)))
+    except Exception:  # noqa: BLE001 - the recorder never changes a validation
+        pass
+    return {"file": str(path), "sha256": file_sha, "rules": rules_status, "failures": failures,
             "stats": stats, "evidence": {k: evidence_id(file_sha, k) for k in stats}}
 
 

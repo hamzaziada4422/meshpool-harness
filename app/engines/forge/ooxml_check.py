@@ -236,6 +236,15 @@ def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
             sub = check(io.BytesIO(z.read(n)), schemas, _name=n)
             validated += sub["parts_validated"]
             problems += [{**p, "part": f"{n}!{p['part']}"} for p in sub["problems"]]
+    if _name is None:
+        try:                                # visible checks: only the part that ran is recorded (no-op when idle)
+            from meshpool_harness import checks
+            subj = os.path.basename(str(path)) if isinstance(path, (str, os.PathLike)) else ""
+            kind, label = ("office_schema", "Office schema") if folder else ("office_structure",
+                                                                              "Office file structure")
+            (checks.passed if not problems else checks.failed)(kind, label, None, subj)
+        except Exception:  # noqa: BLE001
+            pass
     return {"file": str(_name or path), "ok": not problems, "schema_validation": "run" if folder else "not_run",
             "parts_validated": validated, "problems": problems}
 
