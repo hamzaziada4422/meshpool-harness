@@ -90,22 +90,22 @@ function ev010(ev) {
   if (ev.type === "turn_end") sources010();
 }
 function insightUnder010(c) {
-  if (c.type === "followup") {
-    const chips = (c.action?.payload?.chips || c.chips || []);
-    if (!chips.length) return;
-    const d = under010(chips.map(t => `<button class="schip" data-chip="${esc(t)}">${esc(t)}</button>`).join(""), "chips010 schips");
-    d?.addEventListener("click", e => { const b = e.target.closest("[data-chip]"); if (!b) return; post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = b.dataset.chip; sendNow(false); });
-    post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
+  if (c.type === "followup") {            // one card per chip: they share one row under the reply
+    const f = foot010(); if (!f) return;
+    const box = under010("", "chips010 schips"); if (!box) return;
+    const row = box.parentElement.querySelector(".chips010") || box;
+    const b = document.createElement("button"); b.className = "schip"; b.textContent = c.action?.label || c.title;
+    b.onclick = () => { post("/api/insights/act", {id: c.id, event: "accepted"}).catch(() => {}); $("#input").value = c.action?.payload?.text || b.textContent; sendNow(false); };
+    row.appendChild(b); post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
     return;
   }
   insightCard010(c, under010);
 }
-const ACT_LABEL = {schedule: "Set it up", skill: "Draft the skill", project: "Make a project", route: "Use it", connect: "Connect", rerun: "Run it again", teach_accept: "Make these my defaults", teach: "Make these my defaults", remember: "Add to memory"};
 function insightCard010(c, place) {
   const ev = (c.evidence || []).slice(0, 4);
   const html = `<div class="ic010-t"><b>${esc(c.title)}</b><button class="iconbtn" data-ic="dismissed" aria-label="Dismiss">${ICON.x}</button></div><p>${esc(c.body)}</p>
     ${ev.length ? `<ul class="ic010-ev">${ev.map(x => `<li>${esc(x.text)}${x.chat_id ? ` <button class="linkbtn" data-ichat="${esc(x.chat_id)}">Open</button>` : ""}</li>`).join("")}</ul>` : ""}
-    <div class="ic010-a"><button class="btn primary" data-ic="accepted">${esc(c.action?.label || ACT_LABEL[c.action?.kind] || "Do it")}</button><button class="btn" data-ic="dismissed">Not now</button><button class="linkbtn" data-ic="muted">Show me less like this</button></div>`;
+    <div class="ic010-a"><button class="btn primary" data-ic="accepted">${esc(c.action?.label || "Do it")}</button><button class="btn" data-ic="dismissed">Not now</button><button class="linkbtn" data-ic="muted">Show me less like this</button></div>`;
   const el = place(html, "ic010 card"); if (!el) return;
   post("/api/insights/act", {id: c.id, event: "shown"}).catch(() => {});
   el.addEventListener("click", async e => {
@@ -113,9 +113,10 @@ function insightCard010(c, place) {
     const b = e.target.closest("[data-ic]"); if (!b) return;
     const event = b.dataset.ic;
     el.remove();
-    try { await post("/api/insights/act", {id: c.id, event}); } catch (err) { /* the card is gone either way */ }
-    if (event === "accepted") runInsightAction(c.action, {card: c});
-    if (event === "muted") toast("Okay, fewer suggestions like this.");
+    let r = null;
+    try { r = await post("/api/insights/act", {id: c.id, event}); } catch (err) { /* the card is gone either way */ }
+    if (event === "accepted") runInsightAction(r?.action || c.action, {card: c});
+    if (event === "muted") toast("Okay, fewer suggestions like this.", 7000, {label: "Undo", fn: () => post("/api/insights/settings", {action: "undo_mute", id: r?.mute?.id}).catch(() => {})});
   });
 }
 window.insightCard010 = insightCard010;
@@ -125,18 +126,31 @@ window.insightCard010 = insightCard010;
 window.runInsightAction = async function (a, ctx) {
   if (!a) return;
   const p = a.payload || {};
-  if (a.kind === "schedule") { S.prefillTask = p; openSettings?.("scheduled"); return; }
-  if (a.kind === "project") {
-    const r = await post("/api/pj", {name: p.name || "New project", description: p.description || "", instructions: p.instructions || ""}).catch(e => toast(e.message));
-    if (r?.id) { toast(`Project "${r.name}" is ready. Add its files from the project page.`, 8000, {label: "Open", fn: () => openProject(r.id)}); S.pj = (await api("/api/pj")).projects; renderSide(); }
+  const kind = {draft_skill: "skill", make_project: "project", new_chat: "rerun", set_default: "route", teach_accept: "teach"}[a.kind] || a.kind;
+  if (kind === "schedule") { S.prefillTask = p; openSettings("scheduled"); return; }
+  if (kind === "project") {
+    const r = await post("/api/pj", {name: p.name || "New project", description: "", instructions: p.instructions || ""}).catch(e => toast(e.message));
+    if (r?.id) {
+      S.pj = (await api("/api/pj")).projects; renderSide();
+      toast(`Project "${r.name}" is ready.${(p.files || []).length ? " Add its files from the project page." : ""}`, 9000, {label: "Open", fn: () => openProject(r.id)});
+    }
     return;
   }
-  if (a.kind === "connect") return openSettings("connectors");
-  if (a.kind === "memory" || a.kind === "remember") return goPage("memory");
-  if (a.kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); return; }
-  if (a.kind === "route") return openSettings("models");
-  if (a.kind === "skill") { $("#input").value = p.prompt || "Draft a skill from the chats I listed."; if (!S.cur) newThread(); $("#input").value = p.prompt || ""; return $("#input").focus(); }
-  if (a.kind === "teach_accept" || a.kind === "teach") {
+  if (kind === "connect") return openSettings("connectors");
+  if (kind === "remember") return toast("Added to \"Meshpool thinks\" on the memory page. Nothing is remembered until you say yes.", 9000, {label: "Review", fn: () => goPage("memory")});
+  if (kind === "rerun") { newThread(); $("#input").value = p.prompt || ""; $("#input").focus(); if ((p.files || []).length) toast("The new file is named in the message. Attach it with the plus button."); return; }
+  if (kind === "send") { $("#input").value = p.text || ""; return sendNow(false); }
+  if (kind === "route") return openSettings("models");
+  if (kind === "skill") {
+    let d; try { d = await post("/api/insights/draft-skill", p); } catch (e) { return toast(e.message); }
+    const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="Review the skill" style="width:min(640px,94vw)"><h3>Review this skill</h3><p>Drafted from ${d.evidence.length} of your chats. Edit it, then save. It is used only when its description matches.</p><input id="skN" value="${esc(d.name)}" aria-label="Skill name"><textarea id="skB" rows="12" style="width:100%;margin-top:8px">${esc(d.body)}</textarea><div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">Save skill</button></div></div>`;
+    document.body.appendChild(sc);
+    sc.addEventListener("click", async e => { const b = e.target.closest("[data-a]"); if (e.target === sc || b?.dataset.a === "0") return sc.remove(); if (!b) return;
+      try { await post("/api/skills", {action: "create", name: $("#skN", sc).value, description: d.description, body: $("#skB", sc).value}); sc.remove(); toast("Skill saved.", 8000, {label: "Open skills", fn: () => openSettings("skills")}); } catch (err) { toast(err.message); } });
+    return;
+  }
+  if (kind === "teach") {
     const r = await post("/api/insights/accept", {action: a, card: ctx?.card}).catch(e => toast(e.message));
     if (r) toast("Saved as your defaults. See them in memory.", 8000, {label: "Open memory", fn: () => goPage("memory")});
     return;

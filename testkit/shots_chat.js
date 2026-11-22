@@ -10,7 +10,7 @@ const [port, out] = process.argv.slice(2);
   for (let i = 0; i < 5; i++) { const c = await p.$('button:has-text("Continue"), button:has-text("Start using Meshpool")'); if (!c) break; await c.click(); await p.waitForTimeout(600); }
   await p.evaluate(() => newThread());
   await p.fill("#input", "Make a one slide summary of our Q3 results"); await p.keyboard.press("Enter");
-  await p.waitForSelector(".turnfoot", {timeout: 60000}); await p.waitForTimeout(2500);
+  await p.waitForSelector(".turnfoot", {state: "attached", timeout: 60000}); await p.waitForTimeout(2500);
   ck("sources chip under the reply", await p.$(".mem-srcchip") !== null);
   ck("receipt line", await p.$(".rcpt010") !== null);
   await p.screenshot({path: `${out}/chat-turn-end-light.png`});
@@ -21,7 +21,7 @@ const [port, out] = process.argv.slice(2);
   await p.keyboard.press("Control+Shift+N"); await p.waitForTimeout(500);
   ck("incognito toggled by shortcut", (await p.evaluate(() => S.draft.incognito)) === true);
   await p.fill("#input", "Please remember that I like green charts"); await p.keyboard.press("Enter");
-  await p.waitForSelector(".turnfoot", {timeout: 60000}); await p.waitForTimeout(1500);
+  await p.waitForSelector(".turnfoot", {state: "attached", timeout: 60000}); await p.waitForTimeout(1500);
   ck("incognito tag in the header", await p.$(".incog-tag") !== null);
   ck("no sources chip in an incognito chat", await p.$(".mem-srcchip") === null);
   await p.screenshot({path: `${out}/chat-incognito-light.png`});
