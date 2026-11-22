@@ -55,6 +55,7 @@ and the mock model (no paid calls). The set-up is at the end of this page.
 | 48 | Suggestions off hides everything | n/a | `journeys_010.js`, `test_insights.py` |
 | 49 | Code sessions grouped by folder: collapse, search, new session in a folder, group by date | Code | `shots_code.js` |
 | 50 | Turn latency is not slower than 0.0.9 | all | `latency.py` |
+| 51 | Import from other agents: preview, dry run, ticked items only, secrets left behind, logins never read, memories wait in the tray | n/a | `shots_import.js` (with `seed_agents.py`), `app/tests/test_agent_import.py` |
 
 Not testable in this Linux container, so checked by other means:
 

@@ -104,7 +104,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 - **Files in and out:** PDF (scans included, with offline OCR), Word, Excel, PowerPoint, Power BI, CSV and images in; Word, Excel, PowerPoint and PDF out.
 - **Web research** across many sources, with links you can check.
 - **58 connectors** (GitHub, Linear, Jira, Slack, Notion, Google Drive, HubSpot, Stripe and more) plus any remote MCP server. Sign-in goes straight from your computer to the app.
-- **About 100 skills**, and the skills and MCP servers you already use in Claude Desktop, Codex, Cursor, VS Code and others, imported in a click.
+- **About 100 skills**, and the skills, MCP servers, memories and instructions you already have in Claude Code, Codex, Cursor, OpenClaw, Hermes and others, imported in a click with a preview (`meshpool import agents --dry-run`). Logins are never read.
 - **Memory you can see.** One page lists everything Meshpool knows, where each fact came from and where it was used. Edit or remove any of it; incognito chats keep nothing.
 - **Quiet suggestions.** At most one short nudge at a time, only when a chat ends or you open the app, and always with what Meshpool saw. Switch it off in Settings.
 - **Receipts.** Time, cost where known, the agent chosen and the checks that ran, under each reply.

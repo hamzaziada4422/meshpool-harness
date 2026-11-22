@@ -16,6 +16,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Learns from your edits.** Change every slide title of a deck Meshpool made, and it offers to make that your default.
 - **Code sessions by folder.** Sessions are grouped by folder, with a new-session button on each, search, and a dot when one needs you.
 - **Simpler import.** Three steps and direct links to your old assistant's export page.
+- **Bring your other agents.** Meshpool finds Claude Code, Codex, Cursor, OpenClaw and Hermes on your computer and lists their skills, tools, memories and instructions. You tick what you want and can preview first. Passwords and keys are never read, and tools come over without their secrets. Memories wait for your yes. From a terminal: `meshpool import agents --dry-run`.
 
 **New in 0.0.9**
 - **Meshpool for Linux.** A download for 64-bit Linux with everything inside (LibreOffice, Chromium, Node.js, Git and Python), tested in a bare Ubuntu 22.04 before it is published.
