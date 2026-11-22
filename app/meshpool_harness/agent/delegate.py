@@ -33,7 +33,7 @@ ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, sch
 _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placeholder|<[^<>]{1,40}>|\{[^{}]{1,40}\})\s*$",
                           re.I)
 # office_task counts as a command for sub-agents: its engines run model-written code
-NO_COMMANDS = {"bash", "bash_many", "probe", "trace", "run_tests", "office_task"}
+NO_COMMANDS = {"bash", "bash_start", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
 _USAGE_LOCK = threading.Lock()
 

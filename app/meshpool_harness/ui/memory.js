@@ -8,7 +8,7 @@ PAGE_TITLE.memory = "What Meshpool knows";
 ICON.memory = ICON.brain;
 const MEM = {tab: "memory", q: "", cat: "", scope: "", kind: "", unused: false, d: null, hl: new Set(), editing: "", sel: "", drag: ""};
 const MEM_KIND = {stated: "You said it", learned: "Learned", noticed: "Noticed"};
-const MEM_ROW_H = 74, MEM_HEAD_H = 40, MEM_VIRTUAL = 150;
+const MEM_ROW_H = 84, MEM_HEAD_H = 40, MEM_VIRTUAL = 150;
 let memT = 0;
 
 async function memLoad(keep) {

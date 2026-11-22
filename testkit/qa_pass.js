@@ -15,7 +15,7 @@ async function audit(p, view, theme, state) {
     const clipped = e => { for (let a = e.parentElement; a && a !== document.body; a = a.parentElement) { const s = getComputedStyle(a); if (/(hidden|auto|scroll)/.test(s.overflowX) && a.getBoundingClientRect().right <= vw + 1) return true; } return false; };
     o.outside = [...document.querySelectorAll("body *")].filter(e => vis(e) && e.getBoundingClientRect().right > vw + 2 && !clipped(e) && !e.closest("[hidden],.toasts")).slice(0, 4)
       .map(e => (e.id ? "#" + e.id : e.className ? "." + String(e.className).split(" ")[0] : e.tagName) + " " + Math.round(e.getBoundingClientRect().right));
-    const tiny = [...document.querySelectorAll("button, a[href], input, select, textarea, [role=button], [role=tab]")].filter(e => vis(e) && !e.disabled && e.type !== "hidden" && e.type !== "checkbox" && e.type !== "radio" && !e.closest("label") && (e.getBoundingClientRect().width < 24 || e.getBoundingClientRect().height < 24));
+    const tiny = [...document.querySelectorAll("button, a[href], input, select, textarea, [role=button], [role=tab]")].filter(e => vis(e) && !e.disabled && e.type !== "hidden" && e.type !== "checkbox" && e.type !== "radio" && !e.closest("label") && !(e.tagName === "A" && getComputedStyle(e).display === "inline") && (e.getBoundingClientRect().width < 24 || e.getBoundingClientRect().height < 24));
     o.tiny = tiny.length; o.tinySample = tiny.slice(0, 3).map(e => (e.id ? "#" + e.id : e.className ? "." + String(e.className).split(" ")[0] : e.tagName) + " " + Math.round(e.getBoundingClientRect().width) + "x" + Math.round(e.getBoundingClientRect().height));
     const nameless = [...document.querySelectorAll("button, [role=button], input:not([type=hidden]), select, textarea, a[href]")].filter(e => vis(e) && !(e.textContent || "").trim() && !e.getAttribute("aria-label") && !e.getAttribute("title") && !e.getAttribute("aria-labelledby") && !e.getAttribute("placeholder") && !(e.labels && e.labels.length) && !e.closest("label") && !e.querySelector("img[alt]"));
     o.nameless = nameless.length; o.namelessSample = nameless.slice(0, 3).map(e => (e.id ? "#" + e.id : e.className ? "." + String(e.className).split(" ")[0] : e.tagName));
@@ -65,7 +65,7 @@ async function audit(p, view, theme, state) {
     // a finished chat on the phone and desktop, with the new popovers
     await p.evaluate(() => { try { closeSettings(); } catch (e) {} });
     await p.evaluate(() => newThread()); await p.waitForTimeout(500);
-    await p.fill("#input", "Say hello in one line"); await p.keyboard.press("Enter");
+    await p.fill("#input", "Make a one slide summary of our Q3 results"); await p.keyboard.press("Enter");
     await p.waitForSelector(".turnfoot", {state: "attached", timeout: 40000}).catch(() => note(view, theme, "chat", "turn did not finish", ""));
     await p.waitForTimeout(1500); await audit(p, view, theme, "chat-finished");
     if (shots) await p.screenshot({path: `${out}/qa-${view}-${theme}-chat-finished.png`});

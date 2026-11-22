@@ -95,6 +95,34 @@ def patch_from_shell(argv):
     return m.group("body"), cd
 
 
+_BG_ALL: set = set()
+
+
+def _kill_tree(p) -> None:
+    """End a process and everything it started."""
+    import signal
+    if p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=0x08000000)
+        else:
+            os.killpg(p.pid, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _kill_all_background() -> None:
+    for p in list(_BG_ALL):
+        _kill_tree(p)
+
+
+__import__("atexit").register(_kill_all_background)
+
+
 class AllStr(str):
     """An `old` text that edit replaces everywhere (replace_all)."""
 
@@ -138,6 +166,16 @@ SCHEMAS = {
                       {"path": S, "content": S, "append": {"type": "boolean"}}, ["path", "content"]),
     "bash": _fn("bash", "Run a shell command in the workdir. Output is capped; full output is saved to a file.",
                 {"command": S, "timeout_s": I}, ["command"]),
+    "bash_start": _fn("bash_start", "Start a long-running command in the background (a dev server, a watcher, a slow "
+                                    "build) and return at once with an id. Read what it prints with bash_output and end "
+                                    "it with bash_stop. It keeps running between turns until stopped or Meshpool closes.",
+                      {"command": S, "name": S}, ["command"]),
+    "bash_output": _fn("bash_output", "Read the new output of a background command started with bash_start, and say "
+                                      "whether it is still running (or its exit code). `wait_s` waits up to that many "
+                                      "seconds for output first. Without an id, lists every background command.",
+                       {"id": S, "wait_s": I}, []),
+    "bash_stop": _fn("bash_stop", "Stop a background command (and everything it started). Without an id, stops all of them.",
+                     {"id": S}, []),
     "bash_many": _fn("bash_many", "Run several independent shell commands in ONE call (for example: read 3-5 file "
                                   "ranges, grep several patterns, check versions). Each runs on its own, even if an "
                                   "earlier one fails; you get every output, labelled.",
@@ -955,6 +993,93 @@ class Workspace:
 
     def bash(self, command, timeout_s=None):
         return self._run(command, timeout_s, "bash")[0]
+
+    # ---- background commands: started now, read and stopped later (a dev server, a watcher)
+    MAX_BG = 6
+    BG_KEEP = 400_000                      # characters of output kept per command
+
+    def bash_start(self, command, name=None):
+        if self.container and not self.mounted:
+            raise ToolError("background commands run on this computer, not inside a container")
+        bg = self.__dict__.setdefault("_bg", {})
+        if sum(1 for e in bg.values() if e["p"].poll() is None) >= self.MAX_BG:
+            raise ToolError(f"{self.MAX_BG} background commands are already running; stop one with bash_stop first")
+        from meshpool_harness import config as _C
+        if _C.packaged():
+            env = _C.user_env()
+        else:
+            env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+            proj = str(Path(__file__).resolve().parents[2])
+            env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        env.setdefault("PYTHONUTF8", "1")
+        env["PYTHONUNBUFFERED"] = "1"
+        bash = _bash()
+        kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
+        if bash:
+            args, shell = [bash, "-c", command], False
+        elif os.name == "nt":
+            args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
+        else:
+            args, shell = command, True
+        p = subprocess.Popen(args, shell=shell, cwd=self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             stdin=subprocess.DEVNULL, text=True, errors="replace", **kw)
+        _BG_ALL.add(p)
+        n = self.__dict__["_bg_n"] = self.__dict__.get("_bg_n", 0) + 1
+        bid = f"bg{n}"
+        entry = {"p": p, "command": command.strip(), "name": (name or "").strip()[:40], "text": [], "size": 0,
+                 "read": 0, "t0": time.time(), "lock": threading.Lock()}
+        bg[bid] = entry
+
+        def pump():
+            for line in p.stdout:
+                with entry["lock"]:
+                    entry["text"].append(line)
+                    entry["size"] += len(line)
+                    while entry["size"] > self.BG_KEEP and len(entry["text"]) > 1:      # keep the newest output
+                        entry["size"] -= len(entry["text"].pop(0))
+                        entry["read"] = max(0, entry["read"] - 1)
+        threading.Thread(target=pump, daemon=True).start()
+        time.sleep(0.4)                                            # a command that fails at once says so now
+        return (f"started {bid}{' (' + entry['name'] + ')' if entry['name'] else ''}, pid {p.pid}. "
+                f"Read its output with bash_output id={bid}; stop it with bash_stop id={bid}.\n" + self._bg_read(bid, entry))
+
+    def _bg_read(self, bid, entry):
+        with entry["lock"]:
+            new = "".join(entry["text"][entry["read"]:])
+            entry["read"] = len(entry["text"])
+        rc = entry["p"].poll()
+        state = "running" if rc is None else f"exited with code {rc}"
+        return f"[{bid} {state}]\n" + (self._cap(new, "bash") if new else "(no new output)")
+
+    def bash_output(self, id=None, wait_s=0):
+        bg = self.__dict__.get("_bg", {})
+        if not id:
+            if not bg:
+                return "no background commands"
+            return "\n".join(f"{b}: {'running' if e['p'].poll() is None else 'exited ' + str(e['p'].poll())}  "
+                             f"{e['name'] or e['command'][:60]}" for b, e in bg.items())
+        e = bg.get(id)
+        if e is None:
+            raise ToolError(f"no background command {id}. Running: {', '.join(bg) or 'none'}")
+        try:
+            wait = max(0, min(int(wait_s or 0), 60))
+        except (TypeError, ValueError):
+            wait = 0
+        end = time.time() + wait
+        while wait and time.time() < end and e["p"].poll() is None and e["read"] >= len(e["text"]):
+            time.sleep(0.2)
+        return self._bg_read(id, e)
+
+    def bash_stop(self, id=None):
+        bg = self.__dict__.get("_bg", {})
+        ids = [id] if id else list(bg)
+        if id and id not in bg:
+            raise ToolError(f"no background command {id}. Running: {', '.join(bg) or 'none'}")
+        stopped = []
+        for b in ids:
+            _kill_tree(bg[b]["p"])
+            stopped.append(b)
+        return ("stopped " + ", ".join(stopped)) if stopped else "no background commands"
 
     def bash_many(self, commands, timeout_s=None):
         """Several independent commands in one tool call: one turn instead of many (Terminus 2 / KIRA style).

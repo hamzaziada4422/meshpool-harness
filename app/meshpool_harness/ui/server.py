@@ -1029,7 +1029,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
@@ -1039,6 +1039,11 @@ class Handler(BaseHTTPRequestHandler):
                     s.stop()
                 elif act == "answer":
                     s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
+                elif act == "compact":
+                    if s.state in ("working", "waiting"):
+                        raise ValueError("Wait for the task to finish or stop it, then compact.")
+                    r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
+                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), compacted=r))
                 else:
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))

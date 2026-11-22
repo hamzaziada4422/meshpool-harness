@@ -39,7 +39,7 @@ from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
-READ_ONLY = {"read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
+READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
              "ask_user", "diagnostics", "find_skill", "update_plan"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
@@ -53,7 +53,7 @@ PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mc
             "mcp__meshpool_office__slide_layouts"}
 PLAN_TOOLS = ["read_file", "grep", "glob", "fetch_url", "web_search", "web_research", "todo_write", "use_skill",
               "ask_user"]
-BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_many", "fetch_url", "web_search",
+BUILTIN = ["read_file", "grep", "glob", "edit", "write_file", "bash", "bash_start", "bash_output", "bash_stop", "bash_many", "fetch_url", "web_search",
            "web_research", "todo_write", "use_skill", "ask_user"]
 # Harness v3 (benchmarked 2026-11-12, run C): bash_many, todo follow-through, loop and stall breakers, a turn-budget
 # note and an environment snapshot. MH_AGENT_V3=0 turns them off.
@@ -419,8 +419,10 @@ def _summary_of(name: str, args: dict) -> str:
     if name == "update_plan":
         items = args.get("plan") or []
         return f"{sum(1 for i in items if isinstance(i, dict) and i.get('status') == 'completed')}/{len(items)} done"
-    if name == "bash":
+    if name in ("bash", "bash_start"):
         return args.get("command", "")
+    if name in ("bash_output", "bash_stop"):
+        return args.get("id", "") or "all"
     if name == "bash_many":
         return " ; ".join(str(c) for c in args.get("commands") or [])[:400]
     if name == "edit" and isinstance(args.get("changes"), list):     # one call, several files
@@ -1411,6 +1413,21 @@ class Agent:
         if _context_size(self.messages) > limit:
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
+            if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
+                self.compact_now()
+
+    def compact_now(self):
+        """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
+        from meshpool_harness.agent import compaction
+        r = compaction.compact_history(self.messages)
+        if r:
+            self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
+                                                 "going" + ("." if r["model"] else " (from the log only).")})
+            try:
+                self.save()
+            except Exception:  # noqa: BLE001
+                pass
+        return r
 
     def _body(self) -> dict:
         from meshpool_harness.profiles import apply, for_model
@@ -1548,7 +1565,9 @@ class Agent:
                 if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
                     shrunk = True
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
-                    # so a screenshot the user just attached still goes with the retry.
+                    # so a screenshot the user just attached still goes with the retry. Older steps are summarized
+                    # first, so the task keeps its thread.
+                    self.compact_now()
                     _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
                     body["model"] = PV.split(body["model"])[1]
@@ -2036,7 +2055,7 @@ class Agent:
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
         group = ("edit" if name in ("edit", "write_file", "apply_patch")
-                 else "bash" if name in ("bash_many", "probe", "trace", "shell") else name)
+                 else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
         if group in self.always:
@@ -2047,6 +2066,8 @@ class Agent:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
+        elif name == "bash_start":
+            kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
         elif name == "shell":
             kind, title, detail = "bash", "Run this command?", (
                 (f"cd {args['workdir']} && " if args.get("workdir") else "") + T.shell_script(args.get("command")))

@@ -136,3 +136,10 @@
 
 .mem-ins{margin:0;font-size:var(--fs-s);color:var(--ink-2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .mem-files{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* QA pass: every control at least 24px tall */
+.sec .sechd{min-height:28px}
+.linkbtn{min-height:24px;display:inline-flex;align-items:center}
+.mem-scope{min-height:24px}
+.mem-meta{height:auto;min-height:24px}
+.mem-srcchip{min-height:24px}

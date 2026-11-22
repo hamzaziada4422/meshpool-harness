@@ -1105,11 +1105,13 @@ class Session:
             return t.p(st.dim("  /compact is not available for this agent."))
         from meshpool_harness.agent import core as A
         before = A._context_size(self.agent.messages)
+        done = self.agent.compact_now() if hasattr(self.agent, "compact_now") else None
         A._shrink_context(self.agent.messages, max(1, int(before * 0.4)), hard=True)
         after = A._context_size(self.agent.messages)
         if before:
             t.ctx_tokens = int(t.ctx_tokens * after / before)
-        t.p(st.dim(f"  Shortened old tool output: {before // 1000}k to {after // 1000}k characters of context."))
+        t.p(st.dim(f"  {'Summarized earlier steps and shortened' if done else 'Shortened'} old tool output: "
+                   f"{before // 1000}k to {after // 1000}k characters of context."))
 
     def cmd_status(self, arg):
         t, st, a = self.term, self.term.st, self.agent
