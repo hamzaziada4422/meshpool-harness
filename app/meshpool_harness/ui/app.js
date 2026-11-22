@@ -2215,16 +2215,16 @@ function showOnboarding() {
    custom GPT / project instructions as skills. */
 async function contextPanel(box) {
   if (!box) return;
-  let prompt = "", local = {};
-  try { prompt = (await api("/api/import-context")).prompt; } catch (e) { /* the server is older: hide the panel */ return; }
+  let prompt = "", local = {}, links = [];
+  try { const ic = await api("/api/import-context"); prompt = ic.prompt; links = ic.links || []; } catch (e) { /* the server is older: hide the panel */ return; }
   try { local = await api("/api/import-chats"); } catch (e) { local = {}; }
   const srcs = Object.entries(local).filter(([, v]) => v.found);
   const n = x => Number(x || 0).toLocaleString();
   box.innerHTML = `<h3 class="onb-h">Bring your chats and memory</h3>
     <p class="muted">It all stays on this computer.</p>
     <ol class="ctx-steps">
-      <li><b>ChatGPT or Claude chats</b>
-        <div class="ctx-acts"><button class="btn" data-ext="https://chatgpt.com/#settings/DataControls">1. Get your ChatGPT export</button><button class="btn" data-ext="https://claude.ai/settings/data-privacy-controls">1. Get your Claude export</button></div>
+      <li><b>Chats from another assistant</b>
+        <div class="ctx-acts">${links.map(l => `<button class="btn" data-ext="${esc(l.url)}">1. Get your ${esc(l.name)} export</button>`).join("")}</div>
         <div class="dropzone" id="ctxDrop" tabindex="0" role="button">2. Drop the .zip here<input type="file" id="ctxZip" accept=".zip" hidden></div></li>
       ${srcs.length ? `<li><b>On this computer</b>
         ${srcs.map(([k, v]) => `<span class="ctx-src"><span>${esc(v.name)} <small class="muted">${n(v.found)} session${v.found === 1 ? "" : "s"}</small></span><button class="btn" data-local="${esc(k)}" ${v.imported >= v.found ? "disabled" : ""}>${v.imported >= v.found ? "Imported" : "Import"}</button></span>`).join("")}</li>` : ""}
@@ -2240,7 +2240,7 @@ async function contextPanel(box) {
   $$("[data-ext]", box).forEach(x => { x.onclick = () => openExternal(x.dataset.ext); });
   const res = (t, bad, ok) => { const r = $("#ctxRes", box); r.className = "res" + (bad ? " bad" : ok ? " ok" : ""); r.textContent = t; };
   const refresh = async () => { try { if (typeof loadThreads === "function") await loadThreads(); } catch (e) { /* the list refreshes later */ } };
-  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Copied. Paste it into ChatGPT or Claude, then paste the answer here."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the text in the box, then replace it with the answer."); } };
+  $("#ctxCopy", box).onclick = async () => { try { await navigator.clipboard.writeText(prompt); res("Copied. Paste it into your assistant, then paste the answer here."); } catch (e) { $("#ctxText", box).value = prompt; res("Copy the text in the box, then replace it with the answer."); } };
   $("#ctxGo", box).onclick = async () => {
     const text = $("#ctxText", box).value.trim(); if (!text) return res("Paste the answer first.", true);
     try { const r = await post("/api/import-context", {text}); res(`${r.memory} to review in Memory, ${r.instructions} instructions saved.` + (r.skipped?.length ? ` ${r.skipped.length} skipped.` : ""), false, true); if (r.memory) toast("Review what it found.", 9000, {label: "Open Memory", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } goPage("memory"); }}); } catch (e) { res(e.message, true); }

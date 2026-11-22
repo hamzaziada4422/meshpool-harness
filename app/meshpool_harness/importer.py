@@ -244,6 +244,12 @@ account numbers.)
 (Tasks I ask for again and again, with how I like them done. One per line, starting with "- ".)"""
 
 
+EXPORT_LINKS = [
+    {"name": "ChatGPT", "url": "https://chatgpt.com/#settings/DataControls"},
+    {"name": "Claude", "url": "https://claude.ai/settings/data-privacy-controls"},
+]
+
+
 def context_prompt() -> str:
     return CONTEXT_PROMPT
 

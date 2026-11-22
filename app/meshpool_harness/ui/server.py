@@ -408,7 +408,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, IM.scan())
             if u.path == "/api/import-context":
                 from meshpool_harness import importer as IM
-                return self._send(200, {"prompt": IM.context_prompt()})
+                return self._send(200, {"prompt": IM.context_prompt(), "links": IM.EXPORT_LINKS})
             if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
                 from meshpool_harness import chat_import as CI
                 return self._send(200, CI.scan_local())

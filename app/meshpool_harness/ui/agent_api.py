@@ -221,6 +221,9 @@ def _last_reply(agent) -> str:
     return ""
 
 class Session:
+    incognito = False          # class defaults: tests and old callers build a Session without __init__
+    _ck_run, _ck_n, _ck_stop = "", 0, None
+
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
         self.events: list[dict] = []
