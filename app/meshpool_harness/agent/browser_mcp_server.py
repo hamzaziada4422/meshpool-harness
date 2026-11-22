@@ -439,6 +439,55 @@ def browser_close() -> str:
     return B.run(go)
 
 
+def _outputs_dir(sub: str) -> Path:
+    return Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / sub
+
+
+def _launcher():
+    """A separate headless Chromium for audits and renders (fresh viewports, never the user's window)."""
+    from meshpool_harness import ui_audit as UA
+    return UA.launcher(B.pw)
+
+
+def _images(shots, limit: int = 4) -> list:
+    out = []
+    for s in list(shots)[:limit]:
+        try:
+            out.append(image_png(Path(s).read_bytes()))
+        except OSError:
+            pass
+    return out
+
+
+def ui_audit(url: str, views: str = "") -> list:
+    from meshpool_harness import ui_audit as UA
+
+    def go():
+        B.ensure()
+        v = tuple(x.strip() for x in views.split(",") if x.strip() in UA.VIEWS) or tuple(UA.VIEWS)
+        res = UA.audit(B.pw, url, views=v, shots_dir=_outputs_dir("ui-audit"), launch=_launcher())
+        return [text(res["text"])] + _images(res["shots"])
+    return B.run(go, timeout=300)
+
+
+def view_output(path: str, pages: str = "") -> list:
+    from meshpool_harness import view as V
+
+    def go():
+        k = V.kind(path)
+        if k in ("web", "table"):
+            B.ensure()
+        try:
+            res = V.render(path, pages or None, _outputs_dir("views"), launch=_launcher() if k in ("web", "table") else None)
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            raise ToolFailed(str(e))
+        files = [str(f) for _, f in res["shots"]]
+        head = f"{Path(res['file']).name}: " + " ".join(res["notes"]) + "\nPictures saved: " + ", ".join(files)
+        ocr_text = V.reading(res["shots"])
+        return [text(head + ("\n" + ocr_text if ocr_text else ""))] + _images(files)
+    return B.run(go, timeout=300)
+
+
 S = {"type": "string"}
 TOOLS = {
     "browser_open": Tool(browser_open, "Open a web address in the browser window and describe the page.", {"url": S}, ["url"]),
@@ -463,6 +512,15 @@ TOOLS = {
     "browser_wait": Tool(browser_wait, "Wait a few seconds for the page to finish something, then describe it.",
                          {"seconds": {"type": "number"}}),
     "browser_close": Tool(browser_close, "Close the browser window."),
+    "ui_audit": Tool(ui_audit, "Check a web page you built (a file path or address) on a wide screen, a tablet and a "
+                     "phone, in light and dark. Lists what is broken in plain words (sideways scroll, text too faint, "
+                     "tiny buttons, unnamed controls, broken images, console errors), prints the layout, saves "
+                     "screenshots and returns them. Run it after every change to a page; it is done at 'No problems found'.",
+                     {"url": S, "views": S}, ["url"]),
+    "view_output": Tool(view_output, "Look at any visual file you made: a web page, SVG, image, PDF, slides, document, "
+                        "workbook or CSV. Returns pictures of the pages, plus the text read from them for models "
+                        "that cannot see images. Use pages to pick some, like \"1,3\" or \"2-4\".",
+                        {"path": S, "pages": S}, ["path"]),
 }
 
 

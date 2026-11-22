@@ -66,9 +66,13 @@
 
   function draw(box, d) {
     if (d.empty) {
-      box.innerHTML = `<div class="gempty"><b>Nothing to look back on yet.</b><span>Nothing yet. Incognito chats are never counted.</span></div>`;
+      box.innerHTML = `<div class="gempty"><b>Nothing to look back on yet.</b><span>After a few chats this shows what you worked on, what you made, and what to try next. Incognito chats are never counted.</span></div>`;
+      const bar = box.parentElement && box.parentElement.querySelector(".gbar");
+      if (bar) bar.hidden = true;
       return;
     }
+    const bar0 = box.parentElement && box.parentElement.querySelector(".gbar");
+    if (bar0) bar0.hidden = false;
     const t = d.totals, u = d.usage, w = d.when;
     const maxH = Math.max(1, ...w.hour);
     const sec = (title, inner, extra = "") => inner ? `<section class="mw-sec ${extra}"><h2>${title}</h2>${inner}</section>` : "";

@@ -420,7 +420,7 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         sections.append({"title": "This project (instructions, notes, files)", "text": pb, "ids": [f["id"] for f in pf]})
         ids += [f["id"] for f in pf]
     parts.append("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser. "
-                 "Cite sources with links. "
+                 "Cite sources with links. When you build anything visual, a web page, app screen or slide, check it with the view_output or ui_audit tool and fix what they show before you say it is done; for a page or screen, use the build-ui skill. "
                  + ("If the user asks you to remember something, or states a lasting fact or preference about "
                     "themselves or their work, save it with memory_save (facts about the user, never tasks, "
                     "to-dos, bugs, feature requests or plans). When you learn something durable about this project "

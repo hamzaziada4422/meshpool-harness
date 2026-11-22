@@ -148,3 +148,13 @@
 .racts010{display:inline-flex;gap:2px;margin-left:6px;opacity:.55;transition:opacity var(--t-hover) ease}
 .turnfoot:hover .racts010,.racts010:focus-within{opacity:1}
 .racts010 .iconbtn{min-width:28px;min-height:28px}.racts010 .iconbtn.on{color:var(--pool-text)}
+
+/* phones and touch screens: controls big enough to hit (44px) */
+@media (max-width:640px),(pointer:coarse){
+  #cbar .pill,#cbar .send,#cbar .intr{min-width:44px;min-height:44px}
+  #topbar .tbtn,#topbar .iconbtn{min-width:44px;min-height:44px}
+  .gtabs button,.mem-chips .chip,.mem-btns .btn,.mem-sel select,.mem-search input{min-height:44px}
+  .mem-acts{opacity:1}.mem-acts .iconbtn,.racts010 .iconbtn{min-width:44px;min-height:44px}
+  .sgmore summary{min-height:44px;display:flex;align-items:center}
+}
+.sgmore{margin:6px 0}.sgmore summary{cursor:pointer;color:var(--ink-3);font-size:var(--fs-s)}

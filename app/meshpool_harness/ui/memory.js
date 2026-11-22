@@ -51,11 +51,13 @@ function memHealthHTML(d) {
 function memRowHTML(f) {
   const ed = MEM.editing === f.id;
   const hl = MEM.hl.has(f.id) ? " hl" : "";
-  return `<div class="mem-row${hl}${f.kind !== "stated" ? " " + f.kind : ""}${f.status === "archived" ? " arch" : ""}" role="listitem" tabindex="${MEM.sel === f.id ? 0 : -1}" data-id="${esc(f.id)}" draggable="true" style="height:${MEM_ROW_H}px">
+  return `<div class="mem-row${hl}${f.kind !== "stated" ? " " + f.kind : ""}${f.status === "archived" ? " arch" : ""}" role="listitem" tabindex="${MEM.sel === f.id ? 0 : -1}" data-id="${esc(f.id)}" draggable="true" style="height:${rowH()}px">
     <div class="mem-main">${ed ? `<input class="mem-edit" value="${esc(f.text)}" aria-label="Edit this memory" maxlength="400">` : `<span class="mem-text" data-edit="${esc(f.id)}" title="Click to edit">${f.pinned ? `<i class="mem-pin" title="Pinned: always given to agents">${ICON.pin}</i>` : ""}${esc(f.text)}</span>`}
       <span class="mem-meta"><button class="chip mem-scope" data-scope="${esc(f.id)}" title="Where this applies">${esc(f.scope_label)}</button><span class="mem-kind k-${f.kind}">${MEM_KIND[f.kind]}</span><span class="mem-src">${esc(f.source.text)}${f.source.chat_id ? ` <button class="linkbtn" data-chat="${esc(f.source.chat_id)}">Open</button>` : ""}${f.valid_until ? ` · ${f.expired ? "Expired" : "Until"} ${memDate(f.valid_until)}` : ""}</span><span class="mem-use">${esc(f.given_line)}</span></span></div>
-    <div class="mem-acts"><button class="iconbtn" data-pin="${esc(f.id)}" data-tip="${f.pinned ? "Unpin" : "Pin"}" aria-label="${f.pinned ? "Unpin" : "Pin"}">${ICON.pin}</button><button class="iconbtn" data-edit="${esc(f.id)}" data-tip="Edit" aria-label="Edit">${ICON.pencil}</button><button class="iconbtn" data-expiry="${esc(f.id)}" data-tip="Set an expiry" aria-label="Set an expiry">${ICON.clock}</button><button class="iconbtn" data-arch="${esc(f.id)}" data-tip="${f.status === "archived" ? "Restore" : "Archive"}" aria-label="${f.status === "archived" ? "Restore" : "Archive"}">${f.status === "archived" ? ICON.undo : ICON.archive}</button><button class="iconbtn" data-del="${esc(f.id)}" data-tip="Delete" aria-label="Delete">${ICON.trash}</button></div></div>`;
+    ${NARROW() ? `<div class="mem-acts"><button class="iconbtn" data-pin="${esc(f.id)}" aria-label="${f.pinned ? "Unpin" : "Pin"}">${ICON.pin}</button><button class="iconbtn" data-rowmenu="${esc(f.id)}" aria-label="More for this memory" aria-haspopup="menu">${ICON.more}</button></div>` : `<div class="mem-acts"><button class="iconbtn" data-pin="${esc(f.id)}" data-tip="${f.pinned ? "Unpin" : "Pin"}" aria-label="${f.pinned ? "Unpin" : "Pin"}">${ICON.pin}</button><button class="iconbtn" data-edit="${esc(f.id)}" data-tip="Edit" aria-label="Edit">${ICON.pencil}</button><button class="iconbtn" data-expiry="${esc(f.id)}" data-tip="Set an expiry" aria-label="Set an expiry">${ICON.clock}</button><button class="iconbtn" data-arch="${esc(f.id)}" data-tip="${f.status === "archived" ? "Restore" : "Archive"}" aria-label="${f.status === "archived" ? "Restore" : "Archive"}">${f.status === "archived" ? ICON.undo : ICON.archive}</button><button class="iconbtn" data-del="${esc(f.id)}" data-tip="Delete" aria-label="Delete">${ICON.trash}</button></div>`}</div>`;
 }
+const NARROW = () => matchMedia("(max-width:640px)").matches;
+const rowH = () => NARROW() ? 96 : MEM_ROW_H;
 function memItems(d) {
   const items = [];
   let last = "";
@@ -73,7 +75,7 @@ function memListHTML(d) {
 }
 function memVirtualize(d) {
   const box = $("#memList"); if (!box || !box.dataset.virt) return;
-  const items = memItems(d), h = it => it.head ? MEM_HEAD_H : MEM_ROW_H;
+  const items = memItems(d), h = it => it.head ? MEM_HEAD_H : rowH();
   const tops = []; let y = 0; for (const it of items) { tops.push(y); y += h(it); }
   box.style.height = y + "px"; box.style.position = "relative";
   const sc = $("#conv");
@@ -92,7 +94,9 @@ function memFiltersHTML(d) {
 }
 function memProjectsHTML(d) {
   if (!d.projects.length) return `<div class="mem-empty"><b>No projects yet.</b><span>Each project keeps its own memory.</span></div>`;
-  return `<div class="mem-projects">${d.projects.map(p => { const fs = d.facts.filter(f => f.scope === "project:" + p.id);
+  const bare = p => !d.facts.some(f => f.scope === "project:" + p.id) && !p.instructions && !p.knowledge;
+  const empties = d.projects.filter(bare);
+  return `<div class="mem-projects">${empties.length > 1 ? `<section class="mem-proj"><h3>${ICON.stack} ${empties.length} projects with nothing yet</h3><small>${empties.map(p => esc(p.name)).join(" · ")}</small><span class="mem-hint">Drop a memory here to put it in the first one, or open a project to add instructions and files.</span></section>` : ""}${d.projects.filter(p => empties.length < 2 || !bare(p)).map(p => { const fs = d.facts.filter(f => f.scope === "project:" + p.id);
     return `<section class="mem-proj" data-drop="project:${esc(p.id)}"><h3>${ICON.stack} ${esc(p.name)}</h3><small>${fs.length} memor${fs.length === 1 ? "y" : "ies"}</small>${p.instructions ? `<p class="mem-ins" title="This project's instructions">${esc(p.instructions_text)}</p>` : `<small>No instructions</small>`}${p.files.length ? `<small class="mem-files">${p.files.map(esc).join(" · ")}${p.knowledge > p.files.length ? ` · +${p.knowledge - p.files.length}` : ""}</small>` : `<small>No files</small>`}${fs.map(f => `<div class="mem-mini" draggable="true" data-id="${esc(f.id)}">${esc(f.text)}</div>`).join("") || `<span class="mem-hint">Drop a memory here to keep it in this project only.</span>`}</section>`; }).join("")}
     <section class="mem-proj" data-drop="everywhere"><h3>${ICON.globe} Everywhere</h3><small>Applies in every chat</small><span class="mem-hint">Drop a memory here to use it everywhere.</span></section></div>`;
 }
@@ -103,7 +107,7 @@ async function memHistoryHTML() {
   return `<ol class="mem-hist">${h.map(r => `<li><span class="when">${esc(memDate(r.ts))}</span><span class="what"><b>${verb[r.action] || r.action}</b> ${esc(r.text || "")}<small>${r.by === "you" ? "You" : "Meshpool"}: ${esc(r.reason || "")}${r.before_text && r.action === "edited" ? ` · was “${esc(r.before_text)}”` : ""}</small></span>${["archived", "deleted", "edited"].includes(r.action) ? `<button class="btn" data-restore="${r.action}|${esc(r.id)}|${esc(r.before_text || "")}">Restore</button>` : ""}</li>`).join("")}</ol>`;
 }
 function memReviewHTML(d) {
-  if (!d.review.length) return `<div class="mem-empty"><b>Nothing to check.</b><span>Old or expired facts show up here.</span></div>`;
+  if (!d.review.length) return `<div class="mem-empty"><b>Nothing to review.</b><span>Facts no chat has used for 60 days, and facts that expired, wait here for a yes or no.</span></div>`;
   const f = d.review[0];
   return `<div class="mem-rev"><p class="mem-sub">${d.review.length} to check. Y keeps it, N archives.</p><div class="mem-card big" data-id="${esc(f.id)}"><b class="mem-text">${esc(f.text)}</b><span class="mem-src">${f.review_reason === "expired" ? "This expired on " + memDate(f.valid_until) : "No chat has used it in 60 days"} · ${esc(f.source.text)}</span><div class="mem-btns"><button class="btn primary" data-still="${esc(f.id)}">Still true <kbd>Y</kbd></button><button class="btn" data-arch="${esc(f.id)}">No, archive <kbd>N</kbd></button></div></div></div>`;
 }
@@ -179,6 +183,11 @@ function bindMemory(d) {
     if (D.win) return memAct({action: "resolve", winner: D.win, loser: D.lose}, {text: "Kept one, archived the other.", body: () => ({action: "unarchive", id: D.lose})});
     if (D.keepboth) { const [a, b] = D.keepboth.split("|"); return memAct({action: "keep_both", a, b}); }
     if (D.edit) { MEM.editing = D.edit; MEM.sel = D.edit; return pageMemory(true).then(() => { const i = $(".mem-edit"); i?.focus(); i?.select(); }); }
+    if (D.rowmenu) { const id = D.rowmenu; return ctxMenu({type: "click", currentTarget: t}, [
+      {label: "Edit", fn: () => { MEM.editing = id; MEM.sel = id; pageMemory(true).then(() => { const i = $(".mem-edit"); i?.focus(); i?.select(); }); }},
+      {label: "Set an expiry", fn: () => memExpiry(id)},
+      {label: "Archive", fn: () => memArchive(id)},
+      {label: "Delete", danger: true, fn: () => memAct({action: "delete", id}, {text: "Deleted.", body: () => ({action: "undelete", id})})}]); }
     if (D.pin) { const f = d.facts.find(x => x.id === D.pin); return memAct({action: "pin", id: D.pin, on: !f.pinned}); }
     if (D.expiry) return memExpiry(D.expiry);
     if (D.arch) return memArchive(D.arch);
