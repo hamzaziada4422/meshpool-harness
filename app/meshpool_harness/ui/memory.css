@@ -128,3 +128,8 @@
 .cfind{padding:0 4px 6px}.cfind input{width:100%;height:30px;border:1px solid var(--line-3);border-radius:var(--r-m);background:var(--surface);color:var(--ink);padding:0 10px}
 .cfind input:focus{outline:2px solid var(--pool);outline-offset:1px}
 @media (prefers-reduced-motion:reduce){.cgdot.run{animation:none}.cghd .chev{transition:none}}
+
+/* import from other agents */
+.imp .tg small{display:block}
+.impag{margin:0 0 8px}.impag summary{cursor:pointer;padding:4px 0}
+.imp.have{opacity:.55}

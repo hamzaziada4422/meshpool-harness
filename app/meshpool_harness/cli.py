@@ -215,6 +215,10 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "import" and len(argv) > 1 and argv[1] == "agents":
+        # meshpool import agents [--dry-run] [--yes] [--from claude,codex]: skills, tools, memories and instructions
+        from meshpool_harness import agent_import as AI
+        return AI.cli(argv[2:])
     if argv[0] == "import":
         from meshpool_harness.agent import onboard
         from meshpool_harness.agent.tui import Style, _enable_ansi

@@ -1849,7 +1849,8 @@ async function renderSection(sec) {
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
   } else if (sec === "import") {
-    b.innerHTML = `${close}<div id="impBox"></div>`;
+    b.innerHTML = `${close}<div id="impAgents"></div><div id="impBox"></div>`;
+    importPanel($("#impAgents", b));
     await contextPanel($("#impBox", b));
   } else if (sec === "scheduled") {
     const draw = a => {
@@ -2346,26 +2347,29 @@ async function drawMcpLibrary(b) {
 async function importPanel(box, onDone) {
   box.innerHTML = `<div class="res">Looking…</div>`;
   let f;
-  try { f = await api("/api/import"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
-  const rows = [...f.skills, ...f.mcp];
-  if (!rows.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
-  const item = r => `<label class="imp"><input type="checkbox" data-key="${esc(r.key)}"><span class="tg"><b>${esc(r.name)}</b> <span class="badge modified">${esc(r.source)}</span>${r.exists ? ` <span class="badge">Already in Meshpool</span>` : ""}<small>${esc(r.description || "")}</small></span></label>`;
-  box.innerHTML = `<div class="impsel"><button class="linkbtn" id="impAll">Select all</button><button class="linkbtn" id="impNone">Select none</button></div>${f.skills.length ? `<h3 class="onb-h">Skills (${f.skills.length})</h3><div class="impl">${f.skills.map(item).join("")}</div>` : ""}
-    ${f.mcp.length ? `<h3 class="onb-h">Tools (${f.mcp.length})</h3><div class="impl">${f.mcp.map(item).join("")}</div>` : ""}
-    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button></div><div class="res" id="impRes"></div>`;
-  $("#impAll", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = true);
-  $("#impNone", box).onclick = () => $$("[data-key]", box).forEach(x => x.checked = false);
+  try { f = await api("/api/import-agents"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const agents = f.agents.filter(a => a.items.length);
+  if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
+  const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions"};
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
+  const sum = a => ["skill", "mcp", "memory", "instructions"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
+  box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
+    ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="impGo">Import selected</button><button class="linkbtn" id="impDry">Preview only</button></div><div class="res" id="impRes"></div>`;
+  const keys = () => $$("[data-key]", box).filter(x => x.checked && !x.disabled).map(x => x.dataset.key);
+  const say = (t, cls) => { const r = $("#impRes", box); r.className = "res " + (cls || ""); r.textContent = t; };
+  const text = (r, dry) => `${dry ? "Would import" : "Imported"} ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}, ${r.memory} to review in Memory, ${r.instructions} instruction file${r.instructions === 1 ? "" : "s"}.`
+    + (r.stripped.length ? ` Keys left out of ${r.stripped.map(x => x.server).join(", ")}: add them in Settings.` : "") + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
+  $("#impDry", box).onclick = async () => { const k = keys(); if (!k.length) return say("Nothing selected."); try { say(text(await post("/api/import-agents", {keys: k, dry_run: true}), true)); } catch (e) { say(e.message, "bad"); } };
   $("#impGo", box).onclick = box._import = async () => {
-    const keys = $$("[data-key]", box).filter(x => x.checked).map(x => x.dataset.key);
-    if (!keys.length) { $("#impRes", box).className = "res"; $("#impRes", box).textContent = "Nothing selected."; return; }
+    const k = keys(); if (!k.length) return say("Nothing selected.");
     $("#impGo", box).disabled = true;
     try {
-      const r = await post("/api/import", {keys});
+      const r = await post("/api/import-agents", {keys: k});
       await loadSkills(); S.connCache = null;
-      $("#impRes", box).className = "res " + (r.errors.length ? "bad" : "ok");
-      $("#impRes", box).textContent = `Imported ${r.skills.length} skill${r.skills.length === 1 ? "" : "s"}, ${r.mcp.length} tool${r.mcp.length === 1 ? "" : "s"}.` + (r.errors.length ? " Problems: " + r.errors.join("; ") : "");
-      box.dataset.done = "1"; onDone?.(r);
-    } catch (e) { $("#impRes", box).className = "res bad"; $("#impRes", box).textContent = e.message; }
+      say(text(r, false), r.errors.length ? "bad" : "ok"); box.dataset.done = "1"; onDone?.(r);
+      if (r.memory) toast("Review what it found.", 9000, {label: "Open Memory", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } goPage("memory"); }});
+    } catch (e) { say(e.message, "bad"); }
     $("#impGo", box).disabled = false;
   };
 }

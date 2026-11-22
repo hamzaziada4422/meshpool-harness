@@ -403,6 +403,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
+            if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
+                from meshpool_harness import agent_import as AI
+                return self._send(200, AI.scan())
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 return self._send(200, IM.scan())
@@ -714,6 +717,13 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import chat_import as CI
                 b = self._json()
                 return self._send(200, dict(CI.import_local(b.get("sources") or None), found=CI.scan_local()))
+            if u.path == "/api/import-agents":        # {keys, dry_run}: writes nothing when dry_run
+                from meshpool_harness import agent_import as AI
+                b = self._json()
+                r = AI.apply(b.get("keys") or [], dry_run=bool(b.get("dry_run")))
+                if not b.get("dry_run"):
+                    C.load_into_env(override=True)
+                return self._send(200, r)
             if u.path == "/api/import":
                 from meshpool_harness import importer as IM
                 r = IM.run(self._json().get("keys") or [])

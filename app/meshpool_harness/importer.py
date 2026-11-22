@@ -83,9 +83,11 @@ def import_skill(path: str) -> str:
     dst = SK.folder() / SK.slug(meta.get("name") or src.name)
     if dst.exists():
         shutil.rmtree(dst)
+    from meshpool_harness import agent_import as AI
+
     def skip(d, names):                      # links are left out: one pointing at ~/.ssh copied a private key in
         return {n for n in names if n in (".git", "node_modules", "__pycache__", ".DS_Store")
-                or os.path.islink(os.path.join(d, n))}
+                or os.path.islink(os.path.join(d, n)) or AI.DENY_NAMES.match(n)}   # and never a login file
     shutil.copytree(src, dst, ignore=skip)
     return dst.name
 
@@ -170,6 +172,8 @@ def find_mcp() -> list[dict]:
             spec = _norm(raw)
             if not spec:
                 continue
+            from meshpool_harness import agent_import as AI
+            spec, gone = AI.strip_secrets(spec)           # secret-looking variables, headers and arguments stay behind
             sig = json.dumps(spec, sort_keys=True)
             if sig in seen:
                 continue
@@ -178,7 +182,7 @@ def find_mcp() -> list[dict]:
                 "Runs on this computer"
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
-                        "has_secrets": bool(spec.get("env") or spec.get("headers"))})
+                        "has_secrets": bool(gone), "stripped": gone})
     return out
 
 
