@@ -21,7 +21,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Meshpool looks at what it makes.** A page, slide, chart, logo, PDF, document or workbook is turned into pictures and checked before Meshpool says it is done. Web pages are also audited at desktop, tablet and phone width, light and dark. Models that cannot see images get the text and measurements instead.
 - **It can build interfaces properly.** A new Build a UI skill starts from a tested page, keeps one design system and fixes what the audit finds. Method adapted from the open Taste Skill (MIT).
 - **Twenty-two more ready-made skills** for sites, games, apps, dashboards, charts, diagrams, logos, PDFs, images, resumes, invoices, newsletters, study packs, citations, databases, transcripts and more.
-- **Safer by default.** Keys you saved in Meshpool are hidden from commands the agent runs. "Always allow" never covers deleting recursively, force-pushing, wiping a disk or piping a download into a shell. A chat is saved while it works, so a crash loses nothing. A single turn stops after 800 steps instead of running forever.
+- **Safer by default.** Keys you saved in Meshpool are hidden from commands the agent runs. "Always allow" never covers deleting recursively, force-pushing, wiping a disk or piping a download into a shell. A chat is saved while it works, so a crash loses nothing. A single turn stops after 2,000 steps instead of running forever.
 - **Long tasks hold together.** Older steps are summarised into a note, /compact does it on demand, and long commands can run in the background.
 
 **New in 0.0.9**

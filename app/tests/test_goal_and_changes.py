@@ -47,8 +47,8 @@ def test_goal_pauses_for_the_user_errors_and_no_progress(monkeypatch):
     assert s._goal_next(n) is None and "without doing anything" in s.events[-1]["text"]
 
 
-def test_runs_have_no_step_limit_by_default(tmp_path):
-    assert Agent(str(tmp_path)).max_steps == 0
+def test_runs_stop_only_at_a_very_high_ceiling_by_default(tmp_path):
+    assert Agent(str(tmp_path)).max_steps == 2000          # a runaway turn stops; long real tasks never get near it
     assert Agent(str(tmp_path), max_steps=12).max_steps == 12
 
 

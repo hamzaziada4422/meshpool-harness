@@ -682,7 +682,7 @@ class Agent:
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
         # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
-        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 800     # a runaway turn stops; the next message continues
+        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 2000    # a runaway turn stops; the next message continues
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
