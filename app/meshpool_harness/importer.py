@@ -288,9 +288,11 @@ def find_mcp() -> list[dict]:
             seen.add(sig)
             what = ("Connects to " + urllib.parse.urlparse(spec["url"]).netloc) if spec.get("url") else \
                 "Runs on this computer"
+            broken = bool(spec.get("command")) and not shutil.which(str(spec["command"]))
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
-                        "has_secrets": bool(gone), "stripped": gone})
+                        "has_secrets": bool(gone), "stripped": gone,
+                        "default": not (broken or gone), "broken": broken})
     return out
 
 
@@ -304,7 +306,7 @@ def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
         while n in servers and json.dumps(norm_existing(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
             n, i = f"{base}-{i}", i + 1
         servers[n] = dict(spec, description=description or f"Imported from another app ({name}).",
-                          disabled=True)               # another app's command: reviewed and switched on by the user
+                          disabled=True, needs_test=True)   # another app's command: it starts once before it can be on
         return n
     try:
         return M.edit_config(add)
@@ -379,6 +381,33 @@ def _sections(text: str) -> dict:
         if item and cur is not None:
             out[cur].append(item.group(1).strip())
     return out
+
+
+def context_model() -> str:
+    """The model that reads an export: MH_CONTEXT_MODEL, else the one the person configured (Settings, or the settings
+    file), never a name written into the code (F-32)."""
+    from meshpool_harness import config as C
+    for k in ("MH_CONTEXT_MODEL", "MH_MODEL"):
+        v = os.environ.get(k) or C.read().get(k)
+        if v:
+            return v
+    return next(d for key, _l, d, _h in C.FIELDS if key == "MH_MODEL")
+
+
+KNOWN_SECTIONS = ("instruction", "about", "recurring", "prefer", "style", "work")
+
+
+def check_context_answer(text: str) -> str:
+    """"" when a model's answer has the shape CONTEXT_PROMPT asks for (headings with "- " lines under them); else why
+    not, in plain words. Chat, a refusal or an unrelated list must never become memory."""
+    sec = _sections(text)
+    known = {k: v for k, v in sec.items() if any(w in k for w in KNOWN_SECTIONS)}
+    n = sum(len(v) for v in known.values())
+    if not known or not n:
+        return "The model did not answer in the format asked for, so nothing was saved from the conversations."
+    if n > 120 or any(len(x) > 400 for v in known.values() for x in v):
+        return "The model's answer was too long or too loose to trust, so nothing was saved from the conversations."
+    return ""
 
 
 def import_context_text(text: str) -> dict:
@@ -511,15 +540,18 @@ def import_export(path: str, client=None) -> dict:
         try:
             from meshpool_harness.core.client import LiveClient
             client = client or LiveClient("context_import")
-            r = client.chat(model=(os.environ.get("MH_CONTEXT_MODEL") or os.environ.get("MH_MODEL_FAST")
-                                   or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"), max_tokens=2000, temperature=0.1,
+            r = client.chat(model=context_model(), max_tokens=2000, temperature=0.1,
                             task_id="context-import", role="worker", messages=[
                                 {"role": "system", "content": "From these conversation titles and first messages, write "
                                  "what a new assistant should know about this person, in the format below. Only lasting "
                                  "facts and preferences supported by several conversations; no secrets, no one-off "
                                  "questions, no guesses.\n\n" + CONTEXT_PROMPT.split("in exactly this format and nothing else:")[1]},
                                 {"role": "user", "content": "\n".join(lines)}])
-            got = import_context_text(r["choices"][0]["message"].get("content") or "")
+            answer = r["choices"][0]["message"].get("content") or ""
+            problem = check_context_answer(answer)
+            if problem:                                  # not the format asked for: save nothing (F-32)
+                raise ValueError(problem)
+            got = import_context_text(answer)
             done.update(memory=got["memory"], instructions=got["instructions"], skipped=got["skipped"])
         except Exception as e:  # the export still counts: projects were imported
             done["skipped"].append(f"context from conversations: {type(e).__name__}: {str(e)[:160]}")

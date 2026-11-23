@@ -159,6 +159,13 @@ def settings() -> dict:
 
 
 def save_settings(**kw) -> dict:
+    """Change only the settings given, under the cross-process lock: a page that sends one switch never rewrites the
+    others from an old copy (M19-01)."""
+    with _memory_lock():
+        return _save_settings(kw)
+
+
+def _save_settings(kw: dict) -> dict:
     d = _settings_raw()
     for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on"):
         if k in kw:
@@ -179,8 +186,20 @@ def instructions() -> str:
     return _read(_dir() / "instructions.md").strip()
 
 
-def set_instructions(text: str):
-    _write(_dir() / "instructions.md", (text or "").strip()[:8000] + "\n")
+def set_instructions(text: str, base: str | None = None):
+    """Save the instructions. `base` is what the page loaded: when the text is unchanged nothing is written, and when
+    someone else changed the instructions meanwhile the save is refused rather than overwriting them (M19-01)."""
+    new = (text or "").strip()[:8000]
+    with _memory_lock():
+        if base is not None:
+            old = (base or "").strip()[:8000]
+            cur = instructions()
+            if new == old:
+                return
+            if cur != old and cur != new:
+                raise ValueError("Your instructions were changed somewhere else since you opened this page. "
+                                 "Reload the page and make your change again.")
+        _write(_dir() / "instructions.md", new + "\n")
 
 
 def _MS():
@@ -193,9 +212,13 @@ def memory() -> str:
     return _MS().text("everywhere")
 
 
-def set_memory(text: str):
-    """Replace the memory with this text: lines added become facts, lines removed are archived (never lost)."""
-    _MS().replace_scope_text("everywhere", (text or "").strip())
+def set_memory(text: str, base: str | None = None):
+    """Replace the memory with this text: lines added become facts, lines removed are archived (never lost). With
+    `base` (the text the page loaded) only the lines the person added or removed change; facts added meanwhile stay."""
+    if base is None:
+        _MS().replace_scope_text("everywhere", (text or "").strip())
+    else:
+        _MS().patch_scope_text("everywhere", base, (text or "").strip())
 
 
 def remember(fact: str, kind: str = "stated", source: dict | None = None, scope: str = "everywhere") -> str:
@@ -362,21 +385,21 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = True) -> str:
+                  exclude=(), record: bool = True, lookup: bool = True) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
-    return build_context(task, root, project_id, chat_id, incognito, exclude, record)["text"]
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup)["text"]
 
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = False) -> dict:
+                  exclude=(), record: bool = False, lookup: bool = True) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray."""
     st = settings()
     mem_on = st["memory_on"] and not incognito
     MS = _MS()
-    if not project_id and root:
+    if not project_id and root and lookup:       # lookup off: the chat was moved out of its project
         try:
             from meshpool_harness import project_store as PS
             project_id = PS.for_root(root)

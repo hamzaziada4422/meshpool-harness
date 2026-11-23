@@ -367,15 +367,15 @@ def main(argv=None):
             what = argv[1]
             if what in ("claude-code", "codex"):
                 r = CI.import_local([what])
-                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
+                print(f"{what}: {r['summary']}")
                 return 0
             try:
                 r = CI.import_export(os.path.expanduser(what))
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 print(f"Could not import {what}: {e}")
                 return 1
-            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
-                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['summary']} "
+                  f"{len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1

@@ -134,9 +134,9 @@ def assistant_action(b: dict) -> dict:
     from meshpool_harness import assistant as AS
     act = b.get("action")
     if act == "instructions":
-        AS.set_instructions(b.get("text", ""))
+        AS.set_instructions(b.get("text", ""), base=b.get("base"))
     elif act == "memory":
-        AS.set_memory(b.get("text", ""))
+        AS.set_memory(b.get("text", ""), base=b.get("base"))
     elif act == "settings":
         AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
     elif act == "task_add":
@@ -535,6 +535,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
                 from meshpool_harness import chat_import as CI
                 return self._send(200, CI.scan_local())
+            if u.path == "/api/import-status":        # the background read of an export's context: working, done or failed
+                from meshpool_harness import chat_import as CI
+                return self._send(200, CI.context_status())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -902,10 +905,16 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import importer as IM
 
                 def learn(path=tf.name):
+                    CI.set_context_status("working")
                     try:
-                        IM.import_export(path)
-                    except Exception:  # noqa: BLE001
-                        pass
+                        got = IM.import_export(path)
+                        bad = [x for x in got.get("skipped", []) if str(x).startswith("context from conversations")]
+                        if bad:                            # the model call failed or answered badly: say so (M21-04)
+                            CI.set_context_status("failed", error=str(bad[0]).split(": ", 1)[-1], result=got)
+                        else:
+                            CI.set_context_status("done", result=got)
+                    except Exception as e:  # noqa: BLE001
+                        CI.set_context_status("failed", error=f"{type(e).__name__}: {str(e)[:200]}")
                     finally:
                         os.unlink(path)
                 threading.Thread(target=learn, daemon=True).start()

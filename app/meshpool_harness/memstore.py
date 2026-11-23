@@ -602,6 +602,31 @@ def replace_scope_text(scope: str, text: str, kind: str = "stated") -> None:
                     add(t, kind=kind, scope=scope, source={"type": "manual"}, check=False)
 
 
+def patch_scope_text(scope: str, base: str, text: str, kind: str = "stated") -> None:
+    """Apply what a person changed in a memory text box: lines present in `text` but not in `base` are added, lines in
+    `base` but not in `text` are archived. Facts that are in neither (saved meanwhile) are never touched (M19-01)."""
+    A = _A()
+
+    def lines_of(t: str) -> dict:
+        out: dict = {}
+        for l in (t or "").splitlines():
+            c = _clean(l)
+            if c:
+                out.setdefault(norm(c), c[:MAX_TEXT])
+        return out
+    was, want = lines_of(base), lines_of(text)
+    with _lock():
+        for key in was.keys() - want.keys():
+            for f in list(load()):
+                if f["scope"] == scope and f["status"] == "active" and norm(f["text"]) == key:
+                    archive(f["id"], reason="Removed when the memory text was edited")
+        have = {norm(f["text"]) for f in load() if f["scope"] == scope and f["status"] != "archived"}
+        for key in want.keys() - was.keys():
+            if key not in have and not A.BAD.search(want[key]):
+                with contextlib.suppress(ValueError):
+                    add(want[key], kind=kind, scope=scope, source={"type": "manual"}, check=False)
+
+
 # ---------- noticed-fact rejections (teach the detector) ---------------------------------------------------------------
 def _rej_path() -> Path:
     return mdir() / "rejected.json"
