@@ -162,6 +162,7 @@ def test_learned_window_beats_context(monkeypatch):
 
 
 def test_timeouts(monkeypatch):
+    monkeypatch.delenv("MH_LOCAL_FIRST_BYTE_S", raising=False)       # conftest shortens it for loopback mocks
     local, cloud = "http://127.0.0.1:11434/v1", "https://api.example.com/v1"
     assert MC.is_local(local) and not MC.is_local(cloud)
     assert MC.first_byte_timeout(cloud, "m", 60) == 60

@@ -165,6 +165,7 @@ class LiveClient:
         CTX.tell_once(model, win, self.notify or _tell_retry)
         tighten, shrinks = 1.0, 0
         adapted: set = set()                     # refusals already answered by changing the request (once each)
+        max_tokens, temperature = self._apply_learned(model, ex, max_tokens, temperature)   # right the first time
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
@@ -183,6 +184,20 @@ class LiveClient:
                 last = e
                 msg = str(e)
                 kind = classify_error(msg)
+                if kind == "tls":                                  # an untrusted certificate: say how to trust it
+                    from meshpool_harness.core import refusals as RF
+                    raise RuntimeError("The endpoint's TLS certificate is not trusted. "
+                                       + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
+                if kind == "context":                              # an output-size error is not a long conversation
+                    cfix = self._adapt_refusal(msg, dict(ex, model=model, messages=messages, max_tokens=max_tokens),
+                                               model, adapted)
+                    if cfix and cfix.get("action") == "max_out":
+                        max_tokens = min(max_tokens, int(cfix["max_output"]))
+                        if "max_completion_tokens" in ex:
+                            ex["max_completion_tokens"] = max_tokens
+                        if cfix.get("context_window"):
+                            win = CTX.learn(model, int(cfix["context_window"])) if int(cfix["context_window"]) < win else win
+                        continue
                 if kind == "context":                              # too long: learn the real window, shrink, retry now
                     shrinks += 1
                     said = CTX.parse_limit(msg)
@@ -249,6 +264,31 @@ class LiveClient:
                                                  f"{int(budget)} s.")
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last
+
+    @staticmethod
+    def _apply_learned(model, ex: dict, max_tokens, temperature):
+        """What this endpoint+model already refused (modelcaps, persisted): applied before the first request."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(PV.key_base(), model)
+            if c.source.get("max_output") == "learned" and max_tokens:
+                max_tokens = min(int(max_tokens), int(c.max_output))
+            for f in c.refused:
+                if f == "temperature":
+                    temperature = None
+                elif f not in ("model", "messages", "max_tokens"):
+                    ex.pop(f, None)
+            if c.max_tokens_param == "max_completion_tokens" or "max_tokens" in c.refused:
+                ex["max_completion_tokens"] = max_tokens
+            elif "max_completion_tokens" in ex and max_tokens:
+                ex["max_completion_tokens"] = min(int(ex["max_completion_tokens"]), int(max_tokens))
+            if c.no_tools:
+                ex.pop("tools", None)
+                ex.pop("tool_choice", None)
+        except Exception:  # noqa: BLE001 - what was learned is an optimisation
+            pass
+        return max_tokens, temperature
 
     @staticmethod
     def _adapt_refusal(msg: str, body: dict, model: str, adapted: set) -> dict | None:
