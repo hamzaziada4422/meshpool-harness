@@ -80,9 +80,11 @@ def ep(monkeypatch, tmp_path):
               "MH_SHEETS_REVIEW_MODEL", "MH_DESIGN_VISION_MODEL", "MH_MODEL_MEMORY_TTL_S", "MH_PROFILE"):
         monkeypatch.delenv(k, raising=False)
     MC.reset()
+    CL._reset_probe()
     yield e
     e.srv.shutdown()
     MC.reset()
+    CL._reset_probe()
 
 
 def _slides():
@@ -242,3 +244,19 @@ def test_refused_cache_key_is_learned_and_never_sent_again(ep, monkeypatch):
 def test_memory_lives_in_the_data_folder(ep):
     from meshpool_harness import config as C
     assert MC._mem_path() == C.home() / "cache" / "endpoint_models.json"
+
+
+def test_parallel_first_calls_send_a_refused_parameter_only_once(ep):
+    n, bar, out, errs = 4, threading.Barrier(4), [], []
+
+    def go():
+        bar.wait()
+        try:
+            out.append(_chat(temperature=0.2))
+        except Exception as e:                      # noqa: BLE001
+            errs.append(e)
+    ts = [threading.Thread(target=go) for _ in range(n)]
+    [t.start() for t in ts]
+    [t.join(30) for t in ts]
+    assert not errs and len(out) == n
+    assert sum(1 for r in ep.requests if "temperature" in r["keys"]) == 1

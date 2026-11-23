@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -119,6 +120,17 @@ def _tell_retry(text: str) -> None:
     print(f"[Meshpool] {text}", file=sys.stderr, flush=True)
 
 
+_PROBE_GUARD = threading.Lock()
+_PROBE_LOCKS: dict = {}          # (endpoint, model) -> lock held by the first, probing call
+_PROVEN: set = set()             # keys that have had one successful reply: no lock needed any more
+
+
+def _reset_probe() -> None:
+    with _PROBE_GUARD:
+        _PROBE_LOCKS.clear()
+        _PROVEN.clear()
+
+
 class LiveClient:
     notify = None                            # optional callable(text): told once after the first failure that a retry follows
 
@@ -131,8 +143,22 @@ class LiveClient:
             from meshpool_harness.core.wire import SimpleLedger
             self.ledger = SimpleLedger(phase)
 
-    def chat(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
-             max_tokens=8192, temperature=None, extra=None):
+    def chat(self, *, model, messages, **kw):
+        """S-03: until an (endpoint, model) has had one successful reply, only one call at a time runs it, so a refused
+        parameter is learned by that one probe (then dropped by every waiter) instead of 400-ing once per parallel thread."""
+        from meshpool_harness.core import modelcaps as MC
+        key = MC.endpoint_key(getattr(self.ledger, "base_url", None), model)
+        if key in _PROVEN:
+            return self._chat_send(model=model, messages=messages, **kw)
+        with _PROBE_GUARD:
+            lock = _PROBE_LOCKS.setdefault(key, threading.RLock())
+        with lock:                                        # held for the whole send/learn/resend loop; freed on any exit
+            r = self._chat_send(model=model, messages=messages, **kw)   # re-reads MC.refused() itself, after the lock
+            _PROVEN.add(key)
+            return r
+
+    def _chat_send(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
+              max_tokens=8192, temperature=None, extra=None):
         allow = [m.strip() for m in os.environ.get("MH_MODEL_ALLOW", "").split(",") if m.strip()]
         if allow and model not in allow:                 # a cost cap: only these models may be called; a fallback
             raise RuntimeError(f"model {model} not allowed (MH_MODEL_ALLOW={','.join(allow)})")   # chain moves on
