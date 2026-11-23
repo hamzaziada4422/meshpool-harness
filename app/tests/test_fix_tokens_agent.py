@@ -129,7 +129,7 @@ def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_pat
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
     g = {}
-    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python3 t.py"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     outs = [a._repeat_guard(call, g) for _ in range(6)]
     assert len(runs) == 3 and all("Not run" in o for o in outs[3:])
@@ -145,7 +145,7 @@ def test_repeat_window_switch_catches_alternation_and_spares_progress(tmp_path, 
     a = _agent(tmp_path)
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
-    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python3 t.py"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     g = {}
     seq = [a._repeat_guard(x, g) for _ in range(6) for x in (call, other)]
@@ -590,3 +590,32 @@ def test_output_rules_are_opt_in(monkeypatch):
     assert "Keep output small" not in core._codex_prompt()
     monkeypatch.setenv("MH_OUTPUT_RULES", "1")
     assert "Keep output small" in core._codex_prompt()
+
+
+def test_identical_successful_reads_are_stopped_on_the_third_run_and_a_change_resets_it(tmp_path):
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "line 1\nline 2"
+    g = {}
+    read = {"id": "1", "function": {"name": "read_file", "arguments": '{"path": "a.py", "start": 1, "end": 40}'}}
+    outs = [a._repeat_guard(read, g) for _ in range(6)]
+    assert len(runs) == 2 and all("you already ran this" in o for o in outs[2:])
+    assert "Change your approach" in outs[5] and "line 1" in outs[2]
+    a.ws.edits += 1                                          # a file changed: the same read is fine again
+    assert "you already ran this" not in a._repeat_guard(read, g)
+    other = {"id": "2", "function": {"name": "read_file", "arguments": '{"path": "b.py"}'}}
+    assert "you already ran this" not in a._repeat_guard(other, g)
+
+
+def test_polls_of_background_jobs_are_never_refused(tmp_path):
+    a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 0]\npending"
+    poll = {"id": "1", "function": {"name": "bash_output", "arguments": '{"id": "bg1"}'}}
+    g = {}
+    assert not any("you already ran this" in a._repeat_guard(poll, g) for _ in range(8))
+
+
+def test_work_prompt_has_the_fidelity_path_and_edit_rules():
+    from meshpool_harness.agent import core as K
+    for must in ("Copy values the request gives", "exact path and file name", "edit_office_file with direct edits"):
+        assert must in K.WORK_SYSTEM

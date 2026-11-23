@@ -315,6 +315,9 @@ office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides",
 then call it again with the answers as fields. If you already asked them, pass brief_ok=true.
 
 Rules
+- Copy values the request gives (dates, amounts, labels, names) exactly as written, unless it asks you to reformat them: do not rewrite an ISO date, add a note such as "(excl. VAT)" or round a figure the user gave.
+- Save a result at the exact path and file name the request names (for example ./deck.pptx); use the Meshpool outputs folder only when it names none.
+- To fill in or change a workbook, document or deck the user already has, use edit_office_file with direct edits (cell references such as Assumptions!B2 on the named sheets); build with an engine only for a new file.
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
 - Never print or store secrets such as API keys or tokens.
@@ -2058,6 +2061,21 @@ class Agent:
             key = re.sub(r"\d+", "#", key)
         runs = g.setdefault("same", [])
         edits = self.ws.edits
+        nm = str(f.get("name", ""))
+        if os.environ.get("MH_REPEAT_READS", "1") != "0" and (
+                self._inspection(nm, str(f.get("arguments", ""))) or (nm.startswith("mcp__") and MA.read_like(nm))):
+            bg = self.ws.__dict__.get("_bg") or {}
+            prev = [r for r in runs if r[0] == key and r[2] == edits]
+            if not any(e["p"].poll() is None for e in list(bg.values())) and len(prev) >= 2 and \
+                    len({r[1] for r in prev}) == 1:
+                # the same look, nothing changed since, the same result twice already: a third run says nothing new
+                g["refused"] = g.get("refused", 0) + 1
+                runs.append((key, prev[-1][1], edits, False, prev[-1][4]))      # counts toward the 5th ask
+                del runs[:-12]
+                more = (" You have asked this " + str(len(prev) + 1) + " times. Change your approach: edit, run the "
+                        "tests, or answer with what you have." if len(prev) >= 4 else "")
+                return ("[Meshpool] Not run: you already ran this; the result is unchanged and no file changed since. "
+                        "It was: " + str(prev[-1][4])[:200].replace("\n", " ") + more)
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
             stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
@@ -2077,7 +2095,7 @@ class Agent:
                 any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
             out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
                               "case, a shorter timeout), print what it is waiting on, or change the code first.")
-        runs.append((key, h, edits, failed))     # only a call that failed counts: a poll that says "pending" may repeat
+        runs.append((key, h, edits, failed, str(out)[:240]))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
 
