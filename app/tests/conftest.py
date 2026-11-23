@@ -55,6 +55,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     # through to the live endpoint (12 paid calls). Tests that run a mock server set their own URL after this.
     monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/v1")
     monkeypatch.setenv("MH_FETCH_LOGOS", "0")           # logos.py never reaches the internet in tests
+    monkeypatch.setenv("MH_AUTO_ROUTE", "0")            # unit tests drive a bare Agent; test_ws20_cli_route opts in
     monkeypatch.setenv("MH_CLASSIFY_TIMEOUT", "1")      # a routing hint against the dead URL above gives up fast
     monkeypatch.setenv("MH_ROUTING_LOG", "0")           # tests never write a routing log (the log test turns it on)
     # Unit tests exercise the mechanisms with no shipped profile assignment (app/defaults/profiles.json picks the
