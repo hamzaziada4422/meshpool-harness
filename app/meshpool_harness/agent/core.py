@@ -2025,8 +2025,8 @@ class Agent:
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
             # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
             # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
-            msgs = [dict(m) if isinstance(m.get("content"), list) else m for m in msgs]
-            _drop_images(msgs, keep=keep)
+            from meshpool_harness.core import compat as _CP
+            msgs = _CP.cap_images(msgs, keep)           # the cut moves in steps, so the cacheable prefix stays put
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
@@ -2051,7 +2051,18 @@ class Agent:
                     body.pop(f, None)
         except Exception:  # noqa: BLE001
             pass
-        return body
+        return self._prepare(body, caps, prof)
+
+    def _prepare(self, body: dict, caps=None, prof=None) -> dict:
+        """compat.prepare with what this endpoint+model taught (refused fields, token cap, roles, tool ids, schemas)."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import compat as _CP
+            model = self.current_model()
+            caps = caps or self._caps(model, prof)
+            return _CP.prepare(body, caps, PV.endpoint(PV.split(model)[0])[0] or "")
+        except Exception:  # noqa: BLE001 - shaping is an adaptation: never stop the turn over it
+            return body
 
     def _caps(self, model: str, prof: dict | None = None):
         """What this model on its endpoint can do (core/modelcaps.py): every provider-specific choice reads this."""
@@ -2380,6 +2391,7 @@ class Agent:
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         _apply_refused(body)
+        body = self._prepare(body)
         resp = None
         for _ in range(3):
             try:
