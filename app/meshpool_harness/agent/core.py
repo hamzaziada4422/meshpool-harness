@@ -1554,6 +1554,15 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _small_code_verified(self) -> bool:
+        """A code task (not a document, deck or app) where the agent ran something after its last edit and the last
+        such run succeeded. The independent grader on these cost 2 to 4 times the task itself (measured: $0.0086 against
+        $0.0024 per task) and found nothing the passing run had not; it stays for plans, long jobs and app tasks."""
+        if self.profile != "code":
+            return False
+        after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        return bool(after) and after[-1].get("code") == 0
+
     def _grade_commands(self, g: dict) -> list:
         return [c for c in self.ws.commands[g.get("cmd0", 0):] if c.get("kind") != "read"] or \
             self.ws.commands[g.get("cmd0", 0):][-6:]
@@ -1577,6 +1586,8 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
+            if why.startswith("files made") and self._small_code_verified() and os.environ.get("MH_GRADER_SMALL", "0") != "1":
+                return False, final        # a small code change whose own checks passed: no second model loop (MH_GRADER_SMALL=1 keeps it)
             rounds = g.get("grade_rounds", 0)
             self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
                        + (f" (round {rounds + 1})" if rounds else "") + "..."})

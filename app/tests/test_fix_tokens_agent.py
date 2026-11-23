@@ -468,3 +468,30 @@ def test_a_repeated_poll_that_succeeds_is_never_refused(tmp_path):
     g = {}
     call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "gh run view 1"]}'}}
     assert not any("Not run" in a._repeat_guard(call, g) for _ in range(8))
+
+
+def test_independent_grader_skips_a_small_code_task_whose_checks_passed(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    a.ws.edits = 2
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 0, "after_edit": 2, "kind": "run"}]
+    assert a._small_code_verified()
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 1, "after_edit": 2, "kind": "run"}]
+    assert not a._small_code_verified()                       # a failing last run still gets the review
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 0, "after_edit": 1, "kind": "run"}]
+    assert not a._small_code_verified()                       # the run was before the last edit
+    w = _agent(tmp_path, "work")
+    w.ws.edits = 1
+    w.ws.commands = [{"cmd": "x", "code": 0, "after_edit": 1, "kind": "run"}]
+    assert not w._small_code_verified()                       # documents and decks keep the review
+    from meshpool_harness.agent import grader as GR
+    monkeypatch.setenv("MH_GRADER", "1")
+    gate_calls = []
+    monkeypatch.setattr(GR, "run", lambda *x, **k: gate_calls.append(1) or {"error": "x"})
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 0, "after_edit": 2, "kind": "run"}]
+    g = {"msg0": 0, "t0": 0}
+    monkeypatch.setattr(a, "_grade_info", lambda g, f: {"files": ["a.py"], "request": "add a function", "calls": 5,
+                                                          "todos": [], "research": 0, "final": f})
+    assert a._grade_gate(g, {"in": 0, "cached": 0, "out": 0, "calls": 0}, "done") == (False, "done") and not gate_calls
+    monkeypatch.setenv("MH_GRADER_SMALL", "1")
+    a._grade_gate(g, {"in": 0, "cached": 0, "out": 0, "calls": 0}, "done")
+    assert gate_calls                                         # the switch brings it back
