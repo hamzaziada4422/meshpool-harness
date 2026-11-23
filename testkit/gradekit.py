@@ -199,3 +199,157 @@ def recalc_xlsx(path, outdir=None, timeout: int = 180) -> Path:
     if outdir:
         shutil.rmtree(work, ignore_errors=True)
     return res
+
+
+# --------------------------------------------------------------------------- checklist
+
+class Checks:
+    """Collect named pass/fail checks; ok only when every check passed."""
+
+    def __init__(self):
+        self.items: list[tuple[str, bool]] = []
+
+    def add(self, name: str, cond, note: str = "") -> bool:
+        self.items.append((name + (f" ({note})" if note and not cond else ""), bool(cond)))
+        return bool(cond)
+
+    def result(self) -> dict:
+        bad = [n for n, ok in self.items if not ok]
+        good = len(self.items) - len(bad)
+        detail = ("FAILED: " + "; ".join(bad) + f" [{good}/{len(self.items)} checks passed]") if bad \
+            else f"all {len(self.items)} checks passed"
+        return result(not bad, detail, good, len(self.items))
+
+
+# --------------------------------------------------------------------------- PDF chart evidence
+
+_FILL = {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*"}
+_STROKE = {b"S", b"s", b"B", b"B*", b"b", b"b*"}
+
+
+def _mat_mul(a, b):
+    """Row-vector convention: result = a x b (apply a first, then b)."""
+    return (a[0] * b[0] + a[1] * b[2], a[0] * b[1] + a[1] * b[3],
+            a[2] * b[0] + a[3] * b[2], a[2] * b[1] + a[3] * b[3],
+            a[4] * b[0] + a[5] * b[2] + b[4], a[4] * b[1] + a[5] * b[3] + b[5])
+
+
+def _walk_content(reader, stream, resources, ctm, out, depth=0):
+    from pypdf.generic import ContentStream
+    if depth > 4:
+        return
+    cs = ContentStream(stream, reader)
+    stack, pts, curves, run, maxrun = [], [], 0, 0, 0
+
+    def T(x, y):
+        return (x * ctm[0] + y * ctm[2] + ctm[4], x * ctm[1] + y * ctm[3] + ctm[5])
+
+    for operands, op in cs.operations:
+        try:
+            if op == b"q":
+                stack.append(ctm)
+            elif op == b"Q":
+                ctm = stack.pop() if stack else ctm
+            elif op == b"cm":
+                ctm = _mat_mul(tuple(float(v) for v in operands), ctm)
+            elif op == b"re":
+                x, y, w, h = (float(v) for v in operands)
+                pts += [T(x, y), T(x + w, y), T(x + w, y + h), T(x, y + h)]
+            elif op == b"m":
+                pts.append(T(float(operands[0]), float(operands[1])))
+                run = 0
+            elif op == b"l":
+                pts.append(T(float(operands[0]), float(operands[1])))
+                run += 1
+                maxrun = max(maxrun, run)
+            elif op in (b"c", b"v", b"y"):
+                v = [float(o) for o in operands]
+                pts += [T(v[i], v[i + 1]) for i in range(0, len(v), 2)]
+                curves += 1
+            elif op in _FILL or op in _STROKE:
+                if pts:
+                    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+                    box = (min(xs), min(ys), max(xs), max(ys))
+                    if op in _FILL:
+                        out["fills"].append(box + (curves,))
+                    if op in _STROKE and maxrun >= 4 and (box[2] - box[0]) > 5 and (box[3] - box[1]) > 5:
+                        out["polylines"] += 1
+                pts, curves, run, maxrun = [], 0, 0, 0
+            elif op == b"n":
+                pts, curves, run, maxrun = [], 0, 0, 0
+            elif op == b"Do" and resources is not None:
+                xo = resources.get("/XObject")
+                xo = xo.get_object() if xo is not None else {}
+                obj = xo.get(operands[0])
+                obj = obj.get_object() if obj is not None else None
+                if obj is None:
+                    continue
+                sub = obj.get("/Subtype")
+                if sub == "/Image":
+                    out["images"].append((int(obj.get("/Width", 0)), int(obj.get("/Height", 0))))
+                elif sub == "/Form":
+                    m = obj.get("/Matrix")
+                    fm = tuple(float(v) for v in m) if m else (1, 0, 0, 1, 0, 0)
+                    res = obj.get("/Resources")
+                    res = res.get_object() if res is not None else resources
+                    _walk_content(reader, obj, res, _mat_mul(fm, ctm), out, depth + 1)
+            elif op == b"INLINE IMAGE":
+                st = operands.get("settings", {}) if isinstance(operands, dict) else {}
+                w = int(st.get("/W", st.get("/Width", 0)))
+                h = int(st.get("/H", st.get("/Height", 0)))
+                out["images"].append((w, h))
+        except Exception:  # noqa: BLE001 - a malformed operator must not break grading
+            continue
+
+
+def _clusters(items, key, tol=0.6):
+    items = sorted(items, key=key)
+    groups, cur = [], []
+    for it in items:
+        if cur and key(it) - key(cur[-1]) > tol:
+            groups.append(cur)
+            cur = []
+        cur.append(it)
+    if cur:
+        groups.append(cur)
+    return groups
+
+
+def pdf_chart_evidence(path, min_img=(150, 100)) -> dict:
+    """Look for a chart in a PDF: a decent raster image, or vector bars / filled curves / a polyline.
+
+    Table rules and zebra/header shading do not count: bars are >=3 filled shapes on one baseline
+    whose extents differ (a bar chart); table cells share a baseline but not differing extents.
+    """
+    from pypdf import PdfReader
+    rd = PdfReader(str(path))
+    out = {"images": [], "fills": [], "polylines": 0, "pages": len(rd.pages)}
+    blank_only = True
+    for page in rd.pages:
+        res = page.get("/Resources")
+        res = res.get_object() if res is not None else None
+        contents = page.get_contents()
+        if contents is not None:
+            _walk_content(rd, contents, res, (1, 0, 0, 1, 0, 0), out)
+        try:
+            for im in page.images:
+                pil = im.image
+                if pil.size[0] >= min_img[0] and pil.size[1] >= min_img[1]:
+                    cols = pil.convert("RGB").getcolors(maxcolors=4096)
+                    if cols is None or len(cols) >= 3:
+                        blank_only = False
+        except Exception:  # noqa: BLE001
+            blank_only = None  # could not decode: judge by size alone
+    big = [i for i in out["images"] if i[0] >= min_img[0] and i[1] >= min_img[1]]
+    raster = bool(big) and blank_only is not True
+    fills = [f for f in out["fills"] if (f[2] - f[0]) >= 1.0 and (f[3] - f[1]) >= 1.0]
+    bars = 0
+    for lo, hi, ext in ((1, 3, lambda f: f[3] - f[1]),    # vertical bars share y0, differ in height
+                        (0, 2, lambda f: f[2] - f[0])):   # horizontal bars share x0, differ in width
+        for g in _clusters(fills, key=lambda f, lo=lo: f[lo]):
+            if len(g) >= 3 and len({round(ext(f)) for f in g}) >= 3:
+                bars = max(bars, len(g))
+    curved = sum(1 for f in fills if f[4] > 0)
+    out.update(raster=raster, bars=bars, curved=curved,
+               chart=bool(raster or bars >= 3 or curved >= 3 or out["polylines"] >= 1))
+    return out
