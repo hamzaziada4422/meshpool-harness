@@ -178,3 +178,19 @@ def test_p21_message_text_is_unchanged(tmp_path):
     assert msgs[0].endswith('" reads as machine-written; say it plainly.')
     import re
     assert re.search(r'^Slide 1, .+: ("[a-z-]+")(, "[a-z-]+")* reads as machine-written; say it plainly\.$', msgs[0]), msgs[0]
+
+
+def test_times_ending_in_z_parse_on_every_supported_python(monkeypatch):
+    """datetime.fromisoformat accepts a trailing "Z" only from Python 3.11: a scheduled task's time and a typed memory
+    expiry written that way failed on 3.10 (run this file under 3.10 to see it)."""
+    from meshpool_harness import assistant
+    from meshpool_harness.ui import memory_api
+    assert assistant.next_run({"when": "once", "at": "2030-01-01T09:00:00Z"}) == 1893488400.0
+    seen = {}
+    monkeypatch.setattr(memory_api.MS, "set_expiry", lambda fid, until: seen.setdefault("until", until) and {})
+    monkeypatch.setattr(memory_api, "_row", lambda f, used: f, raising=False)
+    try:
+        memory_api.act({"action": "expiry", "id": "f1", "until": "2030-01-01T00:00:00Z"})
+    except Exception:  # noqa: BLE001 - only the parsed value matters here
+        pass
+    assert seen.get("until") == 1893456000.0
