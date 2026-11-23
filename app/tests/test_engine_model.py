@@ -93,6 +93,19 @@ def test_loop_engines_pass_model_to_run(name, monkeypatch, tmp_path):
     assert seen["model"] == "user-model"
 
 
+def test_sheets_uses_env_model(monkeypatch, tmp_path):
+    monkeypatch.setenv("MH_MODEL", "user-model")
+    monkeypatch.setenv("MH_DOSSIER", "0")
+    from engines.sheets import engine as E
+    c = mock()
+    try:
+        E.solve("make a workbook", workdir=str(tmp_path), task_id="t", client=c)
+    except Exception:
+        pass
+    assert c.requests
+    assert all(r["model"] == "user-model" for r in c.requests)
+
+
 def test_credit_uses_env_model(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_MODEL", "user-model")
     from engines.credit import engine as E

@@ -960,9 +960,11 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
     return out
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str | None = None,
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
