@@ -147,3 +147,18 @@ def test_load_import_and_request_repaired(tmp_path):
     CI.write_threads([cv])
     d = SS.read(next((tmp_path / "_sessions").glob("imp-*")))
     assert [m["role"] for m in d["messages"]] == ["user", "assistant", "tool"]
+
+
+def test_head_older_than_snapshot_is_ignored(tmp_path):
+    """A session.json rewritten by a build that writes no head file must not be listed from the stale head."""
+    import os
+    import time
+    from meshpool_harness import session_store as SS
+    d = tmp_path / "chat"
+    SS.write_snapshot(d, {"id": "c", "title": "old title", "messages": []})
+    assert SS.read_head(d)["title"] == "old title"
+    time.sleep(0.01)
+    (d / "session.json").write_text('{"id": "c", "title": "new title", "messages": []}')   # an older build's save
+    st = os.stat(d / "session.json")
+    os.utime(d / SS.HEAD, ns=(st.st_atime_ns, st.st_mtime_ns - 1_000_000))
+    assert SS.read_head(d) is None

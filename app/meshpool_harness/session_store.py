@@ -219,8 +219,12 @@ def _head_of(data: dict, count: int) -> dict:
 def read_head(d) -> dict | None:
     """The small listing record of a chat, or None when there is none (an older chat) or it is unreadable."""
     try:
+        # written right after each snapshot: a head older than session.json was left by a build that does not write
+        # heads (or by a failed write), so it is stale and the caller reads the chat itself
+        if os.stat(Path(d) / HEAD).st_mtime_ns < os.stat(Path(d) / "session.json").st_mtime_ns:
+            return None
         h = fsio.read_json(Path(d) / HEAD, None)
-    except fsio.CorruptFile:
+    except (fsio.CorruptFile, OSError):
         return None
     return h if isinstance(h, dict) and isinstance(h.get("id"), str) and h["id"] else None
 
