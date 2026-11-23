@@ -87,7 +87,11 @@ def test_empty_reply_does_nothing(tmp_path):
 
 def test_usage_is_counted(tmp_path):
     a, *_ = _run(tmp_path, "LGTM")
-    assert a.usage["in"] == 100 and a.usage["out"] == 7 and a.usage["calls"] >= 2
+    rev = [r for r in a._task.records() if r["source"] == "review"]
+    assert len(rev) == 1 and rev[0]["in"] == 100 and rev[0]["out"] == 7 and rev[0]["reported"]
+    assert a.usage["calls"] >= 2 and a.usage["in"] >= 100 and a.usage["out"] >= 7
+    # the worker's replies carry no usage block: they count as flagged estimates, never as free (W-14)
+    assert a.usage["unreported_calls"] >= 1
 
 
 def test_helpers():

@@ -646,7 +646,11 @@ class Handler(BaseHTTPRequestHandler):
                     A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
                 return self._send(200, out)
             if u.path == "/api/usage":
-                return self._send(200, W.usage())
+                try:
+                    since = float(q.get("since") or 0)
+                except ValueError:
+                    since = 0.0
+                return self._send(200, W.usage(since))
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
             if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account

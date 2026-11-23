@@ -14,6 +14,7 @@ Meshpool UI events:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import os
@@ -28,6 +29,7 @@ from pathlib import Path
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
 from meshpool_harness import session_store as SS
+from meshpool_harness.core import usage as USAGE
 
 PROTOCOL_VERSION = 1
 
@@ -302,6 +304,10 @@ def earlier_context(events: list, limit: int = 40000) -> str:
 
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
+    usage_task = None          # the session's usage task (core/usage.py): the harness's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
+    _usage_recorded = False        # set once the current prompt response is in the ledger (any code path)
+    _cost_now = _cost_seen = 0.0   # session cost the harness reported (usage_update), and the part already recorded
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -674,6 +680,10 @@ class ACPAgent:
                                                     for e in u.get("entries") or []]})
         elif kind == "usage_update":
             self.context = {"used": u.get("used", 0), "size": u.get("size", 0)}
+            c = u.get("cost")
+            if isinstance(c, dict) and str(c.get("currency") or "USD").upper() == "USD":
+                with contextlib.suppress(TypeError, ValueError):
+                    self._cost_now = max(self._cost_now, float(c.get("amount") or 0))
             self._emit({"type": "context", **self.context})
         elif kind == "session_info_update" and u.get("title"):
             self.title = self.title or str(u["title"])[:80]
@@ -849,7 +859,45 @@ class ACPAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _prompt_call(self, prompt: list) -> dict:
+        """One session/prompt request; its usage goes to the ledger once (_record_usage)."""
+        self._usage_recorded = False
+        r = self._prompt(prompt)                         # the turn's and chat's own counts (ws17); the ledger row is below
+        self._record_usage(r, "".join(str(p.get("text") or "") for p in prompt if isinstance(p, dict)),
+                           "".join(self._text))
+        return r
+
+    def _record_usage(self, r: dict, prompt_text: str, final_text: str) -> None:
+        """The harness's own usage from a prompt response, else one call counted from the text sizes (flagged as an
+        estimate, never free). At most once per response: other code that records it sets _usage_recorded."""
+        if self._usage_recorded:
+            return
+        self._usage_recorded = True
+        try:
+            hid = str(self.manifest.get("id") or "acp")
+            extra = None
+            if self._cost_now > self._cost_seen:
+                extra = {"reported_cost": round(self._cost_now - self._cost_seen, 6)}
+                self._cost_seen = self._cost_now
+            USAGE.record(str(getattr(self, "model_now", None) or self.model or hid),
+                         (r.get("usage") if isinstance(r, dict) else None) or None, source=f"external:{hid}",
+                         task=self.usage_task or None, extra=extra, request_chars=len(prompt_text),
+                         reply_chars=len(final_text))
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     def send(self, text: str, images: list | None = None) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         kt = getattr(self, "_kill_timer", None)
         if kt:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
@@ -895,7 +943,7 @@ class ACPAgent:
                 else:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name')} does not take images; "
                                                           "they were left out."})
-            r = self._prompt(prompt)
+            r = self._prompt_call(prompt)
             if (r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text
                     and not self._stop):                 # a refusal to a stopped prompt is just the stop
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
@@ -903,14 +951,15 @@ class ACPAgent:
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
                     prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
-                r = self._prompt(prompt)
+                r = self._prompt_call(prompt)
             self._reloaded = False
             final = "".join(self._text)
             if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
                     and getattr(self, "_turn_tools", 0) == 0):
                 # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
                 self._text = []
-                r = self._prompt([{"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
+                r = self._prompt_call([
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
                 final = "".join(self._text)
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
@@ -963,8 +1012,10 @@ class ACPAgent:
             add = {"in": n("inputTokens", "input_tokens") + cached + n("cachedWriteTokens", "cached_write_tokens"),
                    "cached": cached, "out": n("outputTokens", "output_tokens") + n("thoughtTokens", "thought_tokens"),
                    "calls": 1}
+            turn = getattr(self, "_turn", None)          # none outside a send() (a bare prompt call)
             for k, v in add.items():
-                self._turn[k] += v
+                if turn is not None:
+                    turn[k] += v
                 if k != "calls":                         # calls: counted once per message in send()
                     self.usage[k] += v
         return r

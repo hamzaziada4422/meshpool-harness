@@ -341,7 +341,7 @@ def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeyp
     monkeypatch.delenv("MH_MAX_INFLIGHT", raising=False)
     GW._CFG["t"] = 0
     h = GW.health("http://x/v1", "key-12345678")
-    assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 4
+    assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 8
     assert h.check(lambda: "HTTP 0: timed out") == "down" and h.limit == 1
     probes, results = [], []
 
@@ -369,7 +369,7 @@ def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeyp
     assert got
     for _ in range(3):
         h.release(True)
-    assert h.limit == 4                                            # open again after calls go through
+    assert h.limit == 8                                            # open again after calls go through
 
 
 def test_a_known_outage_holds_new_calls_until_the_endpoint_is_back(tmp_path, monkeypatch):

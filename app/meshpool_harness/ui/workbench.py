@@ -695,27 +695,71 @@ def term_stop_all() -> None:
 
 
 # ======================================== usage ===================================================================
-def usage() -> dict:
+_LEGACY_MODEL = "unknown (before usage tracking)"
+_BUCKET_KEYS = ("in", "cached", "out", "calls", "cost", "unpriced_calls", "unreported_calls", "cache_write", "reasoning")
+
+
+def usage(since: float = 0) -> dict:
+    """Usage from the call ledger: every model call, nested engine, reviewer and helper calls included, with the real
+    model of each call. Chats from before the ledger existed are added from their session file, marked "legacy"."""
     from meshpool_harness.agent.core import SESSIONS
-    rows, total = [], {"in": 0, "cached": 0, "out": 0, "calls": 0}
-    by_model: dict[str, dict] = {}
+    from meshpool_harness.core import gateway, usage as U
+    U.flush()
+    recs = [r for r in U.read_records(since=since) if isinstance(r, dict)]
+    s = U.summarize(recs)
+    total = {k: s[k] for k in _BUCKET_KEYS}
+    by_model = {m: {**b, "threads": 0} for m, b in s["by_model"].items()}
+    chats_of: dict[str, set] = {}
+    last: dict[str, float] = {}
+    chat_models: dict[str, dict[str, int]] = {}
+    for r in recs:
+        c = str(r.get("chat") or "")
+        if not c:
+            continue
+        m = str(r.get("model") or "?")
+        chats_of.setdefault(m, set()).add(c)
+        last[c] = max(last.get(c, 0.0), float(r.get("ts") or 0))
+        if (r.get("source") or "chat") == "chat":
+            cm = chat_models.setdefault(c, {})
+            cm[m] = cm.get(m, 0) + 1
+    for m, cs in chats_of.items():
+        by_model[m]["threads"] = len(cs)
+    sessions: dict[str, dict] = {}
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if isinstance(d, dict):
+            sessions[str(d.get("id") or p.parent.name)] = d
+    rows = []
+    for c, b in s["by_chat"].items():
+        if not c:
+            continue
+        d = sessions.get(c) or {}
+        cm = chat_models.get(c)
+        model = max(cm, key=cm.get) if cm else (d.get("model") or "unknown")
+        rows.append({"id": c, "title": d.get("title") or c, "model": model, "updated": last.get(c, 0),
+                     "in": b["in"], "cached": b["cached"], "out": b["out"], "calls": b["calls"], "cost": b["cost"],
+                     "unpriced_calls": b["unpriced_calls"], "legacy": False})
+    for c, d in sessions.items():
         u = d.get("usage") or {}
-        m = d.get("model") or d.get("harness") or "unknown"
-        for k in total:
-            total[k] += int(u.get(k) or 0)
-        bm = by_model.setdefault(m, {"in": 0, "cached": 0, "out": 0, "calls": 0, "threads": 0})
-        for k in ("in", "cached", "out", "calls"):
-            bm[k] += int(u.get(k) or 0)
+        calls = int(u.get("calls") or 0)
+        if c in s["by_chat"] or not calls or float(d.get("updated") or 0) < since:
+            continue
+        r = {"id": c, "title": d.get("title") or c, "model": d.get("model") or "unknown", "updated": d.get("updated", 0),
+             "in": int(u.get("in") or 0), "cached": int(u.get("cached") or 0), "out": int(u.get("out") or 0),
+             "calls": calls, "cost": 0.0, "unpriced_calls": calls, "legacy": True}
+        rows.append(r)
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            total[k] += r[k]
+        bm = by_model.setdefault(_LEGACY_MODEL, {**U._empty_bucket(), "threads": 0})   # noqa: SLF001
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            bm[k] += r[k]
         bm["threads"] += 1
-        rows.append({"id": d.get("id"), "title": d.get("title") or "New chat", "model": m,
-                     "updated": d.get("updated", 0), **{k: int(u.get(k) or 0) for k in total}})
-    rows.sort(key=lambda r: -r["updated"])
-    return {"total": total, "by_model": by_model, "threads": rows[:200]}
+    rows.sort(key=lambda r: -(r["updated"] or 0))
+    return {"total": total, "by_model": by_model, "by_source": s["by_source"], "threads": rows[:200],
+            "gateway": gateway.snapshot()}
 
 
 def open_editor(root: str) -> dict:
