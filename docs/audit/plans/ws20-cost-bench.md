@@ -110,3 +110,15 @@ Meshpool Office tools (12k chars, about 3k tokens) ride on every Code request, i
 2. Baseline on the 0.0.12 code (a worktree at c189e04) and save it.
 3. Fixes (Sonnet), each with its regression test; re-measure after each group.
 4. Docs (K-04), ledger, full suite.
+
+## Scope change (coordinator, after the base moved to 370427e)
+
+- The audit session (claude/amazing-hopper-j9708m) owns code-task cost, the 52-task code eval and every change to
+  `agent/core.py` / `core/loop.py`. X-02, K-02, S-12, P-01, H-10 root causes above were handed to it with a draft
+  patch; ws20 marks them after checking that branch.
+- ws20 owns: office cost and speed (K-01, K-03) on the 7 office tasks, X-08, the office half of K-04, and the
+  build-on-top arms: "Meshpool on Pi" (app driving Pi over RPC) and "Meshpool on Codex" (app driving Codex over ACP)
+  next to vanilla Codex, vanilla Pi and Meshpool's own loop. The default Work agent becomes whichever arm passes at
+  the lowest cost and wall-clock.
+- Reuse `testkit/loop/small_meter.py` and `small_codex.py`; no second meter. Iterate on deepseek-v4.1-flash or the
+  mock server, 1 run per arm; gpt-6-luna with 3 runs only for the final table. Spend cap about $4 list per day.
