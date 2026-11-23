@@ -583,7 +583,8 @@ class Session:
             self.agent.reply(q["id"], text)              # typed in the message box: the answer to the open question
             return {"queued": False, "answered": q["id"]}
         if self.state in ("working", "waiting"):
-            if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
+            if (hasattr(self.agent, "steer") and self.harness["type"] != "acp"
+                    and not getattr(self.agent, "_stop", False)):   # after Stop: queued, it runs once the turn ends
                 with self.lock:                      # the turn may be ending: decide under the lock it ends under
                     if self.state in ("working", "waiting"):
                         self.agent.steer(self._body(text, images), images=images)
@@ -1029,11 +1030,14 @@ class Session:
                 write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan)
                 nxt = None
                 with self.lock:
-                    if self.queue and not getattr(self.agent, "_stop", False):
+                    # Stop clears the queue, so whatever is queued now was sent after Stop, while the turn wound
+                    # down. The user was told it would run: run it (it was dropped, and its Queued chip stayed).
+                    if self.queue:
                         items, self.queue = self.queue, []
                         nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                    elif self.queue:
-                        self.queue = []
+                        if getattr(self.agent, "_stop", False) and self.harness.get("type") == "acp":
+                            nxt = (nxt[0] + "\n\n\u200b[Meshpool] I stopped your previous request. Do not continue "
+                                   "it; answer this message instead.", nxt[1])
                 if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
                     nxt = self._goal_next(ev0)
                 elif not nxt and not getattr(self.agent, "_stop", False) and not self._stop_req:
@@ -1247,6 +1251,8 @@ class Session:
             with self.lock:
                 self.events = events_from_messages(self.agent.messages[1:])
         else:
+            if hasattr(self.agent, "forget_session"):
+                self.agent.forget_session()          # the harness's own session still holds the undone turns
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
                 users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
