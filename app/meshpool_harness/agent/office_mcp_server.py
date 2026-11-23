@@ -173,7 +173,8 @@ def _clean_md(text: str | None) -> str:
         elif fenced:
             out.append(ln)
         elif st.startswith("|"):
-            out.append("|".join("-" if c.strip() in ("\u2014", "\u2013") else c for c in ln.split("|")))
+            out.append("|".join(c.replace("\u2014", "-").replace("\u2013", "-") if c.strip() in ("\u2014", "\u2013") else c
+                                for c in ln.split("|")))
         else:
             out.append(_clean(ln))
     return "\n".join(out)

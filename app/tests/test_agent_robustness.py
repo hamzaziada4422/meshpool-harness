@@ -208,7 +208,7 @@ def test_loop_reports_any_tool_exception_to_the_model(tmp_path, monkeypatch):
     r = run("look", client=client, model="m", profile=None, ws=Workspace(str(tmp_path), str(tmp_path / ".run")),
             ctx={"task_id": "x"}, system_text="s", require_check=False)
     outs = [m["content"] for m in client.requests[-1]["messages"] if m["role"] == "tool"]
-    assert r.ok and outs[0].startswith("ERROR: IsADirectoryError") and outs[1].startswith("ERROR: NotImplementedError")
+    assert r.ok and outs[0].startswith("ERROR: IsADirectoryError") and outs[1].startswith("ERROR: glob patterns are relative")
 
 
 

@@ -163,7 +163,7 @@ def test_mcp_http_non_json_reply_is_an_mcp_error(monkeypatch):
         def __enter__(self): return self
         def __exit__(self, *a): return False
     monkeypatch.setattr(M.urllib.request, "urlopen", lambda *a, **k: R())
-    h = M._Http("http://x.invalid/mcp", {})
+    h = M._Http("x", {"url": "http://x.invalid/mcp"})
     with pytest.raises(M.MCPError):
         h.request(1, "initialize", {}, 5)
 

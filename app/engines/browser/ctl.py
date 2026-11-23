@@ -157,7 +157,12 @@ def _fit_value(loc, text: str) -> str:
     if kind == "date":
         m = re.fullmatch(r"(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})", t)          # MM/DD/YYYY (US order)
         if m:
-            return f"{m.group(3)}-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
+            a, b = int(m.group(1)), int(m.group(2))
+            if a > 12 and b <= 12:                                           # 25/12/2024: only DD/MM can be valid
+                a, b = b, a
+            elif a > 12 and b > 12:
+                return text                                                  # not a date in either order
+            return f"{m.group(3)}-{a:02d}-{b:02d}"
         m = re.fullmatch(r"(\d{4})[/.](\d{1,2})[/.](\d{1,2})", t)            # YYYY/MM/DD
         if m:
             return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"

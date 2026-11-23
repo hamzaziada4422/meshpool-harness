@@ -6,7 +6,7 @@ run tests (`tests/runtests.py` is the runner). Every repo family has its own con
 from __future__ import annotations
 
 import subprocess
-import sys
+import shutil
 from pathlib import Path
 
 
@@ -26,8 +26,11 @@ def discover(host_root: str, container: str | None, cdir: str | None) -> str:
         if container:
             rc = _cexec(container, cdir, f"python3 -c '{code}' 2>/dev/null || python -c '{code}' 2>/dev/null")
             return None if rc == 127 else rc
+        py = shutil.which("python") or shutil.which("python3")      # python3 only on macOS 12.3+/Debian/Ubuntu
+        if not py:
+            return None
         try:                                         # list args: no shell syntax, so it works under Windows too
-            return subprocess.run([sys.executable or "python3", "-c", code], cwd=root, capture_output=True,
+            return subprocess.run([py, "-c", code], cwd=root, capture_output=True,
                                   timeout=60).returncode
         except subprocess.TimeoutExpired:
             return 1

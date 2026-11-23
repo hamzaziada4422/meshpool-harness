@@ -4455,6 +4455,9 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
+    from .common import find_soffice
+    if not find_soffice():                                   # no LibreOffice: nothing to measure labels with
+        return res
     try:
         for _ in range(3):
             moved = _relabel(slides, out_path)
