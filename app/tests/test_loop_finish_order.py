@@ -28,6 +28,23 @@ def test_finish_before_action_still_runs_action(tmp_path):
     assert r.ok
 
 
+EXIT3 = 'python -c "import sys; sys.exit(3)"'
+
+
+def test_reordered_finish_refused_after_nonzero_exit(tmp_path):
+    r, c = go(tmp_path, [multi(("finish", {"answer": "done", "evidence": []}), ("bash", {"command": EXIT3})),
+                         tool_call("finish", {"answer": "really done", "evidence": []})])
+    assert len(c.requests) == 2          # first finish refused because the bash call failed
+    assert r.ok
+
+
+def test_already_ordered_action_then_finish_unchanged(tmp_path):
+    # current behaviour: [action, finish] is accepted even if the action exited non-zero
+    r, c = go(tmp_path, [multi(("bash", {"command": EXIT3}), ("finish", {"answer": "done", "evidence": []}))])
+    assert len(c.requests) == 1
+    assert r.ok
+
+
 def test_finish_before_erroring_action_not_accepted(tmp_path):
     r, c = go(tmp_path, [multi(("finish", {"answer": "done", "evidence": []}),
                                ("read_file", {"path": "missing.txt"})),
