@@ -106,12 +106,11 @@ jobs:
           }
           PS
           run_one() {   # name, install folder; runs NAME.exe /S [/D=...] and reports
-            export MSYS2_ARG_CONV_EXCL="*"   # Git Bash would rewrite /S and /D=... as paths, and the installer would open its window
             local n=$1 dir=$2 args=("/S")
             [ -n "$dir" ] && args+=("/D=$(cygpath -w "$dir")")
             echo "=================== $n"
             local t0=$(date +%s)
-            "$T/$n.exe" "${args[@]}" &
+            MSYS2_ARG_CONV_EXCL="*" "$T/$n.exe" "${args[@]}" &   # keep Git Bash from rewriting /S as a path
             local pid=$! i
             for i in $(seq 1 18); do
               sleep 5
@@ -430,8 +429,9 @@ jobs:
           # The archive itself first: a damaged archive must not look like a hung installer.
           "/c/Program Files/7-Zip/7z.exe" t -bso0 -bsp0 dist-src/app-win/payload.7z && echo "payload.7z tests clean"
           # Silent install in the background, so a hang shows what it is waiting on instead of timing the step out.
-          export MSYS2_ARG_CONV_EXCL="*"   # Git Bash would rewrite /S and /D=... as paths, and the installer would open its window
-          ./out/Meshpool-Setup.exe /S "/D=$W" &
+          # Only for the installer: Git Bash would rewrite /S and /D=... as paths and the installer would open its window.
+          # (Not exported: the smoke test below needs Git Bash to convert the app path it passes to python.exe.)
+          MSYS2_ARG_CONV_EXCL="*" ./out/Meshpool-Setup.exe /S "/D=$W" &
           PID=$!
           for i in $(seq 1 60); do
             sleep 15
