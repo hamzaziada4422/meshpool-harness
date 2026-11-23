@@ -144,7 +144,9 @@ def untrusted_config(root) -> list[str]:
 
 def hooks(root: Path) -> dict:
     out: dict = {e: [] for e in EVENTS}
-    files = [C.home() / "hooks.json"] + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else [])
+    # <home>/hooks.json and the hooks of plugins the user installed are global; a project's own file needs its trust
+    files = ([C.home() / "hooks.json"] + sorted((C.home() / "plugin-hooks").glob("*.json"))
+             + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else []))
     for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))

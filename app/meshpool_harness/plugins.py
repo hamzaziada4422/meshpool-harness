@@ -161,6 +161,10 @@ def enable_plugin(name: str, on: bool = True) -> dict:
     for sid in rec.get("skills", []):
         (off.discard if on else off.add)(sid)
     SK._save_disabled(off)
+    if rec.get("hooks"):                                  # a disabled plugin's hooks stop running
+        src, dst = _hooks_file(name, off=on), _hooks_file(name, off=not on)
+        if src.is_file():
+            src.replace(dst)
     if not on:
         _set_servers_disabled(rec.get("servers", []))
     return next(p for p in list_plugins() if p["name"] == name)
@@ -545,6 +549,57 @@ def _install_root(root: Path, source: str, entry: dict | None = None) -> dict:
     return rec
 
 
+def hooks_dir() -> Path:
+    return C.home() / "plugin-hooks"
+
+
+def _hooks_file(name: str, off: bool = False) -> Path:
+    return hooks_dir() / (SK.slug(name) + (".json.off" if off else ".json"))
+
+
+def _plugin_hooks(pdir: Path, m: dict, name: str, notes: list) -> str:
+    """G-06: a plugin's hooks (Claude Code's {"hooks": {Event: [{matcher, hooks: [{type, command, timeout}]}]}}) become
+    Meshpool hooks in <home>/plugin-hooks/<plugin>.json, which agent/extras.hooks reads for every chat, app or terminal.
+    ${CLAUDE_PLUGIN_ROOT} and ${MESHPOOL_PLUGIN_ROOT} become the plugin's folder. Returns the file written or ""."""
+    from meshpool_harness.agent import extras as EX
+    spec = m.get("hooks")
+    if isinstance(spec, str):
+        spec = _read_json(pdir / spec.lstrip("./")) if (pdir / spec.lstrip("./")).is_file() else {}
+    if not isinstance(spec, dict) or not spec:
+        spec = _read_json(pdir / "hooks" / "hooks.json")
+    events = spec.get("hooks") if isinstance(spec.get("hooks"), dict) else spec
+    out: dict = {}
+    unknown: list[str] = []
+    for ev, groups in (events or {}).items():
+        if ev not in EX.EVENTS:
+            unknown.append(str(ev))
+            continue
+        for g in groups if isinstance(groups, list) else []:
+            if not isinstance(g, dict):
+                continue
+            for h in (g.get("hooks") if isinstance(g.get("hooks"), list) else [g]):
+                cmd = h.get("command") if isinstance(h, dict) else None
+                if not isinstance(cmd, str) or h.get("type", "command") != "command":
+                    continue
+                cmd = cmd.replace("${CLAUDE_PLUGIN_ROOT}", str(pdir)).replace("${MESHPOOL_PLUGIN_ROOT}", str(pdir))
+                row = {"command": cmd}
+                if g.get("matcher"):
+                    row["matcher"] = str(g["matcher"])
+                if h.get("timeout"):
+                    row["timeout"] = h["timeout"]
+                out.setdefault(ev, []).append(row)
+    if unknown:
+        notes.append("Skipped hook events Meshpool does not have: " + ", ".join(sorted(unknown)) + ".")
+    if not out:
+        return ""
+    path = _hooks_file(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(out, indent=1), encoding="utf-8")
+    notes.append("Added %d hook(s): %s." % (sum(len(v) for v in out.values()), ", ".join(
+        f"{ev}({r.get('matcher') or '*'})" for ev, rows in out.items() for r in rows)))
+    return str(path)
+
+
 def _install_parts(pdir: Path, m: dict, name: str, source: str, skills: list, servers: list) -> dict:
     """Add the copied plugin's skills, commands, instructions and MCP servers; skills and servers fill in as they are
     added, so the caller can take them away again if a later step fails."""
@@ -571,12 +626,17 @@ def _install_parts(pdir: Path, m: dict, name: str, source: str, skills: list, se
         sname = _add_server(name, k, v, pdir, notes)
         if sname:
             servers.append(sname)
-    for skipped in ("hooks", "agents"):
+    hooks_path = ""
+    if (pdir / "hooks").exists() or m.get("hooks"):
+        hooks_path = _plugin_hooks(pdir, m, name, notes)
+    for skipped in ("agents",):
         if (pdir / skipped).exists() or m.get(skipped):
             notes.append(f"Skipped {skipped}: Meshpool does not run plugin {skipped}.")
     rec = {"name": name, "version": str(m.get("version") or ""), "description": str(m.get("description") or ""),
            "source": source, "installed": time.strftime("%Y-%m-%d %H:%M"), "dir": str(pdir), "skills": skills,
            "servers": servers, "notes": notes}
+    if hooks_path:
+        rec["hooks"] = hooks_path
     return rec
 
 
@@ -623,6 +683,8 @@ def remove_plugin(name: str) -> list[dict]:
             if isinstance(servers.get(n), dict) and f"the {name} plugin" in str(servers[n].get("description", "")):
                 del servers[n]
     _edit_mcp(drop)
+    for p in (_hooks_file(name), _hooks_file(name, off=True)):
+        p.unlink(missing_ok=True)
     pdir = Path(rec.get("dir") or "")
     if pdir.parent == plugins_dir() and pdir.is_dir():
         shutil.rmtree(pdir, ignore_errors=True)
