@@ -117,7 +117,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
-    CG.forget_models()
+    getattr(CG, "forget_models", lambda: CG._MODELS.update(t=0.0, rows=[]))()   # old code: one global cache
     CG._LIMIT.clear()
     f.url, f.auth = url, codex / "auth.json"
     yield f
