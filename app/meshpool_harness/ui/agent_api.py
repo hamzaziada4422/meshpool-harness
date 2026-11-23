@@ -251,6 +251,10 @@ def _last_reply(agent) -> str:
         pass
     return ""
 
+UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
+                   "and say in your summary what needed the user.")
+
+
 class Session:
     incognito = False          # class defaults: tests and old callers build a Session without __init__
     _ck_run, _ck_n, _ck_stop = "", 0, None
@@ -463,9 +467,20 @@ class Session:
             pass
 
     def approve(self, kind, title, detail, options=None, scope=""):
-        if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
-            return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
-                          "and say in your summary what needed the user.")
+        sid = getattr(self, "id", None)
+        gone = bool(getattr(self, "deleted", False) or getattr(self.agent, "deleted", False) or (sid and sid in DELETED))
+        if os.environ.get("MESHPOOL_HEADLESS") == "1" or self.scheduled or gone:
+            # `meshpool run-due` with the app closed, an unattended scheduled run, or a chat nobody can open any more:
+            # no one can answer, so it fails fast instead of waiting for ever.
+            note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
+                                                      "and do not retry the action.")
+            with self.lock:
+                self._n += 1
+                n = self._n
+            self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
+                       "options": options, "scope": scope})
+            self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
+            return "no", note
         with self.lock:
             self._n += 1
             p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
@@ -474,16 +489,29 @@ class Session:
         self.state = "waiting"
         self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
                    "options": options, "scope": scope})
-        if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
+        if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
-        while not p["ev"].wait(0.5):
+        try:
+            limit = float(os.environ.get("MH_APPROVAL_TIMEOUT_S", "1800"))
+        except ValueError:
+            limit = 1800.0
+        t_end = time.time() + limit if limit > 0 else None
+        timed_out = False
+        while not p["ev"].wait(0.5 if t_end is None else max(0.01, min(0.5, t_end - time.time()))):
             if self.agent._stop:
                 break
+            if t_end is not None and time.time() >= t_end:
+                timed_out = True
+                break
+        if timed_out and not p.get("answered"):
+            mins = max(1, round(limit / 60))
+            p["note"] = (f"No answer within {mins} minute{'s' if mins != 1 else ''}, so this was not done. "
+                         "Ask again when you are back.")
         with self.lock:
             self.pendings.pop(p["id"], None)
             if not self.pendings:
                 self.state = "working"
-        shown = p["decision"] if p.get("answered") else "stopped"
+        shown = p["decision"] if p.get("answered") else ("timeout" if timed_out else "stopped")
         self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
         return p["decision"], p["note"]
 

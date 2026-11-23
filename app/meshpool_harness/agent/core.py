@@ -957,6 +957,7 @@ class Agent:
         self._plan_needed = False              # this turn needs a written plan (decided at its start, free)
         self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
         self._trace_lock = threading.Lock()
+        self._open_calls: dict = {}                    # tool_start sent, tool_end not yet: id -> name
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
         self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
         self.messages = [{"role": "system", "content": self.system_prompt()}]
@@ -1676,6 +1677,10 @@ class Agent:
                     "limit).")})
         except (Interrupted, KeyboardInterrupt):
             self._repair()
+            for cid, nm in list(self._open_calls.items()):       # no card stays "running" after a Stop
+                self._open_calls.pop(cid, None)
+                self.emit({"type": "tool_end", "id": cid, "name": nm, "ok": False, "denied": False,
+                           "output": "Not finished: the turn ended."})
             added = [t for t, _ in getattr(self, "_inbox", [])]
             self._take_inbox()                       # keep what the user added; the next turn sees it
             self.emit({"type": "interrupted", "text": "Stopped. " + (
@@ -3107,6 +3112,7 @@ class Agent:
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
+        self._open_calls[cid] = name
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
                    "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
                                  args["timeout_ms"] / 1000 if name == "shell" and isinstance(
@@ -3232,6 +3238,7 @@ class Agent:
             step["err"] = out[:160]
         with self._trace_lock:                         # one line per tool call: the benchmark's trace
             self.trace.append(step)
+        self._open_calls.pop(cid, None)
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,
                    "output": out[:6000] + ("\n..." if len(out) > 6000 else "")})
         return out

@@ -135,8 +135,8 @@ class Guards:
         return None
 
     def repeat_calls(self, calls: list) -> str | None:
-        """MH_DOOM=1: 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
-        if os.environ.get("MH_DOOM") != "1" or not calls:
+        """Default on (MH_DOOM=0 turns it off): 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
+        if os.environ.get("MH_DOOM") == "0" or not calls:
             return None
         hist = getattr(self, "_call_hist", [])
         for c in calls:
