@@ -6,6 +6,8 @@ Owner decisions of 19 Nov 2026 (final), which cut about 1 GB from each installer
 
 "Packaged" means `config.packaged()` (the app has its own `python/` or `runtime/` beside `app/`) or `sys.frozen`. One definition, used by `meshpool_harness/bundled.py` and `office_runtime.py`.
 
+Update for 0.0.11: ffmpeg, pandoc, the speech model and the Python packages the skills use are bundled too, and every Mac wheel and program is read for the macOS it needs: see `docs/plan/0.0.11-bundled.md` (the audit table, the macOS 11 floor and what only the release can verify).
+
 ## Resolver order
 
 LibreOffice (`app/meshpool_harness/office_runtime.py`; `config.find_soffice()`, `office_mcp_server._soffice()` and `engines/forge/common.find_soffice()` are thin wrappers):
