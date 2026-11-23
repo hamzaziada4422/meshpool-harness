@@ -287,3 +287,11 @@ def test_sign_in_browser_runs_in_the_app_process(monkeypatch, tmp_path):
     finally:
         BA.close_signin()
         srv.shutdown()
+
+
+def test_the_sign_in_panel_has_an_explicit_way_to_use_the_system_browser():
+    from pathlib import Path
+    ui = Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui"
+    assert "/api/browser/system-open" in (ui / "browser_api.py").read_text(encoding="utf-8")
+    js = (ui / "preview.js").read_text(encoding="utf-8")
+    assert 'id="bSystem"' in js and "Open it in my browser" in js

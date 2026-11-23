@@ -351,13 +351,14 @@ function panelBrowser(body) {
   body.innerHTML = `<div class="pbar brw-bar"><button class="btn" id="bBack" aria-label="Back">Back</button><button class="btn" id="bReload" aria-label="Reload">Reload</button><input id="bUrl" aria-label="Address" placeholder="Address" spellcheck="false" autocomplete="off"><button class="btn" id="bGo">Go</button>${signin ? `<button class="btn primary" id="bDone">Done</button>` : ""}</div>
     <div class="brw-title" id="bTitle"></div>
     <div class="brw-stage" id="bStage" tabindex="0" role="application" aria-label="Browser view. Click it, then type to enter text."><img id="bImg" alt="The page the browser shows" draggable="false" hidden><div class="pnote" id="bNote">Loading...</div></div>
-    <div class="brw-foot">${signin ? "Sign in here, then press Done." : "This is the browser the agent uses. Sign in here, or solve a check, and the agent carries on."}${signin && S.cur ? ` <button class="linkbtn" id="bAgent">Show the agent's browser</button>` : ""}</div>`;
+    <div class="brw-foot">${signin ? "Sign in here, then press Done." : "This is the browser the agent uses. Sign in here, or solve a check, and the agent carries on."}${signin ? ` <button class="linkbtn" id="bSystem" title="Opens this page in your own browser, for sites that will not sign you in here">This site refuses? Open it in my browser</button>` : ""}${signin && S.cur ? ` <button class="linkbtn" id="bAgent">Show the agent's browser</button>` : ""}</div>`;
   const stage = $("#bStage"), img = $("#bImg");
   $("#bBack").onclick = () => brwSend({type: "back"});
   $("#bReload").onclick = () => brwSend({type: "reload"});
   const go = () => { const v = $("#bUrl").value.trim(); if (v) brwSend({type: "goto", url: v}); };
   $("#bGo").onclick = go; $("#bUrl").onkeydown = e => { if (e.key === "Enter") go(); };
   if ($("#bDone")) $("#bDone").onclick = () => { post("/api/browser/close", {src: "signin"}).catch(() => {}); BRW.src = "chat"; brwStop(); S.connCache = null; togglePanel("browser"); if (BRW.back) { const s = BRW.back; BRW.back = ""; openSettings(s); } else toast("Done. If you signed in to an app, check it under Settings."); };
+  $("#bSystem")?.addEventListener("click", () => post("/api/browser/system-open", {}).then(() => toast("Opened in your browser. Come back and press Done."), e => toast(e.message)));
   $("#bAgent")?.addEventListener("click", () => { BRW.src = "chat"; BRW.known = ""; renderPanel(); });
   img.addEventListener("click", e => { stage.focus({preventScroll: true}); brwSend({type: "click", count: Math.min(3, e.detail || 1), ...brwPoint(e)}); });
   img.addEventListener("contextmenu", e => { e.preventDefault(); brwSend({type: "click", button: "right", ...brwPoint(e)}); });

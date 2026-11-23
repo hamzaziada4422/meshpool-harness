@@ -106,6 +106,17 @@ def handle(method: str, u, body: bytes = b""):
             except Exception as e:  # noqa: BLE001
                 return 400, {"error": f"The browser could not start: {e}"}
             return 200, {"ok": True}
+        if path == "/api/browser/system-open":
+            # The one way out for a site that refuses an embedded browser (some sign-in pages do): the user asks for it
+            # by name, and only the address the sign-in browser is showing is opened.
+            try:
+                url = _S["b"].page.url if _S["b"] is not None and _S["b"].page is not None else ""
+                url = BL.web_address(url)
+            except Exception:  # noqa: BLE001
+                return 400, {"error": "No sign-in page is open."}
+            import webbrowser
+            webbrowser.open(url)
+            return 200, {"ok": True}
         if path == "/api/browser/close":
             if b.get("src") == "signin":
                 close_signin()
