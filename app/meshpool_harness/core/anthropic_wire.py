@@ -133,4 +133,6 @@ def from_response(p: dict) -> dict:
             "choices": [{"index": 0, "message": msg, "finish_reason": _STOP.get(p.get("stop_reason"), "stop")}],
             "usage": {"prompt_tokens": pin, "completion_tokens": u.get("output_tokens") or 0,
                       "total_tokens": pin + (u.get("output_tokens") or 0),
-                      "prompt_tokens_details": {"cached_tokens": cached}}}
+                      # cache writes kept apart: they bill at the write rate, not the input rate (core/usage.py)
+                      "prompt_tokens_details": {"cached_tokens": cached,
+                                                "cache_write_tokens": u.get("cache_creation_input_tokens") or 0}}}
