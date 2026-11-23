@@ -66,6 +66,38 @@ Tested with a real Pi 1.5.2 in RPC mode against a mock ChatGPT endpoint: text st
 
 Meshpool turns off Hermes's `auth.adopt_external_logins`, so Hermes never borrows another app's sign-in.
 
+## Azure OpenAI, and other key styles
+
+Settings, **Models and providers** takes any endpoint, any key shape and any header.
+
+**Azure OpenAI and Foundry**
+- **Address:** use `https://NAME.openai.azure.com`, `https://NAME.cognitiveservices.azure.com` or `https://NAME.services.ai.azure.com`. You can also paste one of these forms:
+  - `…/openai/deployments/DEPLOYMENT`, which fixes the deployment.
+  - `…/openai/v1`, the v1 route, which needs no api-version.
+  - `…/models`, the Foundry model-inference route.
+  - A full `…/chat/completions?api-version=…` URL; Meshpool keeps the path and the version.
+- **Model:** type your **deployment name** as the model (Azure AI Foundry, Deployments), not the base model name. Azure does not list deployments, so the model box is a text field.
+- **Key:** a 32-character key from the resource's **Keys and Endpoint** page is sent as the `api-key` header. An Entra access token (it starts with `eyJ`) is sent as `Authorization: Bearer`.
+- **Version:** every request carries `?api-version=`. The default is `2024-10-21` (GA). Change it in the Azure api-version field, in `MESHPOOL_AZURE_API_VERSION`, or by pasting a URL that contains `api-version=`.
+- **Request shape:** requests go to `/openai/deployments/<deployment>/chat/completions` and send `max_completion_tokens` (streaming and tool calls work as on OpenAI).
+- **Test connection:** with a deployment, Meshpool makes a real 1-token chat call, because Azure often has no usable model list. Without one, it checks the key on a read-only route and asks for the deployment name.
+
+**Any key shape.** Keys are kept as you paste them. Meshpool only removes surrounding quotes, a leading `Bearer `, `Token ` or `api-key:`, and line breaks or zero-width characters. Dashes, dots, `=`, `_` and any prefix (or none) are fine, and so are JWTs.
+
+**Header and scheme.** Settings, **Key header and Azure options** (`MH_AUTH_HEADER`, `MH_AUTH_SCHEME`) sets which header carries the key:
+
+| Header | Scheme | Sent as |
+|---|---|---|
+| automatic (default) | automatic | `Authorization: Bearer <key>`; `api-key` on Azure; `x-api-key` plus `anthropic-version` on Anthropic-style endpoints |
+| `api-key`, `x-api-key` or any name | raw | the key alone |
+| `Authorization` | bearer, token or basic | `Bearer <key>`, `Token <key>` or `Basic base64(user:password)` |
+
+A local or LAN server (localhost, 127.x, 10.x, 192.168.x, 172.16-31.x, `*.local`, a bare host name) may be used with no key; then no auth header is sent.
+
+**Errors name the problem:** 401 means the key was rejected (on Azure, a key from another resource also gives 401); 403 means the key is valid but not allowed (networking or role); 404 `DeploymentNotFound` means a wrong deployment name; 404 `Resource not found` on Azure points at the api-version or address; 400 "API version not supported" names the version.
+
+Tests: `app/tests/test_fix_keys_a.py` and `test_fix_keys_b.py` run each style against a fake local server and assert the path, query and headers.
+
 ## Tests
 
 - `app/tests/test_providers.py` covers:

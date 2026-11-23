@@ -196,7 +196,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
     from . import context as CTX
     _led = getattr(client, "ledger", None)
-    win = CTX.window(model, getattr(_led, "base_url", None), getattr(_led, "api_key", "") or "")
+    win = CTX.window(model, getattr(_led, "base_url", "") or "", getattr(_led, "api_key", "") or "")
     ws.max_tool_chars = CTX.tool_output_chars(win)
     caps.max_output_tokens = CTX.max_output(win, caps.max_output_tokens)
     caps.compact_chars = CTX.compact_chars(win, CTX.estimate(tools) + CTX.estimate(sys_msg), caps.compact_chars)

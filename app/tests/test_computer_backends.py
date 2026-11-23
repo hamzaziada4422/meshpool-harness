@@ -340,6 +340,7 @@ def test_win_screenshot_scale_and_pillow_fallback(win, monkeypatch):
     assert res[1]["mimeType"] == "image/png"
     CU.click(683, 384)
     assert win.u.SetCursorPos.call_args_list[0] == call(1920, 1079)         # int(683*2.8111), int(384*2.8111)
+    monkeypatch.setattr(sys, "platform", "win32")                         # screen_info words the unit by sys.platform
     info = CU.screen_info()
     assert "Screen 3840x2160 (pixels)" in info
 
@@ -431,7 +432,8 @@ def test_status_windows(monkeypatch):
     assert not st["ready"] and "locked" in st["summary"] and "Unlock" in CU.format_status(st)
 
 
-def test_status_linux_is_plain_about_it():
+def test_status_linux_is_plain_about_it(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")                          # CU.os_() reads the real platform
     st = CU.computer_status("linux")
     assert st["platform"] == "linux" and not st["supported"] and not st["ready"]
     assert "not supported on Linux yet" in st["summary"]

@@ -1302,7 +1302,8 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
         placed.append((mx, tw, row))
         ly = y + (0.0 if row else 0.2) if head > 0.3 else y
         lx = min(max(mx - tw / 2, x), x + w - tw)
-        _write(_box(sl, lx, ly, tw, 0.2, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
+        lab_h = max(0.2, _need([{"text": lab, "size": T["label"], "bold": True}], max(tw - 0.1, 0.3)) - 0.05)
+        _write(_box(sl, lx, ly + 0.2 - lab_h, tw, lab_h, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False,
                  "color": TC.ACCENT_1 if k == len(marks) - 1 else TC.TEXT_1}], ctx, n)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(ly + 0.21), Inches(mx),
@@ -3330,7 +3331,7 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
         ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": not (s or {}).get("title_right"), "numbers": False,
                "prov": intro_prov}]                        # under a panel heading the intro is plain: two bold
         # headings stacked over the cards read as redundant (blind review)
-        ih = _need(ib, w) + 0.1
+        ih = _need(ib, max(w - 0.2, 0.5)) + 0.15           # the box's insets take width: measure the inner width
     room = h - ih
     d = POINT_MARK
     short = all(len(plain(it["lead"]).split()) <= 16 and sum(len(plain(b["text"]).split()) for b in it["bullets"]) <= 14
@@ -3812,7 +3813,23 @@ def a_chart_takeaway(ctx, s, sl, n):
         for b in bl:
             b["size"] = T["body"]
         need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
-    band = min(need + 0.3, 0.45 * body_h)
+    cap = 0.45 * body_h
+    for _ in range(8):                                  # the band is capped: shrink the type until it fits the cap
+        if need + 0.3 <= cap:
+            break
+        small = False
+        for b in bl:
+            if b["size"] > 10:
+                b["size"] -= 1
+                small = True
+        for b in lead:
+            if b["size"] > 12:
+                b["size"] -= 1
+                small = True
+        if not small:
+            break
+        need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    band = min(need + 0.3, cap)
     cy = BODY_B - band
     _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.15)
     box = _fill(sl, LEFT, cy, RIGHT - LEFT, band, TC.BACKGROUND_2, "ov_Panel")
