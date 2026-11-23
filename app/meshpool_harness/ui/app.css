@@ -451,6 +451,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .badge.added{background:var(--add-bg);color:var(--add)}
 .badge.deleted{background:var(--del-bg);color:var(--del)}
 .badge.modified{background:var(--fill);color:var(--ink-2)}
+.pnote.err{color:var(--del)}.wtlist{margin:6px 0 0 18px;font-family:var(--mono);font-size:var(--fs-xs)}
 .ucode{font-family:var(--mono);font-size:var(--fs-l);letter-spacing:.08em;background:var(--fill);padding:1px 6px;border-radius:var(--r-s)}
 .spin{width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;display:inline-block}
 .clip2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
