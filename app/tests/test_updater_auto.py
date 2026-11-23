@@ -8,6 +8,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -24,7 +25,14 @@ def _clean(monkeypatch, tmp_path):
     AU._ST.clear()
     AU._ST["state"] = "idle"
     AU._CFG.update(started=False, busy=lambda: False)
+    AU._CFG.pop("loaded_for", None)
     U._CACHE.clear()
+    # the in-place updater's new interface (another change owns updater.py): a free install lock, no stage to discard
+    class Busy(Exception):
+        pass
+    monkeypatch.setattr(U, "UpdateBusy", Busy, raising=False)
+    monkeypatch.setattr(U, "install_lock", lambda: contextlib.nullcontext(), raising=False)
+    monkeypatch.setattr(U, "discard_stage", lambda p: shutil.rmtree(str(p), ignore_errors=True), raising=False)
     yield
     AU._ST.clear()
     AU._ST["state"] = "idle"
@@ -113,14 +121,14 @@ def test_matching_checksum_makes_the_update_ready(monkeypatch, tmp_path):
 def test_checksum_mismatch_is_refused_and_the_file_deleted(monkeypatch, tmp_path):
     v, _ = _win_release(monkeypatch, tmp_path, sums="bad")
     AU.pipeline(v, download=True)
-    assert AU._ST["state"] == "error" and "checksum" in AU._ST["error"]
+    assert AU._ST["state"] == "failed" and "checksum" in AU._ST["error"]
     assert not list((tmp_path / "data" / "updates").rglob("Meshpool-Setup.exe*"))
 
 
 def test_missing_sha256sums_is_refused(monkeypatch, tmp_path):
     v, _ = _win_release(monkeypatch, tmp_path, sums=None)
     AU.pipeline(v, download=True)
-    assert AU._ST["state"] == "error" and "no checksums" in AU._ST["error"]
+    assert AU._ST["state"] == "failed" and "no checksums" in AU._ST["error"]
     assert not (tmp_path / "data" / "updates" / "v0.2.0" / "Meshpool-Setup.exe").exists()
 
 
@@ -128,13 +136,13 @@ def test_installer_not_listed_in_the_sums_is_refused(monkeypatch, tmp_path):
     v, _ = _win_release(monkeypatch, tmp_path)
     monkeypatch.setattr(U, "_sums", lambda v: {"Other.exe": "0" * 64})
     AU.pipeline(v, download=True)
-    assert AU._ST["state"] == "error" and "do not list" in AU._ST["error"]
+    assert AU._ST["state"] == "failed" and "do not list" in AU._ST["error"]
 
 
 def test_auto_download_off_only_reports(monkeypatch, tmp_path):
     v, _ = _win_release(monkeypatch, tmp_path)
     AU.save_settings({"auto_download": False})
-    monkeypatch.setattr(U, "check", lambda force=False: dict(v, ok=True, newer=True, current="0.1.0"))
+    monkeypatch.setattr(U, "check", lambda force=False, timeout=None: dict(v, ok=True, newer=True, current="0.1.0"))
     AU.tick()
     assert AU._ST["state"] == "available"
     assert not (tmp_path / "data" / "updates" / "v0.2.0").exists()
@@ -177,11 +185,12 @@ def test_download_restarts_when_the_server_ignores_range(monkeypatch, tmp_path):
 
 def test_a_resumed_download_with_wrong_bytes_fails_the_checksum(monkeypatch, tmp_path):
     v, payload = _win_release(monkeypatch, tmp_path, payload=b"A" * 5000)
+    AU._load()
     work = tmp_path / "data" / "updates" / "v0.2.0"
     work.mkdir(parents=True)
     (work / "Meshpool-Setup.exe.part").write_bytes(b"B" * 2000)       # a corrupt partial file
     AU.pipeline(v, download=True)
-    assert AU._ST["state"] == "error" and "checksum" in AU._ST["error"]
+    assert AU._ST["state"] == "failed" and "checksum" in AU._ST["error"]
 
 
 # ------------------------------------------------------------------ Windows helper
@@ -234,6 +243,7 @@ def test_apply_refuses_without_a_ready_update():
 
 
 def test_settings_roundtrip_and_env_switch(monkeypatch):
+    monkeypatch.setattr(AU, "kick", lambda manual=False: None)       # turning it back on starts a check (own test)
     assert AU.settings() == {"auto_download": True, "install_on_quit": True}
     AU.save_settings({"auto_download": False})
     assert AU.settings()["auto_download"] is False
