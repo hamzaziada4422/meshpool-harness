@@ -24,8 +24,8 @@ per agent, so a single pass or fail can move; costs are estimates from one price
 | Codex CLI | 7/7 | $0.0102 | 7/7 | $0.0113 | 84 | 45 |
 | Meshpool on Codex (the app driving Codex) | 5/7 | $0.033 | 6/7 | $0.025 | 185 | 72 |
 | Meshpool on Pi (the app driving Pi) | 4/7 | $0.040 | 3/7 | $0.030 | 196 | 199 |
-| Meshpool CLI | 4/7 | $0.056 | 4/7 | $0.055 | 337 | 182 |
-| Meshpool Work | 5/7 | $0.056 | 6/7 | $0.154 | 874 | 396 |
+| Meshpool CLI (affected, see below) | 4/7 | $0.056 | 4/7 | $0.055 | 337 | 182 |
+| Meshpool Work (affected, see below) | 5/7 | $0.056 | 6/7 | $0.154 | 874 | 396 |
 
 **Meshpool is not cheaper or faster than Codex or Pi on office work yet.** Pi is the cheapest and Codex the most
 reliable. The best Meshpool option, Meshpool on Codex, costs about 2.2x Codex and 4x Pi per task.
@@ -37,7 +37,7 @@ What changed since 0.0.12, and what it did:
   and 15% faster than in 0.0.12. Details: `testkit/bench3/profile/FINDINGS.md`.
 - Editing an existing file no longer launches the spreadsheet engine. Meshpool Work's workbook edit went from 68
   calls and $0.058 to 16 calls and $0.019; letters and invoices are also close to Codex now.
-- Known regression in this run: on three tasks (tracked changes, chart deck, PDF report) Meshpool Work fell into a
+- Known regression in this run (affects the Meshpool Work and Meshpool CLI rows, which run Meshpool's own loop): on three tasks (tracked changes, chart deck, PDF report) Meshpool Work fell into a
   loop where the context is summarized after every step and the agent repeats its last check (about 100 times, two
   runs hit the 15-minute limit). That loop alone explains Meshpool Work's cost in the table; it is being fixed in the
   agent's context handling and the table will be re-measured.
