@@ -290,6 +290,9 @@ def test_slash_commands(monkeypatch, tmp_path):
     sess.command("/status")
     sess.command("/auto edits")
     assert a.mode == "edits"
+    sess.command("/access ask")                     # the old /mode name is now /access (and /permissions)
+    assert a.mode == "ask"
+    sess.command("/auto edits")
     sess.command("/model gpt-x")
     assert a.model == "gpt-x"
     sess.command("/compact")

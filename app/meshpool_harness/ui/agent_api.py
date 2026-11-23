@@ -254,6 +254,7 @@ def _last_reply(agent) -> str:
 
 class Session:
     incognito = False          # class defaults: tests and old callers build a Session without __init__
+    auto_resume = True         # wait out an outage and carry on (the terminal's -p turns it off: a script wants the failure)
     listeners = ()             # front ends that watch the events (the terminal): callables taking the stored event
     _saved_mtime = 0.0
     _ck_run, _ck_n, _ck_stop = "", 0, None
@@ -1223,7 +1224,7 @@ class Session:
     def _resume_next(self, ev0: int):
         """After a turn with no goal: when it ended on a rate limit or an outage (not Stop), wait and pick the task
         up again by itself, so a long task is not left half done. None when there is nothing to pick up."""
-        if os.environ.get("MH_AUTO_RESUME", "1") == "0":
+        if os.environ.get("MH_AUTO_RESUME", "1") == "0" or not self.auto_resume:
             return None
         with self.lock:
             evs = self.events[ev0:]

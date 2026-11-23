@@ -305,3 +305,64 @@ def test_json_and_stream_json_contract(monkeypatch, proj, capfd, tmp_path):
 def test_slash_commands_alias_for_access():
     assert T.ALIASES["access"] == "auto" and T.ALIASES["permissions"] == "auto" and "mode" not in T.ALIASES
     assert {"plan", "goal", "undo", "diff", "rewind", "attach", "agent", "mode", "resume"} <= {c[0] for c in T.COMMANDS}
+
+
+def test_p_outage_fails_now_not_after_a_wait(monkeypatch, proj, capfd):
+    """The app waits out an outage and carries on; a script run (-p) must get the failure at once."""
+    def down(self, turn):
+        self.emit({"type": "error", "text": "Couldn't reach the model."})
+        return _say("x"), False
+    monkeypatch.setattr(core.Agent, "_chat", down)
+    t0 = time.time()
+    rc, out, err = run_main(proj, capfd, prompt="go", json_out="json")
+    assert rc == 1 and time.time() - t0 < 20
+    assert json.loads(out.strip().splitlines()[-1])["ok"] is False
+
+
+# ---------- 9. end to end: a real terminal process, then the app server over the same home --------------------------
+def test_terminal_chat_shows_in_the_app(tmp_path):
+    import re
+    import socket
+    import subprocess
+    import urllib.request
+    repo = Path(__file__).resolve().parents[2]
+    mh, proj, home = tmp_path / "mh", tmp_path / "p", tmp_path / "h"
+    for d in (mh, proj, home):
+        d.mkdir()
+
+    def port():
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            return s.getsockname()[1]
+    mport, uport = port(), port()
+    (mh / "meshpool.config").write_text(f"MESHPOOL_API_KEY=test-key-1234\nMESHPOOL_BASE_URL=http://127.0.0.1:{mport}/v1\n")
+    env = {k: v for k, v in os.environ.items() if not re.match(r"(OPENAI_|CODEX_|MESHPOOL_|MH_)", k)}
+    env.update(HOME=str(home), MESHPOOL_HOME=str(mh), PYTHONPATH=str(repo / "app"), PYTHONUTF8="1", MH_CLARITY="0",
+               MH_SLOTS_DIR=str(tmp_path / "slots"), MH_LEARN="0", MH_GRADER="0", MH_AUTO_ROUTE="0")
+    mock = subprocess.Popen([sys.executable, str(repo / "testkit" / "mock_llm.py"), str(mport), str(tmp_path / "m.jsonl")],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ui = None
+    try:
+        time.sleep(1.0)
+        r = subprocess.run([sys.executable, "-m", "meshpool_harness", "--dir", str(proj), "-p", "hello", "--json",
+                            "--no-mcp"], cwd=str(repo / "app"), env=env, capture_output=True, text=True, timeout=180)
+        assert r.returncode == 0, r.stderr[-800:]
+        res = json.loads(r.stdout.strip().splitlines()[-1])
+        ui = subprocess.Popen([sys.executable, "-m", "meshpool_harness", "ui", "--no-browser", "--port", str(uport)],
+                              cwd=str(repo / "app"), env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        base, end, html = f"http://127.0.0.1:{uport}", time.time() + 60, ""
+        while time.time() < end:
+            try:
+                html = urllib.request.urlopen(base + "/", timeout=3).read().decode()
+                break
+            except Exception:  # noqa: BLE001
+                time.sleep(0.5)
+        tok = re.search(r'token: "([^"]+)"', html).group(1)
+        rows = json.loads(urllib.request.urlopen(urllib.request.Request(
+            base + "/api/agent", headers={"X-Meshpool-Token": tok}), timeout=30).read())
+        rows = rows if isinstance(rows, list) else rows.get("sessions") or []
+        assert res["chat_id"] in [x["id"] for x in rows]
+    finally:
+        mock.kill()
+        if ui:
+            ui.kill()

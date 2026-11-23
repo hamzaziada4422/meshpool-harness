@@ -40,6 +40,8 @@ class TermFrontend:
                 s.agent.ask = self.term.ask_questions        # ask_user questions are answered in the terminal
             else:
                 s.agent.headless = True                      # one request, no one to answer questions
+        if self.headless:
+            s.auto_resume = False                            # a script gets the failure now, not after a 12 minute wait
         self.sub = s.harness["id"] if s.harness["type"] == "acp" else None
 
     def detach(self):
