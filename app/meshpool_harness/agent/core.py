@@ -1737,6 +1737,10 @@ class Agent:
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
+        caps = self._caps(model, prof)
+        eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
+        if eff and "reasoning_effort" not in body:
+            body["reasoning_effort"] = eff            # never the provider's default (high): hidden tokens cost money
         try:
             self._fit_body(body)
         except Exception:  # noqa: BLE001 - fitting is an optimisation: never stop the turn over it
@@ -1756,6 +1760,13 @@ class Agent:
             pass
         return body
 
+    def _caps(self, model: str, prof: dict | None = None):
+        """What this model on its endpoint can do (core/modelcaps.py): every provider-specific choice reads this."""
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import modelcaps as MC
+        prov, bare = PV.split(model)
+        return MC.resolve(PV.endpoint(prov)[0], bare, prof)
+
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
         # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
@@ -1764,7 +1775,8 @@ class Agent:
         prov, body["model"] = PV.split(body["model"])
         base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
                                                # with OPENAI_BASE_URL, never with the Meshpool base)
-        wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
+        wire = "chatgpt" if prov == "chatgpt" else (
+            "responses" if self._caps(self.current_model()).wire == "responses" else "chat")
         if not key and wire != "chatgpt" and not PV.keyless_ok(base):
             raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         if wire != "chatgpt" and PV.key_problem(key):
@@ -1798,6 +1810,8 @@ class Agent:
                 elif wire == "responses":
                     from meshpool_harness.core.wire import SimpleLedger
                     extra = {k: v for k, v in body.items() if k not in ("model", "messages", "max_tokens", "temperature")}
+                    if "reasoning_effort" in extra:      # the Responses API names it reasoning.effort
+                        extra["reasoning"] = {"effort": extra.pop("reasoning_effort")}
                     resp = SimpleLedger("agent").chat(model=body["model"], messages=body["messages"],
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
@@ -2038,6 +2052,11 @@ class Agent:
             from meshpool_harness.core.metrics import CacheMeter
             self._meter = CacheMeter()
         self._meter.observe(u, self.usage)                 # full_miss_calls / full_miss_tokens, as in the benchmark loop
+        try:
+            from meshpool_harness.core import modelcaps as _MC
+            _MC.observe_usage(base, body["model"], u)      # does this endpoint report cached / reasoning tokens
+        except Exception:  # noqa: BLE001
+            pass
         try:                                               # a server that silently cuts a too-long prompt (Ollama)
             from meshpool_harness.core import context as CTX
             sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
@@ -2215,14 +2234,16 @@ class Agent:
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
             stream = False
-            b = AW.to_request(b)
+            from meshpool_harness.core import modelcaps as _MC
+            b = AW.to_request(b, cache=_MC.resolve(base, b.get("model", "")).cache == "explicit")
             url, hdrs = _PV.chat_target(base, key, b.get("model", ""), "messages")
         else:
             if stream:
                 b["stream"] = True
                 b["stream_options"] = {"include_usage": True}
             b = _PV.adapt_body(base, b)
-            if not _cache_hints_ok(base):             # a server that validates fields strictly refuses unknown ones
+            from meshpool_harness.core import modelcaps as _MC
+            if not _MC.resolve(base, b.get("model", "")).cache_hints:    # a strict server refuses fields it does not know
                 b.pop("prompt_cache_key", None)
                 b.pop("user", None)
             url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key

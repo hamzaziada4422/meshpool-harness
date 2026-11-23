@@ -110,3 +110,30 @@ Tests: `app/tests/test_fix_keys_a.py` and `test_fix_keys_b.py` run each style ag
 ## Older settings
 
 Old chats and settings may name agents that are gone: `chatgpt-subscription` opens Codex, and `claude-subscription`, `claude-code` and `gemini-cli` open Meshpool Code.
+
+## Model capabilities (how to add a model)
+
+Every cost and compatibility choice reads one object, `ModelCaps` (`app/meshpool_harness/core/modelcaps.py`), resolved per
+endpoint and model. No code asks whether a model is "GPT" or "DeepSeek".
+
+| Field | Values | Used for |
+|---|---|---|
+| `wire` | `chat`, `responses`, `messages` | which API the request speaks (Anthropic hosts use `messages`) |
+| `reasoning`, `efforts` | `none`, `effort` and the accepted values | `reasoning_effort` is sent explicitly: lowest for quick chat, middle for work, never the provider default |
+| `cache`, `cache_hints` | `auto`, `explicit`, `none`; hints yes/no | `explicit` adds `cache_control` breakpoints (system, tools, last turn); `auto` relies on a stable prefix; `prompt_cache_key` and `user` go only where `cache_hints` is true |
+| `window`, `max_output` | tokens | context fitting (core/context.py) and output limits |
+| `parallel_tools`, `reliability` | bool, `high`/`medium`/`low` | how many tool calls per step and how much guidance |
+| `usage_cached`, `usage_reasoning` | bool | learned from replies: whether cached and reasoning tokens are reported |
+
+Order of precedence for each field: your override, then what the endpoint's replies taught, then the kind of endpoint
+(its host), then the name table, then conservative defaults (chat completions, no reasoning parameter, no cache fields).
+
+- **Override one model**: set `MH_CAPS='{"reasoning":"effort","efforts":["low","medium","high"],"cache":"auto"}'`, or put a
+  `caps:` mapping in the model's profile (`app/profiles/*.yaml`). `MH_REASONING_EFFORT` (`low`, `medium`, `high`, `off`) and
+  `MH_WIRE` (`chat`, `responses`) override single fields.
+- **Add a family**: add a row to `app/defaults/model_hints.json` (or `model_hints.json` in your data folder): a `match`
+  regular expression plus the fields it sets.
+- **Unknown models** get the safe defaults: nothing a strict server could refuse is sent. A field the server rejects with
+  HTTP 400 is dropped, the request is retried, and the field is remembered for that model for the rest of the run.
+- Reasoning tokens are part of `completion_tokens` (OpenAI, Azure) or `output_tokens` (Responses, Anthropic), so cost and
+  `MH_BUDGET_USD` count them without a separate field.

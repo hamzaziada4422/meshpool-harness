@@ -165,3 +165,130 @@ def test_chat_lane_carries_fewer_tools_and_keeps_the_full_set_once_a_task_comes(
     assert len(a.tool_schemas()) > len(names)
     a.lane = "chat"
     assert len(a.tool_schemas()) > len(names)         # no flipping back: the prefix stays stable for the chat
+
+
+# ---- ModelCaps: one capability layer, request shape per kind of endpoint -------------------------------------------
+
+def _caps(base, model, **env):
+    from meshpool_harness.core import modelcaps as MC
+    MC.reset()
+    return MC.resolve(base, model)
+
+
+@pytest.mark.parametrize("base,model,wire,reasoning,cache,hints", [
+    ("https://api.openai.com/v1", "gpt-5.6-terra", "chat", "effort", "auto", True),
+    ("https://my.openai.azure.com/openai/v1", "my-gpt-5-deployment", "chat", "none", "auto", True),   # unknown name: safe
+    ("https://api.anthropic.com/v1", "claude-sonnet-5.5", "messages", "none", "explicit", False),
+    ("http://localhost:11434/v1", "llama3.1:8b", "chat", "none", "none", False),                      # Ollama
+    ("http://localhost:1234/v1", "gpt-oss-20b", "chat", "none", "none", False),                       # LM Studio
+    ("https://strict.example.com/v1", "some-model", "chat", "none", "none", False),
+])
+def test_modelcaps_per_endpoint_kind(base, model, wire, reasoning, cache, hints):
+    c = _caps(base, model)
+    assert (c.wire, c.reasoning, c.cache, c.cache_hints) == (wire, reasoning, cache, hints)
+
+
+def test_reasoning_effort_is_explicit_low_for_chat_medium_for_work_and_overridable(monkeypatch):
+    c = _caps("https://api.openai.com/v1", "gpt-5.6-terra")
+    assert c.effort("chat") == "low" and c.effort("task") == "medium"
+    monkeypatch.setenv("MH_REASONING_EFFORT", "high")
+    assert c.effort("task") == "high"
+    monkeypatch.setenv("MH_REASONING_EFFORT", "off")
+    assert c.effort("task") == ""
+    assert _caps("https://api.deepseek.com", "deepseek-v4.1-flash").effort("task") == ""   # no param it does not define
+
+
+def test_user_override_beats_name_and_host_hints(monkeypatch):
+    monkeypatch.setenv("MH_CAPS", json.dumps({"reasoning": "effort", "efforts": ["low", "high"], "cache": "none"}))
+    c = _caps("https://strict.example.com/v1", "my-azure-deployment")
+    assert c.reasoning == "effort" and c.effort("task") == "high" or c.effort("task") == "low"
+    assert c.cache == "none" and c.source["reasoning"] == "user"
+
+
+def test_body_carries_reasoning_effort_only_for_models_that_take_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_BASE_URL", "https://api.openai.com/v1")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test")
+    from meshpool_harness.core import modelcaps as MC
+    MC.reset()
+    a = _agent(tmp_path)
+    a.model = "gpt-5.6-terra"
+    assert a._body().get("reasoning_effort") == "medium"
+    a.lane = "chat"
+    assert a._body().get("reasoning_effort") == "low"
+    a.model = "deepseek-v4.1-flash"
+    assert "reasoning_effort" not in a._body()
+
+
+def test_two_consecutive_bodies_share_a_byte_identical_prefix(tmp_path):
+    a = _agent(tmp_path)
+    b1 = a._body()
+    a.messages.append({"role": "user", "content": "do the thing"})
+    b2 = a._body()
+    a.messages.append({"role": "assistant", "content": "ok"})
+    a.messages.append({"role": "user", "content": "and then"})
+    b3 = a._body()
+    assert json.dumps(b1["tools"]) == json.dumps(b2["tools"]) == json.dumps(b3["tools"])
+    p1 = json.dumps(b2["messages"][:-1])[:-1]
+    assert json.dumps(b3["messages"]).startswith(p1)
+    assert b1["messages"][0] == b2["messages"][0] == b3["messages"][0]       # the system prompt never changes
+
+
+def test_strict_server_that_400s_on_a_field_is_retried_without_it_and_remembers(tmp_path, monkeypatch):
+    import http.server
+    import threading
+    seen = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            seen.append(sorted(body))
+            if "reasoning_effort" in body:
+                out, code = b'{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}', 400
+            else:
+                out, code = json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok"},
+                                                      "finish_reason": "stop"}], "usage": {"prompt_tokens": 5,
+                                                      "completion_tokens": 1}}).encode(), 200
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("MESHPOOL_BASE_URL", f"http://127.0.0.1:{srv.server_port}/v1")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MH_CAPS", json.dumps({"reasoning": "effort", "efforts": ["low", "medium"]}))
+    monkeypatch.setenv("MH_STREAM", "0")
+    from meshpool_harness.core import modelcaps as MC
+    MC.reset()
+    core._REFUSED.clear()
+    try:
+        a = _agent(tmp_path)
+        a.model = "strict-model"
+        a.messages.append({"role": "user", "content": "hi"})
+        a.emit = lambda ev: None
+        msg, _ = a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        assert msg["content"] == "ok"
+        real = [x for x in seen if "messages" in x]
+        assert "reasoning_effort" in real[0] and "reasoning_effort" not in real[-1]
+        n = len([x for x in seen if "messages" in x])
+        a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        real = [x for x in seen if "messages" in x]
+        assert len(real) == n + 1 and "reasoning_effort" not in real[-1]       # remembered: right the first time
+    finally:
+        srv.shutdown()
+        core._REFUSED.clear()
+
+
+def test_usage_with_reasoning_tokens_counts_all_output_tokens(tmp_path, monkeypatch):
+    # completion_tokens already includes reasoning tokens on OpenAI/Azure; budgets must use that number
+    from meshpool_harness.core import modelcaps as MC
+    MC.reset()
+    MC.observe_usage("https://api.openai.com/v1", "gpt-5.6-terra",
+                     {"prompt_tokens": 100, "completion_tokens": 900,
+                      "completion_tokens_details": {"reasoning_tokens": 800},
+                      "prompt_tokens_details": {"cached_tokens": 64}})
+    c = MC.resolve("https://api.openai.com/v1", "gpt-5.6-terra")
+    assert c.usage_cached and c.usage_reasoning

@@ -41,7 +41,7 @@ def _blocks(content) -> list:
     return out
 
 
-def to_request(body: dict) -> dict:
+def to_request(body: dict, cache: bool | None = None) -> dict:
     system, msgs = [], []
 
     def push(role: str, blocks: list) -> None:
@@ -84,7 +84,7 @@ def to_request(body: dict) -> dict:
         else:
             push("user", _blocks(m.get("content")) or [{"type": "text", "text": "(empty)"}])
     out = {"model": body["model"], "max_tokens": int(body.get("max_tokens") or 8192), "messages": msgs}
-    cache = os.environ.get("MH_ANTHROPIC_CACHE", "1") != "0"
+    cache = (os.environ.get("MH_ANTHROPIC_CACHE", "1") != "0") if cache is None else cache
     if system:
         text = "\n\n".join(s for s in system if s)
         # Explicit cache breakpoints (the Messages API caches only what is marked): the instructions, the tools and
