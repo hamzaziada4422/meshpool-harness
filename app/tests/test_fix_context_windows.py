@@ -19,7 +19,7 @@ def toks(messages, tools):
 class Fake:
     def __init__(self, limit, steps, silent=False):
         self.limit, self.steps, self.n, self.silent = limit, steps, 0, False
-        self.seen, self.errors, self.silent = [], 0, silent
+        self.seen, self.errors, self.silent, self.summaries = [], 0, silent, 0
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -44,6 +44,12 @@ class Fake:
                            f"{need} tokens. Please reduce the length of the messages.")
                     out = json.dumps({"error": {"message": msg, "code": "context_length_exceeded"}}).encode()
                     self.send_response(400)
+                elif body["messages"][0]["content"].startswith("You write a handoff note"):
+                    outer.summaries += 1                            # a compaction call: answered in text, no script step
+                    msg = {"role": "assistant", "content": "Done: read files. Next: finish."}
+                    out = json.dumps({"choices": [{"message": msg, "finish_reason": "stop"}],
+                                      "usage": {"prompt_tokens": 10, "completion_tokens": 10}}).encode()
+                    self.send_response(200)
                 else:
                     step = outer.steps[min(outer.n, len(outer.steps) - 1)]
                     outer.n += 1

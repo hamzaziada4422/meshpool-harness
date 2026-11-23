@@ -59,6 +59,10 @@ def _offline_gateway(monkeypatch, tmp_path):
     # Unit tests exercise the mechanisms with no shipped profile assignment (app/defaults/profiles.json picks the
     # Codex-design engine for every route); test_profiles.test_shipped_assignment and test_codex_engine test that file.
     monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")
+    # Never the real data folder: a saved company profile, settings or memory on the developer's machine must not
+    # change what a test sees (the brief tests failed on machines with a saved company look).
+    (tmp_path / "home").mkdir(exist_ok=True)
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
