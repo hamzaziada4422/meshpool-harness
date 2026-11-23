@@ -820,6 +820,11 @@ def _forge_tool(name):
         if not _readable(p):                    # they run without asking too: the same fence as read_document
             return (f"{path} is outside the project. Ask the user to attach it (or open the folder it is in as "
                     "the project) and check it from there."), True
+        if kw.get("data_files"):                # check_deck's source data: the same fence, resolved per file
+            df = [_resolve(f) for f in ([kw["data_files"]] if isinstance(kw["data_files"], str) else kw["data_files"])]
+            if not all(_readable(f) for f in df):
+                return "A data file is outside the project. Ask the user to attach it and check from there.", True
+            kw["data_files"] = [str(f) for f in df]
         return getattr(FT, name)(str(p), **kw)
     return call
 

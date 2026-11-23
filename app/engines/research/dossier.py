@@ -136,6 +136,9 @@ Use ONLY the findings; never infer a change they do not state. Return ONLY JSON:
   "so_what": "one line: how the model or deck must reflect it"}]}"""
 
 
+DATA_BLOCK = re.compile(r"(?m)^--- .+\.(?:csv|xlsx|xlsm|xls) ---$")    # engine._brief's block for an attached data file
+
+
 def build_dossier(brief: str, facts: list[dict], *, client, models: list[str], out_dir: str, rules: dict | None = None,
                   now: str | None = None, search_fn=None, fetch_fn=None, task_id: str = "dossier",
                   max_questions: int | None = None) -> dict:
@@ -145,6 +148,13 @@ def build_dossier(brief: str, facts: list[dict], *, client, models: list[str], o
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     ident = identify(brief, client, models, task_id)
+    if not ident.get("companies") and DATA_BLOCK.search(brief):    # a brief about the user's own data file: web
+        d = {"identity": ident, "questions": [], "facts": [], "changes": [], "open": [], "failures": [],   # revenue
+             "seconds": round(time.time() - t0, 1),                  # figures of unrelated firms ended up as facts
+             "skipped": "the brief is about the attached data; no company to research"}
+        (out / "dossier.json").write_text(json.dumps(d, indent=1, default=str), encoding="utf-8")
+        (out / "dossier.md").write_text(to_markdown(d), encoding="utf-8")
+        return d
     qs = questions_for(ident, now, int(max_questions or os.environ.get("MH_DOSSIER_QUESTIONS") or 14))
     for q in qs:
         q["queries"] = _queries(q, ident)
