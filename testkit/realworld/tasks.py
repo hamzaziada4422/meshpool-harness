@@ -135,9 +135,9 @@ def grade_pdf_facts(wd, reply):
     ck.add("FY2025 net income 5.9m", re.search(r"5[.,]9\s*(m|million|mn|M)?", body) is not None)
     ck.add("headcount 1,284", re.search(r"1[,.\s]?284", body) is not None)
     ck.add("new market Brazil", "brazil" in body.lower())
-    ck.add("no wrong CEO (Johan Berg as current CEO)",
-           not re.search(r"(ceo|chief executive)[^.\n]{0,40}johan berg|johan berg[^.\n]{0,20}(is|as) (the )?(ceo|chief)",
-                         body, re.I))
+    ceo = [b for b in bullets if re.search(r"\bceo\b|chief executive", b, re.I)]
+    ck.add("the CEO bullet names Lindqvist (not the former CEO Berg alone)",
+           any("lindqvist" in b.lower() for b in ceo) or (not ceo and "lindqvist" in body.lower()))
     return ck.result()
 
 
@@ -159,7 +159,8 @@ def grade_csv_sales(wd, reply):
         except ValueError:
             return None
     q1 = num(a.get("q1"))
-    ck.add("q1 West 2025 revenue", q1 is not None and abs(q1 - e["q1"]) <= 0.01, f"got {a.get('q1')} want {e['q1']}")
+    # the exact sum is 511253.075 (a half-cent tie), so .07 and .08 are both right; float noise must not decide
+    ck.add("q1 West 2025 revenue", q1 is not None and abs(q1 - e["q1_exact"]) <= 0.0051, f"got {a.get('q1')} want {e['q1']}")
     ck.add("q2 top region Q3 2025", str(a.get("q2", "")).strip().lower() == e["q2"].lower(),
            f"got {a.get('q2')} want {e['q2']}")
     q3 = num(a.get("q3"))

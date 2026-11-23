@@ -1,6 +1,6 @@
-# Real-world benchmark (PARTIAL: swe done)
+# Real-world benchmark (PARTIAL: swe + office done)
 
-6 tasks x 1 run(s) per arm; same model (deepseek-v4.1-flash) through llm.meshpool.ai, same metering proxy (testkit/loop/small_meter.py), concurrency 3, arms interleaved task by task in the same hour. Cost = metered tokens at testkit/bench3/prices.json ({'in': 0.33, 'cached': 0.0066, 'out': 1.32}). Versions: {'codex': 'codex-cli 0.171.0', 'pi': '1.5.2', 'meshpool_app': '/tmp/claude-0/rw/mp-head/app', 'meshpool_git': 'bf04014694c0b2efea492f14dc37724c5dc509b8', 'meshpool_version': 'meshpool 0.0.12', 'python': '/usr/local/bin/python3'}.
+11 tasks x 1 run(s) per arm; same model (deepseek-v4.1-flash) through llm.meshpool.ai, same metering proxy (testkit/loop/small_meter.py), concurrency 3, arms interleaved task by task in the same hour. Cost = metered tokens at testkit/bench3/prices.json ({'in': 0.33, 'cached': 0.0066, 'out': 1.32}). Versions: {'codex': 'codex-cli 0.171.0', 'pi': '1.5.2', 'meshpool_app': '/tmp/claude-0/rw/mp-head/app', 'meshpool_git': 'bf04014694c0b2efea492f14dc37724c5dc509b8', 'meshpool_version': 'meshpool 0.0.12', 'python': '/usr/local/bin/python3'}.
 
 ## Suite (testkit/realworld/)
 
@@ -21,26 +21,28 @@ switch except MH_MODEL. **Codex CLI** 0.171.0 = `codex exec --json`, stdin close
 
 | Arm | Solved | $/task | $/solved | Calls/task | Input tok/task | Cached tok/task | Output tok/task | s/task | Errors | Timeouts |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Meshpool | 6/6 | $0.0160 | $0.0160 | 30.8 | 503,000 | 483,712 | 4,866 | 251 | 1 | 1 |
-| Codex CLI | 6/6 | $0.0092 | $0.0092 | 14.5 | 205,756 | 190,379 | 2,181 | 52 | 0 | 0 |
-| Pi | 6/6 | $0.0194 | $0.0194 | 9.3 | 259,832 | 211,456 | 1,544 | 40 | 0 | 0 |
+| Meshpool | 9/11 | $0.0639 | $0.0781 | 73.9 | 810,333 | 743,331 | 27,938 | 277 | 2 | 2 |
+| Codex CLI | 11/11 | $0.0109 | $0.0109 | 14.1 | 204,275 | 188,788 | 3,436 | 54 | 0 | 0 |
+| Pi | 10/11 | $0.0254 | $0.0279 | 16.7 | 366,948 | 316,556 | 5,062 | 61 | 0 | 0 |
 
 ## Per category
 
 | Category | Meshpool solved | Meshpool $/solved | Codex CLI solved | Codex CLI $/solved | Pi solved | Pi $/solved |
 |---|---|---|---|---|---|---|
 | swe | 6/6 | $0.0160 | 6/6 | $0.0092 | 6/6 | $0.0194 |
-| office | - | - | - | - | - | - |
+| office | 3/5 | $0.2023 | 5/5 | $0.0129 | 4/5 | $0.0408 |
 | everyday | - | - | - | - | - | - |
 
 ## Paired ratios (Meshpool / other, same task and run; 95% bootstrap over task-runs)
 
 | vs | pairs | Solves (MP vs them) | Cost ratio | $/solved ratio | Calls ratio | Time ratio |
 |---|---|---|---|---|---|---|
-| Codex CLI | 6 | 6 vs 6 (only MP 0, only them 0) | 1.74x (0.78-3.55) | 1.74x (0.78-3.55) | 2.13x (0.86-4.67) | 4.85x (1.35-16.54) |
-| Pi | 6 | 6 vs 6 (only MP 0, only them 0) | 0.82x (0.41-1.63) | 0.82x (0.41-1.63) | 3.30x (1.30-5.91) | 6.26x (2.07-14.21) |
+| Codex CLI | 11 | 9 vs 11 (only MP 0, only them 2) | 5.87x (1.60-10.98) | 7.17x (1.87-14.45) | 5.25x (1.76-9.84) | 5.13x (2.23-9.64) |
+| Pi | 11 | 9 vs 10 (only MP 0, only them 1) | 2.52x (0.70-6.06) | 2.80x (0.74-6.83) | 4.42x (1.67-10.27) | 4.53x (1.91-9.06) |
 
 - swe: vs Codex CLI cost 1.74x (0.78-3.55), $/solved 1.74x (0.78-3.55); vs Pi cost 0.82x (0.41-1.63), $/solved 0.82x (0.41-1.63)
+
+- office: vs Codex CLI cost 9.40x (2.28-15.66), $/solved 15.67x (3.73-53.41); vs Pi cost 3.72x (0.73-11.13), $/solved 4.96x (1.09-15.20)
 
 ## Where Meshpool loses most
 
@@ -48,11 +50,11 @@ Ranked by solves lost against the better of Codex/Pi, then by extra $ per run ag
 
 | Task | Cat | MP solved | MP $/run | cheaper other $/run | Codex (solved, $/run) | Pi (solved, $/run) | Reason (from traces) |
 |---|---|---|---|---|---|---|---|
+| xlsx_budget | office | 0/1 | $0.0357 | $0.0079 | 1, $0.0079 | 1, $0.0307 | FAILED: Budget formulas reference the Assumptions sheet (>=5 cells) (0 cells) [6/7 checks passed] |
+| invoices_fx | office | 0/1 | $0.0258 | $0.0062 | 1, $0.0062 | 0, $0.0308 | FAILED: one row per invoice line (no more than the 8 lines plus per-invoice subtotals) (19 rows mention invoice ids) [3/4 checks passed] |
+| pdf_report | office | 1/1 | $0.4154 | $0.0190 | 1, $0.0216 | 1, $0.0190 | all 4 checks passed |
+| pptx_chart | office | 1/1 | $0.1265 | $0.0183 | 1, $0.0183 | 1, $0.0645 | all 4 checks passed |
 | sympy__sympy-23534 | swe | 1/1 | $0.0359 | $0.0063 | 1, $0.0063 | 1, $0.0124 | ok |
-| sympy__sympy-22914 | swe | 1/1 | $0.0136 | $0.0048 | 1, $0.0048 | 1, $0.0321 | ok |
-| sympy__sympy-23262 | swe | 1/1 | $0.0222 | $0.0140 | 1, $0.0140 | 1, $0.0141 | ok |
-| sympy__sympy-23824 | swe | 1/1 | $0.0127 | $0.0064 | 1, $0.0064 | 1, $0.0322 | ok |
-| sympy__sympy-24539 | swe | 1/1 | $0.0059 | $0.0059 | 1, $0.0059 | 1, $0.0148 | ok |
 
 ## Every run
 
@@ -76,5 +78,20 @@ Ranked by solves lost against the better of Codex/Pi, then by extra $ per run ag
 | sympy__sympy-24539 | swe | 1 | mp | Y | 0.0059 | 9 | 82 | ok |
 | sympy__sympy-24539 | swe | 1 | codex | Y | 0.0059 | 9 | 22 | ok |
 | sympy__sympy-24539 | swe | 1 | pi | Y | 0.0148 | 13 | 45 | ok |
+| docx_tracked | office | 1 | mp | Y | 0.0035 | 8 | 22 | all 7 checks passed |
+| docx_tracked | office | 1 | codex | Y | 0.0106 | 12 | 29 | all 7 checks passed |
+| docx_tracked | office | 1 | pi | Y | 0.0181 | 19 | 49 | all 7 checks passed |
+| invoices_fx | office | 1 | mp | n | 0.0258 | 32 | 96 | FAILED: one row per invoice line (no more than the 8 lines plus per-invoice subtotals) (19 |
+| invoices_fx | office | 1 | codex | Y | 0.0062 | 8 | 21 | all 4 checks passed |
+| invoices_fx | office | 1 | pi | n | 0.0308 | 22 | 86 | FAILED: every line has invoice, customer, currency, item, qty, unit price, amount and USD  |
+| pdf_report | office | 1 | mp | Y | 0.4154 | 418 | 900 | still looping when the runner process was killed (>=15 min); stopped by hand, counted as a |
+| pdf_report | office | 1 | codex | Y | 0.0216 | 25 | 102 | all 4 checks passed |
+| pdf_report | office | 1 | pi | Y | 0.0190 | 14 | 54 | all 4 checks passed |
+| pptx_chart | office | 1 | mp | Y | 0.1265 | 128 | 372 | all 4 checks passed |
+| pptx_chart | office | 1 | codex | Y | 0.0183 | 16 | 76 | all 4 checks passed |
+| pptx_chart | office | 1 | pi | Y | 0.0645 | 53 | 161 | all 4 checks passed |
+| xlsx_budget | office | 1 | mp | n | 0.0357 | 42 | 155 | FAILED: Budget formulas reference the Assumptions sheet (>=5 cells) (0 cells) [6/7 checks  |
+| xlsx_budget | office | 1 | codex | Y | 0.0079 | 7 | 57 | all 7 checks passed |
+| xlsx_budget | office | 1 | pi | Y | 0.0307 | 20 | 83 | all 7 checks passed |
 
-VERDICT: FAIL - Meshpool $/solved $0.0160 = 1.74x Codex ($0.0092) and 0.82x Pi ($0.0194) [need <= 0.80x both]; solved 6 vs Codex 6 / Pi 6 [need >= each] (PARTIAL: not every category/run is in yet)
+VERDICT: FAIL - Meshpool $/solved $0.0781 = 7.17x Codex ($0.0109) and 2.80x Pi ($0.0279) [need <= 0.80x both]; solved 9 vs Codex 11 / Pi 10 [need >= each] (PARTIAL: not every category/run is in yet)

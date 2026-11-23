@@ -141,7 +141,10 @@ def sales_expected() -> dict:
             q3s[r["region"]] = q3s.get(r["region"], 0) + rev(r)
     q2 = max(q3s, key=q3s.get)
     q3 = sum(1 for r in rows if r["region"] == "East" and rev(r) > 1000)
-    return {"q1": q1, "q2": q2, "q3": q3, "_q3_by_region": {k: round(v, 2) for k, v in q3s.items()}}
+    from decimal import Decimal
+    q1_exact = float(sum(Decimal(r["units"]) * Decimal(r["unit_price"]) * (1 - Decimal(r["discount"])) for r in rows
+                         if r["region"] == "West" and r["date"].startswith("2025")))
+    return {"q1": q1, "q1_exact": q1_exact, "q2": q2, "q3": q3, "_q3_by_region": {k: round(v, 2) for k, v in q3s.items()}}
 
 
 def make_csv_sales(d: Path) -> None:

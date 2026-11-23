@@ -29,7 +29,15 @@ def load(run: Path) -> list[dict]:
         except ValueError:
             continue
         rows[(r["task"], r["arm"], r["rep"])] = r          # last row wins (a rerun replaces)
-    return list(rows.values())
+    # a (task, rep) counts only when every arm has a row and none was cut short by the meter's budget: an unpaired or
+    # budget-truncated run would bias the comparison
+    groups = defaultdict(list)
+    for r in rows.values():
+        groups[(r["task"], r["rep"])].append(r)
+    keep = [r for g in groups.values() if {x["arm"] for x in g} >= set(ARMS) and not any(x.get("budget_blocked") for x in g)
+            for r in g]
+    load.dropped = len(rows) - len(keep)
+    return keep
 
 
 def agg(rs: list[dict]) -> dict:
@@ -132,7 +140,8 @@ def render(rows, title, notes, meta) -> str:
     L.append(f"{len(tasks)} tasks x {len(reps)} run(s) per arm; same model ({meta.get('model', '?')}) through "
              f"llm.meshpool.ai, same metering proxy (testkit/loop/small_meter.py), concurrency {meta.get('parallel', '?')}, "
              f"arms interleaved task by task in the same hour. Cost = metered tokens at "
-             f"testkit/bench3/prices.json ({meta.get('price', '')}). Versions: {meta.get('versions', '')}.")
+             f"testkit/bench3/prices.json ({meta.get('price', '')}). Versions: {meta.get('versions', '')}."
+             + (f" {meta['dropped']} unpaired or budget-cut runs left out." if meta.get("dropped") else ""))
     L.append("")
     A = {a: agg([r for r in rows if r["arm"] == a]) for a in ARMS}
     L += ["## Headline", "", "| Arm | Solved | $/task | $/solved | Calls/task | Input tok/task | Cached tok/task | "
@@ -225,7 +234,7 @@ def main(argv=None):
     info = json.loads((run / "run.json").read_text())
     inv = info["invocations"][-1]
     meta = {"model": inv["model"], "parallel": inv["parallel"], "price": inv["price_used"],
-            "versions": inv["versions"], "final": a.final}
+            "versions": inv["versions"], "final": a.final, "dropped": getattr(load, "dropped", 0)}
     notes = json.loads(Path(a.notes).read_text()) if a.notes else {}
     md = render(rows, a.title, notes, meta)
     if a.preamble:
