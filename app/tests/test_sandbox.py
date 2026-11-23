@@ -1,8 +1,8 @@
 from meshpool_harness.core import sandbox as SB
 
 
-def test_off_by_default(monkeypatch, tmp_path):
-    monkeypatch.delenv("MH_SANDBOX", raising=False)
+def test_off_when_switched_off(monkeypatch, tmp_path):
+    monkeypatch.setenv("MH_SANDBOX", "0")      # G-01: on by default now; 0 turns it off
     assert SB.wrap(["bash", "-c", "ls"], tmp_path) == ["bash", "-c", "ls"]
 
 
