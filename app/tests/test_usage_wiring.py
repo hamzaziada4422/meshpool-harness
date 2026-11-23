@@ -335,3 +335,21 @@ def test_reviewer_calls_obey_the_cap(serve, monkeypatch, tmp_path):
     for t in ts:
         t.join(30)
     assert not errs and srv.chats == 4 and srv.max_running == 2
+
+
+def test_an_empty_reasoning_reply_that_is_retried_is_billed_too(env, monkeypatch):
+    """A reasoning model that thinks through its limit gets one larger retry; both calls are billed."""
+    from meshpool_harness.core import usage as U
+    from meshpool_harness.core.wire import SimpleLedger
+    replies = [{"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 4000}},
+               {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1000, "completion_tokens": 500}}]
+    monkeypatch.setattr(SimpleLedger, "_chat", lambda self, **kw: replies.pop(0))
+    task = U.start_task(label="t")
+    with U.bind(task, "engine"):
+        led = SimpleLedger("t")
+        out = led.chat(model="deepseek-v4.1-flash", messages=[{"role": "user", "content": "hi"}], max_tokens=4000)
+        U.record("deepseek-v4.1-flash", out["usage"])          # what LiveClient records for the reply it returns
+    t = task.totals()
+    assert t["calls"] == 2 and t["out"] == 4500

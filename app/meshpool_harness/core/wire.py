@@ -380,6 +380,9 @@ class SimpleLedger:
         except (KeyError, IndexError, TypeError, AttributeError):
             empty = False
         if empty and 0 < max_tokens < 24000:
+            from meshpool_harness.core import usage   # the caller records the reply it gets; this one is billed too
+            usage.record(kw.get("model", ""), out.get("usage"), base=getattr(self, "base_url", ""),
+                         extra={"retry": "empty_reply"})
             ex = dict(extra or {})
             for k in ("max_completion_tokens",):
                 if ex.get(k):

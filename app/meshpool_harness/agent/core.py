@@ -2293,6 +2293,8 @@ class Agent:
                             m["content"] = clean(m["content"])
                     continue
                 if kind == "rate_limit":
+                    if wire == "chat":                     # the provider says too many: fewer calls at once (P-12)
+                        GW.health(base, key, body["model"]).gate.throttled()
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
                         raise RuntimeError(msg + f" [rate limited for {_dur(rl_waited)}]")
