@@ -401,14 +401,27 @@ def git_status(root: str, fresh: bool = False) -> dict:
     key = str(root)
     gate = _GS_LOCKS.setdefault(key, threading.Lock())
     with gate:
+        stamp = _git_stamp(key)
         hit = _GS.get(key)
-        if hit and not fresh and time.monotonic() - hit[0] < _GS_TTL:
+        if hit and not fresh and hit[2] == stamp and time.monotonic() - hit[0] < _GS_TTL:
             return dict(hit[1])
         res = _git_status(root)
         if len(_GS) > 50:
             _GS.clear()
-        _GS[key] = (time.monotonic(), res)
+        _GS[key] = (time.monotonic(), res, stamp)
         return dict(res)
+
+
+def _git_stamp(root: str) -> tuple:
+    """A change to the remote (config), the branch (HEAD) or the index shows at once, whatever the cache age."""
+    out = []
+    for n in ("config", "HEAD", "index"):
+        try:
+            st = (Path(root) / ".git" / n).stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
 
 
 def _git_status(root: str) -> dict:
