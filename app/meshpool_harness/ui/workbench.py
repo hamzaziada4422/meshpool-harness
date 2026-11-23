@@ -303,7 +303,16 @@ def attach(root: str, name: str, data: bytes) -> dict:
 
 
 def attach_to(r: Path, name: str, data: bytes) -> dict:
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
+    if name.strip(".") == "":
+        name = "file"
+    stem, dot, suf = name.rpartition(".")
+    if dot and stem and len(suf) <= 20 and len(name) > 200:    # keep the extension, cut the rest (255-byte limit)
+        name = stem[:200 - len(suf) - 1] + "." + suf
+    name = name[:200]
+    while len(name.encode("utf-8")) > 200:
+        name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     from meshpool_harness import project_store as PS

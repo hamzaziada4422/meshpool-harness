@@ -145,11 +145,9 @@ def test_tab_stays_inside_the_settings_dialog(page):
     assert page.evaluate("!!document.activeElement.closest('.scrim')")
 
 
-def test_pending_delete_is_flushed_when_the_page_goes_away(page):
-    page.evaluate("S.delFlush = new Map([['abc', 1]])")
-    with page.expect_request("**/api/threads/abc") as req:
-        page.evaluate("dispatchEvent(new Event('pagehide'))")
-    assert req.value.method == "POST"
+def test_delete_needs_no_page_timer(page):
+    """The server finishes a delete by itself (test_chat_delete.py): the page keeps no timer that a reload could lose."""
+    assert page.evaluate("typeof S.delFlush") == "undefined"
 
 
 def test_back_returns_to_the_previous_page(page):

@@ -1755,11 +1755,14 @@ def thread_action(sid: str, body: dict) -> dict:
             old = _DEL_TIMERS.pop(sid, None)
             if old:
                 old.cancel()
-            t = threading.Timer(_grace(), _purge, args=(sid,))
-            t.daemon = True
-            _DEL_TIMERS[sid] = t
-            t.start()
+            if _grace() > 0:
+                t = threading.Timer(_grace(), _purge, args=(sid,))
+                t.daemon = True
+                _DEL_TIMERS[sid] = t
+                t.start()
         list_dirty()
+        if _grace() <= 0:                         # MH_DELETE_GRACE_S=0: no Undo window, gone at once
+            _purge(sid)
     elif act == "undelete":
         with _DEL_LOCK:
             if sid in DELETED or not read_meta(sid).get("deleted"):
