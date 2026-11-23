@@ -84,12 +84,33 @@ def deliverable_names(task_text: str) -> set[str]:
     return names
 
 
+_VOLATILE = [
+    (re.compile(r"0x[0-9a-fA-F]+"), "0xH"),
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?"), "TS"),
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?"), "HMS"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:ms|msec|milliseconds?|seconds?|secs?|s)\b"), "DUR"),
+    (re.compile(r"(?i)\b(pid|process|thread)[ =:#]*\d+"), r"\1 N"),
+    (re.compile(r"/tmp/[^\s'\"]+|/var/folders/[^\s'\"]+|[A-Za-z]:\\Users\\[^\s'\"]*?\\AppData\\Local\\Temp[^\s'\"]*"), "TMP"),
+]
+
+
+def failure_signature(code: int, output: str) -> str:
+    """Identity of a failure: all error lines (last 20, 2000 chars) with volatile tokens (addresses, durations, times,
+    temp paths, pids) normalised; ordinary digits are kept so 'FAIL: 7 issues' != 'FAIL: 6 issues'."""
+    lines = [l.strip() for l in output.splitlines() if l.strip()]
+    hits = [l for l in lines if ERR_LINE.search(l)]
+    text = "\n".join(hits[-20:])[-2000:] if hits else f"exit {code}|" + output.strip()[-300:]
+    for rx, rep in _VOLATILE:
+        text = rx.sub(rep, text)
+    return text
+
+
 class Guards:
     def __init__(self, ctx: dict, ws, allow_test_edits: bool = False, require_check: bool = True):
         self.ctx, self.ws = ctx, ws
         self.allow_test_edits = allow_test_edits
         self.require_check = require_check
-        self.fail_counts: dict[str, int] = {}
+        self.fail_counts: dict[str, tuple[str, int]] = {}   # cmd -> (last failure signature, consecutive count)
         self.pending_error: str | None = None
         self.reminded = False
 
@@ -176,15 +197,17 @@ class Guards:
     def after_command(self, cmd: str, code: int, output: str) -> str | None:
         if code == 0:
             self.pending_error = None
+            self.fail_counts.pop(cmd.strip(), None)
             return None
         if not enabled("repeat_failure"):
             return None
         real = key_error_line(output)
-        line = real or f"exit {code}"
         self.pending_error = real          # only nag about real error lines, not '[exit 1]' or timeouts
-        sig = cmd.strip() + "|" + re.sub(r"\d+", "N", line)[:200]
-        self.fail_counts[sig] = self.fail_counts.get(sig, 0) + 1
-        n = self.fail_counts[sig]
+        sig = failure_signature(code, output)
+        key = cmd.strip()
+        last_sig, n = self.fail_counts.get(key, (None, 0))
+        n = n + 1 if sig == last_sig else 1      # consecutive identical failures only
+        self.fail_counts[key] = (sig, n)
         if n == 3:
             log_failure(self.ctx, "repeat_failure", True, cmd)
             return ("GUARD repeat_failure: this exact command has failed 3 times with the same error. Do not run it "
