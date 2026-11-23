@@ -36,7 +36,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(A, "LIVE", {})
     monkeypatch.setattr(A, "_METAS", {})
     monkeypatch.setattr(A, "_ROWS", {})
-    monkeypatch.setattr(SK, "_DEFAULTS_SEEN", set())
+    monkeypatch.setattr(SK, "_DEFAULTS_SEEN", set(), raising=False)
     monkeypatch.setattr(MS, "_ENSURED", set())
     monkeypatch.setattr(MS, "_CACHE", {})
     C.ensure_home()
