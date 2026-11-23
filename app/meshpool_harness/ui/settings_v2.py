@@ -190,9 +190,18 @@ def key_spend(force: bool = False) -> dict:
 
 
 def usage_by_day(days: int = 30) -> list[dict]:
-    """Tokens per day from the saved chats (a chat counts on the day it was last used)."""
+    """Tokens and cost per day from the call ledger (by the day of each call). Days before the first ledger record
+    come from the saved chats (a chat counts on the day it was last used) and have no cost."""
     from meshpool_harness.agent.core import SESSIONS
+    from meshpool_harness.core import usage as U
+    U.flush()
+    recs = list(U.read_records())
+    first = min((float(r.get("ts") or 0) for r in recs), default=0.0)
     buckets: dict[str, dict] = {}
+    for day, b in U.summarize(recs)["by_day"].items():
+        buckets[day] = {"day": day, "in": b["in"], "out": b["out"], "calls": b["calls"], "cost": b["cost"],
+                        "unpriced_calls": b["unpriced_calls"]}
+    first_day = time.strftime("%Y-%m-%d", time.localtime(first)) if first else ""
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
@@ -200,10 +209,13 @@ def usage_by_day(days: int = 30) -> list[dict]:
             continue
         u = d.get("usage") or {}
         day = time.strftime("%Y-%m-%d", time.localtime(d.get("updated", 0) or 0))
-        b = buckets.setdefault(day, {"day": day, "in": 0, "out": 0, "calls": 0})
+        if first_day and day >= first_day:
+            continue
+        b = buckets.setdefault(day, {"day": day, "in": 0, "out": 0, "calls": 0, "cost": 0.0, "unpriced_calls": 0})
         b["in"] += int(u.get("in") or 0)
         b["out"] += int(u.get("out") or 0)
         b["calls"] += int(u.get("calls") or 0)
+        b["unpriced_calls"] += int(u.get("calls") or 0)
     return sorted(buckets.values(), key=lambda r: r["day"], reverse=True)[:days]
 
 

@@ -1402,8 +1402,12 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     sess.send(prompt)
                 reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
                               and isinstance(m.get("content"), str) and m.get("content").strip()), "")
+                from meshpool_harness.api import usage_dict
+                ud = usage_dict(agent)             # the old keys stay; cost_usd is None when no call had a price
                 out = {"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
-                       "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
+                       "usage": {**dict(agent.usage), **{k: ud[k] for k in ud if k in (
+                           "cost_usd", "unpriced_calls", "unreported_calls", "cache_write_tokens", "reasoning_tokens",
+                           "by_model")}}, "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
                 rv = getattr(agent, "last_review", None)
                 if rv:                                # the independent check of a big task (agent/grader.py)
                     out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
