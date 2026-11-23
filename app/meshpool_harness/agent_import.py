@@ -230,7 +230,8 @@ def _existing_facts() -> set:
 def _existing_mcp() -> set:
     try:
         from meshpool_harness.agent import mcp as M
-        return {json.dumps(_norm_server(v) or {}, sort_keys=True) for v in M.load_config().values() if isinstance(v, dict)}
+        return {json.dumps(_norm_server({k: x for k, x in v.items() if k not in ("disabled", "enabled")}) or {}, sort_keys=True)
+                for v in M.load_config().values() if isinstance(v, dict)}
     except Exception:  # noqa: BLE001
         return set()
 

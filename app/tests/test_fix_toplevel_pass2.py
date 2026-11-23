@@ -14,8 +14,7 @@ def test_html_to_text_keeps_non_ascii():
     pytest.importorskip("lxml")
     from meshpool_harness import web
     t = web.html_to_text("<html><body><article><p>" + "café 日本語 — " * 30 + "</p></article></body></html>")
-    t = t[0] if isinstance(t, tuple) else t
-    assert "café 日本語" in (t if isinstance(t, str) else str(t))
+    assert "café 日本語" in t["text"]
 
 
 def test_redirect_loop_is_an_error():
@@ -170,9 +169,8 @@ def test_models_html_page_and_402(monkeypatch):
     for status, data, want in ((200, None, "not a model list"), (404, None, "not a model list"),
                                (402, None, "payment")):
         monkeypatch.setattr(PS, "_get", lambda *a, _s=status, _d=data, **k: (_s, _d, ""))
-        r = PS.test_connection("http://x/v1", "key") if hasattr(PS, "test_connection") else None
-        if r is not None:
-            assert not r.get("ok") and want in r.get("error", "")
+        r = PS.test("http://x.example/v1", "key")
+        assert not r.get("ok") and want in r.get("error", ""), (status, r)
 
 
 def test_insights_state_list_does_not_crash(tmp_path, monkeypatch):

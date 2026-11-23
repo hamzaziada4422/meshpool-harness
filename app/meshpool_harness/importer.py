@@ -127,6 +127,11 @@ def _norm(spec: dict) -> dict | None:
     return out
 
 
+def norm_existing(spec: dict) -> dict | None:
+    """An entry already in Meshpool's mcp.json, switched on or off (imports start switched off)."""
+    return _norm({k: v for k, v in spec.items() if k not in ("disabled", "enabled")}) if isinstance(spec, dict) else None
+
+
 def toml_loads(text: str) -> dict:
     """Parse TOML: tomllib (Python 3.11+), else `tomli` if installed, else a small parser that understands what MCP
     server tables use (dotted [tables], strings, numbers, booleans, arrays and inline tables)."""
@@ -268,7 +273,7 @@ def find_mcp() -> list[dict]:
         have = M.load_config()
     except Exception:  # noqa: BLE001
         have = {}
-    have_sig = {json.dumps(_norm(v) or {}, sort_keys=True) for v in have.values() if isinstance(v, dict)}
+    have_sig = {json.dumps(norm_existing(v) or {}, sort_keys=True) for v in have.values() if isinstance(v, dict)}
     out, seen = [], set()
     for app, servers in mcp_sources():
         for name, raw in servers.items():
@@ -296,7 +301,7 @@ def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
 
     def add(servers: dict) -> str:
         n, i = base, 2
-        while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
+        while n in servers and json.dumps(norm_existing(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
             n, i = f"{base}-{i}", i + 1
         servers[n] = dict(spec, description=description or f"Imported from another app ({name}).",
                           disabled=True)               # another app's command: reviewed and switched on by the user
