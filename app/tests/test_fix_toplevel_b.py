@@ -123,8 +123,8 @@ def test_checkpoint_writes_are_atomic(tmp_path, monkeypatch):
     # a failed write leaves the old index intact
     before = cp.index_path.read_text()
     monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("boom")))
-    with pytest.raises(OSError):
-        cp._save_turns([])
+    cp.begin_turn("t2")                           # its index write fails: reported, never half-written
+    assert cp.warning and not cp._flush()
     monkeypatch.undo()
     assert cp.index_path.read_text() == before
 

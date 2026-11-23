@@ -293,13 +293,22 @@ def write_file(root: str, rel: str, text: str) -> dict:
     except OSError:
         pass
     p.write_bytes(text.encode("utf-8"))
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(root, str(p), "workbench")
+    except Exception:
+        pass
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
 # ======================================== git =====================================================================
 def attach(root: str, name: str, data: bytes) -> dict:
     """Save a file the user attached in the message box into the project, without overwriting anything."""
-    r = check_root(root)
+    return attach_to(check_root(root), name, data)
+
+
+def attach_to(r: Path, name: str, data: bytes) -> dict:
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
     if name.strip(".") == "":
         name = "file"
@@ -313,14 +322,24 @@ def attach(root: str, name: str, data: bytes) -> dict:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
-    base.mkdir(exist_ok=True)
-    p = base / name
-    stem, suf, i = p.stem, p.suffix, 2
-    while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
-        p = base / f"{stem} ({i}){suf}"
-        i += 1
-    with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
-        f.write(data)
+    try:
+        base.mkdir(exist_ok=True)
+        p = base / name
+        stem, suf, i = p.stem, p.suffix, 2
+        while p.exists() or p.is_symlink():      # exists() follows a dangling link: it wrote outside the project
+            p = base / f"{stem} ({i}){suf}"
+            i += 1
+        with open(p, "xb") as f:                 # x: never through a link or over a file made meanwhile
+            f.write(data)
+    except PermissionError:
+        raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
+    except OSError as e:
+        raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(r), str(p), "attach")
+    except Exception:
+        pass
     return {"path": (sub + "/" if sub else "") + p.name}
 
 

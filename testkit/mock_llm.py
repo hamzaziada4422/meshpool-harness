@@ -42,6 +42,12 @@ def plan(messages, tools):
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": f"goal{n}.txt", "content": f"part {n}\n"})
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
+    mf = __import__("re").search(r"make the file (\S+)", u)
+    if mf:                                                 # Undo and rewind tests: one file per message
+        if step == 0:
+            return ("tool", "write_file" if "write_file" in names else "write",
+                    {"path": mf.group(1).strip(".,"), "content": "made for " + mf.group(1) + "\n"})
+        return ("text", "Made " + mf.group(1).strip(".,") + ".")
     if "remember that" in u:                              # memory: shared by every agent through meshpool-assistant
         mem = next((n for n in names if n.endswith("memory_save")), None)
         if step == 0 and mem:
