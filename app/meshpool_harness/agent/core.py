@@ -2248,11 +2248,20 @@ class Agent:
             limit = min(limit, CTX.compact_chars(win, fixed, limit))
         except Exception:  # noqa: BLE001
             pass
-        if _context_size(self.messages) > limit:
+        try:                                       # a big window never compacts at a few thousand tokens
+            if win > 32_768:
+                limit = max(limit, min(int(self.hsettings()["compact_chars"]), 80_000))
+        except Exception:  # noqa: BLE001
+            pass
+        size = _context_size(self.messages)
+        guard = self.__dict__.setdefault("_compact_guard", __import__("meshpool_harness.core.context", fromlist=["x"]).CompactGuard())
+        edits = getattr(self.ws, "edits", 0)
+        if size > limit and guard.allow(size, edits):
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
             if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
                 self.compact_now()
+            guard.record(_context_size(self.messages), edits)
 
     def compact_now(self):
         """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
@@ -2488,7 +2497,7 @@ class Agent:
                         from meshpool_harness.core import context as CTX
                         said = CTX.parse_limit(msg)
                         if said and said < self._ctx_window():
-                            CTX.learn(self.current_model(), said)       # the server named its real window
+                            CTX.learn(self.current_model(), said, explicit=True)       # the server named its real window
                         self._ctx_tighten *= 0.7
                     except Exception:  # noqa: BLE001
                         pass
@@ -2689,11 +2698,10 @@ class Agent:
             _MC.observe_usage(base, body["model"], u)      # does this endpoint report cached / reasoning tokens
         except Exception:  # noqa: BLE001
             pass
-        try:                                               # a server that silently cuts a too-long prompt (Ollama)
+        try:                                               # a local server that silently cuts a too-long prompt (Ollama)
             from meshpool_harness.core import context as CTX
-            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
-            if d["in"] >= 512 and sent > 1500 and sent > d["in"] * 1.6:
-                CTX.learn(self.current_model(), int(d["in"] * 1.02) + CTX.max_output(self._ctx_window(), None))
+            CTX.observe_silent_cut(self.current_model(), CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or []),
+                                   u, self._ctx_window(), base)
         except Exception:  # noqa: BLE001
             pass
         self.emit({"type": "usage", **d})

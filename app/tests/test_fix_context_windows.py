@@ -216,13 +216,92 @@ def test_error_messages_are_context_errors():
     assert CTX.parse_limit("maximum context length is 4096 tokens") == 4096
 
 
-def test_silent_truncation_is_learned():
-    cl = LiveClient.__new__(LiveClient)
-    sent = [{"role": "user", "content": "x" * 40000}]
-    cl._check_silent_cut("ollama-model", sent, None, {"usage": {"prompt_tokens": 2048}}, 8192)
-    assert CTX.window("ollama-model", "http://localhost:11434/v1", probe_endpoint=False) < 8192
+def test_silent_truncation_needs_two_sane_observations_and_total_tokens():
+    base = "http://localhost:11434/v1"
+    win = CTX.DEFAULT_LOCAL if False else 32768
+    big = 80_000                                                       # tokens we sent
+    use = {"prompt_tokens": 20_000}
+    assert not CTX.observe_silent_cut("ollama-model", big, use, win, base)          # one observation is not enough
+    assert CTX.observe_silent_cut("ollama-model", big, use, win, base)              # a second, matching one is
+    assert CTX.window_info("ollama-model", base, probe_endpoint=False)[0] < win
+    CTX.forget()
+    for _ in range(3):                                                  # a model the table knows is never shrunk by it
+        assert not CTX.observe_silent_cut("llama-3.1-8b", big, use, 131072, base)
+    assert CTX.window_info("llama-3.1-8b", base, probe_endpoint=False) == (131072, "table")
+    CTX.forget()
+    # a tiny implied window is never believed from usage numbers
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("m2", 10_000, {"prompt_tokens": 2048}, win, base)
+    assert CTX.window_info("m2", base, probe_endpoint=False)[0] == CTX.DEFAULT_LOCAL
+    # a remote gateway is never shrunk by it, whatever it reports
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("deepseek-v4.1-flash", 40_000, {"prompt_tokens": 6000}, 1_048_576,
+                                          "https://llm.meshpool.ai/v1")
+    assert CTX.window("deepseek-v4.1-flash", "https://llm.meshpool.ai/v1", probe_endpoint=False) == 1_048_576
+    # fresh-only usage next to separate cache fields: the total is what counts
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("m3", 40_000, {"prompt_tokens": 6000, "cache_read_input_tokens": 33_000},
+                                          131072, base)
 
 
+def test_learn_ignores_guesses_below_the_floor_but_believes_an_error():
+    CTX.learn("tiny", 3000)
+    assert CTX.window_info("tiny", "https://api.example.com/v1", probe_endpoint=False)[1] != "learned"
+    CTX.learn("tiny", 3000, explicit=True)
+    assert CTX.window_info("tiny", "https://api.example.com/v1", probe_endpoint=False) == (3000, "learned")
+
+
+def test_compact_guard_breaks_the_loop():
+    g = CTX.CompactGuard()
+    assert g.allow(100_000, 0)
+    g.record(30_000, 0)
+    assert not g.allow(35_000, 0)                                      # not 30% bigger yet
+    assert g.allow(40_000, 0)
+    g.record(30_000, 0)
+    assert g.allow(40_000, 0)
+    g.record(30_000, 0)
+    assert not g.allow(500_000, 0)                                     # two idle compactions: stop compacting
+    assert g.allow(500_000, 3)                                         # files changed since: working again
+
+
+def test_usage_that_reports_fresh_tokens_only_does_not_loop_compaction(tmp_path, monkeypatch):
+    """The ws20 regression: a metering proxy at 127.0.0.1 in front of a 1M model, usage with fresh-only prompt_tokens."""
+    class Counting(Fake):
+        pass
+    steps = [("bash", {"command": "cat big.py | head -c 20000"})] * 40 + [("finish", {"answer": "done", "evidence": []})]
+    srv = Fake(2_000_000, steps)
+    # the fake reports fresh-only prompt tokens (tiny) with the cached part in separate fields
+    orig = srv.srv.RequestHandlerClass.do_POST
+
+    def post(self):
+        import io
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.rfile = io.BytesIO(json.dumps(body).encode())
+        self.headers.replace_header("Content-Length", str(len(json.dumps(body).encode())))
+        orig(self)
+    monkeypatch.setattr(srv.srv.RequestHandlerClass, "do_POST", post)
+    monkeypatch.setenv("MESHPOOL_BASE_URL", srv.url)
+    monkeypatch.setenv("MH_PROBE_CONTEXT", "0")
+    cl = LiveClient("phase_2_build")
+    cl.notify = lambda t: None
+    real = cl.ledger.chat
+
+    def chat(**kw):
+        r = real(**kw)
+        r["usage"] = {"prompt_tokens": 900, "cache_read_input_tokens": 40_000, "completion_tokens": 30}
+        return r
+    monkeypatch.setattr(cl.ledger, "chat", chat)
+    summaries = []
+    from meshpool_harness.agent import compaction as CP
+    real_ch = CP.compact_history
+    monkeypatch.setattr(CP, "compact_history", lambda *a, **k: summaries.append(1) or real_ch(*a, **k))
+    ws = project(tmp_path)
+    r = L.run("inspect big.py", client=cl, model="deepseek-v4.1-flash", profile=None, ws=ws, ctx={"task_id": "t"},
+              system_text="You are an agent.", require_check=False, caps=L.Caps(max_turns=60))
+    srv.stop()
+    assert r.ok
+    assert CTX.window("deepseek-v4.1-flash", srv.url, probe_endpoint=False) >= 131072      # not shrunk by the usage numbers
+    assert len(summaries) == 0                                                              # nothing near a 1M window
 def test_compaction_budgets_fit_small_windows():
     from meshpool_harness.agent import compaction as CP
     b = CP.budgets(4096)

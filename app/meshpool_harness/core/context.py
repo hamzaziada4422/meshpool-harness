@@ -317,17 +317,76 @@ def target(win: int) -> int:
     return int(min(win * TRIGGER, TARGET_CAP))
 
 
-def learn(model: str, tokens: int) -> int:
-    """Remember a window the server showed us (an error naming it, or a prompt it silently cut). Only ever shrinks."""
+LEARN_FLOOR = 16_384             # a window below this is only ever believed when the server NAMED it in an error
+
+
+def learn(model: str, tokens: int, explicit: bool = False) -> int:
+    """Remember a window the server showed us. explicit: an error message named it (parse_limit); anything else (a
+    guess from usage numbers) is ignored below LEARN_FLOOR. Only ever shrinks, and only in this process."""
     bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
     tokens = int(tokens)
-    if tokens < 512:
+    if tokens < (512 if explicit else LEARN_FLOOR):
         return window(model, probe_endpoint=False)
     with _LOCK:
         cur = _LEARNED.get(bare)
         if cur is None or tokens < cur:
             _LEARNED[bare] = tokens
         return _LEARNED[bare]
+
+
+_SILENT: dict[str, list] = {}
+
+
+def observe_silent_cut(model: str, sent_tokens: int, usage: dict, win: int, base: str | None = None) -> bool:
+    """A local server that silently cuts a too-long prompt (Ollama) reports far fewer prompt tokens than were sent.
+    Believed only when: the endpoint is local, the window is a guess (unknown model), never one the table or provider states, the TOTAL prompt tokens
+    (fresh plus cached) stay far under what was sent twice in a row, and the implied window is a sane size. A gateway
+    that reports only fresh tokens, or a metering proxy in front, therefore never shrinks the window."""
+    try:
+        u = usage or {}
+        used = int(u.get("prompt_tokens") or 0)
+        used += int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        used += int(u.get("cache_read_input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+        used = max(used, int(u.get("total_tokens") or 0) - int(u.get("completion_tokens") or 0))
+        if base is None:
+            from meshpool_harness import providers as PV
+            base = PV.key_base()
+        if not _is_local(base or "") or window_info(model, base, probe_endpoint=False)[1] not in ("default", "learned"):   # never below a size the table or provider states
+            return False
+        implied = used + max_output(win, None)
+        if used < 512 or sent_tokens < 1500 or sent_tokens <= used * 1.6 or implied < LEARN_FLOOR:
+            _SILENT.pop(model, None)
+            return False
+        seen = _SILENT.setdefault(model, [])
+        seen.append(implied)
+        del seen[:-2]
+        if len(seen) < 2 or abs(seen[0] - seen[1]) > 0.15 * max(seen):
+            return False
+        learn(model, int(min(seen)))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+class CompactGuard:
+    """Compaction must not become a loop: it may run again only after the conversation has grown 30% since the last
+    one, and after two compactions with no file changed in between it stops (the task carries on or finishes)."""
+
+    def __init__(self):
+        self.last_size = 0
+        self.last_edits = None
+        self.idle = 0
+
+    def allow(self, size: int, edits: int = 0) -> bool:
+        if self.last_size and size < self.last_size * 1.3:
+            return False
+        if self.idle >= 2 and edits == self.last_edits:
+            return False
+        return True
+
+    def record(self, size_after: int, edits: int = 0) -> None:
+        self.idle = self.idle + 1 if edits == self.last_edits else 0
+        self.last_size, self.last_edits = size_after, edits
 
 
 def forget() -> None:
@@ -337,6 +396,7 @@ def forget() -> None:
         _LISTS.clear()
         _FAILED.clear()
         _NO_SHOW.clear()
+        _SILENT.clear()
         _TOLD.clear()
 
 
