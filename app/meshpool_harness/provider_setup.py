@@ -65,10 +65,10 @@ def normalise_base(url: str) -> str:
     return parse(url).base
 
 
-def parse(url: str, kind: str = "") -> EP.Parsed:
+def parse(url: str, kind: str = "", api_version: str = "") -> EP.Parsed:
     """The pasted address understood: base, provider kind, an Azure deployment and api-version found inside it."""
     try:
-        return EP.parse_pasted(url, kind)
+        return EP.parse_pasted(url, kind, api_version)
     except EP.EndpointError as e:
         raise SetupError(str(e)) from None
 
@@ -180,10 +180,11 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
     and any endpoint with no list, has none to read: there the check is a one-token chat call to `model` (for Azure
     the deployment name), and without a model the answer says so (needs_model) rather than calling the key bad."""
     t0 = time.time()
-    pp = parse(base_url, kind)
+    pp = parse(base_url, kind, api_version)
     base, kind = pp.base, pp.kind
     caps = EP.caps(kind)
     ver = (api_version or pp.api_version or "").strip()
+    asked_v1 = "/openai/v1" in (base_url or "").lower()
     model = (model or pp.deployment or "").strip()
     out = {"ok": False, "wire": "", "base_url": base, "models": [], "latency_ms": 0, "error": "", "kind": kind,
            "label": caps["label"], "api_version": ver or caps["version"], "deployment": bool(caps["deployment"]),
@@ -202,6 +203,19 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
 
     def probe_now() -> dict:
         pr = EP.probe(base, key, model, kind=kind, api_version=ver)
+        if not pr["ok"] and pr["status"] == 404 and kind == "azure-v1" and not asked_v1 \
+                and EP._azure_family(host) in ("classic", "cognitive"):
+            # An older resource without the /openai/v1 route: the same address works on the deployment route. Try that
+            # before telling the user anything is wrong, and remember it so Save uses the route that worked.
+            origin = base[:-len("/openai/v1")] if base.endswith("/openai/v1") else base
+            old = EP.probe(origin, key, model, kind="azure-classic", api_version=EP.AZURE_DEFAULT_VERSION)
+            if old["ok"]:
+                with _LOCK:
+                    _FALLBACK[(base.rstrip("/").lower(), _fp(key))] = {"kind": "azure-classic", "base": origin,
+                                                                      "version": EP.AZURE_DEFAULT_VERSION}
+                out.update(kind="azure-classic", base_url=origin, api_version=EP.AZURE_DEFAULT_VERSION,
+                           label=EP.caps("azure-classic")["label"])
+                pr = old
         out["latency_ms"] = int((time.time() - t0) * 1000)
         if pr["ok"]:
             out.update(ok=True, wire=caps["wire"], models=[{"id": model}], error="")
@@ -272,6 +286,9 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
     return out
 
 
+_FALLBACK: dict = {}      # (v1 base, key fingerprint) -> the older Azure route that answered where /openai/v1 did not
+
+
 def _remember(base: str, key: str, models: list) -> None:
     with _LOCK:
         _TESTS[(base.rstrip("/").lower(), _fp(key))] = {"t": time.time(), "models": [m["id"] for m in models]}
@@ -304,7 +321,7 @@ def catalog() -> list[dict]:
 
 def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "", allow_custom: bool = False,
          env: str = "", confirm_env: bool = False, api_version: str = "", kind: str = "") -> dict:
-    pp = parse(base_url, kind)
+    pp = parse(base_url, kind, api_version)
     base, kind = pp.base, pp.kind
     ver = (api_version or pp.api_version or "").strip()
     model = re.sub(r"[\r\n]", "", str(default_model or "") or pp.deployment).strip()
@@ -323,6 +340,9 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
             and not allow_custom:
         raise SetupError(f"{model} is not in this endpoint's model list. Pick one from the list, or confirm that "
                          "you typed it on purpose.")
+    fb = _FALLBACK.get((base.rstrip("/").lower(), _fp(key)))
+    if fb and kind == "azure-v1" and "/openai/v1" not in (base_url or "").lower():
+        base, kind, ver = fb["base"], fb["kind"], fb["version"]      # the route the test found working
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
         wire = "anthropic" if PV.host(base).endswith("anthropic.com") else EP.wire_of(kind)

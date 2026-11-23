@@ -56,7 +56,8 @@ def _azure_pair() -> tuple[str, str]:
         return "", ""
     from meshpool_harness.core import endpoint as EP
     try:
-        return k, EP.parse_pasted(e, "azure-classic" if "azure" not in e.lower() else "").base
+        return k, EP.parse_pasted(e, "azure-classic",
+                                  os.environ.get("AZURE_OPENAI_API_VERSION", "")).base
     except EP.EndpointError:
         return "", ""
 
@@ -85,6 +86,12 @@ def key_kind() -> str:
     from meshpool_harness.core import endpoint as EP
     src = _env_pair()[2]
     saved = "" if src else _cfg("MH_API_KIND")
+    if src == "azure":
+        try:
+            return EP.parse_pasted(os.environ.get("AZURE_OPENAI_ENDPOINT", ""), "azure-classic",
+                                   os.environ.get("AZURE_OPENAI_API_VERSION", "")).kind
+        except EP.EndpointError:
+            pass
     return saved if saved in EP.CAPS else EP.detect(key_base())
 
 

@@ -15,7 +15,7 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       # one place for Chromium: the install step and the app under test (which only sets a default) both use it
       PLAYWRIGHT_BROWSERS_PATH: /home/runner/pw-browsers

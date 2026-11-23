@@ -23,7 +23,7 @@ A full address pasted from a provider's docs works too: Meshpool cuts off `/chat
 | Cerebras, SambaNova | `https://api.cerebras.ai/v1`, `https://api.sambanova.ai/v1` | provider key | pick from the list |
 | Ollama, LM Studio | `http://localhost:11434/v1`, `http://localhost:1234/v1` | none (leave empty) | pick from the list |
 | vLLM, LiteLLM proxy, your own gateway | its address, usually ending `/v1` | whatever it expects as a Bearer key | list if it has one, else type |
-| Azure OpenAI | `https://NAME.openai.azure.com` | Key 1 or Key 2 | the deployment name |
+| Azure OpenAI | `https://NAME.openai.azure.com` (Meshpool uses its `/openai/v1` route; older resources fall back to the deployment route) | Key 1 or Key 2 | the deployment name |
 | Azure OpenAI v1 route | `https://NAME.openai.azure.com/openai/v1` | Key 1 or Key 2 | the deployment name |
 | Azure AI Foundry | `https://NAME.services.ai.azure.com` (OpenAI route) or `.../models` | resource key | the deployment name |
 | Claude on Azure Foundry | `https://NAME.services.ai.azure.com/anthropic` | resource key | the deployment name |
@@ -32,11 +32,11 @@ A full address pasted from a provider's docs works too: Meshpool cuts off `/chat
 
 1. In the Azure portal open your Azure OpenAI or Foundry resource, then Keys and Endpoint. Copy the endpoint (`https://NAME.openai.azure.com`) and Key 1.
 2. In Azure AI Foundry, Deployments, copy the name of the deployment you created. Azure runs deployments you name yourself, so this is the "model" Meshpool needs. It is not always the model's own name.
-3. In Meshpool paste the endpoint. The page recognises Azure and shows Deployment name and API version. Paste the deployment name. Leave the API version alone (default `2024-10-21`) unless Azure says it is not supported.
+3. In Meshpool paste the endpoint. The page recognises Azure and shows Deployment name and API version. Paste the deployment name. Leave the API version empty: Meshpool then uses Azure's `/openai/v1` route, which needs no version and serves OpenAI, DeepSeek, Llama and Grok deployments alike. If the resource has no such route, Test connection tries the older deployment route (version `2024-10-21`) and Save keeps whichever worked. Type a version only if you want the older route.
 4. Paste the key and press Test connection. Azure has no list of your deployments to read, so the test is a one-token chat call to your deployment. Without a deployment name the test says so rather than calling the key bad.
 5. Save. You can also paste the whole address from the portal's code sample, for example `https://NAME.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21`: the deployment and version are picked out of it.
 
-Meshpool sends the key in Azure's `api-key` header, never as a Bearer token, and never to any host but the address you saved. The `/openai/v1` address needs no api-version.
+Meshpool sends the key in Azure's `api-key` header, never as a Bearer token, and never to any host but the address you saved. The `/openai/v1` route needs no api-version (Microsoft accepts the key as the `api-key` header or as a Bearer token on that route).
 
 ## Keys in your environment
 
