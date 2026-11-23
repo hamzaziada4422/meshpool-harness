@@ -103,12 +103,15 @@ def test_turn_budget_hook_thresholds(tmp_path):
     assert E.turn_budget(39, 50, ws) is None
     assert "still no .xlsx" in E.turn_budget(40, 50, ws)
     assert E.turn_budget(41, 50, ws) is None            # wrap-up once
-    assert "FINISH NOW: 48 of 50 turns used; 2 turns left" in E.turn_budget(48, 50, ws)
-    assert "1 turn left" in E.turn_budget(49, 50, ws)
+    assert "SAVE NOW: 48 of 50 turns used, 2 left" in E.turn_budget(48, 50, ws)      # no workbook: save, not finish
+    assert "1 left" in E.turn_budget(49, 50, ws)
     assert E.turn_budget(50, 50, ws) is None
     ws2 = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
     ws2.nudged = True
     (tmp_path / "m.xlsx").write_bytes(b"x")
+    assert "FINISH NOW: 48 of 50 turns used; 2 turns left" in E.turn_budget(48, 50, ws2)
+    assert "1 turn left" in E.turn_budget(49, 50, ws2)
+    ws2.wrapped = False
     assert "Stop adding features" in E.turn_budget(40, 50, ws2)
 
 
@@ -327,3 +330,23 @@ def test_a_destination_that_is_a_reviewed_round_is_not_copied_to_latest(tmp_path
     model.write_bytes(b"round1")                                   # the file on disk is already a reviewed round
     rv.finalize({"ok": False, "artifacts": [str(model)], "answer": "stopped"}, at_cap=True)
     assert not (tmp_path / ".run" / "review" / "latest").exists()
+
+
+# ---- the last-turns note without a saved workbook says save, not finish (M30-04)
+
+def test_last_turns_without_a_workbook_send_one_save_now_note(tmp_path):
+    ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    note = E.turn_budget(8, 10, ws)                         # fresh workspace: BUILD NOW would also be due at turn 6+
+    assert "SAVE NOW: 8 of 10 turns used, 2 left, and no .xlsx has been saved" in note
+    assert "FINISH NOW" not in note and "Do not change the workbook" not in note and "BUILD NOW" not in note
+    assert "last saved workbook is checked and delivered" in note
+    assert ws.nudged is True
+    assert "SAVE NOW: 9 of 10 turns used, 1 left" in E.turn_budget(9, 10, ws)
+
+
+def test_last_turns_with_a_workbook_still_send_finish_now(tmp_path):
+    ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    (tmp_path / "m.xlsx").write_bytes(b"x")
+    note = E.turn_budget(8, 10, ws)
+    assert "FINISH NOW: 8 of 10 turns used; 2 turns left" in note and "Do not change the workbook" in note
+    assert "SAVE NOW" not in note and "BUILD NOW" not in note

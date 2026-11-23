@@ -385,12 +385,18 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
     17-tab model, kept refining it and hit the turn cap without calling finish; these make it land the work:
     - at ~60% with no workbook: BUILD NOW (build_first);
     - at ~80%: stop adding features, run the checks, fix only failures, finish;
-    - on the last two turns: finish now."""
+    - on the last two turns: finish now (or, with no workbook saved yet, save one now)."""
     ws.turn = turn                                    # last completed turn (reported if the loop raises)
     left = max_turns - turn                           # turns still to come after this note
     notes = [n for n in [build_first(turn, max_turns, ws)] if n]
     if left <= 0:
         return "\n".join(notes) or None
+    if left <= 2 and not ws.saved_workbook():
+        ws.wrapped = ws.nudged = True                 # one instruction only: no BUILD NOW beside it, no "do not change"
+        return (f"SAVE NOW: {turn} of {max_turns} turns used, {left} left, and no .xlsx has been saved. Run your "
+                "build script now so the workbook exists (write build_workbook.py first if you have none), run the "
+                "checker, and call finish with it. If the run ends first, the last saved workbook is checked and "
+                "delivered.")
     if left <= 2:
         ws.wrapped = True
         notes.append(f"FINISH NOW: {turn} of {max_turns} turns used; {left} turn{'s' if left != 1 else ''} left. "
