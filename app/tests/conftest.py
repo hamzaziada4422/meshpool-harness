@@ -54,6 +54,10 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness.core import modelcaps as MCAPS
     monkeypatch.setenv("MH_CAPS_LEARNED", str(tmp_path / "caps_learned.json"))   # learned facts never reach the real folder
     MCAPS.reset()
+    # Loopback mocks count as local servers, which wait 15 min for a first byte and 5 min between bytes (H-06): tests that
+    # check the timeouts use short ones, so the local floors are off here (the H-06 test turns them on).
+    monkeypatch.setenv("MH_LOCAL_FIRST_BYTE_S", "1")
+    monkeypatch.setenv("MH_LOCAL_IDLE_S", "1")
     # A test that misses its mock must fail, never reach a real model: a module reload once let a patched Agent fall
     # through to the live endpoint (12 paid calls). Tests that run a mock server set their own URL after this.
     monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/v1")

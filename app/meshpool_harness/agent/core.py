@@ -375,14 +375,16 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
-        t = float(os.environ.get("MH_PROBE_S", "30"))
+        from meshpool_harness.core import modelcaps as _MCP
+        t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
         with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
             r.read()
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
-        return f"HTTP 0: {e}"
+        from meshpool_harness.core import refusals as _RF
+        return ("tls: " if _RF.is_tls_error(str(e)) else "") + f"HTTP 0: {e}"
 
 
 def _image_in_newest_ask(messages: list) -> bool:
@@ -1340,6 +1342,7 @@ class Agent:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                msg = self._text_tools(msg)             # a model without tool calling asks for tools in text (W-02)
                 cut_off = self._finish == "length"     # the reply hit the output limit (max_tokens)
                 cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
@@ -2072,10 +2075,49 @@ class Agent:
         except Exception:  # noqa: BLE001 - shaping is an adaptation: never stop the turn over it
             return body
 
+    def _prompt_cut(self, resp: dict, body: dict, base: str, turn: dict) -> bool:
+        """H-02: a local server (Ollama) may cut a too-long prompt without an error. When the reply's prompt_tokens are far
+        below what was sent, learn the real window, tell the user how to raise it, and report True (resend, fitted)."""
+        try:
+            from meshpool_harness.core import context as CTX
+            from meshpool_harness.core import modelcaps as MC
+            u = resp.get("usage") or {}
+            n_in = u.get("prompt_tokens", 0) or 0
+            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
+            if not (n_in >= 512 and sent > 1500 and sent > n_in * 1.6):
+                return False
+            win = int(n_in * 1.05)
+            if win >= self._ctx_window():
+                return False
+            CTX.learn(self.current_model(), win)
+            MC.learn(base, body.get("model", ""), window=win)
+            for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
+                turn[k] += v                           # the discarded reply was paid for
+                self.usage[k] += v
+            how = ("set OLLAMA_CONTEXT_LENGTH (or num_ctx in a Modelfile) to a larger value and restart Ollama"
+                   if re.search(r"ollama|:11434", base or "", re.I) else "raise the server's context size")
+            self.emit({"type": "status", "text": f"The server read only about {n_in:,} tokens of this conversation (its "
+                                                 f"real context window is about {win:,}). To use a larger window, {how}. "
+                                                 "The conversation is shortened to fit and sent again."})
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _text_tools(self, msg: dict) -> dict:
+        """On an endpoint that cannot take tools, read <tool_call> blocks in the reply as ordinary tool calls."""
+        try:
+            if msg.get("tool_calls") or not self._caps(self.current_model()).no_tools:
+                return msg
+            from meshpool_harness.core import compat as _CP
+            rest, calls = _CP.parse_text_tool_calls(msg.get("content") or "")
+            return {**msg, "content": rest, "tool_calls": calls} if calls else msg
+        except Exception:  # noqa: BLE001
+            return msg
+
     def _tls_text(self, base: str, msg: str) -> str:
         from meshpool_harness.core import refusals as RF
         return (f"The connection to {base or 'the endpoint'} failed: its TLS certificate is not trusted. "
-                + RF.diagnose(msg)["note"] + " (" + msg[:160] + ")")
+                + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
 
     def _diagnose(self, kind: str, msg: str, body: dict):
         """refusals.diagnose for a 4xx the request itself caused (None for anything else or when nothing is named)."""
@@ -2179,6 +2221,13 @@ class Agent:
                 if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
                     raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
                 self._first_scale = 1.0
+                if not cut_resent and self._prompt_cut(resp, body, base, turn):
+                    cut_resent = True                  # the server cut the prompt: the reply is discarded, resend fitted
+                    if streamed:
+                        self.emit({"type": "stream_reset"})
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    continue
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -2628,6 +2677,11 @@ class Agent:
         # long task the same way ("The read operation timed out").
         idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
+        _bare = _PV.split(b.get("model", ""))[1]
+        first = _MC.first_byte_timeout(base, _bare, first)     # a local server loads the model first (H-06)
+        if _MC.is_local(base):
+            idle = max(idle, float(os.environ.get("MH_LOCAL_IDLE_S", "300")))
+        t_sent = time.time()
         got_text = False
         gen = getattr(self, "_gen", 0)
         live = []
@@ -2645,6 +2699,8 @@ class Agent:
             c.connect = checked_connect
         try:
             with _urlopen(req, first, sink) as r:
+                if stream or _MC.is_local(base):
+                    _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
                 if not stream:
                     raw_body = r.read()
                     try:

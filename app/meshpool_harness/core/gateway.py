@@ -226,6 +226,8 @@ class Health:
         got = None                                  # stays None when the probe raised (Stop): record nothing
         try:
             res = probe()
+            if str(res).startswith("tls"):          # an untrusted certificate is final: no waiting (S-11)
+                raise RuntimeError(_tls_text(res))
             got = "up" if res == "ok" else "auth" if res == "auth" else "down"
         finally:
             with self.cond:
@@ -291,6 +293,8 @@ class Health:
             wait, got = 0.0, ""
             try:
                 got = probe()
+                if str(got).startswith("tls"):
+                    raise RuntimeError(_tls_text(got))
                 if got == "auth":
                     raise RuntimeError("HTTP 401: the endpoint stopped accepting the API key while the task ran.")
                 with self.cond:
@@ -309,6 +313,12 @@ class Health:
                 emit({"type": "status", "text": f"The model endpoint isn't answering ({str(got)[:80]}). Checking "
                                                 f"again in {wait:.0f} s, for up to {max(1, int(budget_s // 60))} min. "
                                                 "Press Stop to end."})
+
+
+def _tls_text(res: str) -> str:
+    from meshpool_harness.core import refusals as RF
+    return ("The endpoint's TLS certificate is not trusted, so it cannot be reached. " + (RF.diagnose(str(res)) or {}).get("note", "Trust its CA or use http:// for a local server.")
+            + " (" + str(res)[:160] + ")")
 
 
 _GATES: dict[str, Gate] = {}
