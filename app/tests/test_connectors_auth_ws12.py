@@ -98,7 +98,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     CN._FLOWS.clear()
-    CN._CANCELLED.clear()
+    getattr(CN, "_CANCELLED", {}).clear()
     CN._DEVICE.clear()
     return tmp_path
 
