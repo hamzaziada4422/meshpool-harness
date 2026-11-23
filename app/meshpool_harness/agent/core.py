@@ -353,6 +353,9 @@ class _TrackHTTPS(_Track, urllib.request.HTTPSHandler):
     pass
 
 
+_ABORT: contextvars.ContextVar = contextvars.ContextVar("meshpool_abort", default=None)   # see _post_slotted
+
+
 class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
 
@@ -1207,7 +1210,7 @@ class Agent:
                      "calls": 1}
                 more = {"cost": c or 0.0, "unpriced_calls": int(c is None), "unreported_calls": int(not r.get("reported")),
                         "cache_write": int(r.get("cache_write") or 0), "reasoning": int(r.get("reasoning") or 0)}
-                for tot in (turn, self.usage):
+                for tot in (self.usage, turn) if isinstance(turn, dict) else (self.usage,):
                     for k, v in {**d, **more}.items():
                         tot[k] = tot.get(k, 0) + v
                 self.emit({"type": "usage", **d, "cost": c, "model": r.get("model", ""), "source": r.get("source", ""),
@@ -2604,14 +2607,16 @@ class Agent:
         """_post, then give the gate slot back when the request really ends. It runs in _wait's worker, so a Stop
         that abandons the call does not free the slot while the request is still on its way (MH_MAX_INFLIGHT)."""
         ok = False
+        _ABORT.set(tok)                                    # _post reads it (it keeps its four-argument calls)
         try:
-            out = self._post(base, key, body, stream, tok=tok)
+            out = self._post(base, key, body, stream)
             ok = True
             return out
         finally:
             h.release(ok, slot)
 
     def _post(self, base: str, key: str, body: dict, stream: bool, tok: dict | None = None) -> tuple[dict, bool]:
+        tok = tok if tok is not None else _ABORT.get()    # Stop's token: set when the call was abandoned
         b = dict(body)
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways

@@ -315,11 +315,12 @@ class MockClient:
         self._n = 0
 
     def chat(self, *, model, messages, tools=None, **kw):
+        req_chars = _request_chars(messages)
+        res = usage.reserve(model, request_chars=req_chars, max_tokens=kw.get("max_tokens") or 0)   # may raise
         self.requests.append({"model": model, "messages": json.loads(json.dumps(messages)), "tools": tools, **kw})
         if not self.script:
+            res.close()
             raise RuntimeError("MockClient script exhausted")
-        req_chars = _request_chars(messages)
-        res = usage.reserve(model, request_chars=req_chars, max_tokens=kw.get("max_tokens") or 0)
         msg = self.script.pop(0)
         u = self._usage[min(self._n, len(self._usage) - 1)] if isinstance(self._usage, list) else self._usage
         self._n += 1

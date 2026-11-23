@@ -382,7 +382,7 @@ class Delegation:
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_rec = rec                            # its own sub-agents' files count as its files
         a.usage_source = "subagent"                      # its calls are recorded under a task of its own, below
-        a.usage_task = usage.start_task(chat=parent.id, parent=getattr(parent, "_task", None), label="subagent")
+        a.usage_task = usage.start_task(chat=parent.id, parent=parent._ensure_task(), label="subagent")
         a._delegate_depth = depth + 1
         a._delegate_top = top
         a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
@@ -519,7 +519,7 @@ class Delegation:
         if isinstance(getattr(p, "_delegate_rec", None), dict):   # a sub-agent's sub-agent wrote these
             p._delegate_rec["files"].update(rec["files"])
         turn = getattr(p, "_turn_usage", None)
-        if hasattr(p, "_absorb_usage") and isinstance(turn, dict):
+        if hasattr(p, "_absorb_usage"):
             p._absorb_usage(turn)                         # the sub-agents' calls sit in the chat's task: count them once
         summary = str(rec.get("summary") or "")
         # every report of one call shares a budget (about 60k characters) so the result fits the chat's context;
