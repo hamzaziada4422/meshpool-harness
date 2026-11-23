@@ -297,3 +297,29 @@ def test_usage_with_reasoning_tokens_counts_all_output_tokens(tmp_path, monkeypa
                       "prompt_tokens_details": {"cached_tokens": 64}})
     c = MC.resolve("https://api.openai.com/v1", "gpt-5.6-terra")
     assert c.usage_cached and c.usage_reasoning
+
+
+def test_old_long_tool_call_arguments_are_stubbed_in_the_request_only(tmp_path):
+    a = _agent(tmp_path)
+    big = json.dumps({"input": "*** Begin Patch\n" + "+x = 1\n" * 400 + "*** End Patch"})
+    def call(i, args):
+        return {"role": "assistant", "content": "", "tool_calls": [{"id": f"c{i}", "type": "function",
+                                                                     "function": {"name": "apply_patch", "arguments": args}}]}
+    for i in range(6):
+        a.messages.append(call(i, big))
+        a.messages.append({"role": "tool", "tool_call_id": f"c{i}", "content": "ok"})
+    msgs = a._body()["messages"]
+    calls = [m for m in msgs if m.get("tool_calls")]
+    assert len(json.dumps(calls[0])) < 600 and len(json.dumps(calls[-1])) > 2500       # old ones shortened, newest intact
+    json.loads(calls[0]["tool_calls"][0]["function"]["arguments"])                       # still valid JSON for strict gateways
+    assert len(a.messages[1]["tool_calls"][0]["function"]["arguments"]) > 2500          # the saved chat is untouched
+
+
+def test_a_second_identical_failure_gets_a_change_of_approach_note(tmp_path):
+    a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
+    g = {}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python slow.py"]}'}}
+    first = a._repeat_guard(call, g)
+    second = a._repeat_guard(call, g)
+    assert "Do not repeat it" not in first and "Do not repeat it" in second

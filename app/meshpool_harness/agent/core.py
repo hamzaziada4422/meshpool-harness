@@ -91,7 +91,8 @@ _TRIM = (
     ("## Sharing progress updates\n", "## Presenting your work and final message\n",
      "## Before you finish\nRe-read the request. For each requirement, check your code or a run against its exact "
      "words: the keys and values returned, empty and single-item inputs, ordering, errors. A requirement you only "
-     "assumed is not done; fix what fails, then answer.\n\n"),
+     "assumed is not done; fix what fails, then answer. Test with the project's own tests or a short script in "
+     "the project; do not scan the file system (`find /`) or copy the project elsewhere to test it.\n\n"),
     ("### Final answer structure and style guidelines\n", "# Sandbox and approvals\n",
      "### Final answer style\nPlain text. At most 10 lines: what changed and how you checked it, nothing else. "
      "Do not restate the task, list every edit, or paste code you wrote. Use `-` bullets and backticks for "
@@ -763,6 +764,40 @@ def _destructive(args: dict) -> bool:
 
 _CHAT_TOOLS = frozenset({"read_file", "grep", "glob", "edit", "write_file", "bash", "web_search", "web_research",
                          "fetch_url", "office_task"})
+
+
+def _elide_old_calls(msgs: list, keep: int = 3, limit: int = 500) -> list:
+    """The long text in the arguments of older tool calls (a whole patch, a script) becomes a short stub: the file is on
+    disk and the result was seen, but the text rode along on every later request (186k tokens in one 34-call task).
+    Only a copy for the request; the newest `keep` calls stay as written, so the prompt prefix before them is stable."""
+    idx = [i for i, m in enumerate(msgs) if m.get("role") == "assistant" and m.get("tool_calls")]
+    old = idx[:-keep] if keep else idx
+    if not old:
+        return msgs
+    out = list(msgs)
+
+    def cut(v):
+        if isinstance(v, str) and len(v) > limit:
+            return v[:160] + f" ... [{len(v) - 160} more characters left out of the history] ..."
+        if isinstance(v, list):
+            return [cut(x) for x in v]
+        if isinstance(v, dict):
+            return {k: cut(x) for k, x in v.items()}
+        return v
+    for i in old:
+        calls = []
+        for c in msgs[i]["tool_calls"]:
+            f = c.get("function") or {}
+            a = f.get("arguments")
+            if isinstance(a, str) and len(a) > limit:
+                try:
+                    a2 = json.dumps(cut(json.loads(a)), ensure_ascii=False)
+                except ValueError:
+                    a2 = a
+                c = dict(c, function=dict(f, arguments=a2))
+            calls.append(c)
+        out[i] = dict(msgs[i], tool_calls=calls)
+    return out
 
 
 def _cache_hints_ok(base: str) -> bool:
@@ -1527,7 +1562,12 @@ class Agent:
                     "finish and tell the user what is blocking you.")
         out = self._run_tool(c, cut=cut)
         import hashlib
-        runs.append((key, hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest(), edits, True))
+        h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
+        if any(r[0] == key and r[1] == h and r[2] == edits for r in runs) and \
+                re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error", str(out)):
+            out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one case, "
+                              "a shorter timeout), print what it is waiting on, or change the code first.")
+        runs.append((key, h, edits, True))
         del runs[:-12]
         return out
 
@@ -1733,6 +1773,8 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
+        if os.environ.get("MH_ELIDE_OLD_CALLS", "1") != "0":
+            msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
         if sum(1 for m in msgs if isinstance(m.get("content"), list)
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
