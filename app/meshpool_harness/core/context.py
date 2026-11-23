@@ -204,6 +204,12 @@ def probe(base: str, model: str, key: str = "") -> int | None:
         except Exception as e:  # noqa: BLE001
             if _plain_404(e):
                 _mark_absent(base, "no_v0")
+    try:                                   # last: vLLM / llama.cpp list the served window in /v1/models
+        listed = (_listed(base, key) or {}).get(model) or (_listed(base, key) or {}).get(model.split("/")[-1])
+        if isinstance(listed, int) and listed > 0:
+            return listed
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
