@@ -360,6 +360,11 @@ def _urlopen(req, timeout: float, sink):
     return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
 
 
+def _is_local_base(base: str) -> bool:
+    from meshpool_harness.core import modelcaps as _MCL
+    return _MCL.is_local(base)
+
+
 def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
@@ -2094,8 +2099,8 @@ class Agent:
             for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
                 turn[k] += v                           # the discarded reply was paid for
                 self.usage[k] += v
-            how = ("set OLLAMA_CONTEXT_LENGTH (or num_ctx in a Modelfile) to a larger value and restart Ollama"
-                   if re.search(r"ollama|:11434", base or "", re.I) else "raise the server's context size")
+            how = ("raise the server's context size (for Ollama: set OLLAMA_CONTEXT_LENGTH, or num_ctx in a Modelfile, "
+                   "then restart Ollama)" if _is_local_base(base) else "raise the server's context size")
             self.emit({"type": "status", "text": f"The server read only about {n_in:,} tokens of this conversation (its "
                                                  f"real context window is about {win:,}). To use a larger window, {how}. "
                                                  "The conversation is shortened to fit and sent again."})
