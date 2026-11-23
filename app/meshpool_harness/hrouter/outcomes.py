@@ -35,6 +35,17 @@ def _append(row: dict) -> None:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _review_of(agent) -> dict | None:
+    """The independent check of this turn, in short (agent/grader.py): what the receipt shows."""
+    r = getattr(agent, "last_review", None)
+    if not isinstance(r, dict) or r.get("turn") != getattr(agent, "_turn_no", None):
+        return None
+    t = r.get("tokens") or {}
+    return {"verdict": r.get("verdict"), "acceptance": r.get("acceptance"), "met": r.get("met", 0), "total": r.get("total", 0),
+            "rounds": r.get("round", 0), "secs": r.get("secs", 0), "tokens": int(t.get("in", 0)) + int(t.get("out", 0)),
+            "error": r.get("error") or ""}
+
+
 def log_turn(session, route, usage_before: dict) -> None:
     a = session.agent
     u = dict(getattr(a, "usage", {}) or {})
@@ -49,7 +60,8 @@ def log_turn(session, route, usage_before: dict) -> None:
              "reason": (getattr(session, "auto_reason", "") or getattr(route, "harness_reason", "")
                         or getattr(route, "reason", "") or "")[:300],
              "error": any(e.get("type") == "error" for e in ev),
-             "stopped": any(e.get("type") == "interrupted" for e in ev)})
+             "stopped": any(e.get("type") == "interrupted" for e in ev),
+             "review": _review_of(a)})
 
 
 def mark(chat: str, outcome: str) -> None:

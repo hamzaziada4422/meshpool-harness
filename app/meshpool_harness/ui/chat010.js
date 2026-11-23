@@ -66,6 +66,35 @@ async function xray010(anchor) {
   bind();
 }
 
+/* ---------- the independent check under a big task's reply: one line, the requirements open on click ---------- */
+const REV_WORD = {met: "Met", not_met: "Not done", unverified: "Could not check"};
+window.reviewCard010 = function (ev, add) {
+  const v = ev.verdict || "error", items = ev.items || [], open = items.filter(i => i.status !== "met").length;
+  const acc = {accept: "The reviewer would accept this as it is.", accept_with_notes: "The reviewer would accept this, with notes.", would_send_back: "The reviewer would send this back."}[ev.acceptance] || "";
+  const meta = ev.secs ? `${Math.round(ev.secs)} s · ${(((ev.tokens?.in || 0) + (ev.tokens?.out || 0)) / 1000).toFixed(1)}k tokens` : "";
+  const head = esc(String(ev.text || "Independent check").split("\n")[0]);
+  const rows = items.map(i => `<li class="${esc(i.status)}"><span class="rv-s">${REV_WORD[i.status] || esc(i.status)}</span> ${esc(i.requirement)}${i.evidence ? `<small>${esc(i.evidence)}</small>` : ""}</li>`).join("");
+  const why = (ev.acceptance_reasons || []).map(r => `<p class="rv-why">${esc(r)}</p>`).join("");
+  const fixBtn = !ev.rework && v !== "pass" && v !== "error" && open ? `<button class="btn sm" data-rv="fix">Ask the agent to fix these</button>` : "";
+  const note = ev.rework ? `<p class="rv-why">Sending these back to the agent to fix.</p>` : v === "error" ? `<p class="rv-why">Nothing was blocked. This work was not independently checked.</p>` : "";
+  const el = add(`<details class="rev010 rv-${esc(v)}"><summary>${v === "pass" ? ICON.check2 : ICON.warn}<span class="rv-t">${head}</span>${meta ? `<span class="rv-m">${esc(meta)}</span>` : ""}</summary>
+    <div class="rv-body">${acc ? `<p class="rv-acc">${esc(acc)}</p>` : ""}${why}${note}${rows ? `<ul class="rv-list" aria-label="Requirements">${rows}</ul>` : ""}${fixBtn}</div></details>`, "note review");
+  const b = el?.querySelector("[data-rv=fix]");
+  if (b) b.onclick = () => {
+    const todo = items.filter(i => i.status !== "met").map(i => `- ${i.requirement}${i.evidence ? " (" + i.evidence + ")" : ""}`).join("\n");
+    const fixes = (ev.fix || []).map(f => `- ${f}`).join("\n");
+    $("#input").value = "[Independent review] These are not done:\n" + todo + (fixes ? "\n\nHow to fix:\n" + fixes : "") + "\n\nFix them, check your fixes yourself, then finish.";
+    sendNow(false);
+  };
+  return el;
+};
+async function checkThis010(btn) {
+  if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
+  btn.disabled = true; toast("A separate reviewer is checking this...", 4000);
+  try { await post(`/api/agent/${S.cur.id}/grade`, {}); clearTimeout(S.cur.pollT); poll(); } catch (e) { toast(e.message); }
+  btn.disabled = false;
+}
+
 /* ---------- events after a turn ---------- */
 const seen010 = new Set();
 function foot010() { return S.cur?.lastFoot || null; }
@@ -266,12 +295,13 @@ function feedback010(outcome) { if (S.cur) post("/api/receipt/feedback", {chat: 
 function acts010(n, text) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
-  w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
+  w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
   f.appendChild(w);
   w.onclick = async e => {
     const b = e.target.closest("[data-ra]"); if (!b) return;
     if (b.dataset.ra === "copy") return navigator.clipboard.writeText(text || "").then(() => toast("Copied"), () => toast("Could not copy."));
     if (b.dataset.ra === "retry") return retry010(n);
+    if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
     if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }

@@ -1,8 +1,10 @@
 """Meshpool Browser: browser use for any harness, as an MCP server. Built in; nothing to install.
 
-The agent drives a real, visible browser window. Which browser is the MH_BROWSER_USE setting (browser_use.py):
-meshpool (default: the app's bundled Chromium; in a source checkout Chrome or Edge when installed, else a Chromium
-fetched once), installed (the Chrome, Edge or Brave program on this computer, with a Meshpool-owned profile) or attach
+The agent drives a real browser that stays out of the way: hidden, and shown inside the app's Browser panel
+(agent/browser_live.py), where the user can click and type too. MH_BROWSER_HEADLESS=0 gives it a window of its own.
+Which browser is the MH_BROWSER_USE setting (browser_use.py):
+meshpool (default: the app's bundled Chromium; in a source checkout a Chromium fetched once; a system Chrome or Edge
+only as a last resort, when no Chromium can be found or installed), installed (the Chrome, Edge or Brave program on this computer, with a Meshpool-owned profile) or attach
 (connect to a browser started with --remote-debugging-port). Meshpool's profile lives in the Meshpool data folder, so
 sign-ins persist between sessions and never touch your everyday browser profile.
 
@@ -92,11 +94,13 @@ def _home() -> Path:
 class Browser:
     """One Playwright session on a dedicated thread (Playwright's sync API is bound to the thread that started it)."""
 
-    def __init__(self):
+    def __init__(self, profile: str = ""):
         self.q: queue.Queue = queue.Queue()
         self.pw = self.ctx = self.page = self.cdp = None
         self.mode = ""
         self.channel = ""
+        self.profile = profile              # a profile folder name of its own (the in-app sign-in browser)
+        self.notice = ""                    # said once, in the next page description (a last-resort browser was used)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
@@ -155,7 +159,7 @@ class Browser:
 
     def ensure(self):
         from meshpool_harness import bundled
-        mode = BU.mode()
+        mode = "meshpool" if self.profile == "signin" else BU.mode()   # the sign-in browser is never the user's own
         if mode == "meshpool":
             why = bundled.browser_needs_newer_macos()   # the app opens on macOS 11, its Chromium needs 13
             if why:
@@ -169,7 +173,10 @@ class Browser:
         sync_playwright = load_playwright()
         if self.pw is None:
             self.pw = sync_playwright().start()
-        headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"
+        if mode == "meshpool":
+            headless = BU.headless()                        # the default: hidden, shown in the app's Browser panel
+        else:
+            headless = os.environ.get("MH_BROWSER_HEADLESS") == "1"   # installed: opt-in, its window as before
         if mode == "attach":
             self._attach()
         elif mode == "installed":
@@ -188,15 +195,14 @@ class Browser:
             args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"], **kw)
 
     def _launch_meshpool(self, headless: bool, own: bool):
-        channels = [""] if own else ["chrome", "msedge", ""] if sys.platform != "linux" else ["chrome", ""]
-        if os.environ.get("MH_BROWSER_CHANNEL") is not None and not own:
-            channels = [os.environ["MH_BROWSER_CHANNEL"]]
+        explicit = os.environ.get("MH_BROWSER_CHANNEL") if not own else None
+        channels = [explicit] if explicit is not None else [""]     # Meshpool's Chromium: never a system browser first
         last = None
         for attempt in range(2):
             for ch in channels:
                 try:
-                    self.ctx = self._launch(_home() / "browser-profile" / (ch or "chromium"), headless=headless,
-                                            channel=ch or None)
+                    self.ctx = self._launch(_home() / "browser-profile" / (self.profile or ch or "chromium"),
+                                            headless=headless, channel=ch or None)
                     self.channel = ch or "chromium"
                     return
                 except Exception as e:  # noqa: BLE001
@@ -206,11 +212,32 @@ class Browser:
             if attempt == 0 and not own and "xecutable doesn't exist" in str(last):
                 if self._use_cached_chromium(headless):     # one is already here: no download
                     return
-                self._install_chromium()
+                try:
+                    self._install_chromium()
+                except ToolFailed as e:
+                    last = e
+                    break
                 channels = [""]
             else:
                 break
+        if not own and explicit is None and self._launch_system_fallback(headless):
+            return
         raise ToolFailed(f"Could not start a browser: {last}")
+
+    def _launch_system_fallback(self, headless: bool) -> bool:
+        """The last resort, source and terminal installs only: no Chromium could be found or installed, so a Chrome or
+        Edge that is already on this computer runs hidden, and the agent is told."""
+        names = {"chrome": "Google Chrome", "msedge": "Microsoft Edge"}
+        for ch in (["chrome"] if sys.platform == "linux" else ["chrome", "msedge"]):
+            try:
+                self.ctx = self._launch(_home() / "browser-profile" / (self.profile or ch), headless=headless, channel=ch)
+            except Exception:  # noqa: BLE001
+                continue
+            self.channel = ch
+            self.notice = (f"Note: Meshpool's own browser could not be found or installed, so this page runs in "
+                           f"{names[ch]} from this computer instead.")
+            return True
+        return False
 
     def _launch_installed(self, headless: bool):
         found = BU.pick_installed()
@@ -275,6 +302,9 @@ class Browser:
         s = self.page.evaluate(SNAPSHOT_JS)
         tabs = len(self.ctx.pages)
         head = [note] if note else []
+        if self.notice:
+            head.append(self.notice)
+            self.notice = ""
         head += [f"Page: {s['title'] or '(no title)'}", f"Address: {s['url']}",
                  f"Scroll: {s['scroll']} of {max(0, s['height'] - s['vh'])} px" + (f" | Tabs open: {tabs}" if tabs > 1 else "")]
         body = s["text"].strip()
@@ -472,6 +502,16 @@ def ui_audit(url: str, views: str = "") -> list:
     return B.run(go, timeout=300)
 
 
+def ui_smoke(url: str) -> list:
+    from meshpool_harness import ui_smoke as US
+
+    def go():
+        B.ensure()
+        res = US.smoke(B.pw, url, launch=_launcher())
+        return [text(res["text"])]
+    return B.run(go, timeout=300)
+
+
 def view_output(path: str, pages: str = "") -> list:
     from meshpool_harness import view as V
 
@@ -519,6 +559,11 @@ TOOLS = {
                      "tiny buttons, unnamed controls, broken images, console errors), prints the layout, saves "
                      "screenshots and returns them. Run it after every change to a page; it is done at 'No problems found'.",
                      {"url": S, "views": S}, ["url"]),
+    "ui_smoke": Tool(ui_smoke, "Use a page you built the way a person would: clicks every button, follows the links, "
+                     "submits each form empty and with nonsense, presses keys in a game, tabs through the controls and "
+                     "reloads to see if typed data is kept. Lists buttons that do nothing, forms that accept bad input, "
+                     "console errors and lost data in plain words. Run it after ui_audit; it is done at 'No problems found'.",
+                     {"url": S}, ["url"]),
     "view_output": Tool(view_output, "Look at any visual file you made: a web page, SVG, image, PDF, slides, document, "
                         "workbook or CSV. Returns pictures of the pages, plus the text read from them for models "
                         "that cannot see images. Use pages to pick some, like \"1,3\" or \"2-4\".",
@@ -532,9 +577,25 @@ def _fix_type_args():
     t.fn = lambda ref, text="", submit=False: browser_type(ref, text_=text, submit=submit)
 
 
+LIVE = None
+
+
+def _start_live():
+    """The control channel the app's Browser panel uses (agent/browser_live.py). Failing to start it costs the live
+    view only, never the browser tools."""
+    global LIVE
+    try:
+        from meshpool_harness.agent import browser_live
+        LIVE = browser_live.LiveServer(B, os.environ.get("MH_CHAT_ID", "")).start()
+    except Exception:  # noqa: BLE001
+        LIVE = None
+
+
 def _close_for_exit(timeout: float = 8):
     """Close the browser on the way out: Chromium writes cookies to disk in batches, so a process that is simply
     killed can lose a sign-in made seconds before."""
+    if LIVE is not None:
+        LIVE.stop()
     try:
         B.run(B.shutdown, timeout=timeout)
     except BaseException:  # noqa: BLE001
@@ -571,6 +632,7 @@ def _prewarm():
 def main():
     _fix_type_args()
     _exit_cleanly()
+    _start_live()
     threading.Thread(target=_prewarm, daemon=True).start()
     serve("meshpool-browser", TOOLS, instructions="Use browser_open, then act on the [eN] numbers from the snapshot.")
     _close_for_exit()                       # stdin closed: the agent is done with us

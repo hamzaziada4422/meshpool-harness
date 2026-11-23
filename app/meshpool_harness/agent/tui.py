@@ -35,6 +35,7 @@ COMMANDS = [
     ("login", "", "sign in: MeshPool key, another provider, or ChatGPT"),
     ("clear", "", "start a new conversation in this folder"),
     ("compact", "", "shorten old tool output to free context"),
+    ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
@@ -347,6 +348,9 @@ class Terminal:
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
             self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+        elif t == "review":
+            self._flush_text()
+            self.scroll([""] + self._review_lines(ev))
         elif t in ("error", "interrupted"):
             self.failed = True
             self._flush_text()
@@ -377,6 +381,24 @@ class Terminal:
             return None
         u = self.usage
         return ((u["in"] - u["cached"]) * pi + u["cached"] * pc + u["out"] * po) / 1e6
+
+    def _review_lines(self, ev) -> list:
+        """The independent check as a compact block: a headline, then what is open (or every requirement when it fits)."""
+        st, w = self.st, self.width - 6
+        paint = {"pass": st.green, "partial": st.amber, "fail": st.red}.get(ev.get("verdict"), st.dim)
+        lines = ["  " + paint(R.clip(str(ev.get("text", "")).splitlines()[0] if ev.get("text") else "Independent check", w + 4))]
+        if ev.get("rework"):
+            lines.append("  " + st.dim("Sending these back to the agent to fix."))
+        items = ev.get("items") or []
+        shown = [i for i in items if i.get("status") != "met"] or (items if len(items) <= 6 else [])
+        for i in shown[:8]:
+            tag = {"met": st.green("met      "), "not_met": st.red("not met  ")}.get(i.get("status"), st.amber("unchecked"))
+            lines.append("    " + tag + " " + R.clip(str(i.get("requirement", "")), w - 12))
+        if ev.get("acceptance") and ev.get("verdict") != "pass":
+            lines.append("  " + st.dim(R.clip({"accept_with_notes": "The reviewer would accept it with notes.",
+                                              "would_send_back": "The reviewer would send it back.",
+                                              "accept": "The reviewer would accept it."}.get(ev["acceptance"], ""), w + 4)))
+        return lines
 
     def _plan(self, entries):
         st = self.st
@@ -1141,6 +1163,16 @@ class Session:
         elif ok:
             t.p(st.dim("  New sessions use it."))
 
+    def cmd_grade(self, arg):
+        t, st = self.term, self.term.st
+        if self.sub or not hasattr(self.agent, "grade_now"):
+            return t.p(st.dim("  /grade is not available for this agent."))
+        t.p(st.dim("  A separate reviewer is checking the last piece of work..."))
+        try:
+            self.agent.grade_now()
+        except KeyboardInterrupt:
+            t.p(st.amber("  Stopped."))
+
     def cmd_compact(self, arg):
         t, st = self.term, self.term.st
         if self.sub or not hasattr(self.agent, "messages"):
@@ -1326,7 +1358,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         term.spin.stop()
     pm = os.environ.get("MH_PERMISSION_MODE", "")
     mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
-    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode)
+    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode,
+              profile="work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")   # --profile work: Cowork
     if sub:
         from meshpool_harness.harnesses.acp import ACPAgent
         if resume or session:
@@ -1346,6 +1379,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             term.p(st.red(str(e)))
             return 1
     term.agent = agent
+    agent.headless = prompt is not None and not sub     # one request, no one to answer questions
     if pm == "plan" and hasattr(agent, "plan"):
         agent.plan = True                        # read only: investigate, then reply with a plan
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
@@ -1368,9 +1402,13 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     sess.send(prompt)
                 reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
                               and isinstance(m.get("content"), str) and m.get("content").strip()), "")
-                sys.__stdout__.write(_json.dumps({"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
-                                              "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])},
-                                             ensure_ascii=False) + "\n")
+                out = {"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
+                       "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
+                rv = getattr(agent, "last_review", None)
+                if rv:                                # the independent check of a big task (agent/grader.py)
+                    out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
+                sys.__stdout__.write(_json.dumps(out, ensure_ascii=False, default=str) + "\n")
+                sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now
                 return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0

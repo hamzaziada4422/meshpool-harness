@@ -77,6 +77,32 @@ def front_matter(**kv) -> str:
     return "---\n" + "\n".join(lines) + "\n---\n"
 
 
+# Default skills whose text changed in a release because they told the agent to install something that now ships inside the
+# app (docs/plan/0.0.11-bundled.md). An install that has the OLD default, byte for byte (the user never edited it), gets
+# the new one; an edited copy is left alone. {skill: SHA-256 of every earlier shipped SKILL.md}.
+REFRESHED_DEFAULTS = {
+    "transcribe-audio": {"3e9a05eb613a601a3209285f2713f169b8edcd8694fee67151699df706332dfb"},
+    "convert-files": {"31921397babd7efde4b533297328b4835119c7e23820bf4f86aca81dd87bcc7d"},
+    "pdf-tools": {"6bda4b25570556d043a9654ccf0df38ec61f90723de60e4a38d3907780737ff0"},
+    "image-tools": {"221c5aa55b774d466a4c6b2274655dac71b792ee7d6328ea2272fe28904ef576"},
+    "notebooks": {"a15b7391182d52e2b2bf66363a2962d84f02da8bbd7c6f47df556e16c9299d29"},
+    "query-database": {"49bfb409b2c1c6f05042e2a8af283781b9b9ddf942ef8cfa0669783f10054f94"},
+    "make-chart": {"34720b574aa2bcaf369328f618f7988701719ece76f1b12962ebb07394a2ca71"},
+}
+
+
+def _refresh_unedited_defaults(src: Path, dst: Path) -> None:
+    import hashlib
+    for name, old in REFRESHED_DEFAULTS.items():
+        have, shipped = dst / name / "SKILL.md", src / name
+        try:
+            if have.is_file() and shipped.is_dir() and hashlib.sha256(have.read_bytes()).hexdigest() in old:
+                shutil.rmtree(dst / name)
+                shutil.copytree(shipped, dst / name, copy_function=shutil.copyfile)
+        except OSError:
+            pass                                      # a locked file: the next start tries again
+
+
 def ensure_defaults():
     src = C.APP / "defaults" / "skills"
     dst = folder()
@@ -92,6 +118,7 @@ def ensure_defaults():
             v = None
         # 2.2 wrote "1" after installing its three defaults; anything newer is offered once
         done = set(v) if isinstance(v, list) else {"code-review", "pull-request", "research-brief"}
+    _refresh_unedited_defaults(src, dst)
     new = [d for d in src.iterdir() if d.is_dir() and d.name not in done]
     if not new:
         return

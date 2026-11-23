@@ -2,8 +2,9 @@
 by the Settings API.
 
 MH_BROWSER_USE:
-  meshpool   (default) Meshpool's own browser: Chromium bundled in the app (Chrome/Edge when installed, in a source
-             checkout), with a Meshpool-owned profile.
+  meshpool   (default) Meshpool's own browser: Chromium bundled in the app, hidden, shown inside the app's Browser
+             panel (MH_BROWSER_HEADLESS=0 gives it a window of its own). A system Chrome or Edge is used only as a last
+             resort, when no Chromium can be found or installed.
   installed  the engine of the Chrome, Edge or Brave on this computer, still with a Meshpool-owned profile folder.
              Chrome does not allow automation of the everyday profile, so sign-ins of your own browser are not shared.
   attach     connect over CDP to a browser you started with --remote-debugging-port=<port> (MH_BROWSER_CDP_URL).
@@ -28,8 +29,8 @@ DEFAULT_CDP_URL = "http://127.0.0.1:9222"
 
 MODE_INFO = [
     {"id": "meshpool", "name": "Meshpool's browser",
-     "desc": "A separate browser window that Meshpool owns. Sign-ins you make in it are kept for next time. "
-             "Your own browser and its sign-ins are never touched."},
+     "desc": "A browser that Meshpool owns. You see it in the Browser panel inside Meshpool. Sign-ins you make in it "
+             "are kept for next time. Your own browser and its sign-ins are never touched."},
     {"id": "installed", "name": "My installed Chrome, Edge or Brave",
      "desc": "Uses the browser program installed on this computer, but with a profile folder that belongs to Meshpool. "
              "It is your browser engine, not your everyday profile: Chrome does not allow automation of the everyday "
@@ -67,6 +68,12 @@ def setting(key: str, default: str = "") -> str:
 def mode() -> str:
     m = setting("MH_BROWSER_USE", "meshpool").lower()
     return m if m in MODES else "meshpool"
+
+
+def headless() -> bool:
+    """Meshpool's own browser runs hidden by default: the page is shown inside the app (the Browser panel). It gets
+    its own window only when the user turns on "Show the browser in its own window" (MH_BROWSER_HEADLESS=0)."""
+    return setting("MH_BROWSER_HEADLESS", "1") != "0"
 
 
 def cdp_url() -> str:
@@ -203,7 +210,7 @@ def describe() -> dict:
             row["detail"] = "built in"
         modes.append(row)
     return {"mode": cur, "modes": modes, "cdp_url": cdp_url(), "installed": inst,
-            "default_cdp_url": DEFAULT_CDP_URL}
+            "default_cdp_url": DEFAULT_CDP_URL, "show_window": not headless()}
 
 
 def validate(values: dict) -> None:
@@ -214,6 +221,9 @@ def validate(values: dict) -> None:
     u = values.get("MH_BROWSER_CDP_URL")
     if u not in (None, "") and not str(u).strip().startswith(("http://", "https://", "ws://", "wss://")):
         raise ValueError(f"The debugging address must start with http:// (for example {DEFAULT_CDP_URL}).")
+    h = values.get("MH_BROWSER_HEADLESS")
+    if h not in (None, "") and str(h) not in ("0", "1"):
+        raise ValueError("Show the browser in its own window must be on or off.")
     a = values.get("MH_BROWSER_APP")
     if a not in (None, "") and str(a).lower() not in KEYS:
         raise ValueError("Installed browser must be chrome, edge or brave (or empty for the first one found).")

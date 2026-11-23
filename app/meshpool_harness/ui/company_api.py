@@ -9,7 +9,7 @@
                                                     company look is active; stored as "style" in the brand index
     POST /api/company/logo?id=&name=  <image bytes>
     POST /api/company/sample   {id}                 a three-slide sample deck in the look, no model call
-    POST /api/company/open     {id}                 open that sample deck on this computer
+    POST /api/company/sample-path {id}              where the sample deck is (the page opens it in its own viewer)
 
 The server routes every /api/company path here after its token check; handle() returns (status, payload).
 """
@@ -126,20 +126,17 @@ def handle(method: str, u, body: bytes) -> tuple[int, dict]:
         q = parse_qs(u.query)
         B.set_logo(q.get("id", [""])[0], unquote(q.get("name", ["logo.png"])[0]), body)
         return 200, state()
-    if path in ("/api/company/sample", "/api/company/open"):
+    if path in ("/api/company/sample", "/api/company/sample-path"):
         prof = B.get(str(data.get("id") or ""))
         if not prof:
             raise ValueError("Save the company first.")
         out = _sample_path(prof)
-        if path == "/api/company/open":
+        if path == "/api/company/sample-path":
             if not out.exists():
                 raise ValueError("Build the sample deck first.")
-            from meshpool_harness.ui.desktop import reveal
-            try:
-                reveal(out)
-            except OSError as e:
-                raise ValueError(f"Could not open it on this computer ({e}). It is at: {out}") from e
-            return 200, {"ok": True}
+            from meshpool_harness.ui import server as S        # the page opens it in its own viewer
+            runs = S.RUNS.resolve()
+            return 200, {"ok": True, "root": str(runs), "path": out.resolve().relative_to(runs).as_posix()}
         from meshpool_harness.ui import server as S
         res = B.sample_deck(prof, str(out))
         return 200, {"ok": True, "file": out.name, "errors": res.get("errors") or [],

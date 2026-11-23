@@ -60,6 +60,9 @@ FIELDS = [
      "connect to a browser you started with --remote-debugging-port."),
     ("MH_BROWSER_CDP_URL", "Browser use: debugging address (attach)", "http://127.0.0.1:9222",
      "Where your browser listens when you started it with --remote-debugging-port=9222 and its own --user-data-dir."),
+    ("MH_BROWSER_HEADLESS", "Browser use: show a window", "",
+     "Empty (the default): Meshpool's browser stays hidden and shows inside the app, in the Browser panel. 0: it also "
+     "opens a window of its own."),
     ("MH_BROWSER_APP", "Browser use: which installed browser", "",
      "chrome, edge or brave. Empty: the first one found."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "
@@ -404,6 +407,7 @@ def system_check() -> list[dict]:
                  "fix": "Optional. Meshpool uses only its own LibreOffice (the copy inside the app), never one you "
                         "installed. With it, Meshpool checks spreadsheet formula results, "
                         "renders slides to review them and converts Office files. Files are complete without it."})
+    rows.extend(_bundled_program_rows(bundled))
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
     try:                                    # the model's context window and where that number came from
@@ -412,6 +416,57 @@ def system_check() -> list[dict]:
                      "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
     except Exception:  # noqa: BLE001 - a check must report, not crash
         pass
+    return rows
+
+
+def _bundled_program_rows(bundled) -> list[dict]:
+    """ffmpeg, pandoc, speech to text and notebooks, each with the version that is really there. In the app they are
+    Meshpool's own copies (vendor/); a source or terminal install may use the ones on PATH. A probe that fails shows as a
+    row that says so; it never breaks the settings page."""
+    rows = []
+    for name, label, uses in (("ffmpeg", "ffmpeg", "converts audio and video"),
+                              ("pandoc", "pandoc", "converts documents between Markdown, HTML, Word, EPUB and more")):
+        try:
+            mine = bundled.bundled_program(name)
+            exe = mine if (mine or bundled.packaged()) else shutil.which(name)
+            why = bundled.ffmpeg_needs_newer_macos() if name == "ffmpeg" and exe else ""
+            ver = bundled.program_version(exe, "-version" if name == "ffmpeg" else "--version") if exe and not why else ""
+            if why:
+                rows.append({"name": label, "optional": True, "ok": False, "detail": "needs macOS 12 or later", "fix": why})
+            elif exe:
+                tail = " (ships with Meshpool)" if mine else ""
+                rows.append({"name": label, "optional": True, "ok": bool(ver),
+                             "detail": f"{ver or 'found but did not start'} at {exe}{tail}",
+                             "fix": "Missing from this install; reinstall Meshpool." if not ver and bundled.packaged() else
+                                    f"Optional. {label} {uses}."})
+            else:
+                rows.append({"name": label, "optional": True, "ok": False, "detail": "not found",
+                             "fix": ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                                     f"Optional. {label} {uses}. The desktop app includes it; for a terminal install, "
+                                     "install it with your package manager.")})
+        except Exception as e:  # noqa: BLE001
+            rows.append({"name": label, "optional": True, "ok": False, "detail": f"check failed ({e})", "fix": ""})
+    try:
+        sp = bundled.speech_status()
+        rows.append({"name": "Speech to text", "optional": True, "ok": sp["ok"], "detail": sp["detail"], "fix": sp["fix"]})
+    except Exception as e:  # noqa: BLE001
+        rows.append({"name": "Speech to text", "optional": True, "ok": False, "detail": f"check failed ({e})", "fix": ""})
+    try:
+        from importlib import metadata
+        have = {}
+        for pkg in ("nbformat", "nbconvert", "ipykernel"):
+            try:
+                have[pkg] = metadata.version(pkg)
+            except metadata.PackageNotFoundError:
+                pass
+        ok = len(have) == 3
+        rows.append({"name": "Notebooks", "optional": True, "ok": ok,
+                     "detail": ", ".join(f"{k} {v}" for k, v in have.items()) if have else "not installed",
+                     "fix": "" if ok else ("Missing from this install; reinstall Meshpool." if bundled.packaged() else
+                                           "The desktop app includes them. In a terminal install: pip install nbformat "
+                                           "nbconvert ipykernel")})
+    except Exception as e:  # noqa: BLE001
+        rows.append({"name": "Notebooks", "optional": True, "ok": False, "detail": f"check failed ({e})", "fix": ""})
     return rows
 
 

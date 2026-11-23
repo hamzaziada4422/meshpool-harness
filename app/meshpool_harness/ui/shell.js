@@ -497,7 +497,7 @@ function renderTop() {
   $("#devBtn")?.addEventListener("click", e => devPop(e));
   $("#flagBtn")?.addEventListener("click", () => reportProblem());
   $("#pjChip")?.addEventListener("click", () => openProject(pid));
-  $("#projChip")?.addEventListener("click", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else post("/api/open-path", {path: root}).catch(err => toast(err.message)); });
+  $("#projChip")?.addEventListener("click", () => { if (!v) chooseDraftFolder(); else if (isMgd(root)) togglePanel("session", true); else openFolderInApp(root, ""); });
   const ttl = $("#ttl");
   if (v) {
     ttl.ondblclick = renameTop; ttl.onclick = e => { if (ttl.contentEditable !== "true") chatMenu({type: "click", currentTarget: ttl}); };
@@ -549,7 +549,7 @@ function devPop(e) {
   const own = !!v.scratch;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
     {head: `<b>${esc(a.device?.name || "This computer")}</b><span class="conn"><i class="gdot"></i>Connected</span><small>${own ? "This chat works in its own private folder on this computer." : `Meshpool can read and change files in ${esc(shortPath(root))} on this computer.`}</small>`, html: true},
-    {label: own ? "Open the chat's folder" : "Open the folder", icon: ICON.folderopen, fn: () => root && post("/api/open-path", {path: root}).catch(err => toast(err.message))},
+    {label: own ? "Browse the chat's folder" : "Open in Meshpool editor", icon: ICON.folderopen, fn: () => root && openFolderInApp(root, "")},
   ], {cls: "devmenu"});
 }
 // What the chat says, as Markdown: copied, or saved as a file.
@@ -591,7 +591,7 @@ async function ciChip(root, fresh) {
   el.insertAdjacentHTML("beforeend", `<button class="chip ci ${ci.summary}" id="ciChip" title="${esc(ci.pr ? "#" + ci.pr.number + " " + ci.pr.title : ci.branch)}"><span class="cidot"></span>${CI_TEXT[ci.summary]}</button>`);
   $("#ciChip").onclick = () => togglePanel("git", true);
 }
-const PANELS = {cowork: ["session", "progress", "outputs"], code: ["session", "diff", "files", "term", "git", "preview"]};
+const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["session", "diff", "files", "term", "git", "browser", "preview"]};
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.

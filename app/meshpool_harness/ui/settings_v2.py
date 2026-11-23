@@ -66,6 +66,7 @@ CAPS = [
     {"id": "web", "name": "Web search", "desc": "Search the web, read pages and research across sources.", "kind": "server", "server": "meshpool-web"},
     {"id": "browser", "name": "Browser use", "desc": "Open pages, click, type and fill in forms for you.", "kind": "server", "server": "browser"},
     {"id": "subtasks", "name": "Sub-tasks", "desc": "Split big jobs into parts that run at the same time.", "kind": "env", "env": "MH_SUBAGENTS"},
+    {"id": "grader", "name": "Independent check on big tasks", "desc": "A separate reviewer checks big jobs before Meshpool tells you they are done.", "kind": "env", "env": "MH_GRADER"},
     {"id": "plan_first", "name": "Plan first", "desc": "New chats start with a plan and wait for your OK.", "kind": "profile", "advanced": True},
     {"id": "computer", "name": "Computer use", "desc": "Let Meshpool see your screen and use the mouse and keyboard.", "kind": "server", "server": "computer-use", "advanced": True},
 ]
@@ -108,7 +109,7 @@ def browser_use() -> dict:
     return BU.describe()
 
 
-def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = None) -> dict:
+def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = None, show_window: bool | None = None) -> dict:
     """Save which browser browser use drives (meshpool, installed, attach), the debugging address for attach and, for
     installed, which of chrome, edge, brave (empty: the first found). New chats use it."""
     from meshpool_harness import browser_use as BU
@@ -117,6 +118,8 @@ def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = Non
         vals["MH_BROWSER_CDP_URL"] = str(cdp_url).strip()
     if app is not None:
         vals["MH_BROWSER_APP"] = str(app).strip().lower()
+    if show_window is not None:                    # off (the default, saved as empty): hidden, shown in the app. On: 0, its own window.
+        vals["MH_BROWSER_HEADLESS"] = "0" if show_window else ""
     BU.validate(vals)
     C.write(vals)
     for k, v in vals.items():

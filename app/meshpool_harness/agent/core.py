@@ -35,12 +35,13 @@ from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
 from meshpool_harness.core.wire import sse_to_chat
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
+from meshpool_harness.agent import mcp_assist as MA
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill", "update_plan"}
+             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -167,7 +168,7 @@ Rules
 - Tools whose names start with mcp__ come from MCP servers the user connected. Use them when they fit.
 - To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - If a value in the user's message arrives as a tag like [redacted: phone number #1], PHONE_NUMBER_1 or EMAIL_ADDRESS, it was hidden for privacy. Never invent or use an example value in its place; leave it out and tell the user where to add it.
-- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first.
+- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first. For anything you build as code (app, game, dashboard, script, CLI, API), read the matching build skill (build-app, build-game, build-dashboard, build-website, build-code), write the list of features a user expects as your plan, use it like a user before you finish (ui_smoke for pages, real runs and tests for programs), and fix what breaks.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler. Use Markdown code blocks for code.
 - Between tool calls write nothing, or one short line when it helps: the user sees every call. Do not restate what a \
@@ -181,6 +182,34 @@ calls in one message run at the same time, and bash_many runs several shell comm
 is the slowest way to work.
 - For any request with more than one step, list its concrete requirements and your steps with todo_write first, and \
 mark items completed as you go. Before you end your turn, every item should be completed, or say why it is not."""
+
+
+# ---- E2E-AUTONOMY (0.0.12): finishing the whole job, MCP use, errors, verification. MH_E2E=0 turns it off. ----
+E2E_RULES = """
+
+Finishing the job
+- Finish the whole task yourself, in this turn. Do not stop to ask permission for the next step, and do not end \
+your reply with a promise ("I will now...", "Next I would..."): do the next step with a tool call instead. A reply \
+without a tool call ends the turn, so only send one when the work is done or you are truly blocked.
+- Ask the user (ask_user) only when you are truly blocked: a secret or access only they have, an action you cannot \
+undo that they did not ask for, or two readings that lead to very different results which no file or tool can \
+settle. For everything else pick the sensible default, go on, and say what you assumed in your final reply.
+- A failed tool call is information, not the end. Read the whole message, fix what it names (a wrong or missing \
+argument, a format, a step to do first) and call again. Retry a temporary failure (timeout, 5xx, rate limit) up to \
+three times. Try a different tool or approach before you report something as impossible. A result that says \
+ok false, error or failed is a failure even when the call itself did not error.
+- Connected-app tools (names starting mcp__): find the right tool by reading the tool list (or mcp_find_tools when \
+it is offered); look ids up with a search or list tool instead of guessing them; follow every next page \
+(next_cursor, page, offset) until none is left; join data from several tools by id; and then do the write steps \
+the user asked for. A summary is not the job when they asked for a change.
+- Never repeat a call that already succeeded and created or changed something (a booking, an invoice, a message): it \
+would be done twice. To check it, read.
+- To check your work, only look: read the file, run the tests, call a read-only tool. Never test by doing extra \
+real things in a live system (booking, sending, creating, updating or deleting something just to see if it \
+works). If an effect cannot be read back, say it was accepted by the tool but is not independently confirmed.
+- Before you finish, go through every requirement in the request one by one against the real result. Say plainly \
+what failed or was not done; never write "done" for something that errored."""
+E2E = os.environ.get("MH_E2E", "1") != "0"
 
 
 T.SCHEMAS["web_search"] = T._fn(
@@ -257,10 +286,10 @@ when it helps the user follow along.
 Asking the user (ask_user)
 The user wants the result they had in mind, not a good guess. ask_user shows them clickable options; they can also \
 type their own answer.
-- Before you build a large deliverable (deck, workbook, long document, report), make ONE ask_user call only if \
-choices that change the result most are still open after reading the request and files: at most 3 questions. If the \
-request already says what it wants, or it is small, build it now with your recommendations and list them in one \
-line at the end. Waiting on questions costs the user time; ask only what you cannot reasonably choose. Typical ones: \
+- E2E-AUTONOMY: build now with sensible choices. Make ONE ask_user call before a large deliverable (deck, workbook, \
+long document, report) only if a choice that would waste the whole job when wrong is open and nothing in the \
+request, the files or the connected apps settles it: at most 3 questions. A vague request ("a plan for X") is not a \
+reason to ask: choose audience, length and format yourself and list them in one line at the end. Waiting on questions costs the user time; ask only what you cannot reasonably choose. Typical ones: \
 audience and purpose; density, with the options "present" (visual, few words, to present live), "balanced" and \
 "read" (a dense pre-read); length (e.g. number of slides or pages); look or theme (navy, ocean, forest, burgundy, \
 graphite, mono); sources to use or leave out. Give every question 2 to 5 short options, mark the one you recommend \
@@ -270,7 +299,7 @@ asking for them. A quick question or a small, clear task needs no questions.
 - While you work, ask a short follow-up whenever something material is ambiguous (two readings of the data, a \
 missing number, a choice the user would care about). Never make two ask_user calls in a row without doing work in \
 between.
-- Before you finish, confirm anything important you assumed, with one short ask_user call if it could change the result.
+- E2E-AUTONOMY: do not ask at the end to confirm what you assumed; list the assumptions in your reply.
 - Pass the answers on to the engines in plain words: put them in the make_deck, make_spreadsheet, make_document or \
 office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides", "audience: the board").
 - If the result says no one answered, go ahead with your recommendations and list them as assumptions in your reply.
@@ -284,7 +313,7 @@ Rules
 - If the user denies a tool call, do not retry it. Take another approach or ask.
 - To look things up, use web_search, web_research and fetch_url. They are fast and need no browser. Match the depth to the request: a quick question gets one web_research call and a short answer with links; for a research job or report, run web_research with several varied queries, read key sources in full with fetch_url, and cite every fact with its link.
 - If a value in the user's message arrives as a tag like [redacted: phone number #1], PHONE_NUMBER_1 or EMAIL_ADDRESS, it was hidden for privacy. Never invent or use an example value in its place; leave it out and tell the user where to add it.
-- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first.
+- Anything with a visual result (a web page, app screen, slide, chart, document, image) you must look at before you say it is done. Open the result with view_output (any file) or ui_audit (a web page: wide, tablet and phone, light and dark), read the report and the pictures, fix what is wrong, and check again. For a new web page or app screen, read the build-ui skill first. For anything you build as code (app, game, dashboard, script, CLI, API), read the matching build skill (build-app, build-game, build-dashboard, build-website, build-code), write the list of features a user expects as your plan, use it like a user before you finish (ui_smoke for pages, real runs and tests for programs), and fix what breaks.
 - Use the browser tools (if enabled) only for pages that need a sign-in, clicks or forms. Use computer use only for desktop apps, and only when the user asks for it. Files, commands and APIs beat clicking. Before anything irreversible on a website or in an app (sending, paying, deleting, submitting), stop and confirm with the user.
 - Write plainly: short sentences, no filler."""
 
@@ -701,6 +730,26 @@ def _apply_refused(body: dict) -> dict:
     return body
 
 
+_PROMISE = re.compile(
+    r"(?:\b(?:I'll|I will|I am going to|I'm going to|let me|now I(?:'ll| will)|next,? I(?:'ll| will)|next up)\b"
+    r"|\b(?:shall|should) I (?:proceed|continue|go ahead|start|begin)\b"
+    r"|\b(?:want|like) me to (?:proceed|continue|go ahead|start|begin|keep going)\b"
+    r"|\bdo you want me to (?:proceed|continue|go ahead|keep going)\b)", re.I)
+
+
+def _stopped_early(final: str) -> bool:
+    """True when a reply that ended the turn ends with a promise of more work ("Now I'll run the tests.") or asks
+    leave to carry on ("Shall I proceed?"): the model stopped in the middle of the job (E2E-AUTONOMY)."""
+    tail = [p for p in re.split(r"\n\s*\n", str(final or "").strip()) if p.strip()]
+    if not tail:
+        return False
+    last = " ".join(tail[-1].split())[-400:]
+    if re.search(r"let me know|I'll need|I will need|I'll wait|I can't|I cannot|I'm unable|I am unable", last, re.I):
+        return False
+    last_sentence = re.split(r"(?<=[.!?])\s+", last)[-1]
+    return bool(_PROMISE.search(last_sentence))
+
+
 _DESTRUCTIVE = re.compile(
     r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
     r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
@@ -921,6 +970,8 @@ class Agent:
             if "todo_write" in self._dropped():     # a focused harness: no todo list, so no rule about one
                 rules = rules.split("\n- For any request with more than one step")[0]
             text += rules
+        if E2E:
+            text += E2E_RULES
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
@@ -959,7 +1010,15 @@ class Agent:
         return effective(getattr(self, "route", None))
 
     def _dropped(self) -> set:
-        """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0."""
+        """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0. A headless run
+        (no one to answer: `meshpool -p`, scripts) also leaves out ask_user: E2E-AUTONOMY, it decides and says what
+        it assumed."""
+        d = self._dropped_route()
+        if E2E and getattr(self, "headless", False) and not self.plan:
+            d = d | {"ask_user"}
+        return d
+
+    def _dropped_route(self) -> set:
         route = getattr(self, "route", None)
         if route is None or self.plan or not self.hsettings()["lean_tools"]:
             return set()
@@ -997,10 +1056,23 @@ class Agent:
         drop = self._dropped()
         if drop:
             names = [n for n in names if n not in drop]
-        return T.schemas(names) + ([x for x in self.mcp.schemas()
-                                    if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
-                                    and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
-                                   if self.mcp else [])
+        ms = ([x for x in self.mcp.schemas()
+               if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
+               and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
+              if self.mcp else [])
+        return T.schemas(names) + self._lazy_apply(ms)
+
+    def _lazy_apply(self, ms: list) -> list:
+        """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
+        lz = getattr(self, "_lazy", None)
+        if lz is None:
+            lz = self._lazy = MA.LazyTools()
+        self._lazy_all, self._lazy_hidden = ms, []
+        if not ms or not MA.LazyTools.wanted(ms):
+            return ms
+        shown, hidden = lz.split(ms)
+        self._lazy_hidden = [h["function"]["name"] for h in hidden]
+        return shown + ([lz.find_schema(hidden)] if hidden else [])
 
     def _tool_names(self) -> list:
         if self._codex():
@@ -1195,6 +1267,10 @@ class Agent:
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
         g.update({"since_todo": 0, "plan_asked": False})
+        g.update({"msg0": max(0, len(self.messages) - 1), "t0": time.time(), "cmd0": len(self.ws.commands),
+                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0})
+        self._last_g, self._last_final = g, ""
+        self._turn_no = getattr(self, "_turn_no", 0) + 1
         cx = self._codex()
         if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
             self._plan_needed = False
@@ -1347,6 +1423,18 @@ class Agent:
                         continue
                     if self.has_steers():           # added while the checks above ran
                         continue
+                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2
+                            and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
+                        g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
+                        self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
+                            "[Meshpool] Your reply ends with what you will do next, or asks whether to go on, but "
+                            "no tool call came with it, so the turn ended. Do the next step now with a tool call; do "
+                            "not ask permission for work you were given. If you are truly finished or truly blocked, "
+                            "say so plainly, without promising more.")})
+                        continue
+                    again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
+                    if again:
+                        continue
                     break
                 said = ""
                 shots = []
@@ -1414,6 +1502,8 @@ class Agent:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
         finally:
+            self._last_final = final
+            self._prev_plan = bool(self.plan)
             try:
                 rec = self.receipt()
                 self.last_receipt = rec
@@ -1430,6 +1520,116 @@ class Agent:
             self._running = False
             self.save()
         return final
+
+    # ---------- independent grader (agent/grader.py) -----------------------------------------------------------
+    def _repeat_note(self, name: str, args: dict, ok: bool) -> str:
+        """E2E-AUTONOMY: the same connected-app call that already succeeded this turn, made again, and not a read:
+        say it may have been done twice. Reads are never flagged."""
+        if not (E2E and MA.assist_on()):
+            return ""
+        done = self.__dict__.setdefault("_done_calls", {})
+        if self._turn_no != done.get("_turn"):
+            done.clear()
+            done["_turn"] = self._turn_no
+        if not ok or MA.read_like(name):
+            return ""
+        key = name + ":" + json.dumps(args, sort_keys=True, default=str)[:600]
+        if key in done:
+            return MA.REPEAT
+        done[key] = True
+        return ""
+
+    def _tool_msgs_since(self, start: int) -> int:
+        return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
+
+    def _grade_info(self, g: dict, final: str) -> dict:
+        from meshpool_harness.agent import grader as GR
+        msgs = self.messages
+        calls, research = GR.count_calls(msgs, g.get("msg0", 0))
+        reqs = GR.requests(msgs, g.get("msg0", 0))
+        route = getattr(self, "route", None)
+        return {"todos": [t for t in getattr(self, "_todos", []) if isinstance(t, dict)], "calls": calls,
+                "research": research, "final": final, "request": " ".join(reqs[-3:]), "requests": reqs,
+                "files": GR.files_changed(self.root, g.get("t0", self.created), getattr(self.ws, "turn_files", ())),
+                "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
+                "root": str(self.root)}
+
+    def _grade_commands(self, g: dict) -> list:
+        return [c for c in self.ws.commands[g.get("cmd0", 0):] if c.get("kind") != "read"] or \
+            self.ws.commands[g.get("cmd0", 0):][-6:]
+
+    def _grade_usage(self, res: dict, turn: dict) -> None:
+        u = res.get("usage") or {}
+        for k in ("in", "cached", "out", "calls"):
+            turn[k] += int(u.get(k, 0) or 0)
+            self.usage[k] += int(u.get(k, 0) or 0)
+        self.emit({"type": "usage", "aux": True, **{k: int(u.get(k, 0) or 0) for k in ("in", "cached", "out", "calls")}})
+
+    def _grade_gate(self, g: dict, turn: dict, final: str, force: bool = False) -> tuple[bool, str]:
+        """At the final answer of a big task: an independent review. Returns (True, final) when the findings were sent
+        back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
+        try:
+            from meshpool_harness.agent import grader as GR
+            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan
+                    or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
+                return False, final
+            info = self._grade_info(g, final)
+            why = "you asked for it" if force else GR.large(info)
+            if not why:
+                return False, final
+            rounds = g.get("grade_rounds", 0)
+            self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
+                       + (f" (round {rounds + 1})" if rounds else "") + "..."})
+            res = GR.run(self, info, self._grade_commands(g))
+            self._grade_usage(res, turn)
+            rework = (not force and "error" not in res and GR.needs_rework(res) and rounds < GR.limits()["rounds"])
+            text = GR.report(res, rounds)
+            ev = GR.event(res, text=text, rounds=rounds, why=why, secs=res.get("secs", 0), usage=res.get("usage") or {},
+                          forced=force, rework=rework, model=res.get("model", ""))
+            self.last_review = dict(ev, turn=getattr(self, "_turn_no", 0))
+            self.emit(ev)
+            if rework:
+                g["grade_rounds"] = rounds + 1
+                self.messages.append({"role": "user", "content": GR.inject_text(res)})
+                self._trace_note("grader", f"round {rounds + 1}: {res['not_met']} not met")
+                return True, final
+            self._trace_note("grader", res.get("verdict", "error"))
+            if self.messages and self.messages[-1].get("role") == "assistant" and isinstance(
+                    self.messages[-1].get("content"), str) and not force:
+                self.messages[-1]["content"] += "\n\n" + text
+            return False, (final + "\n\n" + text) if not force else final
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception as e:  # noqa: BLE001 - the check must never break the turn
+            try:
+                from meshpool_harness.agent import grader as GR
+                res = {"error": f"it hit a problem: {str(e)[:80]}"}
+                text = GR.report(res)
+                self.emit(GR.event(res, text=text, rounds=g.get("grade_rounds", 0), why="", secs=0, usage={}, forced=force))
+                return False, final + "\n\n" + text
+            except Exception:  # noqa: BLE001
+                return False, final
+
+    def grade_now(self) -> dict:
+        """Check the last piece of work on demand (/grade, "Check this"): the same independent review, no rework round.
+        Returns the review event."""
+        self._stop = False
+        turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        g = getattr(self, "_last_g", None)
+        final = getattr(self, "_last_final", "") or next(
+            (m.get("content") for m in reversed(self.messages) if m.get("role") == "assistant"
+             and isinstance(m.get("content"), str) and m["content"].strip()), "")
+        if g is None:
+            i = max((i for i, m in enumerate(self.messages) if m.get("role") == "user"), default=0)
+            g = {"msg0": i, "t0": self.created, "cmd0": 0, "after_plan": False, "grade_rounds": 0}
+        if not final.strip():
+            ev = {"type": "review", "verdict": "error", "error": "there is nothing to check yet", "text":
+                  "Independent check: there is nothing to check yet.", "items": [], "met": 0, "total": 0}
+            self.emit(ev)
+            return ev
+        self.last_review = None
+        self._grade_gate(g, turn, final, force=True)
+        return getattr(self, "last_review", None) or {}
 
     def _plan_start(self, route, g: dict):
         """Decide, for free, whether this request needs a written plan; if so the first call is told to write it
@@ -1612,6 +1812,19 @@ class Agent:
         for c in calls:
             f = c.get("function", {})
             g["hist"].append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        if E2E:                                          # the same lookup over and over, spread among other calls
+            seen = g.setdefault("dups", {})
+            for c in calls:
+                f = c.get("function", {})
+                if f.get("name") in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write",
+                                     "update_plan", "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+                    continue
+                k = f.get("name", "") + ":" + str(f.get("arguments", ""))[:500]
+                seen[k] = seen.get(k, 0) + 1
+                if seen[k] == 3:
+                    notes.append(f"You have made the same {f.get('name')} call three times; the result does not "
+                                 "change. Use what you already have, or ask a different question (another query, "
+                                 "page or source).")
         g["n_calls"] = g.get("n_calls", 0) + len(calls)
         h = g["hist"] = g["hist"][-12:]
         hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
@@ -1701,6 +1914,10 @@ class Agent:
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
+        rv = getattr(self, "last_review", None)
+        if rv and rv.get("turn") == getattr(self, "_turn_no", 0):
+            from meshpool_harness.agent import grader as GR
+            check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
 
     def _delta(self, t: str):
@@ -2622,6 +2839,8 @@ class Agent:
                             "incomplete and it was not run. Split the content into smaller pieces: write_file the "
                             "first part, then write_file with append=true for each further part, or make several "
                             "smaller edits.")
+        elif name == MA.FIND and not self.plan:
+            pass                                       # connected-tool lookup (mcp_assist): no schema to validate
         elif not is_mcp:
             try:
                 args = validate(name, raw, self._tool_names() + (
@@ -2656,10 +2875,25 @@ class Agent:
                 out, err = self._run_subtasks(name, args)
                 ok = not err
                 out = self.ws._cap(str(out), "mcp")
+            elif name == MA.FIND:
+                lz = getattr(self, "_lazy", None) or MA.LazyTools()
+                self._lazy = lz
+                out = lz.search(getattr(self, "_lazy_all", []), str(args.get("query") or ""), args.get("names"))
+            elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:
+                out = self._lazy.stub(name, getattr(self, "_lazy_all", [])) or "tool not loaded"
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
-                ok = not err
-                out = self.ws._cap(str(out), "mcp")    # head and tail; the full output goes to a file
+                paged = self.__dict__.setdefault("_paged", set())
+                pre, post, ok = MA.classify(str(out), bool(err), name in paged)
+                post += self._repeat_note(name, args, ok)
+                if ok and MA.assist_on():
+                    note, replace = MA.same_result(self.__dict__.setdefault("_same_out", {}), name, str(out))
+                    if replace:
+                        out = note.strip()
+                    else:
+                        post += note
+                (paged.add if (ok and MA.page_hint(str(out))) else paged.discard)(name)
+                out = pre + self.ws._cap(str(out), "mcp") + post    # head and tail; the full output goes to a file
             elif name == "fetch_url":
                 out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
                                  bool(args.get("links")))
@@ -2680,6 +2914,10 @@ class Agent:
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))
+                if E2E and not str(out).startswith("ERROR"):    # a skill's "ask the user" is not a reason to stop
+                    out += ("\n\n[Meshpool] Where this skill says to ask the user: ask (ask_user) only if you cannot "
+                            "go on without the answer. Otherwise assume a sensible default, do the work, and list the "
+                            "assumption in your reply.")
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))

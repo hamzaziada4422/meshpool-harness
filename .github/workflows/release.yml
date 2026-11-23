@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       platforms:
-        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), linux, or both (all platforms). Publishing needs both. linux-publish: build Linux and attach it to the current version's public release (main only). probe: only report which macOS runners this repository is given."
+        description: "Build only: windows (2x minutes, shakes out packaging first), mac (10x), linux, or both (all platforms). Publishing needs both. linux-publish: build Linux and attach it to the current version's public release (main only). probe: only report which macOS runners this repository is given. installer-test: compile the real Windows installer script with a stand-in payload of the real size and install it silently (about 10 minutes, not 40)."
         type: choice
-        options: [windows, mac, linux, both, linux-publish, probe]
+        options: [windows, mac, linux, both, linux-publish, probe, installer-test]
         default: windows
 
 permissions:
@@ -29,6 +29,108 @@ env:
   GH_TOKEN: ${{ github.token }}
 
 jobs:
+  installer-test:
+    # Finds out which part of the Windows installer misbehaves, in minutes: an empty installer, the real script with a
+    # small payload, and the real script as released (stub with an archive appended) with a small payload.
+    if: github.event_name == 'workflow_dispatch' && inputs.platforms == 'installer-test'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the test installers
+        shell: bash
+        run: |
+          set -euo pipefail
+          T=installer-test-work
+          mkdir -p $T/payload/app $T/payload/runtime
+          cp packaging/icons/Meshpool.ico $T/payload/Meshpool.ico
+          cp /c/Windows/System32/hostname.exe $T/payload/Meshpool.exe
+          cp /c/Windows/System32/hostname.exe $T/payload/runtime/python.exe
+          python - <<'PY'
+          import os
+          for i in range(300):
+              open(f"installer-test-work/payload/app/f{i:04d}.txt", "w").write("meshpool\n" * 50)
+          PY
+          choco install nsis -y --no-progress
+          MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
+          SEVEN="/c/Program Files/7-Zip"
+          # v0: an installer that does nothing
+          printf 'Unicode true\nOutFile "v0.exe"\nRequestExecutionLevel user\nSection\nSectionEnd\n' > $T/v0.nsi
+          (cd $T && "$MAKENSIS" -V1 v0.nsi)
+          # v1: the real script, files inside it (no 7zr.exe next to it, so it takes the plain File /r path)
+          mkdir -p $T/v1 && cp -r $T/payload $T/v1/Meshpool
+          cp packaging/nsis/installer.nsi packaging/nsis/winsetup.nsh packaging/nsis/winsetup.ps1 $T/v1/
+          sed -i 's/@VERSION_NUM@/0.0.0/; s/@VERSION@/0.0.0/g; s/@BETA@/ test/' $T/v1/installer.nsi
+          (cd $T/v1 && "$MAKENSIS" -V1 installer.nsi && cp "Meshpool Setup.exe" ../v1.exe)
+          # v2: the real script as released: a stub with 7zr.exe, and the archive appended
+          mkdir -p $T/v2 && cp -r $T/payload $T/v2/Meshpool
+          cp packaging/nsis/installer.nsi packaging/nsis/winsetup.nsh packaging/nsis/winsetup.ps1 $T/v2/
+          sed -i 's/@VERSION_NUM@/0.0.0/; s/@VERSION@/0.0.0/g; s/@BETA@/ test/' $T/v2/installer.nsi
+          curl -fsSL --retry 4 -o $T/v2/7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
+          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  $T/v2/7zr.exe" | sha256sum -c -
+          (cd $T/v2/Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -bso0 -bsp0 ../payload.7z '*')
+          (cd $T/v2 && "$MAKENSIS" -V1 installer.nsi && cat "Meshpool Setup.exe" payload.7z > ../v2.exe && "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 ../v2.exe)
+          ls -la $T/*.exe
+      - name: Run each one silently, with diagnostics when it hangs
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -uo pipefail
+          T="$PWD/installer-test-work"
+          cat > $T/diag.ps1 <<'PS'
+          $name = $env:MP_NAME
+          Add-Type -TypeDefinition @"
+          using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+          public class W {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            public static List<string> For(uint pid) {
+              var r = new List<string>();
+              EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+                if (p == pid) { var t = new StringBuilder(256); var c = new StringBuilder(256); GetWindowText(h, t, 256); GetClassName(h, c, 256);
+                  r.Add("window class=[" + c + "] title=[" + t + "] visible=" + IsWindowVisible(h)); }
+                return true; }, IntPtr.Zero);
+              return r;
+            }
+          }
+          "@
+          foreach ($x in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            "pid {0}: cpu {1}s, responding {2}, threads {3}, handles {4}, ws {5} MB" -f $x.Id, $x.CPU, $x.Responding, $x.Threads.Count, $x.HandleCount, [int]($x.WorkingSet64/1MB)
+            $x.Threads | ForEach-Object { "  thread {0}: {1} {2}" -f $_.Id, $_.ThreadState, $_.WaitReason }
+            [W]::For([uint32]$x.Id) | ForEach-Object { "  $_" }
+            Get-CimInstance Win32_Process -Filter ("ParentProcessId=" + $x.Id) | ForEach-Object { "  child: {0} pid {1}" -f $_.Name, $_.ProcessId }
+          }
+          PS
+          run_one() {   # name, install folder; runs NAME.exe /S [/D=...] and reports
+            local n=$1 dir=$2 args=("/S")
+            [ -n "$dir" ] && args+=("/D=$(cygpath -w "$dir")")
+            echo "=================== $n"
+            local t0=$(date +%s)
+            MSYS2_ARG_CONV_EXCL="*" "$T/$n.exe" "${args[@]}" &   # keep Git Bash from rewriting /S as a path
+            local pid=$! i
+            for i in $(seq 1 18); do
+              sleep 5
+              kill -0 $pid 2>/dev/null || { wait $pid; echo "$n finished: exit code $?, $(( $(date +%s) - t0 )) s"; return 0; }
+              if [ $i -eq 6 ]; then echo "$n still running after 30 s:"; MP_NAME="$n" powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w $T/diag.ps1)" 2>&1 | head -60; fi
+            done
+            echo "$n HUNG for 90 s"
+            MP_NAME="$n" powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w $T/diag.ps1)" 2>&1 | head -60
+            taskkill //F //IM "$n.exe" >/dev/null 2>&1 || true
+            return 1
+          }
+          fail=0
+          run_one v0 "" || fail=1
+          run_one v1 "$PWD/inst-v1" || fail=1
+          ls "$PWD/inst-v1" 2>/dev/null | head -5
+          run_one v2 "$PWD/inst-v2" || fail=1
+          ls "$PWD/inst-v2" 2>/dev/null | head -5
+          [ -f "$PWD/inst-v2/Meshpool.exe" ] && echo "v2 installed Meshpool.exe" || echo "v2 did NOT install Meshpool.exe"
+          exit $fail
+
   mac-probe:
     # Which GitHub-hosted macOS runners this repository is actually given (a job no runner takes is cancelled after
     # about 15 minutes). Prints the machine only.
@@ -128,7 +230,10 @@ jobs:
           # The oldest macOS the app opens on is 11 (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist).
           # Node 22, Playwright's driver and LibreOffice run on 11. Playwright's Chromium (159) needs macOS 13, so browser
           # use says so on older Macs (bundled.browser_needs_newer_macos) and Chromium is the one exemption.
-          exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0')
+          # The Apple silicon ffmpeg (imageio-ffmpeg's build, read from the file) needs macOS 12: converting audio and video
+          # says so on an older Mac (bundled.ffmpeg_needs_newer_macos); speech to text decodes with PyAV and runs on 11.
+          # Every other file, the new Python packages included, must pass at 11 (app/tests/test_macos_floor.py reads them).
+          exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0' --exempt 'Contents/Resources/app/vendor/ffmpeg/*=12.0')
           # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
           clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
           # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead
@@ -282,6 +387,17 @@ jobs:
           fi
           [ -x "$MAKENSIS" ] || { echo "NSIS could not be installed"; exit 1; }
           cd dist-src/app-win
+          # makensis is a 32-bit program: with the speech model, ffmpeg and pandoc the payload no longer fits in its memory
+          # ("Internal compiler error #12345: error mmapping datablock"). So the program files go into one 7z archive, made
+          # here with the 64-bit 7-Zip, and the installer unpacks it with 7-Zip's own 7z.exe and 7z.dll.
+          SEVEN="/c/Program Files/7-Zip"
+          [ -x "$SEVEN/7z.exe" ] || choco install 7zip -y --no-progress
+          [ -x "$SEVEN/7z.exe" ] || { echo "7-Zip is not installed"; exit 1; }
+          (cd Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -md=64m -mmt=on -bso0 -bsp0 ../payload.7z '*')
+          ls -la payload.7z
+          # 7zr.exe (7-Zip 25.01, LGPL) goes inside the installer to unpack the archive that is appended to it afterwards
+          curl -fsSL --retry 4 -o 7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
+          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  7zr.exe" | sha256sum -c -
           # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
           # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
           if [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
@@ -295,8 +411,49 @@ jobs:
           else
             "$MAKENSIS" -V2 installer.nsi
           fi
+          # The installer file is the NSIS stub with the archive appended (the stub stays under 1 MB: 7-Zip finds an archive
+          # after a stub only within the first few megabytes).
+          ls -la "Meshpool Setup.exe"
+          [ "$(stat -c %s "Meshpool Setup.exe")" -lt 3000000 ] || { echo "the installer stub is larger than 3 MB"; exit 1; }
+          cat "Meshpool Setup.exe" payload.7z > "Meshpool Setup.full.exe"
+          "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 "Meshpool Setup.full.exe" || { echo "7-Zip cannot read the archive inside the installer"; exit 1; }
+          mv -f "Meshpool Setup.full.exe" "Meshpool Setup.exe"
           cd "$GITHUB_WORKSPACE"
           mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
+      - name: Install the installer and smoke test what it installed (what a user gets)
+        timeout-minutes: 25
+        shell: bash
+        run: |
+          set -uo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          D="$PWD/install-test"
+          W=$(cygpath -w "$D")
+          # The archive itself first: a damaged archive must not look like a hung installer.
+          "/c/Program Files/7-Zip/7z.exe" t -bso0 -bsp0 dist-src/app-win/payload.7z && echo "payload.7z tests clean"
+          # Silent install in the background, so a hang shows what it is waiting on instead of timing the step out.
+          # Only for the installer: Git Bash would rewrite /S and /D=... as paths and the installer would open its window.
+          # (Not exported: the smoke test below needs Git Bash to convert the app path it passes to python.exe.)
+          MSYS2_ARG_CONV_EXCL="*" ./out/Meshpool-Setup.exe /S "/D=$W" &
+          PID=$!
+          for i in $(seq 1 60); do
+            sleep 15
+            kill -0 $PID 2>/dev/null || break
+            echo "-- $((i * 15))s: installer still running; programs:"
+            tasklist //FI "STATUS eq RUNNING" //FO CSV //NH 2>/dev/null | grep -i -E "7z|powershell|Meshpool|cmd.exe|taskkill|conhost" | head -8 || true
+            MP_W="$W" powershell -NoProfile -Command 'foreach ($d in ($env:MP_W + ".new"), $env:MP_W) { if (Test-Path $d) { "{0}: {1} MB" -f $d, [math]::Round((Get-ChildItem $d -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB) } }' || true
+          done
+          if kill -0 $PID 2>/dev/null; then
+            echo "The installer did not finish in 15 minutes. Programs it started:"
+            tasklist //FO CSV //NH | head -40
+            exit 1
+          fi
+          wait $PID; echo "installer exit code: $?"
+          for f in Meshpool.exe "Uninstall Meshpool.exe" runtime/python.exe node/node.exe app/meshpool_harness/__init__.py \
+                   app/vendor/libreoffice/program/soffice.exe app/vendor/whisper/base/model.bin bin/meshpool.cmd; do
+            [ -e "$D/$f" ] || { echo "missing after install: $f"; exit 1; }
+          done
+          ls "$D/app/vendor" | head -20
+          "$D/runtime/python.exe" packaging/smoke.py --app "$D/app" --version "$VER"
       - name: Sign the installer
         if: env.AZURE_SIGNING_ENDPOINT != ''
         uses: azure/artifact-signing-action@v2

@@ -5,7 +5,7 @@ description: Query or edit a SQLite, DuckDB, CSV or Excel data set with SQL and 
 
 # Query database
 
-1. SQLite: python3 sqlite3 module. DuckDB: pip install duckdb, then duckdb.sql over CSV, Parquet and Excel files directly. Postgres or MySQL only when the user gives a connection they own; read it from an environment variable.
+1. SQLite: python3 sqlite3 module (there is no sqlite3 program; use the module). DuckDB ships inside Meshpool (never pip install it): `import duckdb`, then duckdb.sql over CSV, Parquet and Excel files directly. Postgres or MySQL only when the user gives a connection they own; read it from an environment variable.
 2. Look at the schema first. Run read queries freely; for any change (insert, update, delete, drop) copy the file first, say what will change and how many rows, and wait for a yes.
 3. Show the SQL you ran and the result as a small table. Write large results to CSV.
 

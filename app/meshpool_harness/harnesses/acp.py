@@ -156,7 +156,7 @@ def passthrough_env() -> dict:
             if v and (k in NET_ENV or k.startswith("MH_") or k.startswith("MESHPOOL_"))}
 
 
-def mcp_servers_for_acp(roots: list[str]) -> list[dict]:
+def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
     """Meshpool's enabled MCP servers in ACP's session/new format, so every harness sees the same tools."""
     from meshpool_harness.agent import mcp as M
     os.environ["MESHPOOL_PROJECT"] = str(Path(roots[0]).resolve()) if roots else os.getcwd()
@@ -185,6 +185,8 @@ def mcp_servers_for_acp(roots: list[str]) -> list[dict]:
                 env.setdefault("MESHPOOL_CONFIG", str(C.config_path()))
                 env.setdefault("MESHPOOL_PROJECT", os.environ["MESHPOOL_PROJECT"])
                 env.setdefault("PYTHONUTF8", "1")
+                if chat and any("browser_mcp_server" in str(x) for x in spec.get("args", [])):
+                    env["MH_CHAT_ID"] = chat                  # the app finds this chat's browser for its live view
                 if os.environ.get("PYTHONPYCACHEPREFIX"):        # never write caches inside the signed app
                     env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
                 else:
@@ -620,7 +622,7 @@ class ACPAgent:
             self.loaded_from, self.acp_session = self.acp_session, None
         if self.acp_session:
             return
-        mcp = mcp_servers_for_acp([str(self.root)]) if self.manifest.get("share_mcp", True) else []
+        mcp = mcp_servers_for_acp([str(self.root)], self.id) if self.manifest.get("share_mcp", True) else []
         if self.manifest.get("office", True):
             mcp.append(office_server([str(self.root)]))
         if self.loaded_from and self.capabilities.get("loadSession"):

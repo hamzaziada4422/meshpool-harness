@@ -1,0 +1,1396 @@
+{
+ "arm64": {
+  "anyio==4.16.0": {
+   "file": "anyio-4.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "asttokens==3.0.2": {
+   "file": "asttokens-3.0.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "attrs==26.1.0": {
+   "file": "attrs-26.1.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "av==14.1.0": {
+   "file": "av-14.1.0-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "av/option.cpython-312-darwin.so"
+  },
+  "beautifulsoup4==4.15.0": {
+   "file": "beautifulsoup4-4.15.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "bleach==6.4.0": {
+   "file": "bleach-6.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cairocffi==1.7.1": {
+   "file": "cairocffi-1.7.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cairosvg==2.9.1": {
+   "file": "cairosvg-2.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cffi==2.1.1": {
+   "file": "cffi-2.1.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "_cffi_backend.cpython-312-darwin.so"
+  },
+  "charset-normalizer==3.5.3": {
+   "file": "charset_normalizer-3.5.3-cp312-cp312-macosx_10_13_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "charset_normalizer/cd.cpython-312-darwin.so"
+  },
+  "click==8.5.1": {
+   "file": "click-8.5.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "coloredlogs==15.0.1": {
+   "file": "coloredlogs-15.0.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "comm==0.2.3": {
+   "file": "comm-0.2.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "contourpy==1.4.0": {
+   "file": "contourpy-1.4.0-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "contourpy/_contourpy.cpython-312-darwin.so"
+  },
+  "cryptography==50.0.2": {
+   "file": "cryptography-50.0.2-cp311-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "cryptography/hazmat/bindings/_rust.abi3.so"
+  },
+  "cssselect2==0.10.1": {
+   "file": "cssselect2-0.10.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ctranslate2==4.9.1": {
+   "file": "ctranslate2-4.9.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "ctranslate2/_ext.cpython-312-darwin.so"
+  },
+  "cycler==0.12.1": {
+   "file": "cycler-0.12.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ddgs==9.16.1": {
+   "file": "ddgs-9.16.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "debugpy==1.8.5": {
+   "file": "debugpy-1.8.5-py2.py3-none-any.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "debugpy/_vendored/pydevd/pydevd_attach_to_process/attach_x86_64.dylib"
+  },
+  "defusedxml==0.7.1": {
+   "file": "defusedxml-0.7.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "duckdb==2.0.1": {
+   "file": "duckdb-2.0.1-cp312-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "_duckdb.abi3.so"
+  },
+  "et-xmlfile==2.0.0": {
+   "file": "et_xmlfile-2.0.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "executing==2.3.0": {
+   "file": "executing-2.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "faster-whisper==1.2.1": {
+   "file": "faster_whisper-1.2.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "fastjsonschema==2.22.3": {
+   "file": "fastjsonschema-2.22.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "filelock==4.3.0": {
+   "file": "filelock-4.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "flatbuffers==25.12.19": {
+   "file": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "fonttools==4.68.0": {
+   "file": "fonttools-4.68.0-cp312-cp312-macosx_10_13_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "fontTools/qu2cu/qu2cu.cpython-312-darwin.so"
+  },
+  "fsspec==2026.9.0": {
+   "file": "fsspec-2026.9.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "greenlet==3.5.6": {
+   "file": "greenlet-3.5.6-cp312-cp312-macosx_11_0_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "greenlet/_greenlet.cpython-312-darwin.so"
+  },
+  "h11==0.16.0": {
+   "file": "h11-0.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "hf-xet==1.8.0": {
+   "file": "hf_xet-1.8.0-cp38-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "hf_xet/hf_xet.abi3.so"
+  },
+  "httpcore2==2.16.2": {
+   "file": "httpcore2-2.16.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "httpx2==2.16.2": {
+   "file": "httpx2-2.16.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "huggingface-hub==2.4.0": {
+   "file": "huggingface_hub-2.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "humanfriendly==10.0": {
+   "file": "humanfriendly-10.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "idna==3.20": {
+   "file": "idna-3.20-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipykernel==7.4.0": {
+   "file": "ipykernel-7.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipython-pygments-lexers==1.1.1": {
+   "file": "ipython_pygments_lexers-1.1.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipython==9.19.1": {
+   "file": "ipython-9.19.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jedi==0.20.1": {
+   "file": "jedi-0.20.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jinja2==3.1.6": {
+   "file": "jinja2-3.1.6-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jsonschema-specifications==2025.9.1": {
+   "file": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jsonschema==4.26.0": {
+   "file": "jsonschema-4.26.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyter-client==8.10.0": {
+   "file": "jupyter_client-8.10.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyter-core==5.9.1": {
+   "file": "jupyter_core-5.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyterlab-pygments==0.3.0": {
+   "file": "jupyterlab_pygments-0.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "kiwisolver==1.5.1": {
+   "file": "kiwisolver-1.5.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "kiwisolver/_cext.cpython-312-darwin.so"
+  },
+  "lxml==6.1.3": {
+   "file": "lxml-6.1.3-cp312-cp312-macosx_10_13_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "lxml/builder.cpython-312-darwin.so"
+  },
+  "markupsafe==3.0.4": {
+   "file": "markupsafe-3.0.4-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "markupsafe/_speedups.cpython-312-darwin.so"
+  },
+  "matplotlib-inline==0.2.2": {
+   "file": "matplotlib_inline-0.2.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "matplotlib==3.11.2": {
+   "file": "matplotlib-3.11.2-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "matplotlib/_image.cpython-312-darwin.so"
+  },
+  "mistune==3.4.0": {
+   "file": "mistune-3.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "mpmath==1.3.0": {
+   "file": "mpmath-1.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbclient==0.11.0": {
+   "file": "nbclient-0.11.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbconvert==7.17.2": {
+   "file": "nbconvert-7.17.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbformat==5.11.1": {
+   "file": "nbformat-5.11.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nest-asyncio2==1.7.4": {
+   "file": "nest_asyncio2-1.7.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "numpy==2.5.5": {
+   "file": "numpy-2.5.5-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "numpy/linalg/lapack_lite.cpython-312-darwin.so"
+  },
+  "onnxruntime==1.19.2": {
+   "file": "onnxruntime-1.19.2-cp312-cp312-macosx_11_0_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "onnxruntime/capi/onnxruntime_pybind11_state.so"
+  },
+  "openpyxl==3.1.5": {
+   "file": "openpyxl-3.1.5-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "packaging==26.3": {
+   "file": "packaging-26.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pandas==3.1.1": {
+   "file": "pandas-3.1.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "pandas/_libs/properties.cpython-312-darwin.so"
+  },
+  "pandocfilters==1.5.1": {
+   "file": "pandocfilters-1.5.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "parso==0.8.7": {
+   "file": "parso-0.8.7-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pdfminer-six==20260107": {
+   "file": "pdfminer_six-20260107-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pexpect==4.9.0": {
+   "file": "pexpect-4.9.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pillow-heif==1.8.1": {
+   "file": "pillow_heif-1.8.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "_pillow_heif.cpython-312-darwin.so"
+  },
+  "pillow==13.0.0": {
+   "file": "pillow-13.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "PIL/_webp.cpython-312-darwin.so"
+  },
+  "platformdirs==4.14.8": {
+   "file": "platformdirs-4.14.8-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "playwright==1.65.2": {
+   "file": "playwright-1.65.2-py3-none-macosx_11_0_arm64.whl",
+   "minos": [
+    13,
+    5
+   ],
+   "worst": "playwright/driver/node"
+  },
+  "primp==2.0.1": {
+   "file": "primp-2.0.1-cp310-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "primp/primp.abi3.so"
+  },
+  "prompt-toolkit==3.0.53": {
+   "file": "prompt_toolkit-3.0.53-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "protobuf==6.33.5": {
+   "file": "protobuf-6.33.5-cp39-abi3-macosx_10_9_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "google/_upb/_message.abi3.so"
+  },
+  "psutil==7.2.2": {
+   "file": "psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "psutil/_psutil_osx.abi3.so"
+  },
+  "ptyprocess==0.7.0": {
+   "file": "ptyprocess-0.7.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pure-eval==0.2.4": {
+   "file": "pure_eval-0.2.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pycparser==3.12": {
+   "file": "pycparser-3.12-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pygments==2.21.0": {
+   "file": "pygments-2.21.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pyparsing==3.3.3": {
+   "file": "pyparsing-3.3.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pypdf==7.1.1": {
+   "file": "pypdf-7.1.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pypdfium2==4.30.1": {
+   "file": "pypdfium2-4.30.1-py3-none-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "python-dateutil==4.0.0": {
+   "file": "python_dateutil-4.0.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "python-docx==1.2.0": {
+   "file": "python_docx-1.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "python-pptx==1.0.2": {
+   "file": "python_pptx-1.0.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pywebview==3.4": {
+   "file": "pywebview-3.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pyyaml==6.0.4": {
+   "file": "pyyaml-6.0.4-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "yaml/_yaml.cpython-312-darwin.so"
+  },
+  "pyzmq==27.3.0": {
+   "file": "pyzmq-27.3.0-cp312-abi3-macosx_10_15_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "zmq/backend/cython/_zmq.abi3.so"
+  },
+  "referencing==0.37.0": {
+   "file": "referencing-0.37.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "reportlab==5.1.0": {
+   "file": "reportlab-5.1.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "rpds-py==2026.9.1": {
+   "file": "rpds_py-2026.9.1-cp312-cp312-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "rpds/rpds.cpython-312-darwin.so"
+  },
+  "ruff==0.17.6": {
+   "file": "ruff-0.17.6-py3-none-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "ruff-0.17.6.data/scripts/ruff"
+  },
+  "soupsieve==4.1.3": {
+   "file": "soupsieve-4.1.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "stack-data==0.6.3": {
+   "file": "stack_data-0.6.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "sympy==1.14.0": {
+   "file": "sympy-1.14.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tinycss2==1.5.1": {
+   "file": "tinycss2-1.5.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tokenizers==0.23.3": {
+   "file": "tokenizers-0.23.3-cp310-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "tokenizers/tokenizers.abi3.so"
+  },
+  "tornado==6.6.1": {
+   "file": "tornado-6.6.1-cp311-abi3-macosx_10_9_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "tornado/speedups.abi3.so"
+  },
+  "tqdm==4.70.1": {
+   "file": "tqdm-4.70.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "traitlets==5.16.1": {
+   "file": "traitlets-5.16.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "truststore==0.10.5": {
+   "file": "truststore-0.10.5-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "typing-extensions==4.16.0": {
+   "file": "typing_extensions-4.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tzdata==2026.6": {
+   "file": "tzdata-2026.6-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "wcwidth==0.9.5": {
+   "file": "wcwidth-0.9.5-cp310-abi3-macosx_11_0_arm64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "wcwidth/_wcwidth_c.abi3.so"
+  },
+  "webencodings==0.6.1": {
+   "file": "webencodings-0.6.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "xlrd==2.0.2": {
+   "file": "xlrd-2.0.2-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "xlsxwriter==3.3.4": {
+   "file": "xlsxwriter-3.3.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  }
+ },
+ "programs": {
+  "ffmpeg": {
+   "mac-arm64": {
+    "libs": [
+     "/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
+     "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+     "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+     "/System/Library/Frameworks/CoreHaptics.framework/Versions/A/CoreHaptics",
+     "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage",
+     "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+     "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+     "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+     "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+     "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/GameController.framework/Versions/A/GameController",
+     "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+     "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+     "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libbz2.1.0.dylib",
+     "/usr/lib/libc++.1.dylib",
+     "/usr/lib/libexpat.1.dylib",
+     "/usr/lib/libobjc.A.dylib",
+     "/usr/lib/libz.1.dylib"
+    ],
+    "member": "imageio_ffmpeg/binaries/ffmpeg-macos-aarch64-v7.1",
+    "minos": [
+     12,
+     0
+    ],
+    "sha256": "5cb5c37d3c19aa8e7cd95b9f4833e6a3d9fd33e4b1d126a42995b14aef9fef02",
+    "wheel": "imageio_ffmpeg-0.7.0-py3-none-macosx_11_0_arm64.whl"
+   },
+   "mac-x64": {
+    "libs": [
+     "/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
+     "/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+     "/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+     "/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+     "/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+     "/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+     "/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+     "/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+     "/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+     "/System/Library/Frameworks/CoreHaptics.framework/Versions/A/CoreHaptics",
+     "/System/Library/Frameworks/CoreImage.framework/Versions/A/CoreImage",
+     "/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+     "/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+     "/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+     "/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+     "/System/Library/Frameworks/ForceFeedback.framework/Versions/A/ForceFeedback",
+     "/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+     "/System/Library/Frameworks/GameController.framework/Versions/A/GameController",
+     "/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+     "/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+     "/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+     "/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+     "/System/Library/Frameworks/Security.framework/Versions/A/Security",
+     "/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox",
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libbz2.1.0.dylib",
+     "/usr/lib/libc++.1.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libobjc.A.dylib",
+     "/usr/lib/libz.1.dylib"
+    ],
+    "member": "imageio_ffmpeg/binaries/ffmpeg-macos-x86_64-v7.1",
+    "minos": [
+     11,
+     0
+    ],
+    "sha256": "fafa399433b571e8963471487cd7a7bb3ee7b532af42e6342145add6379f479b",
+    "wheel": "imageio_ffmpeg-0.7.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl"
+   }
+  },
+  "pandoc": {
+   "mac-arm64": {
+    "libs": [
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libcharset.1.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libz.1.dylib"
+    ],
+    "member": "pypandoc/files/pandoc",
+    "minos": [
+     11,
+     0
+    ],
+    "sha256": "21ef0345726d36fc45a50211320614daf2caede684b0d0963ce8738292809746",
+    "wheel": "pypandoc_binary-1.13-py3-none-macosx_11_0_arm64.whl"
+   },
+   "mac-x64": {
+    "libs": [
+     "/usr/lib/libSystem.B.dylib",
+     "/usr/lib/libcharset.1.dylib",
+     "/usr/lib/libiconv.2.dylib",
+     "/usr/lib/libz.1.dylib"
+    ],
+    "member": "pypandoc/files/pandoc",
+    "minos": [
+     11,
+     0
+    ],
+    "sha256": "946666388eb79b307d7f497b3b33045ef807750f8e5ef3440e0ba3bbab698044",
+    "wheel": "pypandoc_binary-1.13-py3-none-macosx_10_9_x86_64.whl"
+   }
+  }
+ },
+ "x86_64": {
+  "anyio==4.16.0": {
+   "file": "anyio-4.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "asttokens==3.0.2": {
+   "file": "asttokens-3.0.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "attrs==26.1.0": {
+   "file": "attrs-26.1.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "av==14.1.0": {
+   "file": "av-14.1.0-cp312-cp312-macosx_11_0_x86_64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "av/option.cpython-312-darwin.so"
+  },
+  "beautifulsoup4==4.15.0": {
+   "file": "beautifulsoup4-4.15.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "bleach==6.4.0": {
+   "file": "bleach-6.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cairocffi==1.7.1": {
+   "file": "cairocffi-1.7.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cairosvg==2.9.1": {
+   "file": "cairosvg-2.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "cffi==2.1.1": {
+   "file": "cffi-2.1.1-cp312-cp312-macosx_10_15_x86_64.whl",
+   "minos": [
+    10,
+    15
+   ],
+   "worst": "_cffi_backend.cpython-312-darwin.so"
+  },
+  "charset-normalizer==3.5.3": {
+   "file": "charset_normalizer-3.5.3-cp312-cp312-macosx_10_13_universal2.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "charset_normalizer/cd.cpython-312-darwin.so"
+  },
+  "click==8.5.1": {
+   "file": "click-8.5.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "coloredlogs==15.0.1": {
+   "file": "coloredlogs-15.0.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "comm==0.2.3": {
+   "file": "comm-0.2.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "contourpy==1.4.0": {
+   "file": "contourpy-1.4.0-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "contourpy/_contourpy.cpython-312-darwin.so"
+  },
+  "cryptography==48.0.1": {
+   "file": "cryptography-48.0.1-cp311-abi3-macosx_10_9_universal2.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "cryptography/hazmat/bindings/_rust.abi3.so"
+  },
+  "cssselect2==0.10.1": {
+   "file": "cssselect2-0.10.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ctranslate2==4.9.1": {
+   "file": "ctranslate2-4.9.1-cp312-cp312-macosx_11_0_x86_64.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "ctranslate2/_ext.cpython-312-darwin.so"
+  },
+  "cycler==0.12.1": {
+   "file": "cycler-0.12.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ddgs==9.16.1": {
+   "file": "ddgs-9.16.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "debugpy==1.8.5": {
+   "file": "debugpy-1.8.5-py2.py3-none-any.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "debugpy/_vendored/pydevd/pydevd_attach_to_process/attach_x86_64.dylib"
+  },
+  "defusedxml==0.7.1": {
+   "file": "defusedxml-0.7.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "duckdb==2.0.1": {
+   "file": "duckdb-2.0.1-cp312-abi3-macosx_10_15_x86_64.whl",
+   "minos": [
+    10,
+    15
+   ],
+   "worst": "_duckdb.abi3.so"
+  },
+  "et-xmlfile==2.0.0": {
+   "file": "et_xmlfile-2.0.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "executing==2.3.0": {
+   "file": "executing-2.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "faster-whisper==1.2.1": {
+   "file": "faster_whisper-1.2.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "fastjsonschema==2.22.3": {
+   "file": "fastjsonschema-2.22.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "filelock==4.3.0": {
+   "file": "filelock-4.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "flatbuffers==25.12.19": {
+   "file": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "fonttools==4.68.0": {
+   "file": "fonttools-4.68.0-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "fontTools/qu2cu/qu2cu.cpython-312-darwin.so"
+  },
+  "fsspec==2026.9.0": {
+   "file": "fsspec-2026.9.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "greenlet==3.5.6": {
+   "file": "greenlet-3.5.6-cp312-cp312-macosx_11_0_universal2.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "greenlet/_greenlet.cpython-312-darwin.so"
+  },
+  "h11==0.16.0": {
+   "file": "h11-0.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "hf-xet==1.8.0": {
+   "file": "hf_xet-1.8.0-cp38-abi3-macosx_10_12_x86_64.whl",
+   "minos": [
+    10,
+    12
+   ],
+   "worst": "hf_xet/hf_xet.abi3.so"
+  },
+  "httpcore2==2.16.2": {
+   "file": "httpcore2-2.16.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "httpx2==2.16.2": {
+   "file": "httpx2-2.16.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "huggingface-hub==2.4.0": {
+   "file": "huggingface_hub-2.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "humanfriendly==10.0": {
+   "file": "humanfriendly-10.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "idna==3.20": {
+   "file": "idna-3.20-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipykernel==7.4.0": {
+   "file": "ipykernel-7.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipython-pygments-lexers==1.1.1": {
+   "file": "ipython_pygments_lexers-1.1.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "ipython==9.19.1": {
+   "file": "ipython-9.19.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jedi==0.20.1": {
+   "file": "jedi-0.20.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jinja2==3.1.6": {
+   "file": "jinja2-3.1.6-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jsonschema-specifications==2025.9.1": {
+   "file": "jsonschema_specifications-2025.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jsonschema==4.26.0": {
+   "file": "jsonschema-4.26.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyter-client==8.10.0": {
+   "file": "jupyter_client-8.10.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyter-core==5.9.1": {
+   "file": "jupyter_core-5.9.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "jupyterlab-pygments==0.3.0": {
+   "file": "jupyterlab_pygments-0.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "kiwisolver==1.5.1": {
+   "file": "kiwisolver-1.5.1-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "kiwisolver/_cext.cpython-312-darwin.so"
+  },
+  "lxml==6.1.3": {
+   "file": "lxml-6.1.3-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "lxml/builder.cpython-312-darwin.so"
+  },
+  "markupsafe==3.0.4": {
+   "file": "markupsafe-3.0.4-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "markupsafe/_speedups.cpython-312-darwin.so"
+  },
+  "matplotlib-inline==0.2.2": {
+   "file": "matplotlib_inline-0.2.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "matplotlib==3.11.2": {
+   "file": "matplotlib-3.11.2-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "matplotlib/_image.cpython-312-darwin.so"
+  },
+  "mistune==3.4.0": {
+   "file": "mistune-3.4.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "mpmath==1.3.0": {
+   "file": "mpmath-1.3.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbclient==0.11.0": {
+   "file": "nbclient-0.11.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbconvert==7.17.2": {
+   "file": "nbconvert-7.17.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nbformat==5.11.1": {
+   "file": "nbformat-5.11.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "nest-asyncio2==1.7.4": {
+   "file": "nest_asyncio2-1.7.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "numpy==2.5.5": {
+   "file": "numpy-2.5.5-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "numpy/linalg/lapack_lite.cpython-312-darwin.so"
+  },
+  "onnxruntime==1.19.2": {
+   "file": "onnxruntime-1.19.2-cp312-cp312-macosx_11_0_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "onnxruntime/capi/onnxruntime_pybind11_state.so"
+  },
+  "openpyxl==3.1.5": {
+   "file": "openpyxl-3.1.5-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "packaging==26.3": {
+   "file": "packaging-26.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pandas==3.1.1": {
+   "file": "pandas-3.1.1-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "pandas/_libs/properties.cpython-312-darwin.so"
+  },
+  "pandocfilters==1.5.1": {
+   "file": "pandocfilters-1.5.1-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "parso==0.8.7": {
+   "file": "parso-0.8.7-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pdfminer-six==20260107": {
+   "file": "pdfminer_six-20260107-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pexpect==4.9.0": {
+   "file": "pexpect-4.9.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pillow-heif==1.8.1": {
+   "file": "pillow_heif-1.8.1-cp312-cp312-macosx_10_15_x86_64.whl",
+   "minos": [
+    10,
+    15
+   ],
+   "worst": "_pillow_heif.cpython-312-darwin.so"
+  },
+  "pillow==13.0.0": {
+   "file": "pillow-13.0.0-cp312-cp312-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "PIL/_webp.cpython-312-darwin.so"
+  },
+  "platformdirs==4.14.8": {
+   "file": "platformdirs-4.14.8-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "playwright==1.65.2": {
+   "file": "playwright-1.65.2-py3-none-macosx_10_13_x86_64.whl",
+   "minos": [
+    13,
+    5
+   ],
+   "worst": "playwright/driver/node"
+  },
+  "primp==2.0.1": {
+   "file": "primp-2.0.1-cp310-abi3-macosx_10_12_x86_64.whl",
+   "minos": [
+    10,
+    12
+   ],
+   "worst": "primp/primp.abi3.so"
+  },
+  "prompt-toolkit==3.0.53": {
+   "file": "prompt_toolkit-3.0.53-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "protobuf==6.33.5": {
+   "file": "protobuf-6.33.5-cp39-abi3-macosx_10_9_universal2.whl",
+   "minos": [
+    11,
+    0
+   ],
+   "worst": "google/_upb/_message.abi3.so"
+  },
+  "psutil==7.2.2": {
+   "file": "psutil-7.2.2-cp36-abi3-macosx_10_9_x86_64.whl",
+   "minos": [
+    10,
+    9
+   ],
+   "worst": "psutil/_psutil_osx.abi3.so"
+  },
+  "ptyprocess==0.7.0": {
+   "file": "ptyprocess-0.7.0-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pure-eval==0.2.4": {
+   "file": "pure_eval-0.2.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pycparser==3.12": {
+   "file": "pycparser-3.12-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pygments==2.21.0": {
+   "file": "pygments-2.21.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pyparsing==3.3.3": {
+   "file": "pyparsing-3.3.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pypdf==7.1.1": {
+   "file": "pypdf-7.1.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pypdfium2==4.30.1": {
+   "file": "pypdfium2-4.30.1-py3-none-macosx_10_13_x86_64.whl",
+   "minos": [
+    10,
+    13
+   ],
+   "worst": "pypdfium2_raw/libpdfium.dylib"
+  },
+  "python-dateutil==4.0.0": {
+   "file": "python_dateutil-4.0.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "python-docx==1.2.0": {
+   "file": "python_docx-1.2.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "python-pptx==1.0.2": {
+   "file": "python_pptx-1.0.2-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pywebview==3.4": {
+   "file": "pywebview-3.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "pyyaml==6.0.4": {
+   "file": "pyyaml-6.0.4-cp312-cp312-macosx_10_15_x86_64.whl",
+   "minos": [
+    10,
+    15
+   ],
+   "worst": "yaml/_yaml.cpython-312-darwin.so"
+  },
+  "pyzmq==27.3.0": {
+   "file": "pyzmq-27.3.0-cp312-abi3-macosx_10_15_universal2.whl",
+   "minos": [
+    10,
+    15
+   ],
+   "worst": "zmq/backend/cython/_zmq.abi3.so"
+  },
+  "referencing==0.37.0": {
+   "file": "referencing-0.37.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "reportlab==5.1.0": {
+   "file": "reportlab-5.1.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "rpds-py==2026.9.1": {
+   "file": "rpds_py-2026.9.1-cp312-cp312-macosx_10_12_x86_64.whl",
+   "minos": [
+    10,
+    12
+   ],
+   "worst": "rpds/rpds.cpython-312-darwin.so"
+  },
+  "ruff==0.17.6": {
+   "file": "ruff-0.17.6-py3-none-macosx_10_12_x86_64.whl",
+   "minos": [
+    10,
+    12
+   ],
+   "worst": "ruff-0.17.6.data/scripts/ruff"
+  },
+  "soupsieve==4.1.3": {
+   "file": "soupsieve-4.1.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "stack-data==0.6.3": {
+   "file": "stack_data-0.6.3-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "sympy==1.14.0": {
+   "file": "sympy-1.14.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tinycss2==1.5.1": {
+   "file": "tinycss2-1.5.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tokenizers==0.23.3": {
+   "file": "tokenizers-0.23.3-cp310-abi3-macosx_10_12_x86_64.whl",
+   "minos": [
+    10,
+    12
+   ],
+   "worst": "tokenizers/tokenizers.abi3.so"
+  },
+  "tornado==6.6.1": {
+   "file": "tornado-6.6.1-cp311-abi3-macosx_10_9_universal2.whl",
+   "minos": [
+    10,
+    9
+   ],
+   "worst": "tornado/speedups.abi3.so"
+  },
+  "tqdm==4.70.1": {
+   "file": "tqdm-4.70.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "traitlets==5.16.1": {
+   "file": "traitlets-5.16.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "truststore==0.10.5": {
+   "file": "truststore-0.10.5-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "typing-extensions==4.16.0": {
+   "file": "typing_extensions-4.16.0-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "tzdata==2026.6": {
+   "file": "tzdata-2026.6-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "wcwidth==0.9.5": {
+   "file": "wcwidth-0.9.5-cp310-abi3-macosx_10_9_x86_64.whl",
+   "minos": [
+    10,
+    9
+   ],
+   "worst": "wcwidth/_wcwidth_c.abi3.so"
+  },
+  "webencodings==0.6.1": {
+   "file": "webencodings-0.6.1-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "xlrd==2.0.2": {
+   "file": "xlrd-2.0.2-py2.py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  },
+  "xlsxwriter==3.3.4": {
+   "file": "xlsxwriter-3.3.4-py3-none-any.whl",
+   "minos": null,
+   "worst": null
+  }
+ }
+}

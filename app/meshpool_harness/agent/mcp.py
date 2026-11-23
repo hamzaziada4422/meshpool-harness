@@ -1048,7 +1048,9 @@ class Server:
 class Manager:
     """Starts the configured servers in parallel and exposes their tools as OpenAI function tools."""
 
-    def __init__(self, roots: list[str] | None = None, path: Path | None = None, extra: dict | None = None):
+    def __init__(self, roots: list[str] | None = None, path: Path | None = None, extra: dict | None = None,
+                 chat: str = ""):
+        self.chat = chat                               # the chat these servers belong to (the browser's live view)
         self.extra = extra or {}                       # servers supplied by an ACP client for this session
         self.path = path or config_file()
         self.roots = roots or [os.getcwd()]
@@ -1077,7 +1079,7 @@ class Manager:
             if not isinstance(spec, dict) or spec.get("disabled"):
                 self.disabled.append(name)
                 continue
-            s = Server(name, spec, log_dir, self.roots)
+            s = Server(name, self._with_chat(spec), log_dir, self.roots)
             self.servers[name] = s
             bad = recently_failed(name, spec) if use_health else None
             if bad is not None:                       # failed a moment ago: do not make every thread wait for it
@@ -1098,6 +1100,12 @@ class Manager:
         self._rebuild()
         return self
 
+    def _with_chat(self, spec: dict) -> dict:
+        """The browser server learns which chat it serves, so the app can find its live view."""
+        if self.chat and any("browser_mcp_server" in str(a) for a in spec.get("args") or []):
+            return {**spec, "env": {**(spec.get("env") or {}), "MH_CHAT_ID": self.chat}}
+        return spec
+
     def _rebuild(self):
         """Tool name -> (server, tool) for every connected server. schemas() reads the same table, so the model is
         never offered a tool that call() does not know."""
@@ -1112,7 +1120,7 @@ class Manager:
         old = self.servers.pop(name, None)
         if old:
             old.close()
-        s = Server(name, spec, C.runs_dir() / "mcp-logs", self.roots)
+        s = Server(name, self._with_chat(spec), C.runs_dir() / "mcp-logs", self.roots)
         s.start(timeout)
         self.servers[name] = s
         self._rebuild()

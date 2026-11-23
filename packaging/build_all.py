@@ -10,7 +10,8 @@ Everything the app needs ships inside the installer; the installed app uses none
 nothing (docs/plan/BUNDLED_TOOLS.md). This script therefore also puts in the bundle, each pinned and verified by
 packaging/bundled_tools.py: LibreOffice (<app>/vendor/libreoffice, pruned to headless conversion by
 packaging/lo_prune.py), Chromium (<app>/vendor/browsers, English only, no headless shell), Git (Windows: MinGit;
-macOS: packaging/mac/build_git.sh), and Hermes without its tests, website and apps, next to the Node runtime and Pi it
+macOS: packaging/mac/build_git.sh), ffmpeg and pandoc (<app>/vendor/ffmpeg and vendor/pandoc), the speech-to-text model
+(<app>/vendor/whisper), and Hermes without its tests, website and apps, next to the Node runtime and Pi it
 already carried. Codex and OpenCode are NOT shipped (Meshpool's own agent is the product; the benchmark in testkit/
 runs them with npx). MH_BUNDLE_LIBREOFFICE=0 builds a slim test app without LibreOffice on a developer machine only:
 it is refused when CI is set, so a release can never ship without it.
@@ -191,6 +192,28 @@ def chromium(app_dir: Path, plat: str):
     print(f"build_all: vendored Chromium for {plat}: {full} MB, {mb} MB after dropping other languages")
 
 
+def media_tools(app_dir: Path, plat: str):
+    """ffmpeg and pandoc into <app>/vendor/ffmpeg and <app>/vendor/pandoc, taken out of the pinned, hash-checked PyPI
+    wheels (bundled_tools.WHEEL_PROGRAMS), so converting audio, video and documents never needs a program the customer
+    installed. The Apple silicon ffmpeg needs macOS 12 (read from the file; bundled.ffmpeg_needs_newer_macos tells the
+    user) and is exempt from the macOS 11 check up to that."""
+    bt = _bt()
+    key = LO_KEY[plat]
+    for name in ("ffmpeg", "pandoc"):
+        exe = bt.fetch_wheel_program(name, key, CACHE, app_dir / "vendor" / name)
+        mb = exe.stat().st_size // 1_000_000
+        print(f"build_all: {name} for {plat}: {mb} MB ({bt.WHEEL_PROGRAMS[name]['version']})")
+
+
+def speech_model(app_dir: Path):
+    """The speech-to-text model (Whisper base, CTranslate2 format) into <app>/vendor/whisper, from the pinned revision
+    with each file's SHA-256 checked. faster-whisper (in the runtime's packages) loads it from there, offline."""
+    bt = _bt()
+    out = bt.fetch_whisper_model(CACHE, app_dir / "vendor" / "whisper")
+    mb = sum(f.stat().st_size for f in out.rglob("*") if f.is_file()) // 1_000_000
+    print(f"build_all: speech model {bt.WHISPER_MODEL}: {mb} MB")
+
+
 def git_win(root: Path):
     """MinGit into <app root>/git. deps/git-win (the release workflow unpacks MinGit there) wins; otherwise the pinned,
     checksum-verified download in bundled_tools.py."""
@@ -288,6 +311,8 @@ def mac_app(arch: str):
     pi_and_node(root / "Resources/app", root / "Resources/node", arch)
     libreoffice(root / "Resources/app", arch)
     chromium(root / "Resources/app", arch)
+    media_tools(root / "Resources/app", arch)
+    speech_model(root / "Resources/app")
     git_mac(root / "Resources", arch)
     docs(root / "Resources/harness-docs")
     # Contents/MacOS/Meshpool is compiled on the Mac from this source (see build_mac.sh)
@@ -323,6 +348,8 @@ def linux_app():
     pi_and_node(root / "app", root / "node", "linux")
     libreoffice(root / "app", "linux")
     chromium(root / "app", "linux")
+    media_tools(root / "app", "linux")
+    speech_model(root / "app")
     docs(root / "harness-docs")
     # Playwright's own Node needs libatomic, which a desktop may lack: it runs on the app's Node 22 instead (as on macOS)
     drv = next((root / "python" / "lib").glob("python3.*/site-packages/playwright/driver"), None)
@@ -346,6 +373,8 @@ def win_app():
     pi_and_node(root / "app", root / "node", "win")
     libreoffice(root / "app", "win")
     chromium(root / "app", "win")
+    media_tools(root / "app", "win")
+    speech_model(root / "app")
     docs(root / "harness-docs")
     stamp(PKG / "nsis/installer.nsi", OUT / "app-win" / "installer.nsi")
     # The uninstaller generator and the shared macro: the release build writes and signs the uninstaller with these
