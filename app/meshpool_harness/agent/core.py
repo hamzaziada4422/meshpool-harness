@@ -1381,7 +1381,14 @@ class Agent:
                 "research": research, "final": final, "request": " ".join(reqs[-3:]), "requests": reqs,
                 "files": GR.files_changed(self.root, g.get("t0", self.created), getattr(self.ws, "turn_files", ())),
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
-                "root": str(self.root)}
+                "root": str(self.root), "actions": self._accepted_actions()}
+
+    def _accepted_actions(self) -> list[str]:
+        """Connected-app writes the tools accepted this turn (for the reviewer's evidence)."""
+        done = self.__dict__.get("_done_calls") or {}
+        if done.get("_turn") != getattr(self, "_turn_no", None):
+            return []
+        return [k[:200] for k in done if k != "_turn"]
 
     def _grade_commands(self, g: dict) -> list:
         return [c for c in self.ws.commands[g.get("cmd0", 0):] if c.get("kind") != "read"] or \
