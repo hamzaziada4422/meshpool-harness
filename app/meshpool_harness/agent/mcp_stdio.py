@@ -100,6 +100,8 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                 try:
                     if serial:
                         with call_lock:
+                            if _CALL.cancel.is_set():       # cancelled while it waited its turn: do not run it now
+                                raise ToolFailed("cancelled before it ran")
                             r = t.fn(**args)
                     else:
                         r = t.fn(**args)
