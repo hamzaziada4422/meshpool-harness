@@ -187,8 +187,8 @@ def test_connection(values: dict | None = None) -> dict:
     t0 = time.time()
     st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
     secs = round(time.time() - t0, 1)
-    if err or st not in (200, 429):
-        why = (("No server at that address." if err == "refused" else "The server did not answer in time.") if err
+    if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
+        why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
         return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
     txt = ""
@@ -636,6 +636,9 @@ class Handler(BaseHTTPRequestHandler):
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
+                    except Exception as e:           # a test must answer, never a 500
+                        return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0, "base_url": "",
+                                                "error": f"The test could not finish: {type(e).__name__}: {e}"})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),

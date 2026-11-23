@@ -12,11 +12,13 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
 import re
 import shutil
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -61,7 +63,7 @@ def normalise_base(url: str) -> str:
     if not u:
         raise SetupError("Enter the endpoint address, for example https://api.openai.com/v1.")
     if "://" not in u:
-        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) else "https://") + u
+        u = ("http://" if PV.keyless_ok("http://" + u) else "https://") + u
     p = urlparse(u)
     if not p.hostname or p.scheme not in ("http", "https"):
         raise SetupError("That does not look like a web address. Use the form https://api.example.com/v1.")
@@ -84,6 +86,56 @@ def _candidates(base: str) -> list[str]:
     return [base] if p.path else [base, base + "/v1"]
 
 
+def _tls_kind(exc) -> str:
+    """"cert" (certificate not trusted), "tls" (the server does not speak TLS here) or "" for anything else."""
+    chain, e = [], exc
+    for _ in range(4):
+        if e is None or isinstance(e, str):
+            break
+        chain.append(e)
+        e = getattr(e, "reason", None)
+    if any(isinstance(t, ssl.SSLCertVerificationError) or "CERTIFICATE_VERIFY_FAILED" in str(t) for t in chain):
+        return "cert"
+    if any(isinstance(t, ssl.SSLError) or re.search(r"WRONG_VERSION_NUMBER|record layer failure|UNKNOWN_PROTOCOL",
+                                                    str(t)) for t in chain):
+        return "tls"
+    return ""
+
+
+def _net_error(err: str, base: str) -> str:
+    """The sentence for a failed connection kind ("" when err is not one)."""
+    if err == "refused":
+        return "No server at that address. Check the address and your connection."
+    if err == "timeout":
+        return "The server did not answer in time."
+    if err == "not_http":
+        return "Something answers at that address, but it is not a web API. Check the address and port."
+    if err == "tls":
+        return "That address does not speak HTTPS. Try http://" + base.split("://", 1)[-1]
+    if err == "cert":
+        return _mhttp.explain(ssl.SSLCertVerificationError("CERTIFICATE_VERIFY_FAILED"), base)
+    return ""
+
+
+def _is_reply(wire: str, data) -> bool:
+    """Does a chat probe's JSON body look like a model's reply (not an error body, not a page)?"""
+    if not isinstance(data, dict):
+        return False
+    if wire == "anthropic":
+        return isinstance(data.get("content"), list) or data.get("type") == "message"
+    if wire == "responses":
+        return "output" in data
+    return isinstance(data.get("choices"), list)
+
+
+def _not_reply_msg(data) -> str:
+    err = data.get("error") if isinstance(data, dict) else None
+    txt = (err.get("message") if isinstance(err, dict) else err) if err else ""
+    if txt:
+        return str(txt)[:200]
+    return "The address answered, but not like a model API."
+
+
 def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = None):
     """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout". With `body`: a JSON POST."""
     hdr = {"User-Agent": "Meshpool", "Accept": "application/json", **headers}
@@ -99,12 +151,14 @@ def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = Non
         raw, status = e.read(200_000), e.code
     except (socket.timeout, TimeoutError):
         return 0, None, "timeout"
+    except http.client.HTTPException:
+        return 0, None, "not_http"
     except urllib.error.URLError as e:
         if isinstance(e.reason, (socket.timeout, TimeoutError)):
             return 0, None, "timeout"
-        return 0, None, "refused"
-    except (OSError, ValueError):
-        return 0, None, "refused"
+        return 0, None, _tls_kind(e) or "refused"
+    except (OSError, ValueError) as e:
+        return 0, None, _tls_kind(e) or "refused"
     try:
         return status, json.loads(raw.decode("utf-8", "replace")), ""
     except ValueError:
@@ -162,12 +216,12 @@ def explain(status: int, data, *, base: str, model: str = "", version: str = "")
 
 def probe_chat(base: str, key: str, model: str, wire: str = "openai", header: str = "", scheme: str = "",
                version: str = "") -> tuple[int, object, str]:
-    """One 1-token chat call: (status, JSON or None, error kind). It exercises the real URL, key header and model."""
+    """One tiny chat call: (status, JSON or None, error kind). It exercises the real URL, key header and model."""
     hdr = _headers(wire, key, base, header, scheme)
     if wire == "anthropic":
-        body = AW.to_request({"model": model, "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]})
+        body = AW.to_request({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "ping"}]})
         return _get(base.rstrip("/") + "/messages", hdr, 30.0, body)
-    body = PV.adapt_body(base, {"model": model, "max_tokens": 16 if PV.is_azure(base) else 5,
+    body = PV.adapt_body(base, {"model": model, "max_tokens": 16,
                                 "messages": [{"role": "user", "content": "ping"}]})
     return _get(PV.chat_url(base, model, "chat/completions", version), hdr, 30.0, body)
 
@@ -186,6 +240,8 @@ def _test_azure(base: str, key: str, model: str, header: str, scheme: str, versi
         out["error"] = f"No server at {PV.host(base)}. Check the resource name in the address and your connection."
     elif err == "timeout":
         out["error"] = "The server did not answer in time."
+    elif status == 200 and dep and not _is_reply("openai", data):
+        out["error"] = _not_reply_msg(data)
     elif status in (200, 429) and dep:
         out.update(ok=True, wire="openai", models=[{"id": dep}])
         if status == 429:
@@ -289,17 +345,17 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
     order = [wire] if wire != "auto" else (["anthropic", "openai"] if host.endswith("anthropic.com")
                                            else ["openai", "anthropic"])
     auth_code = 0
-    saw_missing = False
+    missing_base = ""
     last_status = 0
+    hdr_name, hdr_scheme = auth_header.strip(), auth_scheme.strip().lower()
     for b in _candidates(base):
         for w in order:
-            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, auth_header.strip(), auth_scheme.strip().lower()))
-            if err == "refused":
-                out["error"] = "No server at that address. Check the address and your connection."
-                out["latency_ms"] = int((time.time() - t0) * 1000)
-                return out
-            if err == "timeout":
-                out["error"] = "The server did not answer in time."
+            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, hdr_name, hdr_scheme))
+            if err == "tls" and urlparse(b).scheme == "https" and PV.keyless_ok(b):
+                plain = "http://" + base.split("://", 1)[1]           # a local server speaking plain http
+                return test(plain, api_key, wire, env, model, auth_header, auth_scheme, api_version)
+            if err:
+                out["error"] = _net_error(err, b)
                 out["latency_ms"] = int((time.time() - t0) * 1000)
                 return out
             last_status = status or last_status
@@ -315,20 +371,35 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
                 return out
             if status in (401, 403):
                 auth_code = auth_code or status
-            elif data is not None and (status == 404 or (status == 200 and items is None)):   # JSON, not a portal page
-                saw_missing = True
+            elif status in (404, 405) or status == 200:               # no model list here: look at the chat route
+                missing_base = missing_base or b
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
         out["error"] = explain(auth_code, None, base=base)
-    elif saw_missing:      # something answers, but has no /models: with a model name, check the key with a chat call
-        w = "openai" if wire == "auto" else wire
-        if model:
-            st, dt, er = probe_chat(base, key, model, w, auth_header.strip(), auth_scheme.strip().lower())
-            if not er and st not in (200, 429):
-                out["error"] = explain(st, dt, base=base, model=model)
+    elif missing_base:
+        # something answers but lists no models: a tiny real call per wire finds the wire and checks the key
+        pm = model or "meshpool-connection-test"
+        note = ""
+        for w in order:
+            st, dt, er = probe_chat(missing_base, key, pm, w, hdr_name, hdr_scheme)
+            if er:
+                out["error"] = _net_error(er, missing_base) or str(er)
                 return out
-        out.update(ok=True, wire=w, base_url=base,
-                   error="Connected, but this endpoint does not list models: type a model name.")
+            msg = ((dt.get("error") or {}).get("message") if isinstance(dt.get("error"), dict) else dt.get("error")) \
+                if isinstance(dt, dict) else ""
+            if st in (401, 403):
+                out["error"] = explain(st, dt, base=base, model=pm)
+                return out
+            named_model = st in (400, 404, 422) and "model" in str(msg or "").lower()
+            if (st == 200 and _is_reply(w, dt)) or st == 429 or named_model:
+                out.update(ok=True, wire=w, base_url=missing_base.rstrip("/"),
+                           error="Connected, but this endpoint does not list models: type a model name.")
+                return out
+            if st == 200 and not note:
+                note = _not_reply_msg(dt)
+        out["error"] = (note + " " if note and not note.startswith("The address answered") else "") + \
+            f"The address answered, but not like a model API ({last_status}). Check the address: it should end in " \
+            "/v1 for most services."
     elif last_status >= 500:
         out["error"] = f"The server answered with an error ({last_status}). Try again in a moment."
     elif last_status == 402:

@@ -52,6 +52,15 @@ class Mock:
                 self._j(200, {"object": "list", "data": [{"id": "gpt-b", "object": "model", "context_length": 8000},
                                                          {"id": "gpt-a", "object": "model"}]})
 
+            def do_POST(self):             # a chat probe: "nolist" servers check the key, then the model name
+                self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                bearer = (self.headers.get("Authorization") or "").replace("Bearer ", "")
+                if outer.style == "nolist" and self.path.endswith("/chat/completions"):
+                    if bearer not in (outer.key, "sk-whatever-1234"):
+                        return self._j(401, {"error": {"message": "bad key"}})
+                    return self._j(400, {"error": {"message": "The model `x` does not exist"}})
+                self._j(404, {"error": "nope"})
+
             def _j(self, code, obj):
                 b = json.dumps(obj).encode()
                 self.send_response(code)
