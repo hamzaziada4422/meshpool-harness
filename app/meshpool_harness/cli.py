@@ -153,6 +153,7 @@ def _agent_parser():
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
+    ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
     return ap
 
 
@@ -218,6 +219,8 @@ def main(argv=None):
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
+        if a.profile:
+            os.environ["MH_AGENT_PROFILE"] = a.profile
         if a.max_turns:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:

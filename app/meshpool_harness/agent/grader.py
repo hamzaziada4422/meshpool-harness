@@ -57,6 +57,8 @@ Method:
 4. Missing evidence counts as NOT met. If you cannot see it or prove it, it is not_met. Use "unverified" only when your tools truly cannot check it (say why in evidence).
 5. Judge overall: would this person accept it as it is, or send it back?
 
+E2E-AUTONOMY: an effect in a connected app or live system (a booking, a sent message, a status change, a record) that the log shows the tool accepted, and that no read-only tool can read back, is "unverified", not "not_met". Never ask the agent to create, send, book, update or delete anything just to prove something; ask only for read-only evidence.
+
 Rules: you may only read and run checks. You must not create, change or delete any file, install anything, or send anything anywhere. Do not run commands that write. Be efficient: a few targeted looks are better than reading everything. You have a small step budget.
 
 Finish with ONE JSON object and nothing else (no code fence), in plain words, short:
@@ -73,7 +75,7 @@ CHECK = ("The agent says it is finished. Do not take its word for it: grade it n
          "with the JSON object only.")
 REPAIR = "Reply again with only the JSON object described in your instructions. No other text, no code fence."
 INJECT = ("[Independent review] A reviewer who did not do this work checked it against what you were asked. These are "
-          "not done:\n{items}\n\nFix them, check your fixes yourself, then finish with your answer. Do not say anything "
+          "not done:\n{items}\n\nFix them, check your fixes yourself by looking only (read files, run tests, call read-only tools; never create, send, book, update or delete anything in a live system just to test it), then finish with your answer. Do not say anything "
           "is done unless you checked it. If one of them cannot be done, say plainly why.")
 
 
