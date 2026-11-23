@@ -87,6 +87,8 @@ def _clean(monkeypatch):
     monkeypatch.delenv("MH_CONTEXT_WINDOW", raising=False)
     monkeypatch.delenv("MESHPOOL_CONTEXT_WINDOW", raising=False)
     monkeypatch.setenv("MH_CACHE_KEY", "0")
+    monkeypatch.setenv("MH_API_WIRE", "openai")        # other tests may leave an Anthropic wire in the environment
+    monkeypatch.setenv("MH_WIRE", "chat")
     yield
     CTX.forget()
 
