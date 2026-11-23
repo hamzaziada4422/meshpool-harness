@@ -519,12 +519,14 @@ class Session:
             raise ValueError("That style does not exist any more.")
         write_meta(self.id, style=style_id or ST.NORMAL)
 
-    def send(self, text: str, images: list | None = None, interrupt: bool = False) -> dict:
+    def send(self, text: str, images: list | None = None, interrupt: bool = False, files: list | None = None) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
         agent and Pi read it before their next step; other harnesses get it as soon as the current turn ends.
         interrupt=True stops the current work first and sends the message as a new turn."""
-        if not text.strip() and not images:
+        if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
+        if files:                                    # saved first: if it fails, nothing was emitted or started
+            text = self._save_files(text, files)
         self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
             self._interrupting = True
@@ -569,6 +571,24 @@ class Session:
             return {"queued": True}
         self._start_turn(text, images)
         return {"queued": False}
+
+    def _save_files(self, text: str, files: list) -> str:
+        """Attached files go into this chat's own folder; the message then names them."""
+        import base64
+        from meshpool_harness import project_store as PS
+        from meshpool_harness.ui import workbench as W
+        if not self.workdir:
+            raise ValueError("This chat has no folder to save files in.")
+        saved = []
+        for f in files:
+            f = f if isinstance(f, dict) else {}
+            try:
+                data = base64.b64decode(f.get("data", "") or "")
+            except (ValueError, TypeError):
+                raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
+            saved.append(W.attach_to(Path(self.workdir), f.get("name", ""), data)["path"])
+        where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
+        return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
 
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
@@ -1419,12 +1439,16 @@ def _reap_once(idle_s: float) -> list:
 def _start_reaper():
     """MH_IDLE_CLOSE_S (default 900; 0 = never): how long an unused thread keeps its helper processes."""
     idle_s = float(os.environ.get("MH_IDLE_CLOSE_S", "900") or 0)
-    if _REAPER or idle_s <= 0:
+    if _REAPER:
+        return
+    purge_due()                                    # chats deleted before the app last closed
+    if idle_s <= 0:
         return
 
     def loop():
         while True:
             time.sleep(min(60.0, max(5.0, idle_s / 4)))
+            purge_due()
             _reap_once(idle_s)
     th = threading.Thread(target=loop, daemon=True, name="meshpool-reaper")
     _REAPER.append(th)
@@ -1439,7 +1463,7 @@ _OPENING: dict = {}                 # chat id -> lock: only one request builds t
 
 
 def get(sid: str) -> Session:
-    if sid in DELETED:
+    if sid in DELETED or read_meta(sid).get("deleted"):
         raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
@@ -1454,7 +1478,17 @@ def get(sid: str) -> Session:
             return s
         s = Session(resume_id=sid)               # reopen a saved session
         with LOCK:
-            live = LIVE.setdefault(sid, s)
+            dead = sid in DELETED or bool(read_meta(sid).get("deleted"))   # deleted while it was being built
+            live = s if dead else LIVE.setdefault(sid, s)
+        if dead:
+            try:
+                s.deleted = True
+                if getattr(s, "agent", None) is not None:
+                    s.agent.deleted = True
+            except Exception:  # noqa: BLE001
+                pass
+            s.close()
+            raise KeyError(sid)
         if live is not s:
             s.close()
         return live
@@ -1602,6 +1636,95 @@ def exists(sid: str) -> bool:
     return bool(re.fullmatch(r"[\w-]+", sid or "")) and (SESSIONS / sid).is_dir()
 
 
+_DEL_LOCK = threading.Lock()
+_DEL_TIMERS: dict = {}
+
+
+def _grace() -> float:
+    try:
+        return float(os.environ.get("MH_DELETE_GRACE_S", "8"))
+    except ValueError:
+        return 8.0
+
+
+def _write_meta_raw(sid: str, m: dict) -> None:
+    from meshpool_harness import fsio
+    fsio.atomic_write_json(_meta_path(sid), m, indent=None)
+    _METAS.pop(sid, None)
+
+
+def _has_user_message(sid: str) -> bool:
+    with LOCK:
+        s = LIVE.get(sid)
+    if s is not None:
+        with s.lock:
+            if any(e.get("type") == "user" for e in s.events):
+                return True
+    tr = _transcript(sid) or {}
+    if any(e.get("type") == "user" for e in tr.get("events") or []):
+        return True
+    return any(m.get("role") == "user" for m in (_saved(sid) or {}).get("messages") or [] if isinstance(m, dict))
+
+
+def _purge(sid: str, force: bool = False) -> None:
+    """Really remove a deleted chat (stop it, its folder, checks records, private folder). Idempotent; a chat that was
+    undeleted meanwhile is left alone."""
+    import shutil
+    with _DEL_LOCK:
+        if sid in DELETED and not (SESSIONS / sid).exists():
+            return
+        m = read_meta(sid)
+        if not force and not m.get("deleted"):
+            return
+        t = _DEL_TIMERS.pop(sid, None)
+        if t and t is not threading.current_thread():
+            t.cancel()
+        scratch_dir = ""
+        if m.get("scratch"):
+            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
+        with LOCK:
+            DELETED.add(sid)
+            list_dirty()
+            s = LIVE.pop(sid, None)
+    if s:
+        s.deleted = True
+        s.agent.deleted = True                        # its last save after stopping must not recreate the thread
+        s.close()
+        end = time.time() + 6
+        while s.state in ("working", "waiting") and time.time() < end:
+            time.sleep(0.1)
+    d = SESSIONS / sid
+    if d.is_dir() and d.parent == SESSIONS:
+        shutil.rmtree(d, ignore_errors=True)
+    list_dirty()
+    try:                                              # its checks records go with it
+        from meshpool_harness import checks as CK
+        for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
+            f.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    if scratch_dir:                                   # the chat's private folder goes with it
+        from meshpool_harness import project_store as PS
+        PS.remove_scratch(scratch_dir)
+
+
+def purge_due() -> list:
+    """Purge every chat whose delete grace has run out (also after a restart: the page need not be open)."""
+    out, now, grace = [], time.time(), _grace()
+    if not SESSIONS.exists():
+        return out
+    for p in list(SESSIONS.glob("*/meta.json")):
+        sid = p.parent.name
+        m = read_meta(sid)
+        if m.get("deleted") and now - float(m.get("deleted_at") or 0) >= grace:
+            try:
+                _purge(sid)
+                out.append(sid)
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
 def thread_action(sid: str, body: dict) -> dict:
     act = body.get("action")
     if not exists(sid):
@@ -1623,35 +1746,38 @@ def thread_action(sid: str, body: dict) -> dict:
         if not read_meta(sid):
             raise KeyError("Chat not found.")
         write_meta(sid, project_id=pid, project_ctx="" if not pid else None)
-    elif act == "delete":
-        scratch_dir = ""
-        if read_meta(sid).get("scratch"):
-            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
-        with LOCK:
-            DELETED.add(sid)
-            list_dirty()
-            s = LIVE.pop(sid, None)
-        if s:
-            s.deleted = True
-            s.agent.deleted = True                    # its last save after stopping must not recreate the thread
-            s.close()
-            end = time.time() + 6
-            while s.state in ("working", "waiting") and time.time() < end:
-                time.sleep(0.1)
-        import shutil
-        d = SESSIONS / sid
-        if d.is_dir() and d.parent == SESSIONS:
-            shutil.rmtree(d, ignore_errors=True)
+    elif act == "delete":                             # soft: the server purges it after the grace, page or no page
+        with _DEL_LOCK:
+            if sid in DELETED:
+                raise KeyError("That chat no longer exists. Refresh the list.")
+            write_meta(sid, deleted=True, deleted_at=time.time())
+            old = _DEL_TIMERS.pop(sid, None)
+            if old:
+                old.cancel()
+            if _grace() > 0:
+                t = threading.Timer(_grace(), _purge, args=(sid,))
+                t.daemon = True
+                _DEL_TIMERS[sid] = t
+                t.start()
         list_dirty()
-        try:                                          # its checks records go with it
-            from meshpool_harness import checks as CK
-            for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
-                f.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-        if scratch_dir:                               # the chat's private folder goes with it
-            from meshpool_harness import project_store as PS
-            PS.remove_scratch(scratch_dir)
+        if _grace() <= 0:                         # MH_DELETE_GRACE_S=0: no Undo window, gone at once
+            _purge(sid)
+    elif act == "undelete":
+        with _DEL_LOCK:
+            if sid in DELETED or not read_meta(sid).get("deleted"):
+                raise ValueError("This chat was already deleted.")
+            m = read_meta(sid)
+            m.pop("deleted", None)
+            m.pop("deleted_at", None)
+            _write_meta_raw(sid, m)
+            t = _DEL_TIMERS.pop(sid, None)
+            if t:
+                t.cancel()
+        list_dirty()
+    elif act == "discard":                            # a brand-new chat whose first message failed
+        if _has_user_message(sid):
+            raise ValueError("This chat already has messages.")
+        _purge(sid, force=True)
     else:
         raise ValueError("Unknown chat action.")
     return {"ok": True}

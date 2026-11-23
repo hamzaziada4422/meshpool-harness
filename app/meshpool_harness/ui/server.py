@@ -1066,7 +1066,8 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
-                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")))
+                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
+                               files=b.get("files") or None)
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
                 elif act == "stop":
                     s.stop()
@@ -1202,6 +1203,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     if desktop:
         LAST_PING[0] = time.time()
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
+    threading.Thread(target=A.purge_due, daemon=True).start()          # chats deleted before the last close
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     if desktop:                                     # background update checks and downloads; install on quit

@@ -254,6 +254,7 @@ def clear_chats() -> int:
     for sid in ids:
         try:
             A.thread_action(sid, {"action": "delete"})
+            A._purge(sid)                          # "Clear all chats" has its own confirmation: no Undo window
             n += 1
         except Exception:  # noqa: BLE001
             pass
