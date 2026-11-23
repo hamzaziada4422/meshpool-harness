@@ -99,6 +99,15 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+def _meta_window(it: dict) -> int:
+    """vLLM reports max_model_len and llama.cpp meta.n_ctx in /v1/models: the window the server really serves."""
+    v = it.get("max_model_len")
+    if isinstance(v, int) and v > 0:
+        return v
+    v = (it.get("meta") or {}).get("n_ctx") if isinstance(it.get("meta"), dict) else None
+    return v if isinstance(v, int) and v > 0 else 0
+
+
 def probe(base: str, model: str, key: str = "") -> int | None:
     """The window the endpoint reports for this model: Ollama /api/show (the num_ctx it will really use), LM Studio
     /api/v0/models, or context_length in an OpenAI-style /models list (OpenRouter and others). None if unknown."""
@@ -132,9 +141,11 @@ def probe(base: str, model: str, key: str = "") -> int | None:
                 if not (isinstance(it, dict) and model in str(it.get("id") or "")):
                     continue
             for k in ("loaded_context_length", "context_length", "context_window", "max_context_length",
-                      "max_input_tokens", "inputTokenLimit"):
+                      "max_input_tokens", "inputTokenLimit", "max_model_len"):
                 if isinstance(it.get(k), int) and it[k] > 0:
                     return it[k]
+            if _meta_window(it):
+                return _meta_window(it)
     return None
 
 
@@ -171,11 +182,14 @@ def _listed(base: str, key: str) -> dict:
             if not isinstance(it, dict):
                 continue
             for k in ("max_input_tokens", "loaded_context_length", "context_length", "context_window", "max_context",
-                      "max_context_length", "inputTokenLimit"):
+                      "max_context_length", "inputTokenLimit", "max_model_len"):
                 v = it.get(k) or (it.get("top_provider") or {}).get(k)
                 if isinstance(v, int) and v > 0:
                     out[str(it.get("id") or it.get("name") or "")] = v
                     break
+            else:
+                if _meta_window(it):
+                    out[str(it.get("id") or it.get("name") or "")] = _meta_window(it)
         if not isinstance(items, list):
             raise ValueError("no model list")
     except Exception:  # noqa: BLE001 - unreachable, slow or no list: try again later
