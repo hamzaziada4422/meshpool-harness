@@ -88,6 +88,19 @@ LAST_PAGE = ("\n[Meshpool] That was the last page: there is no next page. You no
              "not call it again to look for more.")
 
 
+REPEAT = ("\n[Meshpool] You already made this exact call earlier in this task and it succeeded. If it creates or "
+          "changes something, it may now be done twice (a duplicate booking, invoice or message). Do not repeat it; "
+          "to check, read with a list or get tool, and tell the user if a duplicate was made.")
+_READ = re.compile(r"(?:^|[_\-.])(?:get|list|find|search|query|read|lookup|look|fetch|show|describe|check|count|"
+                   r"view|stats|info|page|free|codes|people|who|verify|validate|preview|dry|test|ping|poll|wait|"
+                   r"analytics|report|summary|history|logs?)(?:$|[_\-.])", re.I)
+
+
+def read_like(tool_name: str) -> bool:
+    """True when the tool's name says it only reads (get_, list_, find_, search_, query_ ...)."""
+    return bool(_READ.search(str(tool_name).split("__", 2)[-1]))
+
+
 def classify(out: str, is_error: bool, was_paged: bool = False) -> tuple[str, str, bool]:
     """(prefix, suffix, ok) for an MCP result: a failure gets a clear line before and a hint after, a long list
     gets a paging line, and the page after a "next page" one that has no next page says so (was_paged: the last

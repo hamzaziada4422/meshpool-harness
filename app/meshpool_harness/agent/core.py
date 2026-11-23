@@ -162,6 +162,8 @@ ok false, error or failed is a failure even when the call itself did not error.
 it is offered); look ids up with a search or list tool instead of guessing them; follow every next page \
 (next_cursor, page, offset) until none is left; join data from several tools by id; and then do the write steps \
 the user asked for. A summary is not the job when they asked for a change.
+- Never repeat a call that already succeeded and created or changed something (a booking, an invoice, a message): it \
+would be done twice. To check it, read.
 - To check your work, only look: read the file, run the tests, call a read-only tool. Never test by doing extra \
 real things in a live system (booking, sending, creating, updating or deleting something just to see if it \
 works). If an effect cannot be read back, say it was accepted by the tool but is not independently confirmed.
@@ -1349,6 +1351,23 @@ class Agent:
         return final
 
     # ---------- independent grader (agent/grader.py) -----------------------------------------------------------
+    def _repeat_note(self, name: str, args: dict, ok: bool) -> str:
+        """E2E-AUTONOMY: the same connected-app call that already succeeded this turn, made again, and not a read:
+        say it may have been done twice. Reads are never flagged."""
+        if not (E2E and MA.assist_on()):
+            return ""
+        done = self.__dict__.setdefault("_done_calls", {})
+        if self._turn_no != done.get("_turn"):
+            done.clear()
+            done["_turn"] = self._turn_no
+        if not ok or MA.read_like(name):
+            return ""
+        key = name + ":" + json.dumps(args, sort_keys=True, default=str)[:600]
+        if key in done:
+            return MA.REPEAT
+        done[key] = True
+        return ""
+
     def _tool_msgs_since(self, start: int) -> int:
         return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
 
@@ -2546,6 +2565,7 @@ class Agent:
                 out, err = self._wait(self.mcp.call, name, args)
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
+                post += self._repeat_note(name, args, ok)
                 (paged.add if (ok and MA.page_hint(str(out))) else paged.discard)(name)
                 out = pre + self.ws._cap(str(out), "mcp") + post    # head and tail; the full output goes to a file
             elif name == "fetch_url":

@@ -281,3 +281,23 @@ def test_the_same_lookup_three_times_gets_a_note(tmp_path):
     a.send("look around")
     notes = [m for m in a.messages if m.get("role") == "user" and "same glob call three times" in str(m.get("content"))]
     assert len(notes) == 1
+
+
+def test_repeating_a_successful_write_is_flagged_but_reads_are_not(tmp_path):
+    mcp = FakeMcp({"mcp__x__inv2_create": "create", "mcp__x__tix_query": "q"},
+                  {"mcp__x__inv2_create": ('{"ok": true, "invoice_id": "I-1"}', False),
+                   "mcp__x__tix_query": ('{"tickets": []}', False)})
+    a, _ = _agent(tmp_path, [{"content": "", "tool_calls": [_call(1, "mcp__x__inv2_create", {"id": "a"}), _call(2, "mcp__x__tix_query", {})]},
+                             {"content": "", "tool_calls": [_call(3, "mcp__x__inv2_create", {"id": "a"}), _call(4, "mcp__x__tix_query", {})]},
+                             {"content": "done"}], mcp)
+    a.send("invoice it")
+    tools = [m["content"] for m in a.messages if m.get("role") == "tool"]
+    assert "done twice" not in tools[0] and "done twice" in tools[2]
+    assert "done twice" not in tools[1] and "done twice" not in tools[3]
+
+
+def test_read_like_names():
+    for n in ("mcp__crm__crm_acct_find", "mcp__x__tix_query", "mcp__x__deals_page", "mcp__x__cal_free", "mcp__x__get_user"):
+        assert MA.read_like(n), n
+    for n in ("mcp__x__inv2_create", "mcp__x__cal_book", "mcp__x__tix_set_status", "mcp__x__send_message"):
+        assert not MA.read_like(n), n
