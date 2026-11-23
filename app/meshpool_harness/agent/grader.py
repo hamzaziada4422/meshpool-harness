@@ -335,9 +335,9 @@ def normalise(raw: dict | None) -> dict | None:
 
 
 def needs_rework(res: dict) -> bool:
-    """Something the agent can fix: a requirement not met, a blocker, or a fix instruction. Items nobody could check
-    (unverified) are reported to the user but do not send the agent round again."""
-    return res.get("verdict") in ("partial", "fail") and bool(res.get("not_met") or res.get("blockers") or res.get("fix"))
+    """Something the agent must fix: a requirement not met, or a blocker. Items nobody could check (unverified) and
+    suggestions alone are reported to the user but do not send the agent round again (that would double the cost)."""
+    return res.get("verdict") in ("partial", "fail") and bool(res.get("not_met") or res.get("blockers"))
 
 
 def findings_text(res: dict) -> str:
@@ -409,7 +409,7 @@ def event(res: dict, *, text: str, rounds: int, why: str, secs: float, usage: di
 
 # ---------- the read-only grader agent ----------------------------------------------------------------------------------------
 def _snapshot(root: Path, cap_files: int = 4000, keep: int = 262144, budget: int = 64 * 1024 * 1024) -> dict:
-    """{relpath: (size, mtime_ns, bytes or None)} of the project, to undo and report anything the grader touched."""
+    """{relpath: (size, mtime_ns, bytes or None)} of the project, to report anything that changed while the grader ran."""
     snap, used = {}, 0
     for dp, dns, fns in os.walk(root):
         dns[:] = [d for d in dns if not _skip_dir(dp, d)]
@@ -430,29 +430,17 @@ def _snapshot(root: Path, cap_files: int = 4000, keep: int = 262144, budget: int
     return snap
 
 
-def _restore(root: Path, before: dict) -> list[str]:
-    """Undo what changed since the snapshot; the names of what the grader touched (empty: it changed nothing)."""
+def _changed(root: Path, before: dict) -> list[str]:
+    """What differs from the snapshot (report only: the project may legitimately change while the grader works, for
+    example an editor or a background process; the grader's own tools cannot write)."""
     touched = []
     now = _snapshot(root)
-    for rel, (size, mt, data) in before.items():
+    for rel, (size, mt, _data) in before.items():
         cur = now.get(rel)
         if cur is None or (cur[0], cur[1]) != (size, mt):
             touched.append(rel)
-            if data is not None:
-                try:
-                    p = root / rel
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(data)
-                except OSError:
-                    pass
-    for rel in now:
-        if rel not in before:
-            touched.append(rel)
-            try:
-                (root / rel).unlink()
-            except OSError:
-                pass
-    return touched
+    touched += [rel for rel in now if rel not in before]
+    return sorted(touched)[:50]
 
 
 def command_allowed(cmd: str) -> bool:
@@ -631,7 +619,7 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
             timer.cancel()
         touched = []
         try:
-            touched = _restore(root, snap) if snap else []
+            touched = _changed(root, snap) if snap else []
         except Exception:  # noqa: BLE001
             pass
         if a is not None:

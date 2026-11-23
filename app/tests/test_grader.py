@@ -246,16 +246,32 @@ def test_command_rules():
         assert not GR.command_allowed(bad), bad
 
 
-def test_anything_the_grader_changes_is_undone(tmp_path):
+def test_changes_during_the_check_are_reported_not_reverted(tmp_path):
     (tmp_path / "keep.txt").write_text("keep")
     snap = GR._snapshot(tmp_path)
-    (tmp_path / "keep.txt").write_text("changed")
+    (tmp_path / "keep.txt").write_text("changed by someone else")
     (tmp_path / "new.txt").write_text("n")
     (tmp_path / "__pycache__").mkdir()
     (tmp_path / "__pycache__" / "x.pyc").write_text("c")          # caches are not counted
-    touched = GR._restore(tmp_path, snap)
-    assert sorted(touched) == ["keep.txt", "new.txt"]
-    assert (tmp_path / "keep.txt").read_text() == "keep" and not (tmp_path / "new.txt").exists()
+    assert GR._changed(tmp_path, snap) == ["keep.txt", "new.txt"]
+    assert (tmp_path / "keep.txt").read_text() == "changed by someone else" and (tmp_path / "new.txt").exists()
+
+
+def test_only_unverified_or_suggestions_do_not_send_the_agent_round_again():
+    r = GR.normalise({"verdict": "partial", "acceptance": "accept_with_notes", "fix": ["replace the placeholder URL"],
+                      "items": [{"requirement": f"r{i}", "status": "met", "evidence": "x"} for i in range(7)]
+                      + [{"requirement": "tests pass", "status": "unverified", "evidence": "could not run"}]})
+    assert r["verdict"] == "partial" and not GR.needs_rework(r)
+    assert GR.needs_rework(GR.normalise({"verdict": "partial", "items": [{"requirement": "a", "status": "not_met", "evidence": "gone"}]}))
+    assert GR.needs_rework(GR.normalise({"verdict": "partial", "blockers": ["b"], "items": [{"requirement": "a", "status": "met", "evidence": "x"}]}))
+
+
+def test_run_with_only_a_suggestion_does_not_rework(tmp_path, monkeypatch):
+    items = [item("a"), item("b", "unverified", "no tool")]
+    m = Model(monkeypatch, [PLAN3, say("Done.")], [verdict(items, v="partial", fix=["tidy the URL"])])
+    a, ev = agent(tmp_path)
+    out = a.send("do it")
+    assert m.grader_calls == 1 and not reviews(ev)[0]["rework"] and "Could not check: b" in out
 
 
 # ---------- reading the JSON --------------------------------------------------------------------------------------------------

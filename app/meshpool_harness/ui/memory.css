@@ -169,7 +169,7 @@
 .rev010 summary::-webkit-details-marker{display:none}
 .rev010 summary svg{width:13px;height:13px;flex:none;color:var(--pool-text)}
 .rev010.rv-partial summary svg,.rev010.rv-fail summary svg,.rev010.rv-error summary svg{color:var(--warn)}
-.rev010 .rv-t{color:var(--ink-2);font-weight:500}
+.rev010 .rv-t{color:var(--ink-2);font-weight:500;flex:1 1 12ch;min-width:0}
 .rev010 .rv-m{color:var(--ink-3)}
 .rev010 summary:focus-visible{outline:2px solid var(--pool-text);outline-offset:2px;border-radius:4px}
 .rev010 .rv-body{margin:6px 0 2px 21px;max-width:60ch}
