@@ -355,6 +355,13 @@ def sse_to_chat(lines) -> dict:
                             "usage": usage})
 
 
+class _Attempt(RuntimeError):
+    """One HTTP attempt that did not answer 200; carries what the retry loop needs."""
+    def __init__(self, status: int, raw: bytes, retry_after: str = ""):
+        super().__init__(f"meshpool HTTP {status}: {raw[:300].decode('utf-8', 'replace')}")
+        self.status, self.raw, self.retry_after = status, raw, retry_after
+
+
 class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
 
@@ -427,21 +434,41 @@ class SimpleLedger:
         status, raw, retry_after = 0, b"", ""
         gw_tries = 0
         attempt = 0
-        while True:
+        from meshpool_harness.core import gateway as GW
+        model = body.get("model", "")
+
+        def probe():
+            from meshpool_harness.agent.core import _probe_once
+            return _probe_once(base_url, api_key, model)
+
+        def send_once():
+            """One HTTP attempt. A reply other than 200 raises _Attempt, so the gate counts it as a failed call and
+            the retry loop below reads the status from it."""
+            st, rw, ra = 0, b"", ""
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as r:
-                    status = r.status
-                    raw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and status == 200
-                           else r.read())
+                    st = r.status
+                    rw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and st == 200
+                          else r.read())
             except urllib.error.HTTPError as e:
-                raw, status = e.read(), e.code
-                ra = (getattr(e, "headers", None) or {}).get("Retry-After") if getattr(e, "headers", None) else None
+                rw, st = e.read(), e.code
+                hd = getattr(e, "headers", None)
+                h = hd.get("Retry-After") if hd else None
                 try:                                     # seconds (an HTTP-date is ignored); never wait more than a minute
-                    retry_after = f" [retry-after: {min(60.0, max(1.0, float(str(ra).strip())))}]" if ra else ""
+                    ra = f" [retry-after: {min(60.0, max(1.0, float(str(h).strip())))}]" if h else ""
                 except ValueError:
-                    retry_after = ""
+                    ra = ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
+                rw, st = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
+            if st != 200:
+                raise _Attempt(st, rw, ra)
+            return st, rw, ra
+
+        while True:
+            try:
+                status, raw, retry_after = GW.call(base_url, api_key, model, send_once, probe=probe)
+            except _Attempt as a:
+                status, raw, retry_after = a.status, a.raw, a.retry_after
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):
