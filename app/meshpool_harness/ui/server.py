@@ -39,6 +39,7 @@ LAST_PING = [time.time()]
 HTTPD = [None]
 NATIVE = [False]                    # True while the interface is shown in the app's own window
 ON_SHOW: list = []                  # called when a second launch asks this instance to come forward
+BOOT = uuid.uuid4().hex                 # identifies this process: the page tells the restarted app from the old one
 ON_QUIT: list = []                  # called when the app quits (closes the native window)
 LOCK = threading.Lock()
 
@@ -220,6 +221,22 @@ def _disposition(kind: str, name: str) -> str:
     return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
+_RESTART_FAILED = "Meshpool was updated but could not restart itself. Quit and open it again."
+
+
+def _restart_or_recover(UP, AU) -> None:
+    """Restart into the new code. The code on disk is already new, so if the restart itself fails (it could not start the
+    new process) the app stays up: reopen the run gate and tell the user to restart it by hand."""
+    try:
+        UP.restart([A.close_all, *ON_QUIT])
+    except Exception:  # noqa: BLE001
+        A.resume()
+        try:
+            AU.install_finished(False, _RESTART_FAILED)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
 
@@ -367,7 +384,7 @@ class Handler(BaseHTTPRequestHandler):
                     "</h2><p>" + msg.replace("<", "&lt;") + "</p></div>")
             return self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8")
         if u.path == "/healthz":
-            return self._send(200, {"ok": True, "app": "meshpool"})
+            return self._send(200, {"ok": True, "app": "meshpool", "pid": os.getpid(), "boot": BOOT})
         if u.path == "/favicon.svg":
             return self._send(200, (HERE / "favicon.svg").read_bytes(), "image/svg+xml")
         m = re.fullmatch(r"/brand/((?:fonts/)?[\w.-]+\.(png|woff2))", u.path)
@@ -657,7 +674,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, r)
             if u.path == "/api/update/status":
                 from meshpool_harness import autoupdate as AU
-                return self._send(200, AU.status())
+                return self._send(200, AU.status(consume=True))
             if u.path == "/api/update/settings":
                 from meshpool_harness import autoupdate as AU
                 return self._send(200, AU.save_settings(self._json() or {}))
@@ -667,21 +684,80 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/update/apply":     # "Restart to update": the helper installs it after this app quits
                 from meshpool_harness import autoupdate as AU
-                if _running():
-                    return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
-                r = AU.begin_apply()
-                self._send(200, r)
-                if r.get("ok") and r.get("mode") != "code":
-                    threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
-                return
-            if u.path == "/api/update/install":
                 from meshpool_harness import updater as UP
-                if _running():
-                    return self._send(200, {"ok": False, "error": "A task is still running. Update when it finishes."})
-                return self._send(200, UP.install())
+                gate_open = False
+                try:
+                    with UP.install_lock():
+                        if not A.quiesce():
+                            return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
+                        gate_open = True
+                        r = AU.begin_apply()
+                        if not r.get("ok"):
+                            return self._send(200, r)
+                        if r.get("mode") == "code":
+                            self._send(200, {"ok": True, "mode": "code", "restarting": True, "boot": BOOT})
+                            gate_open = False          # the gate stays closed: the process is going away
+                            threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
+                            return
+                        self._send(200, r)
+                        gate_open = False
+                        threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                        return
+                except UP.UpdateBusy as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+                finally:
+                    if gate_open:
+                        A.resume()
+            if u.path == "/api/update/install":
+                from meshpool_harness import autoupdate as AU
+                from meshpool_harness import updater as UP
+                gate_open = False
+                marked = applied = False
+                stage = ""
+                try:
+                    with UP.install_lock():
+                        r = UP.install()
+                        if r.get("action") != "staged":
+                            return self._send(200, r)
+                        stage = r["stage"]
+                        AU.mark_installing(r["tag"], r["latest"], "code")
+                        marked = True
+                        if not A.quiesce():
+                            UP.discard_stage(stage)
+                            msg = "A task is still running. Update when it finishes."
+                            AU.install_finished(False, msg)
+                            return self._send(200, {"ok": False, "error": msg})
+                        gate_open = True
+                        r2 = UP.apply_staged(r)
+                        if not r2.get("ok"):
+                            AU.install_finished(False, r2.get("error", ""))
+                            return self._send(200, r2)        # the finally below reopens the gate
+                        applied = True
+                        self._send(200, {"ok": True, "action": "restarting", "boot": BOOT})
+                        gate_open = False                  # the gate stays closed: the process is going away
+                        threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
+                        return
+                except UP.UpdateBusy as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+                except Exception as e:  # noqa: BLE001 - after mark_installing: never leave "installing" behind
+                    if not marked:
+                        raise
+                    msg = str(e) or e.__class__.__name__
+                    if applied:
+                        msg = _RESTART_FAILED
+                    else:
+                        UP.discard_stage(stage)
+                    try:
+                        AU.install_finished(False, msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return self._send(200, {"ok": False, "error": msg})
+                finally:
+                    if gate_open:
+                        A.resume()
             if u.path == "/api/update/restart":
                 from meshpool_harness import updater as UP
-                self._send(200, {"ok": True})
+                self._send(200, {"ok": True, "boot": BOOT})
                 threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
                 return
             if u.path == "/api/upload":

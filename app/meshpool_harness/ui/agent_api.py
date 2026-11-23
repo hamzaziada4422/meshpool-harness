@@ -17,6 +17,33 @@ from meshpool_harness.harnesses.acp import ACPAgent
 from meshpool_harness.harnesses.pi_rpc import PiAgent
 
 LIVE: dict[str, "Session"] = {}
+
+# Update gate: while an update is being installed no turn or scheduled run may start (M11-02).
+GATE = threading.Lock()
+QUIESCING = [False]
+_GATE_MSG = "Meshpool is restarting to install an update. Send this again in a moment."
+
+
+def quiesce() -> bool:
+    """Close the gate if nothing is running. False (gate left open) while any live chat works or waits."""
+    with GATE:
+        if any(s.state in ("working", "waiting") for s in list(LIVE.values())):
+            return False
+        QUIESCING[0] = True
+        return True
+
+
+def resume() -> None:
+    with GATE:
+        QUIESCING[0] = False
+
+
+def _claim_working(sess) -> None:
+    """Set a session to "working" under the gate, or refuse while an update is being installed."""
+    with GATE:
+        if QUIESCING[0]:
+            raise ValueError(_GATE_MSG)
+        sess.state = "working"
 LOCK = threading.Lock()
 _SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
@@ -827,7 +854,7 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
         with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
-            self.state = "working"
+            _claim_working(self)
         try:
             caps = self._capability_turn(text)
         except BaseException:
@@ -1047,7 +1074,7 @@ class Session:
         if not hasattr(self.agent, "grade_now"):
             raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
         with self.lock:
-            self.state = "working"
+            _claim_working(self)
         self.t_turn = time.time()
 
         def go():
@@ -1867,7 +1894,7 @@ def scheduler_loop():
     from meshpool_harness import assistant as AS
     while True:
         try:
-            for t in AS.due():
+            for t in ([] if QUIESCING[0] else AS.due()):      # due tasks stay due and run after the restart
                 try:
                     run_scheduled(t)
                 except Exception as e:  # noqa: BLE001
