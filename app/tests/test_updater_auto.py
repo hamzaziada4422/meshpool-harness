@@ -19,6 +19,9 @@ from meshpool_harness import updater as U
 
 @pytest.fixture(autouse=True)
 def _clean(monkeypatch, tmp_path):
+    def _no_network(*a, **k):
+        raise OSError("tests never reach the network")
+    monkeypatch.setattr(U, "_get", _no_network)          # a test that needs releases stubs _get or check itself
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "data"))
     monkeypatch.delenv("MESHPOOL_AUTO_UPDATE", raising=False)
     monkeypatch.delenv("MESHPOOL_NO_UPDATE", raising=False)
