@@ -291,7 +291,7 @@ openThread = function (id, fresh) {
 const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`;
 const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
 const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
-function feedback010(outcome) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome}).catch(() => {}); }
+function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome, turn: n}).catch(() => {}); }
 function acts010(n, text) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
@@ -304,7 +304,7 @@ function acts010(n, text) {
     if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
-    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
+    if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
 async function rewind010(n) {
@@ -315,7 +315,7 @@ async function retry010(n) {
   const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
   if (!asked) return toast("Could not find the message to send again.");
-  try { await rewind010(n); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+  try { await rewind010(n); feedback010("retry", n); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;

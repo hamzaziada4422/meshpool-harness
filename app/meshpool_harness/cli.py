@@ -112,7 +112,10 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                 inputs.append(str(rep))
                 researched = True
     spent = client.spent() if hasattr(client, "spent") else None
-    return {"task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
+    arts = list(dict.fromkeys(a for x in results for a in (x.get("artifacts") or [])))
+    bad = next((x for x in results if not x.get("ok")), None)
+    return {"answer": (results[-1].get("answer") or "") if results else "", "artifacts": arts,
+            "reason": (bad.get("reason") or "") if bad else "", "task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
                                          "used_model_call": r.used_model_call},
             "ok": all(x.get("ok") for x in results) and len(results) == len(r.engines),
             "steps": [{k: v for k, v in x.items() if k in ("engine", "ok", "answer", "artifacts", "evidence", "turns",
@@ -360,6 +363,7 @@ def main(argv=None):
     w.add_argument("--engine", default=None)
     w.add_argument("--out", default="./mh_out")
     w.add_argument("--report", action="store_true", help="post the outcome back to the source")
+    w.add_argument("--json", action="store_true", help="print the result as JSON")
     u = sub.add_parser("ui", help="open the Meshpool web app")
     u.add_argument("--port", type=int, default=int(os.environ.get("MH_UI_PORT", "8765")))
     u.add_argument("--no-browser", action="store_true")
@@ -400,8 +404,19 @@ def main(argv=None):
         res = run_request(task.text(), [], a.out, a.engine, a.workdir)
         if a.report:
             conn.report(task, res)
-        print(json.dumps({"task": task.ref, "source": task.source, **{k: res.get(k) for k in ("ok", "answer")}},
-                         indent=1, default=str))
+        if a.json:
+            print(json.dumps({"task": task.ref, "source": task.source,
+                              **{k: res.get(k) for k in ("ok", "answer", "artifacts", "reason", "out_dir")}},
+                             indent=1, default=str))
+            return 0 if res.get("ok") else 1
+        print(res.get("answer") or "")
+        if res.get("artifacts"):
+            print("\nFiles:")
+            for f in res["artifacts"]:
+                print("  " + str(f))
+        print("\nOutput folder: " + str(res.get("out_dir", "")))
+        if not res.get("ok"):
+            print("Failed: " + str(res.get("reason") or "no reason given"))
         return 0 if res.get("ok") else 1
     if a.cmd == "route":
         from meshpool_harness.router.rules import decide
