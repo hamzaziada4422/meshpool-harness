@@ -427,6 +427,9 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
                      max_tokens=5, retries=1, timeout=60)
         txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+        from meshpool_harness.core import usage
+        usage.record(model, r.get("usage"), base=led.base_url, source="check", request_chars=30,
+                     reply_chars=len(txt))
         return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}", "model": model,
                 "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:

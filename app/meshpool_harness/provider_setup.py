@@ -173,10 +173,24 @@ def probe_chat(base: str, key: str, model: str, wire: str = "openai", header: st
     hdr = _headers(wire, key, base, header, scheme)
     if wire == "anthropic":
         body = AW.to_request({"model": model, "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]})
-        return _get(base.rstrip("/") + "/messages", hdr, 30.0, body)
-    body = PV.adapt_body(base, {"model": model, "max_tokens": 16 if PV.is_azure(base) else 5,
-                                "messages": [{"role": "user", "content": "ping"}]})
-    return _get(PV.chat_url(base, model, "chat/completions", version), hdr, 30.0, body)
+        res = _get(base.rstrip("/") + "/messages", hdr, 30.0, body)
+    else:
+        body = PV.adapt_body(base, {"model": model, "max_tokens": 16 if PV.is_azure(base) else 5,
+                                    "messages": [{"role": "user", "content": "ping"}]})
+        res = _get(PV.chat_url(base, model, "chat/completions", version), hdr, 30.0, body)
+    _account_probe(res, base, model)
+    return res
+
+
+def _account_probe(res: tuple, base: str, model: str) -> None:
+    """A test call that got an answer is billed like any other: put its usage in the ledger (source "check")."""
+    try:
+        status, data, _ = res
+        if status == 200 and isinstance(data, dict):
+            from meshpool_harness.core import usage
+            usage.record(model, data.get("usage") or None, base=base, source="check", request_chars=4)
+    except Exception:  # noqa: BLE001 - accounting never breaks a connection test
+        pass
 
 
 def _test_azure(base: str, key: str, model: str, header: str, scheme: str, version: str, t0: float, out: dict) -> dict:

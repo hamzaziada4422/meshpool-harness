@@ -14,6 +14,7 @@ Meshpool UI events:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import os
@@ -27,6 +28,7 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness.core import usage as USAGE
 
 PROTOCOL_VERSION = 1
 
@@ -268,6 +270,9 @@ def earlier_context(events: list, limit: int = 40000) -> str:
 
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
+    usage_task = None          # the session's usage task (core/usage.py): the harness's calls are recorded in it
+    _usage_recorded = False        # set once the current prompt response is in the ledger (any code path)
+    _cost_now = _cost_seen = 0.0   # session cost the harness reported (usage_update), and the part already recorded
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -592,6 +597,10 @@ class ACPAgent:
                                                     for e in u.get("entries") or []]})
         elif kind == "usage_update":
             self.context = {"used": u.get("used", 0), "size": u.get("size", 0)}
+            c = u.get("cost")
+            if isinstance(c, dict) and str(c.get("currency") or "USD").upper() == "USD":
+                with contextlib.suppress(TypeError, ValueError):
+                    self._cost_now = max(self._cost_now, float(c.get("amount") or 0))
             self._emit({"type": "context", **self.context})
         elif kind == "session_info_update" and u.get("title"):
             self.title = self.title or str(u["title"])[:80]
@@ -731,6 +740,33 @@ class ACPAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _prompt_call(self, prompt: list) -> dict:
+        """One session/prompt request; its usage goes to the ledger once (_record_usage)."""
+        self._usage_recorded = False
+        r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+        self._record_usage(r, "".join(str(p.get("text") or "") for p in prompt if isinstance(p, dict)),
+                           "".join(self._text))
+        return r
+
+    def _record_usage(self, r: dict, prompt_text: str, final_text: str) -> None:
+        """The harness's own usage from a prompt response, else one call counted from the text sizes (flagged as an
+        estimate, never free). At most once per response: other code that records it sets _usage_recorded."""
+        if self._usage_recorded:
+            return
+        self._usage_recorded = True
+        try:
+            hid = str(self.manifest.get("id") or "acp")
+            extra = None
+            if self._cost_now > self._cost_seen:
+                extra = {"reported_cost": round(self._cost_now - self._cost_seen, 6)}
+                self._cost_seen = self._cost_now
+            USAGE.record(str(getattr(self, "model_now", None) or self.model or hid),
+                         (r.get("usage") if isinstance(r, dict) else None) or None, source=f"external:{hid}",
+                         task=self.usage_task or None, extra=extra, request_chars=len(prompt_text),
+                         reply_chars=len(final_text))
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     def send(self, text: str, images: list | None = None) -> str:
         kt = getattr(self, "_kill_timer", None)
         if kt:
@@ -772,22 +808,22 @@ class ACPAgent:
                 else:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name')} does not take images; "
                                                           "they were left out."})
-            r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+            r = self._prompt_call(prompt)
             if r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text:
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
                 self._ensure_session()
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
                     prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+                r = self._prompt_call(prompt)
             self._reloaded = False
             final = "".join(self._text)
             if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
                     and getattr(self, "_turn_tools", 0) == 0):
                 # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
                 self._text = []
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": [
-                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}]})
+                r = self._prompt_call([
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
                 final = "".join(self._text)
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "

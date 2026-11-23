@@ -21,10 +21,25 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from meshpool_harness.core import chatgpt as CG
+from meshpool_harness.core import usage as USAGE
 
 MAX_BODY = 64 * 1024 * 1024
 _LOCK = threading.Lock()
 _STATE: dict = {"server": None, "url": "", "token": ""}
+
+
+def _account(model: str, out: dict, body: dict) -> None:
+    """Put one served reply in the usage ledger: the provider's numbers, else an estimate from the text sizes. The
+    relay has no chat id of its own, so the call goes to the task in scope here, else to background."""
+    try:
+        msg = ((out.get("choices") or [{}])[0].get("message")) or {}
+        reply = len(str(msg.get("content") or "")) + len(json.dumps(msg.get("tool_calls") or []))
+        task, _ = USAGE.current()
+        USAGE.record(model, out.get("usage") or None, source="external:chatgpt-relay", task=task,
+                     request_chars=len(json.dumps(body.get("messages") or body.get("input") or [], default=str)),
+                     reply_chars=reply)
+    except Exception:  # noqa: BLE001 - accounting never breaks a reply
+        pass
 
 
 def _chunk(rid: str, model: str, delta: dict | None = None, finish: str | None = None, usage: dict | None = None) -> bytes:
@@ -123,6 +138,7 @@ class _Handler(BaseHTTPRequestHandler):
             from meshpool_harness.core.wire import from_responses
             out = from_responses(r)
             out.update(id=rid, object="chat.completion", created=int(time.time()), model=model)
+            _account(model, out, body)
             return self._json(200, out)
         # Streamed: text goes out as it arrives; tool calls and usage follow when the reply is complete.
         started, sent_text = [False], [False]
@@ -162,6 +178,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         from meshpool_harness.core.wire import from_responses
         c = from_responses(r)
+        _account(model, c, body)
         msg = c["choices"][0]["message"]
         start()
         if msg.get("content") and not sent_text[0]:

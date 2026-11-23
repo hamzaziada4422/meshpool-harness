@@ -27,6 +27,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.core import usage as USAGE
 from meshpool_harness.harnesses.acp import _kill_tree
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
@@ -209,6 +210,7 @@ def _before_turn(agent) -> list:
 
 class PiAgent:
     """One Pi process serving one Meshpool thread. Same surface as ACPAgent."""
+    usage_task = None          # the session's usage task (core/usage.py): Pi's calls are recorded in it
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -350,6 +352,21 @@ class PiAgent:
             raise PiError(str(r.get("error") or "Pi refused the request."))
         return r.get("data") or {}
 
+    def _record_usage(self, msg: dict, u: dict):
+        """One assistant message is one model call: put Pi's own numbers in the ledger (no usage block: counted as
+        an estimate, never free)."""
+        try:
+            extra = None
+            cost = u.get("cost")
+            cost = cost.get("total") if isinstance(cost, dict) else cost
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+                extra = {"reported_cost": cost}
+            text = "".join(str(c.get("text") or "") for c in msg.get("content") or [] if isinstance(c, dict))
+            USAGE.record(str(msg.get("model") or self.model or "pi"), u or None, source="external:pi",
+                         task=self.usage_task or None, reply_chars=len(text), extra=extra)
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     # ---------- events -----------------------------------------------------------------------------------------
     def _on(self, m: dict):
         t = m.get("type")
@@ -374,6 +391,7 @@ class PiAgent:
                 self._turn["in"] += int(u.get("input") or 0) + int(u.get("cacheRead") or 0)
                 self._turn["cached"] += int(u.get("cacheRead") or 0)
                 self._turn["out"] += int(u.get("output") or 0)
+                self._record_usage(msg, u)
                 has_tools = any(isinstance(c, dict) and c.get("type") == "toolCall" for c in msg.get("content") or [])
                 self._flush_text(has_tools)
                 if msg.get("stopReason") == "error" and msg.get("errorMessage"):

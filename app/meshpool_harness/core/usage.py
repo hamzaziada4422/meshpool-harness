@@ -169,7 +169,9 @@ def _sum_or_int(v: Any) -> int:
 
 def normalize(raw: dict | None) -> dict:
     """Provider ``usage`` -> {in, cached, cache_write, out, reasoning, reported}. ``in`` includes cached and
-    cache-write tokens; reasoning tokens are already inside ``out``."""
+    cache-write tokens; reasoning tokens are already inside ``out``. Also reads pi (input/output/cacheRead/cacheWrite),
+    ACP (camelCase; ``inputTokens`` excludes the cache reads and writes) and Codex exec (``input_tokens`` includes
+    ``cached_input_tokens``; ``reasoning_output_tokens`` are inside ``output_tokens``)."""
     z = {"in": 0, "cached": 0, "cache_write": 0, "out": 0, "reasoning": 0, "reported": False}
     if not isinstance(raw, dict) or not raw:
         return z
@@ -184,6 +186,15 @@ def normalize(raw: dict | None) -> dict:
         reasoning = _first(ctd.get("reasoning_tokens"), raw.get("reasoning_tokens"))
         if cached + cw > in_:                       # a converted shape that left the cache tokens out of the prompt
             in_ += cached + cw
+    elif _present(raw, "cached_input_tokens", "reasoning_output_tokens"):         # Codex exec turn.completed
+        in_, cached, out = _n(raw.get("input_tokens")), _n(raw.get("cached_input_tokens")), _n(raw.get("output_tokens"))
+        reasoning = _n(raw.get("reasoning_output_tokens"))    # input includes the cached part; output the reasoning
+        if cached > in_:
+            in_ += cached
+    elif _present(raw, "inputTokens", "outputTokens"):                            # ACP: inputTokens excludes the cache
+        cached, cw, out = _n(raw.get("cachedReadTokens")), _n(raw.get("cachedWriteTokens")), _n(raw.get("outputTokens"))
+        in_ = _n(raw.get("inputTokens")) + cached + cw
+        reasoning = _n(raw.get("thoughtTokens"))
     elif _present(raw, "input_tokens", "output_tokens"):                          # Responses API, Anthropic
         out = _n(raw.get("output_tokens"))
         itd, otd = _d(raw, "input_tokens_details"), _d(raw, "output_tokens_details")

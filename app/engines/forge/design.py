@@ -558,8 +558,20 @@ class ImageClient:
         self.post = post or _post
         self.sizes = sizes or [DEFAULTS["size"]] + list(DEFAULTS["fallback_sizes"])
         self.calls: list[dict] = []
+        self._prompt = ""
+
+    def _account(self, pl) -> None:
+        """One successful image call in the usage ledger (the provider's usage block when it sends one; an image
+        model the price table does not know is counted but unpriced)."""
+        try:
+            from meshpool_harness.core import usage
+            usage.record(self.model, pl.get("usage") if isinstance(pl, dict) else None, base=self.base,
+                         source="engine:forge-image", request_chars=len(self._prompt), reply_chars=0)
+        except Exception:  # noqa: BLE001 - accounting never breaks a design run
+            pass
 
     def generate(self, prompt: str) -> dict:
+        self._prompt = prompt
         why = ""
         fmt = True
         for size in self.sizes:
@@ -569,6 +581,7 @@ class ImageClient:
             st, pl = self.post(f"{self.base}/images/generations", body, self.timeout)
             self.calls.append({"endpoint": "images/generations", "size": size, "status": st})
             if st == 200:
+                self._account(pl)
                 d = (pl.get("data") or [{}])[0] if isinstance(pl, dict) else {}
                 raw = _decode(d.get("b64_json") or d.get("url") or "", self.timeout)
                 if raw:
@@ -585,6 +598,7 @@ class ImageClient:
                                                                        if k != "response_format"}, self.timeout)
                 self.calls.append({"endpoint": "images/generations", "size": size, "status": st})
                 if st == 200:
+                    self._account(pl)
                     d = (pl.get("data") or [{}])[0]
                     raw = _decode(d.get("b64_json") or d.get("url") or "", self.timeout)
                     if raw:
@@ -604,6 +618,7 @@ class ImageClient:
                             "messages": [{"role": "user", "content": prompt[:30000]}]}, self.timeout)
         self.calls.append({"endpoint": "chat/completions", "status": st})
         if st == 200:
+            self._account(pl)
             u = _image_from_chat(pl)
             raw = _decode(u, self.timeout) if u else None
             if raw:
