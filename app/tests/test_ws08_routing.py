@@ -191,3 +191,31 @@ def test_an_auto_chat_whose_agent_cannot_start_moves_on_and_sends_again(chat, mo
     s.harness = _row("pi", "code", "pi")           # the chat currently runs on Pi, which just failed
     assert s._start_failed_handoff("fix the bug") is True and moved == ["meshpool-code"]
     assert s._start_failed_handoff("fix the bug") is False      # once only
+
+
+def test_a_start_failure_handoff_shows_the_message_once(chat, monkeypatch):
+    """The failed attempt's copy of the message is folded into one note: after the switch the chat shows the
+    message once, and the next agent's history does not carry it twice."""
+    A, proj, made = chat
+    v = A.create({"kind": "code", "harness": "meshpool-auto", "task": "fix the bug", "workdir": str(proj)})
+    made.append(v["id"])
+    s = A.LIVE[v["id"]]
+    ev0 = len(s.events)
+    s.emit({"type": "user", "text": "fix the bug"})                 # what the failed agent's send() emitted
+    s.emit({"type": "model_start"})
+    s.emit({"type": "error", "text": "Pi exited during the turn."})
+    s.emit({"type": "turn_end"})
+    s.agent.start_error = "Pi exited during the turn."
+    s.harness = _row("pi", "code", "pi")
+    monkeypatch.setattr(HRT, "route", lambda text, kind, **k: {"harness": "meshpool-code"})
+    carried = []
+    monkeypatch.setattr(s, "handoff", lambda hid, why="": carried.append(
+        [e for e in s.events if e.get("type") == "user"]))
+    epoch = s.epoch
+    assert s._start_failed_handoff("fix the bug", ev0) is True
+    assert not [e for e in s.events[ev0:] if e.get("type") in ("user", "error", "turn_end")]
+    assert "could not start" in s.events[-1]["text"] and s.epoch == epoch + 1
+    assert [e["i"] for e in s.events] == list(range(len(s.events)))
+    assert carried == [[]]                                         # the next agent gets no copy of the message
+    s.emit({"type": "user", "text": "fix the bug"})                 # the resend
+    assert sum(1 for e in s.events if e.get("type") == "user" and e.get("text") == "fix the bug") == 1
