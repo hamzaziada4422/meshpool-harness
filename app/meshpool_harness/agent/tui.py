@@ -1366,6 +1366,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 if rv:                                # the independent check of a big task (agent/grader.py)
                     out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
                 sys.__stdout__.write(_json.dumps(out, ensure_ascii=False, default=str) + "\n")
+                sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now
                 return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0
