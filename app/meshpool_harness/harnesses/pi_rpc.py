@@ -252,6 +252,26 @@ class PiAgent:
             self.events.append({k: v for k, v in ev.items() if k not in ("i", "t")})
         self.emit_cb(ev)
 
+    def _start_tracked(self):
+        """_start, recording whether Pi could start (hrouter/health.py: Auto skips an agent that cannot)."""
+        hid = self.manifest.get("id") or "pi"
+        try:
+            self._start()
+        except Exception as e:  # noqa: BLE001 - PiError, or the process could not be spawned (OSError)
+            if not self._stop:                       # a Stop is not a failed start
+                self.start_error = str(e)
+                try:
+                    from meshpool_harness.hrouter import health
+                    health.start_failed(hid, str(e))
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
+        try:
+            from meshpool_harness.hrouter import health
+            health.start_ok(hid)
+        except Exception:  # noqa: BLE001
+            pass
+
     def _start(self):
         if self._p and self._p.poll() is None:
             return
@@ -528,6 +548,7 @@ class PiAgent:
     # ---------- turns ------------------------------------------------------------------------------------------
     def send(self, text: str, images: list | None = None) -> str:
         self._stop = False
+        self.start_error = None                          # set when this turn's agent could not start (Session hands off)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
@@ -546,7 +567,7 @@ class PiAgent:
         final = ""
         try:
             self._emit({"type": "model_start"})
-            self._start()
+            self._start_tracked()
             if getattr(self, "_carry", False):
                 self._carry = False
                 from meshpool_harness.harnesses.acp import earlier_context
