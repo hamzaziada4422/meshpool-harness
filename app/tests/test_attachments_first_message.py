@@ -183,7 +183,7 @@ def test_file_on_the_first_message_lands_in_the_new_chats_own_folder(page, app):
     page.wait_for_function("() => S.cur && S.cur.view && S.cur.view.workdir", timeout=60000)
     wd = Path(page.evaluate("S.cur.view.workdir"))
     page.wait_for_function("() => document.querySelector('#conv, #col') && document.body.innerText.includes('note.txt')", timeout=30000)
-    assert (wd / "attachments" / "note.txt").read_text() == "hello attach"
+    assert (wd / "note.txt").read_text() == "hello attach"     # S-05: attachments sit at the folder root
     assert wd.parent.name == "chats"
     page.wait_for_timeout(800)
     assert len(_rows(_threads(app))) == before + 1
