@@ -28,7 +28,7 @@ class Rec:
                 pass
 
             def _rec(self):
-                outer.seen.append({k.lower(): v for k, v in self.headers.items()})
+                outer.seen.append({k.lower(): v for k, v in self.headers.items()} | {"_path": self.path})
 
             def do_GET(self):
                 self._rec()
@@ -162,6 +162,46 @@ def test_hosted_endpoint_without_key_is_still_refused(home, mocks):  # noqa: F81
     with pytest.raises(ValueError):
         S.save_settings({"values": {"MESHPOOL_BASE_URL": "https://api.example.com/v1"}})
     assert PV.key() == "sk-hosted-key-1"
+
+
+def _shell_then_file(mocks, monkeypatch):
+    a, b = mocks(), mocks()
+    C.config_path().write_text("MESHPOOL_API_KEY=k-file\n")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k-shell")
+    monkeypatch.setenv("MESHPOOL_BASE_URL", a.url)
+    C.load_into_env(override=True)
+    assert PV.endpoint_pair()[:2] == (a.url, "k-shell")
+    return a, b
+
+
+def test_saved_key_beats_earlier_shell_key_after_save(home, mocks, monkeypatch):  # noqa: F811
+    a, b = _shell_then_file(mocks, monkeypatch)
+    PS.save(b.url, "k-new-key-12", default_model="m", allow_custom=True)
+    _chat()
+    assert b.keys() == ["Bearer k-new-key-12"] and a.seen == []
+
+
+def test_saved_key_beats_earlier_shell_key_through_settings_route(home, mocks, monkeypatch):  # noqa: F811
+    from meshpool_harness.ui import server as S
+    a, b = _shell_then_file(mocks, monkeypatch)
+    S.save_settings({"values": {"MESHPOOL_BASE_URL": b.url, "MESHPOOL_API_KEY": "k-new-key-12"}})
+    _chat()
+    chats = [h for h in b.seen if h["_path"].endswith("/chat/completions")]   # (local-server probes carry no key)
+    assert [h.get("authorization") for h in chats] == ["Bearer k-new-key-12"] and a.seen == []
+
+
+def test_saving_only_the_model_keeps_shell_pair(home, mocks, monkeypatch):  # noqa: F811
+    from meshpool_harness.ui import server as S
+    a, _ = _shell_then_file(mocks, monkeypatch)
+    S.save_settings({"values": {"MH_MODEL": "x"}})
+    assert PV.endpoint_pair() == (a.url, "k-shell", "environment")
+
+
+def test_shell_key_is_dropped_when_saving_keyless_local_endpoint(home, mocks, monkeypatch):  # noqa: F811
+    a, local = _shell_then_file(mocks, monkeypatch)
+    PS.save(local.url, None, default_model="m", allow_custom=True)
+    _no_auth(local)
+    assert a.seen == []
 
 
 def test_wording_names_custom_endpoint(home, monkeypatch, capsys):  # noqa: F811

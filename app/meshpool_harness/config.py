@@ -230,6 +230,9 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
+    for k in values:
+        if k in ENDPOINT_NAMES:
+            SHELL.pop(k, None)           # an explicit save replaces what the shell once gave for this name
     with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
         return _write(values, path)
 
