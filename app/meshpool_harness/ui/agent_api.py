@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
@@ -69,8 +70,8 @@ _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "a
 
 def _transcript(sid: str) -> dict | None:
     try:
-        return json.loads((SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.TranscriptLog(SESSIONS / sid).read()
+    except OSError:
         return None
 DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
@@ -364,7 +365,11 @@ class Session:
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints")
+        outside = self.harness["type"] in ("acp", "pi")
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints", mode="scan" if outside else "journal",
+                              seq_floor=int(read_meta(self.id).get("turn_seq") or 0))
+        if not outside:
+            self.agent.checkpoint = self.cp          # the agent books what its own tools wrote (core._run_tool)
         if self.harness["type"] in ("acp", "pi"):
             self.state = "idle"
             name = self.harness["name"]
@@ -452,14 +457,26 @@ class Session:
         try:
             d = SESSIONS / sid
             d.mkdir(parents=True, exist_ok=True)
-            with self.lock:
-                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP
-                       and not (e.get("type") == "subagent" and e.get("kind") == "tool")][-3000:]   # live only
-            run = bool(getattr(self, "_turn_open", False)) if running is None else running
-            tmp = d / "transcript.json.tmp"
-            tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
-                           encoding="utf-8")
-            C.replace_file(tmp, d / "transcript.json")
+            plock = self.__dict__.get("_plock") or self.__dict__.setdefault("_plock", threading.RLock())
+            with plock:                              # the emit thread and the 1 s timer thread must not interleave
+                log = self.__dict__.get("_tlog")
+                if log is None or log.dir != d:
+                    log = self._tlog = SS.TranscriptLog(d)
+                    self._tlog_n = None
+                run = bool(getattr(self, "_turn_open", False)) if running is None else running
+                with self.lock:
+                    total, epoch = len(self.events), getattr(self, "epoch", 0)
+                    n = getattr(self, "_tlog_n", None)
+                    replace = n is None or epoch != getattr(self, "_tlog_epoch", None) or total < n
+                    src = self.events if replace else self.events[n:]
+                    evs = [{k: v for k, v in e.items() if k != "i"} for e in src if e.get("type") not in _SKIP
+                           and not (e.get("type") == "subagent" and e.get("kind") == "tool")]   # live only
+                if replace:
+                    log.rewrite(evs[-3000:], run)
+                else:
+                    log.append(evs)
+                    log.set_running(run)
+                self._tlog_n, self._tlog_epoch = total, epoch
         except OSError:
             pass
 
@@ -546,12 +563,14 @@ class Session:
             raise ValueError("That style does not exist any more.")
         write_meta(self.id, style=style_id or ST.NORMAL)
 
-    def send(self, text: str, images: list | None = None, interrupt: bool = False) -> dict:
+    def send(self, text: str, images: list | None = None, interrupt: bool = False, files: list | None = None) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
         agent and Pi read it before their next step; other harnesses get it as soon as the current turn ends.
         interrupt=True stops the current work first and sends the message as a new turn."""
-        if not text.strip() and not images:
+        if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
+        if files:                                    # saved first: if it fails, nothing was emitted or started
+            text = self._save_files(text, files)
         self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
             self._interrupting = True
@@ -597,6 +616,24 @@ class Session:
             return {"queued": True}
         self._start_turn(text, images)
         return {"queued": False}
+
+    def _save_files(self, text: str, files: list) -> str:
+        """Attached files go into this chat's own folder; the message then names them."""
+        import base64
+        from meshpool_harness import project_store as PS
+        from meshpool_harness.ui import workbench as W
+        if not self.workdir:
+            raise ValueError("This chat has no folder to save files in.")
+        saved = []
+        for f in files:
+            f = f if isinstance(f, dict) else {}
+            try:
+                data = base64.b64decode(f.get("data", "") or "")
+            except (ValueError, TypeError):
+                raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
+            saved.append(W.attach_to(Path(self.workdir), f.get("name", ""), data)["path"])
+        where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
+        return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
 
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
@@ -684,6 +721,10 @@ class Session:
             except Exception:  # noqa: BLE001
                 pass
         self.agent, self.harness = a, new
+        if self.cp:                                   # Meshpool's agent books by its tools, an outside agent by scan
+            a_out = new["type"] in ("acp", "pi")
+            self.cp.mode = "scan" if a_out else "journal"
+            a.checkpoint = None if a_out else self.cp
         try:
             if hasattr(old, "close") and old is not a:
                 old.close()
@@ -881,7 +922,8 @@ class Session:
             try:
                 if self.cp:
                     try:
-                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
+                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
+                                               event_index=ev0)
                         self._turn_n = (t or {}).get("n")
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
@@ -1011,19 +1053,11 @@ class Session:
                 self._turn_finish()
                 with _ACTIVE_LOCK:
                     _ACTIVE.get(root, set()).discard(self)
-                if self._turn_shared and self._turn_n is not None:
-                    write_meta(self.id, shared_turns=sorted(set(read_meta(self.id).get("shared_turns") or [])
-                                                            | {self._turn_n}))
-                if self.cp:
-                    try:
-                        self.cp.end_turn()
-                        self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._end_cp_turn()
                 while (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
                        and self.agent.has_steers()):  # added with Enter just as the turn ended: answer it now
                     try:
-                        self.agent.resume_steers()
+                        self._resume_steers()
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "error", "text": str(e)})
                         break
@@ -1054,7 +1088,7 @@ class Session:
                                 self.state = "idle"
                                 break
                         try:
-                            self.agent.resume_steers()
+                            self._resume_steers()
                         except Exception as e:  # noqa: BLE001
                             self.emit({"type": "error", "text": str(e)})
                             with self.lock:
@@ -1069,6 +1103,44 @@ class Session:
                         _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
                                 + (self.agent.title or "task")[:60], last.strip()[:200])
         threading.Thread(target=go, daemon=True).start()
+
+    def _end_cp_turn(self):
+        """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
+        if not self.cp:
+            return
+        try:
+            self.cp.end_turn()
+            write_meta(self.id, turn_seq=self.cp.seq)
+            self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _resume_steers(self):
+        """Answer what the user added just as the turn ended, as a turn of its own: its file changes get their own
+        checkpoint (so Undo and the rewound chat agree), titled by the added message."""
+        title, ev_i = "Added message", None
+        with self.lock:
+            for e in reversed(self.events):
+                if e.get("type") == "user" and e.get("steer"):
+                    ev_i = e.get("i")
+                    t = str(e.get("text") or "").strip()
+                    if t:
+                        title = t.splitlines()[0]
+                    break
+            if ev_i is None:
+                ev_i = len(self.events)
+        began = False
+        if self.cp:
+            try:
+                msgs = None if self.harness["type"] in ("acp", "pi") else len(self.agent.messages)
+                began = self.cp.begin_turn(title, msgs, event_index=ev_i) is not None
+            except Exception:  # noqa: BLE001
+                began = False
+        try:
+            return self.agent.resume_steers()
+        finally:
+            if began:
+                self._end_cp_turn()
 
     def grade(self) -> dict:
         """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
@@ -1233,30 +1305,40 @@ class Session:
             self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
+    def _turn_cut(self, turn: int):
+        """Position in the transcript of the user event that started this checkpoint turn, or None (old turns)."""
+        from meshpool_harness import chat_rewind as CR
+        t = next((x for x in (self.cp.turns() if self.cp else []) if x.get("n") == int(turn)), None)
+        if not t:
+            return None
+        with self.lock:
+            return CR.turn_event_pos(self.events, t)
+
     def revert(self, turn: int) -> dict:
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
-        shared = [n for n in read_meta(self.id).get("shared_turns") or [] if n >= int(turn)]
-        if shared:
-            raise ValueError("Another chat, or an edit you saved, changed files in this folder while this chat was "
-                             "working, so Undo cannot tell the changes apart and would remove theirs. Undo by hand "
-                             "or with Git (the Git panel shows what changed).")
+        cut = self._turn_cut(turn)
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
-        if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
+        built_in = self.harness["type"] not in ("acp", "pi")
+        if built_in and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
             self.agent.messages = self.agent.messages[:idx]
             self.agent.save()
             with self.lock:
-                self.events = events_from_messages(self.agent.messages[1:])
+                if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
+                    self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
+                else:
+                    self.events = events_from_messages(self.agent.messages[1:])
         else:
             if hasattr(self.agent, "forget_session"):
                 self.agent.forget_session()          # the harness's own session still holds the undone turns
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
-                users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
-                cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
+                if cut is None:
+                    users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
+                    cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
@@ -1282,8 +1364,33 @@ class Session:
         elif r.get("kept"):
             names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
             msg += f". Kept as they are, because you changed them afterwards: {names}"
-        self.emit({"type": "status", "text": msg + "."})
+        msg += "."
+        if r.get("backup"):
+            msg += f" Copies of the files Undo replaced are in {r['backup']}."
+        self.emit({"type": "status", "text": msg})
         return r
+
+    def rewind(self, event_index: int, files: bool = True) -> dict:
+        """Go back to just before one of the user's messages (the event at `event_index`): the conversation, the
+        transcript and, with `files`, the file changes made from there on. Returns {text, undo[, forked]}."""
+        from meshpool_harness import chat_rewind as CR
+        if self.state in ("working", "waiting"):
+            raise ValueError("Stop the agent before rewinding.")
+        r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self)
+        if r.get("undo"):
+            msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
+                                                                         r["undo"].get("deleted")) else "")
+            if r["undo"].get("notes"):
+                msg += " " + " ".join(r["undo"]["notes"][:5])
+            if r["undo"].get("backup"):
+                msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
+            self.emit({"type": "status", "text": msg.strip()})
+        return r
+
+    def fork(self, event_index: int) -> str:
+        """A new chat with the conversation up to the end of the exchange that starts at this message."""
+        from meshpool_harness import chat_rewind as CR
+        return CR.fork(self.id, CR.message_for_event(self, int(event_index)), session=self)
 
     def stop(self):
         self._stop_req = True                        # checked before the agent starts: its own flag resets then
@@ -1326,6 +1433,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
+                "worktree": meta.get("worktree") or None,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1408,13 +1516,23 @@ def create(body: dict) -> dict:
             plan = SV2.profile()["plan_first"]
         except Exception:  # noqa: BLE001
             plan = False
+    wt, made_wt = _chat_worktree(body, wd, kind, scratch, task)
+    if wt:
+        wd = wt["workdir"]                          # the chat works in its own isolated copy of the folder
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
                     kind=kind, model=model, plan=bool(plan))
     except BaseException:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
+        if made_wt:
+            from meshpool_harness import worktrees as WT
+            WT.discard(wt["id"])
         raise
+    if wt:
+        from meshpool_harness import worktrees as WT
+        WT.set_owner(wt["id"], "chat", s.id)
+        write_meta(s.id, worktree=WT.summary(wt))
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -1466,10 +1584,40 @@ def create(body: dict) -> dict:
     if not scratch and not pid:
         try:
             from meshpool_harness.ui import workbench as W
-            W.add_project(s.workdir)
+            W.add_project(wt["source"] if wt else s.workdir)
         except Exception:  # noqa: BLE001
             pass
     return s.view(0)
+
+
+def _chat_worktree(body: dict, wd: str, kind: str, scratch: bool, task: str) -> tuple:
+    """(record, made here) of the isolated copy a new chat works in, or (None, False). ``worktree_id``: a copy made
+    for it already (a scheduled run); ``worktree: true``: a Code chat asked for one ("Work in an isolated copy")."""
+    from meshpool_harness import worktrees as WT
+    if body.get("worktree_id"):
+        return WT.get(str(body["worktree_id"])), False
+    if body.get("worktree") and not scratch and wd:
+        if kind != "code":
+            raise ValueError("Isolated copies are for Code chats.")
+        return WT.create(wd, owner_kind="chat", title=(task or "").strip()[:80]), True
+    return None, False
+
+
+def worktree_users(folder: str, exclude: str = "") -> list:
+    """Open chats that work directly in ``folder`` (not in an isolated copy of it): a new chat there is offered one."""
+    from meshpool_harness import worktrees as WT
+    want = WT._norm(folder)
+    with LOCK:
+        live = list(LIVE.values())
+    out = []
+    for s in live:
+        if s.id == exclude or getattr(s, "deleted", False) or not s.workdir:
+            continue
+        m = read_meta(s.id)
+        if WT._norm(s.workdir) == want and not m.get("worktree"):
+            out.append({"id": s.id, "title": m.get("title") or nice_title(s.agent.title or "New chat"),
+                        "state": s.state})
+    return out
 
 
 def _short_harness(name: str) -> str:
@@ -1502,12 +1650,16 @@ def _reap_once(idle_s: float) -> list:
 def _start_reaper():
     """MH_IDLE_CLOSE_S (default 900; 0 = never): how long an unused thread keeps its helper processes."""
     idle_s = float(os.environ.get("MH_IDLE_CLOSE_S", "900") or 0)
-    if _REAPER or idle_s <= 0:
+    if _REAPER:
+        return
+    purge_due()                                    # chats deleted before the app last closed
+    if idle_s <= 0:
         return
 
     def loop():
         while True:
             time.sleep(min(60.0, max(5.0, idle_s / 4)))
+            purge_due()
             _reap_once(idle_s)
     th = threading.Thread(target=loop, daemon=True, name="meshpool-reaper")
     _REAPER.append(th)
@@ -1522,7 +1674,7 @@ _OPENING: dict = {}                 # chat id -> lock: only one request builds t
 
 
 def get(sid: str) -> Session:
-    if sid in DELETED:
+    if sid in DELETED or read_meta(sid).get("deleted"):
         raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
@@ -1537,7 +1689,17 @@ def get(sid: str) -> Session:
             return s
         s = Session(resume_id=sid)               # reopen a saved session
         with LOCK:
-            live = LIVE.setdefault(sid, s)
+            dead = sid in DELETED or bool(read_meta(sid).get("deleted"))   # deleted while it was being built
+            live = s if dead else LIVE.setdefault(sid, s)
+        if dead:
+            try:
+                s.deleted = True
+                if getattr(s, "agent", None) is not None:
+                    s.agent.deleted = True
+            except Exception:  # noqa: BLE001
+                pass
+            s.close()
+            raise KeyError(sid)
         if live is not s:
             s.close()
         return live
@@ -1599,6 +1761,9 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
     r["kind"] = m.get("kind") or r.get("kind") or "code"
+    if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from
+        r["worktree"] = m["worktree"].get("id")
+        r["workdir"] = m["worktree"].get("source") or r.get("workdir")
     return r
 
 
@@ -1623,13 +1788,13 @@ def _disk_rows() -> tuple:
                 if p.parent.name.startswith("sub-"):
                     continue
                 try:
-                    st = p.stat()
+                    key = SS.stamp(p.parent)
                     hit_row = _ROWS.get(str(p))
-                    if hit_row and hit_row[0] == st.st_mtime_ns and hit_row[1] == st.st_size:
+                    if hit_row and hit_row[0] == key:
                         rows[hit_row[2]["id"]] = dict(hit_row[2])
                         continue
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    d = SS.read(p.parent)
+                except OSError:
                     continue
                 if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
                     continue
@@ -1638,7 +1803,7 @@ def _disk_rows() -> tuple:
                        "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
                        "model": d.get("model"),
                        "imported": (d.get("imported") or {}).get("source", "")}
-                _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
+                _ROWS[str(p)] = (key, None, row)
                 rows[d["id"]] = dict(row)
         legacy, live_pids = _project_info()
         base = {}
@@ -1685,6 +1850,100 @@ def exists(sid: str) -> bool:
     return bool(re.fullmatch(r"[\w-]+", sid or "")) and (SESSIONS / sid).is_dir()
 
 
+_DEL_LOCK = threading.Lock()
+_DEL_TIMERS: dict = {}
+
+
+def _grace() -> float:
+    try:
+        return float(os.environ.get("MH_DELETE_GRACE_S", "8"))
+    except ValueError:
+        return 8.0
+
+
+def _write_meta_raw(sid: str, m: dict) -> None:
+    from meshpool_harness import fsio
+    fsio.atomic_write_json(_meta_path(sid), m, indent=None)
+    _METAS.pop(sid, None)
+
+
+def _has_user_message(sid: str) -> bool:
+    with LOCK:
+        s = LIVE.get(sid)
+    if s is not None:
+        with s.lock:
+            if any(e.get("type") == "user" for e in s.events):
+                return True
+    tr = _transcript(sid) or {}
+    if any(e.get("type") == "user" for e in tr.get("events") or []):
+        return True
+    return any(m.get("role") == "user" for m in (_saved(sid) or {}).get("messages") or [] if isinstance(m, dict))
+
+
+def _purge(sid: str, force: bool = False) -> None:
+    """Really remove a deleted chat (stop it, its folder, checks records, private folder). Idempotent; a chat that was
+    undeleted meanwhile is left alone."""
+    import shutil
+    with _DEL_LOCK:
+        if sid in DELETED and not (SESSIONS / sid).exists():
+            return
+        m = read_meta(sid)
+        if not force and not m.get("deleted"):
+            return
+        t = _DEL_TIMERS.pop(sid, None)
+        if t and t is not threading.current_thread():
+            t.cancel()
+        scratch_dir = ""
+        if m.get("scratch"):
+            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
+        with LOCK:
+            DELETED.add(sid)
+            list_dirty()
+            s = LIVE.pop(sid, None)
+    if s:
+        s.deleted = True
+        s.agent.deleted = True                        # its last save after stopping must not recreate the thread
+        s.close()
+        end = time.time() + 6
+        while s.state in ("working", "waiting") and time.time() < end:
+            time.sleep(0.1)
+    d = SESSIONS / sid
+    if d.is_dir() and d.parent == SESSIONS:
+        shutil.rmtree(d, ignore_errors=True)
+    list_dirty()
+    try:                                              # its checks records go with it
+        from meshpool_harness import checks as CK
+        for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
+            f.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    if scratch_dir:                                   # the chat's private folder goes with it
+        from meshpool_harness import project_store as PS
+        PS.remove_scratch(scratch_dir)
+    try:                                              # and its isolated copy (unmerged work stays on its branch)
+        from meshpool_harness import worktrees as WT
+        WT.prune_owner("chat", sid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def purge_due() -> list:
+    """Purge every chat whose delete grace has run out (also after a restart: the page need not be open)."""
+    out, now, grace = [], time.time(), _grace()
+    if not SESSIONS.exists():
+        return out
+    for p in list(SESSIONS.glob("*/meta.json")):
+        sid = p.parent.name
+        m = read_meta(sid)
+        if m.get("deleted") and now - float(m.get("deleted_at") or 0) >= grace:
+            try:
+                _purge(sid)
+                out.append(sid)
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
 def thread_action(sid: str, body: dict) -> dict:
     act = body.get("action")
     if not exists(sid):
@@ -1706,35 +1965,38 @@ def thread_action(sid: str, body: dict) -> dict:
         if not read_meta(sid):
             raise KeyError("Chat not found.")
         write_meta(sid, project_id=pid, project_ctx="" if not pid else None)
-    elif act == "delete":
-        scratch_dir = ""
-        if read_meta(sid).get("scratch"):
-            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
-        with LOCK:
-            DELETED.add(sid)
-            list_dirty()
-            s = LIVE.pop(sid, None)
-        if s:
-            s.deleted = True
-            s.agent.deleted = True                    # its last save after stopping must not recreate the thread
-            s.close()
-            end = time.time() + 6
-            while s.state in ("working", "waiting") and time.time() < end:
-                time.sleep(0.1)
-        import shutil
-        d = SESSIONS / sid
-        if d.is_dir() and d.parent == SESSIONS:
-            shutil.rmtree(d, ignore_errors=True)
+    elif act == "delete":                             # soft: the server purges it after the grace, page or no page
+        with _DEL_LOCK:
+            if sid in DELETED:
+                raise KeyError("That chat no longer exists. Refresh the list.")
+            write_meta(sid, deleted=True, deleted_at=time.time())
+            old = _DEL_TIMERS.pop(sid, None)
+            if old:
+                old.cancel()
+            if _grace() > 0:
+                t = threading.Timer(_grace(), _purge, args=(sid,))
+                t.daemon = True
+                _DEL_TIMERS[sid] = t
+                t.start()
         list_dirty()
-        try:                                          # its checks records go with it
-            from meshpool_harness import checks as CK
-            for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
-                f.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-        if scratch_dir:                               # the chat's private folder goes with it
-            from meshpool_harness import project_store as PS
-            PS.remove_scratch(scratch_dir)
+        if _grace() <= 0:                         # MH_DELETE_GRACE_S=0: no Undo window, gone at once
+            _purge(sid)
+    elif act == "undelete":
+        with _DEL_LOCK:
+            if sid in DELETED or not read_meta(sid).get("deleted"):
+                raise ValueError("This chat was already deleted.")
+            m = read_meta(sid)
+            m.pop("deleted", None)
+            m.pop("deleted_at", None)
+            _write_meta_raw(sid, m)
+            t = _DEL_TIMERS.pop(sid, None)
+            if t:
+                t.cancel()
+        list_dirty()
+    elif act == "discard":                            # a brand-new chat whose first message failed
+        if _has_user_message(sid):
+            raise ValueError("This chat already has messages.")
+        _purge(sid, force=True)
     else:
         raise ValueError("Unknown chat action.")
     return {"ok": True}
@@ -1754,13 +2016,15 @@ def search(q: str) -> list:
         if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
             continue
         try:
-            st = p.stat()
-            key = (st.st_mtime_ns, st.st_size)
+            key = SS.stamp(p.parent)
             hit = _RAW.get(str(p))
             if hit and hit[0] == key:
                 raw, low = hit[1], hit[2]
             else:
-                raw = p.read_text(encoding="utf-8")
+                sd = SS.read(p.parent)
+                if not isinstance(sd, dict):
+                    continue
+                raw = json.dumps(sd, ensure_ascii=False, default=str)
                 low = raw.lower()
                 if _RAW_BYTES[0] + 2 * len(raw) <= _RAW_CAP:      # keep the text of recent searches in memory, up to a cap
                     old_hit = _RAW.get(str(p))
@@ -1875,8 +2139,16 @@ def run_scheduled(t: dict) -> str:
     folder = t.get("folder") or ""
     if folder and not Path(folder).expanduser().is_dir():
         raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
-    v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
+    rf = AS.run_folder(t)                       # a repository: the run gets its own isolated copy
+    try:
+        v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                    "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
+                    "worktree_id": rf.get("worktree_id") or None})
+    except BaseException:
+        if rf.get("worktree_id"):
+            from meshpool_harness import worktrees as WT
+            WT.discard(rf["worktree_id"])
+        raise
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
@@ -1884,6 +2156,21 @@ def run_scheduled(t: dict) -> str:
                           "which ones you made, and finish with a short summary.)"))
     AS.set_thread(t["id"], s.id)
     return s.id
+
+
+def recover_worktrees():
+    """At app start: remove isolated copies whose creation never finished, whose chat was deleted, or whose
+    sub-agent's process is gone. Copies of chats that still exist are kept."""
+    try:
+        from meshpool_harness import worktrees as WT
+
+        def alive(kind, oid, rec):
+            if kind == "chat":                      # no id yet: a chat being made right now
+                return exists(oid) if oid else time.time() - float(rec.get("created") or 0) < 600
+            return WT._default_alive(kind, oid, rec)
+        return WT.recover(alive)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def probe_mcp():
@@ -1911,10 +2198,9 @@ def scheduler_loop():
 
 
 def _saved(sid: str) -> dict | None:
-    p = SESSIONS / sid / "session.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.read(SESSIONS / sid)
+    except OSError:
         return None
 
 

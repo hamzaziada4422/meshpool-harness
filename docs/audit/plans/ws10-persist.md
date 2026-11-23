@@ -1,0 +1,57 @@
+# ws10-persist: persistence, Undo, delete, attachments, rewind/fork — plan
+
+Base: 0.0.12 (`c189e04`). Every item below was re-checked against 0.0.12 source. Line numbers are 0.0.12.
+
+## Reproduction status and root causes
+
+| ID | Still reproduces in 0.0.12? | Root cause |
+|---|---|---|
+| M09-01 / G-12 / M23-04 | Yes (partly) | `agent/core.py:2795` `Agent.save` writes `session.json.tmp` (one shared name per chat, no fsync) then `os.replace`: two threads saving the same chat interleave in one tmp file, and a power cut can leave a renamed but unflushed file. `harnesses/pi_rpc.py:640` and `harnesses/acp.py:812` (harness chats, M23-04) and `chat_import.py:303` write `session.json` in place: a full disk or a kill truncates it. Readers (`agent_api._saved`, `Agent.resume`, sidebar rows, search) treat a damaged file as "no chat", so the chat vanishes. |
+| M09-02 | Yes | `ui/agent_api.py:405` `_persist` runs from the emit thread and from the 1 s `_persist_soon` timer thread at once; both write the same `transcript.json.tmp` and replace it. |
+| P-05 | Yes | `_persist` rewrites the whole transcript (up to 3000 events with 6 kB tool outputs) once per second; `Agent.save` rewrites the whole message list every 4 s during a turn (`core.py:1165`). `Checkpoints.diff()` writes a full new manifest on every call for a running turn; manifests and objects are never pruned. |
+| H-13 | Yes | `checkpoints.py`: every chat keeps its own full content copy of the folder (`objects/`) and a full manifest per snapshot; nothing is ever pruned; every begin/end turn walks and hashes the whole folder, and a new `Checkpoints` object (after a restart) re-reads every file because the stat cache lives only in memory. |
+| M05-01 | Yes | `checkpoints.py` `end_turn` books every difference between the folder before and after the turn to the agent. A file the user creates or edits in their editor during the turn is "added/modified by the agent", and Undo deletes or reverts it with no copy kept. |
+| M05-02 | Yes | `ui/agent_api.py:927-965`: `cp.end_turn()` runs, then `agent.resume_steers()` runs whole extra turns (twice: before and after the queue) with no `begin_turn`, so their file changes are never recorded and Undo/rewind disagree with the chat. |
+| M05-03 | Yes (mitigated by refusal) | Undo in chat A writes files while chat B's turn is open in the same folder; B's `end_turn` diff books them as B's changes. 0.0.12 only refuses Undo when `shared_turns` (meta) is set, which also blocks legitimate undos. |
+| M05-04 | Yes | `checkpoints.py:_save_turns` writes `turns.json` in place; `_turns()` returns `[]` for a damaged file, so the next save erases every checkpoint and numbering restarts at 1 while `shared_turns` in meta.json still holds old numbers. |
+| M06-01 | Yes | `ui/app.js:366` posts `/stop` the moment Delete is clicked; Undo in the toast only cancels the page timer, so the restored chat's task is already killed. |
+| M06-02 / F-04 | Yes | `ui/app.js:369`: the delete request is only sent by a 6 s `setTimeout` in the page. Reload or close within 6 s and nothing is deleted; the chat reappears. |
+| M06-04 | Yes | `ui/agent_api.py:1403` `get()` builds `Session(resume_id=sid)` outside `LOCK`; a delete that lands meanwhile pops nothing, then `LIVE.setdefault` puts the deleted chat (and its MCP/harness processes) back. |
+| F-34 / X-03 | Yes | `ui/app.js:543`: for a new chat, `root = curRoot()` is read right after `openThread(v.id, true)`, whose fresh view has no `workdir` and which cleared `S.draft.pid`; so the root is `""` (Cowork chat: "Choose a folder first") or the draft folder instead of the chat's own folder. The chat was already created, so the failure leaves an empty chat, and both `post()` and the catch toast. |
+| F-35 | Yes | `ui/workbench.py:297` `attach` lets `PermissionError` escape as a raw server error; same empty-chat leftover as X-03. |
+| X-05 | Yes (real cause found) | Undo buttons are attached by matching the ordinal of the user message (`cur.turn`) to the checkpoint turn number. After one Undo, `Session.revert` rebuilds events from messages (`agent_api.py:1158`), which drops every `turn_end`/`checkpoint` event, so the remaining turns lose their Undo buttons; turn numbers also drift from ordinals (late additions, M05-02). |
+| G-10 | Missing | No conversation rewind-to-message or fork. |
+
+## Design
+
+### A. Crash-safe chat storage, append-only during a turn (M09-01, M09-02, M23-04, G-12, P-05)
+New module `meshpool_harness/session_store.py`, all writes through `fsio`:
+- `write_snapshot(dir, data)`: under `fsio.file_lock(dir/"session.json")`: hard-link the current `session.json` to `session.json.bak` (copy if links are unsupported), `atomic_write_json(session.json)`, then delete `session.journal`. No moment without a readable `session.json`.
+- `append_journal(dir, start, messages, meta)`: one fsync'd JSON line `{"from": start, "messages": [...], "meta": {...}}`.
+- `read(dir)`: `read_json(session.json)`; on `CorruptFile` quarantine it and use `.bak`; then replay journal lines (`messages = messages[:from] + new`, meta fields override), ignoring a torn last line. Returns `None` only when there is truly nothing.
+- `Agent.save()`: full snapshot when the persisted prefix changed (truncate, compaction, revert, first save, turn end, journal > 2 MB); otherwise append only the new messages. Mid-turn saves (every 4 s) become appends.
+- Harness chats (`pi_rpc`, `acp`) and `chat_import` write through `write_snapshot`; every single-chat reader (`Agent.resume`, `agent_api._saved`, Session resume, sidebar rows, search) reads through `session_store.read` so a damaged file is recovered, not dropped.
+- Transcript: `TranscriptLog(dir)`: `transcript.jsonl` (append-only, one event per line) + `transcript.state.json` (`running`, written only when it changes). `_persist` appends events not yet written; a history replacement (Undo, rewind, epoch change) rewrites atomically. Serialized by a per-session lock; legacy `transcript.json` still read.
+- Tests: kill -9 a child process in the middle of saves (both stores) and reload; ENOSPC injected into `os.write`/`fsio` leaves the previous chat intact; two threads persisting at once; corrupt `session.json` recovers from `.bak` and is quarantined; old-format sessions/transcripts load; bytes written for a 200-step turn stay within 3x the final size (old code: >50x).
+
+### B. Undo that only undoes the agent's own changes (M05-01, M05-03, M05-04, H-13, P-05)
+`checkpoints.py`:
+- Attribution by what the agent's tools did. `Checkpoints(root, store, mode="journal"|"scan")`. In `journal` mode (Meshpool's own agents) `begin_turn`/`end_turn` do not walk the folder. Every tool call runs inside `cp.tool(name, args, read_only)`: a write tool (`write_file`, `edit`, `notebook_edit`, `apply_patch`) records the before-image of its target paths just before it runs and the after-image just after; a read-only tool records nothing; any other tool (shell, MCP, delegate) is a short scan window (incremental stat walk before/after the call). Changes made between tool calls (the user's editor) are never booked. `scan` mode (outside agents: Codex, Pi, ...) keeps the whole-turn diff.
+- Foreign writes. A per-folder registry (`note_foreign_write(root, path)`; in process + a locked file under the runs folder for other processes) records writes Meshpool makes on the user's behalf: Undo itself, the in-app editor save, attachments. A scan window or scan-mode turn drops a change whose current content equals a foreign write made during its window (M05-03). A change seen in a window that overlapped another chat's window in the same folder is marked `ambiguous`; Undo keeps it with a note instead of refusing the whole Undo (replaces the `shared_turns` refusal).
+- Undo keeps a copy: every file Undo deletes or overwrites is first copied to `<chat>/checkpoints/undone/<time>/<path>` and the status line says where.
+- Storage: turn records hold only the changed paths' before/after values. Content objects live in one store per folder (`runs/checkpoints/<hash of folder>/objects`), shared by all chats in that folder, with a persisted stat cache (no re-hash after a restart). Old per-chat manifests/objects are still read for old turns. Keep the last `MH_UNDO_TURNS` (default 100) turns undoable; older turns keep their file list but drop their images. Unreferenced objects are garbage-collected (mark and sweep under a lock) after pruning and after Undo; `diff()` of a running turn no longer writes a manifest.
+- `turns.json` through `fsio` (atomic, `.bak` copy, `CorruptFile` → quarantine and recover from `.bak`); a monotonic `seq` stored in the file and in meta.json so turn numbers are never reused; each turn stores `event_index` (its user event in the transcript) and `message_index`.
+
+### C. Delete that is true and undoable (M06-01, M06-02, M06-04, F-04) and attachments (F-34, F-35, X-03)
+- Server-side soft delete: `delete` sets `deleted_at` in meta (hidden everywhere at once) and schedules a server-side purge after `MH_DELETE_GRACE_S` (default 8 s). The task keeps running during the grace period. `undelete` clears it. Purge (timer, the reaper loop, and a sweep at server start for anything past its grace) stops the chat, removes it from `LIVE`, deletes its folder and scratch folder. The page no longer stops the chat or keeps the delete in a timer.
+- `get()` re-checks `DELETED`/`deleted_at` under `LOCK` after building a Session and closes it instead of publishing it.
+- Attachments go with the message: `/api/agent/<id>/send` takes `files`, saved by the server into the chat's own folder (`attachments/` in a private folder) before anything is emitted; a failure (read-only folder, disk full) is one friendly error. A brand-new chat whose first send fails is discarded at once (`discard` action, only allowed while the chat has no messages). `workbench.attach` turns `OSError` into a readable message.
+
+### D. Turn wiring, rewind/fork, Undo buttons (M05-02, X-05, G-10)
+- Each `resume_steers()` turn gets its own `begin_turn`/`end_turn` + `checkpoint` event.
+- `Session.revert` cuts `events` at the turn's `event_index` instead of rebuilding them from messages, so earlier turns keep `turn_end`/`checkpoint` events and their Undo buttons; the page matches Undo buttons by the turn number carried on `turn_end`/`checkpoint`, not by ordinal.
+- Backend module `meshpool_harness/chat_rewind.py` (used by the app and, for ws23, the CLI): `points(sid)`, `rewind(sid, message_index, files=True)` (conversation back to just before that user message; with `files`, Undo of every turn from there), `fork(sid, message_index)` (new chat with the conversation up to and including that exchange, same folder, no file changes). Works on a live Session or on the saved chat. Outside agents: fork continues in Meshpool's agent with the conversation; rewind restarts the outside agent's session with the kept conversation as context.
+- UI: "Rewind to here" and "Fork from here" on each user message; endpoints `/api/agent/<id>/rewind`, `/api/agent/<id>/fork`.
+
+## Execution
+Four Sonnet work packages, each in its own worktree: A, B, C in parallel (files overlap only in `ui/agent_api.py`, different functions), D after A+B+C are merged. Every fix ships with a test that fails on 0.0.12. Review: line-by-line diff review, each new test run against the reverted fix, fault injection (kill -9, ENOSPC, concurrent chats, Windows lock retry, restart, old formats), full suite.

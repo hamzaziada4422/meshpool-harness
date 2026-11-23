@@ -27,6 +27,7 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 
 PROTOCOL_VERSION = 1
 
@@ -965,11 +966,11 @@ class ACPAgent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            SS.write_snapshot(self.dir, {
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "harness": self.manifest.get("id"), "kind": self.manifest.get("mode", "cowork"),
                 "acp_session": self.acp_session or self.loaded_from, "usage": self.usage,
-                "events": self.events[-2000:]}, ensure_ascii=False), encoding="utf-8")
+                "events": self.events[-2000:]})
         except OSError:
             pass
 

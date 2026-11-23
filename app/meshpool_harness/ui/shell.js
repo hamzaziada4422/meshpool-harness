@@ -595,7 +595,7 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : PANELS[curMode()]; }
+function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 

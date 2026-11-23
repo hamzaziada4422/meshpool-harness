@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 from meshpool_harness.harnesses.acp import _kill_tree
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
@@ -817,11 +818,10 @@ class PiAgent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            SS.write_snapshot(self.dir, {
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "harness": self.manifest.get("id"), "kind": self.manifest.get("mode", "code"),
-                "usage": self.usage, "model": self.model, "events": self.events[-2000:]}, ensure_ascii=False),
-                encoding="utf-8")
+                "usage": self.usage, "model": self.model, "events": self.events[-2000:]})
         except OSError:
             pass
 

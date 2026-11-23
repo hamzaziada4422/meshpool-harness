@@ -188,14 +188,14 @@ function fitInput(inp) {
   if (fitRaf) return;
   fitRaf = requestAnimationFrame(() => { fitRaf = 0; inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; });
 }
-function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false}) {
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false, check = ""}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
-    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}${check ? `<label class="dlgck"><input type="checkbox" id="dlgCk" checked> ${esc(check)}</label>` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
-    const val = () => input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
+    const val = () => check ? {checked: $("#dlgCk", sc).checked} : input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
     const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
@@ -370,17 +370,17 @@ function projMenu(e, pid) {
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
-// A delete still waiting out its undo window is sent when the page goes away, so a reload never brings the chat back.
-addEventListener("pagehide", () => { for (const id of S.delFlush?.keys() || []) { try { fetch(`/api/threads/${id}`, {method: "POST", keepalive: true, headers: {"X-Meshpool-Token": MP.token, "Content-Type": "application/json"}, body: JSON.stringify({action: "delete"})}); } catch (e) { /* page is closing */ } } });
 async function threadAct(id, action) {
-  if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
+  if (action === "delete") {                         // the server does the delete (and its grace period) itself
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
-    if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
+    try { await post(`/api/threads/${id}`, {action: "delete"}); }
+    catch (e) { S.pendingDelete.delete(id); renderSide(); return toast(e.message); }
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); S.delFlush?.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    (S.delFlush = S.delFlush || new Map()).set(id, t);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); S.delFlush?.delete(id); renderSide(); toast("Chat restored"); }});
+    toast("Chat deleted", 6000, {label: "Undo", fn: async () => {
+      try { await post(`/api/threads/${id}`, {action: "undelete"}); S.pendingDelete.delete(id); await loadThreads(); toast("Chat restored"); }
+      catch (e) { toast(e.message); }
+    }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -547,24 +547,19 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
-  let created = null;
+  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
-      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
-      S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
+      S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot() || created?.workdir || "";          // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image);
-    if (files.length) {
-      const saved = [];
-      for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
-    }
+    const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
+    const files = atts.filter(a => !a.image).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
-    const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
+    const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
     if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
@@ -576,6 +571,13 @@ async function sendNow(interrupt) {
     S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
+    if (created) {                                  // a brand-new chat whose first message failed: no empty chat is left behind
+      try { await post(`/api/threads/${created.id}`, {action: "discard"}); } catch (e2) { /* it may already be gone */ }
+      if (S.cur?.id === created.id) newThread();
+      S.draft.project = draft0.project; S.draft.pid = draft0.pid;
+      const i2 = $("#input"); if (i2) { i2.value = typed; i2.dispatchEvent(new Event("input")); }
+      S.attachments = atts; renderAttach(); loadThreads();
+    }
     toast(e.message, 4000);
   }
 }
@@ -1145,7 +1147,7 @@ function applyEv(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; mu.dataset.ei = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1252,9 +1254,7 @@ function applyEv(ev) {
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
-      const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
-      pvTurnCards(cur, foot, cur.turn);
-      if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(foot); }
+      pvTurnCards(cur, foot, 0);                        // the files it changed arrive with its checkpoint event
       if (cur.view?.plan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
@@ -1369,13 +1369,36 @@ function bindFoot(foot) {
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+  const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
+  const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
+    threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
+  const asked = ue?.text || "";
   try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
+// "Rewind to here" / "Fork from here" under one of your messages (the server finds the message from the event number).
+async function rewindFork(kind, el) {
+  const cur = S.cur, ei = el && el.dataset.ei !== undefined ? +el.dataset.ei : -1;
+  if (!cur || ei < 0) return;
+  if (["working", "waiting"].includes(cur.view?.state)) { toast(kind === "rewind" ? "Stop the agent before rewinding." : "Wait for the reply, or stop it, then fork."); return; }
+  try {
+    if (kind === "fork") {
+      const r = await post(`/api/agent/${cur.id}/fork`, {event_index: ei});
+      await loadThreads(); openThread(r.id); toast("Forked into a new chat. Nothing changed in your files.", 4000); return;
+    }
+    const a = await ask({title: "Rewind to here?", text: "The conversation goes back to just before this message, and the reply and everything after it are removed. The message goes back into the box so you can change it.",
+      ok: "Rewind", danger: true, check: "Also undo the file changes Meshpool made from here on"});
+    if (!a) return;
+    const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
+    if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
+    const inp = $("#input"); if (r.text && !inp.value.trim()) { inp.value = r.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
+    renderBranch(); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
+  } catch (e) { toast(e.message); }
+}
+
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser", worktree: "Isolated copy"};
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1407,7 +1430,7 @@ function renderPanel() {
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
-    preview: panelPreview, browser: panelBrowser})[S.panel](body);
+    preview: panelPreview, browser: panelBrowser, worktree: panelWorktree})[S.panel](body);
 }
 
 /* ---------- Cowork: progress, files made, context ---------- */
@@ -2591,6 +2614,7 @@ async function restartApp(bootBefore) {
     const ma = e.target.closest("[data-ma]"); if (!ma) return;
     const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;

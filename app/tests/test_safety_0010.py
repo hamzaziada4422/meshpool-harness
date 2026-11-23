@@ -37,7 +37,8 @@ def test_the_session_is_written_whole_and_marked_unfinished_while_running(tmp_pa
     assert d["unfinished"] is True and not (a.dir / "session.json.tmp").exists()
     a._running = False
     a.save()
-    assert json.loads((a.dir / "session.json").read_text(encoding="utf-8"))["unfinished"] is False
+    from meshpool_harness import session_store as SS
+    assert SS.read(a.dir)["unfinished"] is False   # a mid-turn save is a journal append, read through the store
     assert a.max_steps >= 100
 
 

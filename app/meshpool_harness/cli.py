@@ -123,7 +123,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree"}
 
 
 def _agent_parser():
@@ -141,6 +141,7 @@ def _agent_parser():
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
                "  work             fetch a task from GitHub, Jira, a URL or a file, run it, report back\n"
                "  run / route      run or preview Meshpool's task engines (decks, spreadsheets, data, code)\n"
+               "  worktree         isolated copies: list, diff, merge or discard (see --worktree)\n"
                "  ui / app         open the Meshpool web app or desktop app\n"
                "  install-browser  install the optional browser engine")
     ap.add_argument("request", nargs="?", help="first request for an interactive session")
@@ -159,7 +160,39 @@ def _agent_parser():
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
     return ap
+
+
+def _worktree_session(a, prompt) -> dict | None:
+    """--worktree: an isolated copy for this session; a.dir then points into it."""
+    if not getattr(a, "worktree", False):
+        return None
+    from meshpool_harness import worktrees as WT
+    if a.resume or a.session:
+        raise SystemExit("error: --worktree starts a new session; it cannot be combined with -c or --resume")
+    try:
+        rec = WT.create(a.dir or os.getcwd(), owner_kind="cli", owner_id=str(os.getpid()),
+                        title=(prompt or a.request or "terminal session").strip()[:80])
+    except WT.WorktreeError as e:
+        raise SystemExit(f"error: {e}")
+    print(f"Working in an isolated copy ({rec['id']}): {rec['workdir']}", file=sys.stderr)
+    a.dir = rec["workdir"]
+    return rec
+
+
+def _worktree_done(rec: dict | None) -> None:
+    if not rec:
+        return
+    from meshpool_harness import worktrees as WT
+    try:
+        n = len(WT.diff(rec["id"], max_patch=0)["files"])
+    except (WT.WorktreeError, KeyError, OSError):
+        n = -1
+    what = "No changes" if n == 0 else f"{n} file(s) changed" if n > 0 else "Changes"
+    print(f"{what} in isolated copy {rec['id']}. Review: meshpool worktree diff {rec['id']}  |  bring them in: "
+          f"meshpool worktree merge {rec['id']}  |  throw away: meshpool worktree discard {rec['id']}",
+          file=sys.stderr)
 
 
 def _stdin_has_data(explicit: bool) -> bool:
@@ -199,6 +232,8 @@ _HELP = {
     "app": "Usage: meshpool app\nOpen the desktop app.",
     "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
     "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
+    "worktree": "Usage: meshpool worktree list [--all] | diff <id> [--stat] | merge <id> | discard <id>\n"
+                "Isolated copies made by `meshpool --worktree`, chats, sub-agents and scheduled runs.",
 }
 
 
@@ -268,7 +303,14 @@ def main(argv=None):
         if a.disallowed_tools:
             os.environ["MH_DENY"] = a.disallowed_tools
         fmt = a.output_format or ("json" if a.json_out else "")
-        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+        wt = _worktree_session(a, prompt)
+        try:
+            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+        finally:
+            _worktree_done(wt)
+    if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
+        from meshpool_harness import worktrees as WT
+        return WT.cli(argv[1:])
     if argv[0] == "agent":
         return main(argv[1:] or [])
     if argv[0] == "acp":
