@@ -34,7 +34,7 @@ def read_ws() -> dict[str, list[tuple[str, str, str]]]:
             c = cells(line)
             if len(c) < 2 or c[0] in ("ID", "---") or set(c[0]) <= {"-"}:
                 continue
-            status = c[1].lower().strip("* ")
+            status = re.sub(r"\s*[(:;-].*$", "", c[1].lower().strip("* `")).strip()   # "fixed (note)" -> "fixed"
             test = c[5] if len(c) > 5 else (c[-1] if len(c) > 2 else "")
             found.setdefault(c[0], []).append((f.stem, status, test))
     return found
@@ -48,7 +48,7 @@ def main() -> int:
     open_ids, bad, conflict, out = [], [], [], []
     for line in lines:
         c = cells(line) if line.startswith("| ") else []
-        if len(c) == 5 and c[1].startswith("ws") and c[0] != "ID":
+        if len(c) == 5 and re.match(r"^(ws|oss-)", c[1]) and c[0] != "ID":
             rid = c[0]
             rows = ws.get(rid, [])
             if not rows:
@@ -68,7 +68,7 @@ def main() -> int:
         master.write_text("\n".join(out) + "\n", encoding="utf-8")
     known = {cells(l)[0] for l in lines if l.startswith("| ") and len(cells(l)) == 5}
     extra = sorted(set(ws) - known)
-    total = sum(1 for l in lines if l.startswith("| ") and len(cells(l)) == 5 and cells(l)[1].startswith("ws"))
+    total = sum(1 for l in lines if l.startswith("| ") and len(cells(l)) == 5 and re.match(r"^(ws|oss-)", cells(l)[1]))
     print(f"{total} findings; {total - len(open_ids)} with a workstream row; open {len(open_ids)}; "
           f"bad status {len(bad)}; conflicting {len(conflict)}; extra rows (new IDs) {len(extra)}")
     for title, items in (("OPEN", open_ids), ("BAD STATUS", bad), ("CONFLICT", conflict), ("EXTRA", extra)):
