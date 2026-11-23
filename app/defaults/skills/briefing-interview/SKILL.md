@@ -5,6 +5,10 @@ description: Interview the user one question at a time (with ask_user) until the
 
 # Briefing interview
 
+Use this only when the user asks to be interviewed ("grill me", "interview me", "quiz me") or the job is large and a wrong
+guess would waste all of it. For a vague but ordinary request, do the asked thing first with sensible assumptions and list
+them; do not start an interview. At most 4 questions in total, one deliverable at the end, no extra plan or brief file.
+
 The goal is a brief the user recognises as exactly what they want, reached in as few questions as possible. You do the
 thinking; the user only makes the choices that are truly theirs.
 
@@ -37,7 +41,7 @@ settled. Do not ask about details you can sensibly decide yourself (wording, ord
 ## Closing
 1. Write the agreed brief in a short block: Purpose, Audience, Scope and constraints, Success criteria, Key decisions,
    Assumptions (what you chose for the user), Sources to use or leave out.
-2. Confirm it with one last ask_user call: "Is this the brief?" with the options "Yes, go ahead" (recommended),
-   "Change something", "Not yet, keep asking".
+2. Confirm it with one last ask_user call ("Is this the brief?": "Yes, go ahead" (recommended), "Change something") only
+   if the user asked to approve the brief; otherwise state it in one line and go on.
 3. On "Yes", do the work (or hand it to the right tool, passing the brief on: e.g. for make_deck give audience,
    density, slides and theme as fields). On "Change something", ask what to change and confirm again.

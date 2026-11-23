@@ -210,13 +210,20 @@ Environment
 
 How to work
 0. Match the effort to the request. A question, a rewrite or a quick lookup gets a direct answer, with a tool only \
-when the answer needs a file, a current fact or an action. Only a real deliverable gets the full process below.
+when the answer needs a file, a current fact or an action. Only a real deliverable gets the full process below. \
+Do the asked thing first, at the size asked: ONE deliverable unless the user asked for more. Do not add a plan \
+document, a tracker or workbook, a summary file, a PDF copy or extra versions on the side. What fits on a screen \
+goes in your reply (a table, a short plan, post copy, a reply email); make a file only when the user wants one or the \
+result is long, and then one file in one format. A vague request gets a sensible first version with your assumptions \
+listed, not questions and not a research project. Research only as deep as the request needs: a few sources, then \
+write; stop once each fact you will state has a source. A skill is a guide, not a checklist: skip any step the \
+request does not need, and never let it add deliverables the user did not ask for. Ask only when truly blocked.
 1. Understand the job. Ask only when a choice that changes the result is open (see "Asking the user" below).
 2. For a multi-step job, keep a short plan with todo_write and update it as you go.
 3. Gather material: read the user's files (read_file, glob, grep), research the web with web_research and \
 web_search, read pages and PDFs with fetch_url, and use connected apps (mcp__ tools) when they fit. For a big \
 research job, split it into parts, research each, then write up.
-4. Produce real deliverables as files in the working folder. For decks, spreadsheets, models and data analysis use \
+4. When a file is the right deliverable (see 0), make it in the working folder. For decks, spreadsheets, models and data analysis use \
 office_task: it returns a finished, checked file. For memos, reports, letters and proposals make a Word document \
 (.docx) with the make_document tool (or python-docx through bash for edits to an existing .docx); write Markdown only \
 when the user asks for it. Use Python through bash for quick calculations.
@@ -1366,6 +1373,29 @@ class Agent:
         if key in done:
             return MA.REPEAT
         done[key] = True
+        return ""
+
+    def _lookup_note(self, name: str, args: dict) -> str:
+        """0.0.13: a research budget. Lookups (web_search, web_research, fetch_url) are counted per turn; past 8 the
+        model is told to write from what it has, past 16 to stop. A fetch of a search engine's own results page is
+        told to use web_search. One run made 170 fetches of search pages for a one-page agenda."""
+        if not E2E or name not in ("web_search", "web_research", "fetch_url"):
+            return ""
+        c = self.__dict__.setdefault("_lookups", {})
+        if c.get("turn") != self._turn_no:
+            c.clear()
+            c["turn"] = self._turn_no
+        c["n"] = c.get("n", 0) + 1
+        url = str(args.get("url", "")) if isinstance(args, dict) else ""
+        if name == "fetch_url" and re.search(r"(?:google|bing|duckduckgo|yahoo|baidu|yandex)\.[a-z.]+/(?:search|html|\?q=)|[?&]q=", url, re.I):
+            return ("\n[Meshpool] That was a search engine page. Do not fetch search result pages (and do not page through "
+                    "them): use web_search for searching and fetch_url only for a page you want to read.")
+        if c["n"] == 8:
+            return ("\n[Meshpool] That is 8 lookups this turn. Unless a specific fact you need is still missing, stop "
+                    "researching now and write the deliverable from what you have, sized to what was asked.")
+        if c["n"] >= 16 and c["n"] % 4 == 0:
+            return (f"\n[Meshpool] {c['n']} lookups this turn is far more than this request needs. Stop researching. "
+                    "Write the answer or file now with what you already have, and say what you could not confirm.")
         return ""
 
     def _tool_msgs_since(self, start: int) -> int:
@@ -2604,7 +2634,8 @@ class Agent:
                 if E2E and not str(out).startswith("ERROR"):    # a skill's "ask the user" is not a reason to stop
                     out += ("\n\n[Meshpool] Where this skill says to ask the user: ask (ask_user) only if you cannot "
                             "go on without the answer. Otherwise assume a sensible default, do the work, and list the "
-                            "assumption in your reply.")
+                            "assumption in your reply. Size the work to the request: one deliverable unless more were "
+                            "asked for, no extra plan or tracker files, research only as deep as the request needs.")
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))
@@ -2654,6 +2685,7 @@ class Agent:
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
         out = clean(str(out))
+        out += self._lookup_note(name, args)
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
                 "arg": _summary(name, args)[:100] if isinstance(args, dict) else ""}
