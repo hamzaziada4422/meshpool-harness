@@ -532,7 +532,7 @@ def test_m24_04_a_message_added_while_pi_starts_is_not_refused(fake_pi, monkeypa
     from meshpool_harness.harnesses import pi_rpc
     make, rows = fake_pi
     real = pi_rpc.prepare
-    monkeypatch.setattr(pi_rpc, "prepare", lambda root, chat="": (time.sleep(1.0), real(root, chat))[1])
+    monkeypatch.setattr(pi_rpc, "prepare", lambda root, chat="", *a, **k: (time.sleep(1.0), real(root, chat, *a, **k))[1])
     evs = []
     a = make(evs)
     out = {}
@@ -582,7 +582,7 @@ def test_m24_03_each_pi_chat_gets_its_own_config(home, monkeypatch):
         env = mcp["mcpServers"]["meshpool-assistant"]["env"]
         assert env["MESHPOOL_PROJECT"] == str(root.resolve())   # was: whichever chat launched last
         settings = json.loads((out[chat] / "settings.json").read_text())
-        assert settings["skills"] == [str(pi_rpc.pi_home() / "skills" / "meshpool")]
+        assert "skills" not in settings                 # ws20: Pi lists no skills catalog; matched skills load per chat
 
 
 def test_m05_05_undo_in_a_pi_chat_restarts_pi_without_the_undone_turns(fake_pi):
@@ -605,7 +605,7 @@ def test_pi_stop_while_starting_sends_nothing(fake_pi, monkeypatch):
     from meshpool_harness.harnesses import pi_rpc
     make, rows = fake_pi
     real = pi_rpc.prepare
-    monkeypatch.setattr(pi_rpc, "prepare", lambda root, chat="": (time.sleep(0.8), real(root, chat))[1])
+    monkeypatch.setattr(pi_rpc, "prepare", lambda root, chat="", *a, **k: (time.sleep(0.8), real(root, chat, *a, **k))[1])
     evs = []
     a = make(evs)
     t = threading.Thread(target=a.send, args=("hello",), daemon=True)

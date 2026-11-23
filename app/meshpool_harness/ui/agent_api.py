@@ -598,6 +598,25 @@ class Session:
         self._start_turn(text, images)
         return {"queued": False}
 
+    def _office_ready(self, edit_only: bool = False):
+        """The office tools for this chat from this message on: an outside agent (Pi, Codex) gets its office server at
+        its next launch or session start; Meshpool's own agents wait for the office MCP server to be up."""
+        self.agent.office_on = True
+        if self.harness.get("type") == "acp":
+            # edit only: Codex gets the six tools that read, change and check a file; a request to make one adds the rest
+            self.agent.office_edit = bool(edit_only) and not (getattr(self.agent, "office_on_all", False))
+            if not edit_only:
+                self.agent.office_on_all = True
+                self.agent.office_edit = False
+        if self.harness.get("type") not in ("acp", "pi"):
+            ready = getattr(self, "_mcp_ready", None)
+            if ready is not None and not ready.is_set():
+                # The office tools come from the office MCP server, which starts with the chat. A first message that
+                # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
+                # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
+                self.emit({"type": "status", "text": "Starting the office tools..."})
+                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
+
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
         The chat keeps its agent when that agent can; otherwise it moves, with its history, to the agent Auto would
@@ -609,6 +628,9 @@ class Session:
         except Exception:  # noqa: BLE001 - a check never blocks a message
             return []
         if not caps:
+            if CAP.edits(text):                      # a file the user has: edit_office_file, no engine to build one
+                self._office_ready(edit_only=True)
+                return ["edit"]
             return []
         try:
             from meshpool_harness import harness_router as HRT
@@ -627,15 +649,7 @@ class Session:
                 self.handoff(target, f"{self.harness.get('name', 'This agent')} cannot make {CAP.labels(caps)}")
         except Exception as e:  # noqa: BLE001 - the current agent still answers
             self.emit({"type": "status", "text": f"Could not check which agent can do this: {e}"})
-        if self.harness.get("type") not in ("acp", "pi"):
-            self.agent.office_on = True              # Meshpool's agents: the office tools from this message on
-            ready = getattr(self, "_mcp_ready", None)
-            if ready is not None and not ready.is_set():
-                # The office tools come from the office MCP server, which starts with the chat. A first message that
-                # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
-                # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
-                self.emit({"type": "status", "text": "Starting the office tools..."})
-                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
+        self._office_ready()
         return caps
 
     def switch_harness(self, hid: str) -> None:
@@ -934,8 +948,15 @@ class Session:
                         m0 = read_meta(self.id)
                         pid = m0.get("project_id") or ""
                         ex = list(m0.get("memory_exclude") or [])
-                        body += "\n\n\u200b" + AS.context_block(text, self.workdir, pid, chat_id=self.id,
-                                                               incognito=self.incognito, exclude=ex)
+                        outside = self.harness.get("type") in ("acp", "pi")
+                        tools = "all"                  # which Meshpool tools this agent has (names only those)
+                        if outside:
+                            tools = "deferred" if self.harness.get("type") == "pi" else (
+                                "all" if not self.harness.get("lean") else "none")
+                        body += "\n\n\u200b" + AS.context_block(
+                            text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
+                            rules=outside, tools=tools,
+                            office=tools != "none" or bool(getattr(self.agent, "office_on", False)))
                         write_meta(self.id, memory_exclude_sent=ex)
                         if pid:
                             write_meta(self.id, project_ctx=pid)

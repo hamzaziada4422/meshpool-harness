@@ -42,7 +42,7 @@ CODEX = {"id": "codex", "name": "Codex", "mode": "code", "type": "acp", "models"
          # Codex's read-only mode refuses to edit rather than asking; in Workspace access it edits the project and
          # asks before anything outside it. Meshpool's Undo covers every change.
          "modes": {"ask": "workspace-write", "edits": "workspace-write", "auto": "agent-full-access"},
-         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "install": NODE_NOTE,
+         "command": "npx", "args": ["-y", CODEX_ACP], "share_mcp": True, "lean": True, "install": NODE_NOTE,
          "tagline": "Terminal and command-line work, on GPT models",
          "description": ("Best for terminal and command-line work. OpenAI's open-source Codex agent, on your Meshpool "
                          "key, another API key or your ChatGPT sign-in. It edits files in your project without "
