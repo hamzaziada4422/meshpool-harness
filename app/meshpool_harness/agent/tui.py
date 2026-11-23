@@ -1339,6 +1339,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             term.p(st.red(str(e)))
             return 1
     term.agent = agent
+    agent.headless = prompt is not None and not sub     # one request, no one to answer questions
     if pm == "plan" and hasattr(agent, "plan"):
         agent.plan = True                        # read only: investigate, then reply with a plan
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal

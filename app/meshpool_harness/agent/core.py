@@ -871,7 +871,15 @@ class Agent:
         return effective(getattr(self, "route", None))
 
     def _dropped(self) -> set:
-        """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0."""
+        """Tools the routed harness leaves out (hrouter specs' drop list), unless MH_LEAN_TOOLS=0. A headless run
+        (no one to answer: `meshpool -p`, scripts) also leaves out ask_user: E2E-AUTONOMY, it decides and says what
+        it assumed."""
+        d = self._dropped_route()
+        if E2E and getattr(self, "headless", False) and not self.plan:
+            d = d | {"ask_user"}
+        return d
+
+    def _dropped_route(self) -> set:
         route = getattr(self, "route", None)
         if route is None or self.plan or not self.hsettings()["lean_tools"]:
             return set()
@@ -2523,7 +2531,9 @@ class Agent:
                 out = self._lazy.stub(name, getattr(self, "_lazy_all", [])) or "tool not loaded"
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
-                pre, post, ok = MA.classify(str(out), bool(err))
+                paged = self.__dict__.setdefault("_paged", set())
+                pre, post, ok = MA.classify(str(out), bool(err), name in paged)
+                (paged.add if (ok and MA.page_hint(str(out))) else paged.discard)(name)
                 out = pre + self.ws._cap(str(out), "mcp") + post    # head and tail; the full output goes to a file
             elif name == "fetch_url":
                 out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
@@ -2545,6 +2555,10 @@ class Agent:
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
                 out = SK.instructions(str(args.get("name", "")).lstrip("$"))
+                if E2E and not str(out).startswith("ERROR"):    # a skill's "ask the user" is not a reason to stop
+                    out += ("\n\n[Meshpool] Where this skill says to ask the user: ask (ask_user) only if you cannot "
+                            "go on without the answer. Otherwise assume a sensible default, do the work, and list the "
+                            "assumption in your reply.")
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))

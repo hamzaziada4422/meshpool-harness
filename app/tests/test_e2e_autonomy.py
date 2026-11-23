@@ -110,7 +110,21 @@ def test_agent_notes_a_second_page(tmp_path):
     a, _ = _agent(tmp_path, [{"content": "", "tool_calls": [_call(1, "mcp__x__list", {})]}, {"content": "ok"}], mcp)
     a.send("list them")
     tool = [m for m in a.messages if m.get("role") == "tool"][0]["content"]
-    assert tool.startswith("{") and "more pages" in tool and "next_cursor" in tool
+    assert tool.startswith("{") and "not the last page" in tool and "next_cursor" in tool
+
+
+def test_the_page_after_the_last_cursor_says_it_was_the_last(tmp_path):
+    p1 = json.dumps({"tickets": [{"id": 1}], "next_cursor": "5"})
+    p2 = json.dumps({"tickets": [{"id": 6}]})
+    mcp = FakeMcp({"mcp__x__list": "list"})
+    outs = [(p1, False), (p2, False)]
+    mcp.call = lambda name, args: outs.pop(0)
+    a, _ = _agent(tmp_path, [{"content": "", "tool_calls": [_call(1, "mcp__x__list", {})]},
+                             {"content": "", "tool_calls": [_call(2, "mcp__x__list", {"cursor": "5"})]},
+                             {"content": "ok"}], mcp)
+    a.send("list them")
+    tools = [m["content"] for m in a.messages if m.get("role") == "tool"]
+    assert "not the last page" in tools[0] and "That was the last page" in tools[1]
 
 
 # ---------- many tools: an index and on-demand schemas -------------------------------------------------------------------
@@ -248,3 +262,13 @@ def test_cli_profile_flag_reaches_the_agent(monkeypatch):
     assert cli.main(["-p", "hello", "--profile", "work", "--auto"]) == 0
     assert seen["profile"] == "work"
     monkeypatch.delenv("MH_AGENT_PROFILE", raising=False)
+
+
+def test_headless_run_has_no_ask_user_tool(tmp_path):
+    a, seen = _agent(tmp_path, [{"content": "hi"}])
+    a.headless = True
+    a.send("hello")
+    assert "ask_user" not in _names(seen[0])
+    b, seen = _agent(tmp_path, [{"content": "hi"}])
+    b.send("hello")
+    assert "ask_user" in _names(seen[0])                    # an interactive session keeps it

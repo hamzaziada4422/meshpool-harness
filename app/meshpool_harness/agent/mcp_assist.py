@@ -76,23 +76,32 @@ def page_hint(text: str) -> str:
     for k in _NEXT_KEYS:
         v = d.get(k)
         if v not in (None, "", False, 0, [], {}):
-            return (f"\n[Meshpool] The result has more pages ({k}={json.dumps(v)}). Fetch them all with the same call "
-                    f"and that {k} until it is empty before you summarise, count or conclude.")
+            return (f"\n[Meshpool] This is not the last page: {k}={json.dumps(v)}. Call the same tool again passing "
+                    f"that value to get the next page, and go on until a page comes back without {k}. Only then "
+                    "summarise, count or conclude.")
     if d.get("has_more") is True or d.get("hasMore") is True or d.get("truncated") is True:
         return "\n[Meshpool] The result says there is more. Fetch the rest before you summarise, count or conclude."
     return ""
 
 
-def classify(out: str, is_error: bool) -> tuple[str, str, bool]:
+LAST_PAGE = ("\n[Meshpool] That was the last page: there is no next page. You now have everything this tool lists. Do "
+             "not call it again to look for more.")
+
+
+def classify(out: str, is_error: bool, was_paged: bool = False) -> tuple[str, str, bool]:
     """(prefix, suffix, ok) for an MCP result: a failure gets a clear line before and a hint after, a long list
-    gets a paging line. Computed on the whole text, so a result that is cut for length keeps its notes."""
+    gets a paging line, and the page after a "next page" one that has no next page says so (was_paged: the last
+    result of this tool had one). Computed on the whole text, so a result cut for length keeps its notes."""
     if not assist_on():
         return "", "", not is_error
     if is_error:
         return "ERROR (tool call failed): ", FAIL_HINT, False
     if soft_failure(out):
         return "", SOFT_HINT, False
-    return "", page_hint(out), True
+    hint = page_hint(out)
+    if not hint and was_paged and _json(str(out)[:400000]) is not None:
+        return "", LAST_PAGE, True
+    return "", hint, True
 
 
 def annotate(out: str, is_error: bool) -> tuple[str, bool]:
