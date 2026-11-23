@@ -241,7 +241,7 @@ def list_dir(root: str, rel: str = "") -> dict:
                 continue
     except PermissionError:
         raise ValueError(_perm_hint(d))
-    return {"root": str(r), "path": rel, "entries": rows[:2000]}
+    return {"root": str(r), "path": rel, "entries": rows[:2000], "truncated": len(rows) > 2000, "total": len(rows)}
 
 
 def _perm_hint(p: Path) -> str:
@@ -282,6 +282,8 @@ def read_file(root: str, rel: str) -> dict:
 def write_file(root: str, rel: str, text: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
+    if p.is_dir() or p == r:
+        raise ValueError("That is a folder, not a file.")
     p.parent.mkdir(parents=True, exist_ok=True)
     text = text.replace("\r\n", "\n")
     try:                                         # keep the file's line endings: a one-line edit is a one-line diff
@@ -297,7 +299,15 @@ def write_file(root: str, rel: str, text: str) -> dict:
 def attach(root: str, name: str, data: bytes) -> dict:
     """Save a file the user attached in the message box into the project, without overwriting anything."""
     r = check_root(root)
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
+    if name.strip(".") == "":
+        name = "file"
+    stem, dot, suf = name.rpartition(".")
+    if dot and stem and len(suf) <= 20 and len(name) > 200:    # keep the extension, cut the rest (255-byte limit)
+        name = stem[:200 - len(suf) - 1] + "." + suf
+    name = name[:200]
+    while len(name.encode("utf-8")) > 200:
+        name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     from meshpool_harness import project_store as PS
@@ -374,7 +384,8 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
         raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
                          "connection and try again.") from None
     if check and r.returncode != 0:
-        raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
+        raise ValueError((r.stderr or r.stdout).strip()[-800:]
+                         or f"git {next((a for a in args if not a.startswith('-')), 'command')} failed")
     return r.stdout
 
 
@@ -430,7 +441,7 @@ def git_action(root: str, body: dict) -> dict:
                 [git_exe(), "check-ref-format", "--branch", name], cwd=str(r), capture_output=True,
                 creationflags=NO_WINDOW).returncode:
             raise ValueError(f"\"{name}\" is not a valid branch name.")
-        if not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
+        if not body.get("create") and not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
                 not _git(r, "for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/heads",
                          check=False).strip():
             # detached, with commits on no branch: switching away would leave them only in the reflog
@@ -454,6 +465,8 @@ def git_action(root: str, body: dict) -> dict:
              "commit", "-m", msg)
     elif act == "push":
         branch = _git(r, "branch", "--show-current").strip()
+        if not branch:
+            raise ValueError("Switch to a branch first. Pushing needs a branch, and this folder is on a detached commit.")
         _git(r, "push", "-u", "origin", branch, timeout=180)
     elif act == "pull":
         _git(r, "pull", "--ff-only", timeout=180)
@@ -469,6 +482,8 @@ def _open_pr(r: Path, body: dict) -> dict:
     slug = st.get("github")
     if not slug:
         raise ValueError("Pull requests work with GitHub remotes. This project's origin is not on GitHub.")
+    if st.get("branch") == "(detached)":
+        raise ValueError("Switch to a branch first. A pull request needs a branch, and this folder is on a detached commit.")
     title = (body.get("title") or "").strip() or _git(r, "log", "-1", "--pretty=%s").strip()
     desc = body.get("body") or ""
     if st["ahead"] or not st["upstream"]:

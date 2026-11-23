@@ -242,12 +242,16 @@ def _csv_sheet(p: Path) -> list[dict]:
             delim = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|").delimiter
         except csv.Error:
             pass
+    try:                                          # a cell over 128 KB must not fail the whole preview
+        csv.field_size_limit(max(csv.field_size_limit(), min(len(text) + 1, 2 ** 31 - 1)))
+    except (OverflowError, ValueError):
+        pass
     rows, cols, more = [], 0, False
     for i, row in enumerate(csv.reader(io.StringIO(text), delimiter=delim)):
         if i >= MAX_ROWS:
             more = True
             break
-        rows.append(row[:MAX_COLS])
+        rows.append([c[:2000] for c in row[:MAX_COLS]])
         cols = max(cols, len(rows[-1]))
     return [{"name": p.stem, "rows": [r + [""] * (cols - len(r)) for r in rows], "cols": cols, "more": more, "wide": False}]
 
@@ -260,7 +264,10 @@ def meta(root: str, rel: str) -> dict:
     base = {"name": p.name, "path": rel, "ext": p.suffix.lower().lstrip("."), "size": st.st_size, "mtime": st.st_mtime,
             "kind": k}
     if k == "pdf":
-        n = _pdf_pages(p)
+        try:
+            n = _pdf_pages(p)
+        except Exception:  # noqa: BLE001
+            raise ValueError("This PDF is damaged or protected, so it cannot be previewed here. Open it in its app.") from None
         return base | {"kind": "pages", "state": "ready", "pages": min(n, MAX_PAGES), "total": n}
     if k == "office":
         return base | {"kind": "pages"} | _office_state(p)
@@ -271,6 +278,9 @@ def meta(root: str, rel: str) -> dict:
             try:
                 return base | {"state": "ready", "sheets": _xlsx_sheets(p)}
             except Exception:  # noqa: BLE001 - a workbook openpyxl cannot read: let LibreOffice draw it
+                import zipfile
+                if not zipfile.is_zipfile(p):
+                    raise ValueError("This workbook is damaged, so it cannot be previewed. Open it in its app.") from None
                 return base | {"kind": "pages"} | _office_state(p)
         return base | {"state": "ready", "sheets": _csv_sheet(p)}
     if k == "image":
