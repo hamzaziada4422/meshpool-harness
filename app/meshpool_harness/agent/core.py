@@ -1058,9 +1058,11 @@ class Agent:
             names = [n for n in names if n not in drop]
         ms = ([x for x in self.mcp.schemas()
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
-               and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
-              if self.mcp else [])
-        return T.schemas(names) + self._lazy_apply(ms)
+               and not x["function"]["name"].endswith("run_subtasks")   # delegate_task instead
+               and not (self.profile == "code" and not getattr(self, "office_on", False)   # about 3k tokens per call:
+                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__"))]
+              if self.mcp else [])             # a Code chat gets the office tools once a message asks for a file
+        return (T.schemas(names) + self._lazy_apply(ms))[:128]    # no endpoint takes more than 128 tools
 
     def _lazy_apply(self, ms: list) -> list:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""

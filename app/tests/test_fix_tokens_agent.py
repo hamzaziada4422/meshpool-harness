@@ -496,3 +496,20 @@ def test_independent_grader_skips_a_small_code_task_whose_checks_passed(tmp_path
     monkeypatch.setenv("MH_GRADER_SMALL", "1")
     a._grade_gate(g, {"in": 0, "cached": 0, "out": 0, "calls": 0}, "done")
     assert gate_calls                                         # the switch brings it back
+
+
+def test_code_chat_leaves_office_schemas_out_until_asked_and_tools_are_capped(tmp_path, monkeypatch):
+    class FakeMcp:
+        def schemas(self):
+            return [{"type": "function", "function": {"name": f"mcp__meshpool_office__t{i}", "description": "d" * 200,
+                                                      "parameters": {"type": "object"}}} for i in range(15)] + [
+                {"type": "function", "function": {"name": f"mcp__x__t{i}", "description": "d", "parameters": {"type": "object"}}}
+                for i in range(200)]
+        status = lambda self: []  # noqa: E731
+    a = _agent(tmp_path)          # profile code, not Codex style (no engine style env here)
+    monkeypatch.setenv("MH_ENGINE_STYLE", "full")
+    a.mcp = FakeMcp()
+    names = [t["function"]["name"] for t in a.tool_schemas()]
+    assert not any(n.startswith("mcp__meshpool_office__") for n in names) and len(names) <= 128
+    a.office_on = True
+    assert any(n.startswith("mcp__meshpool_office__") for n in [t["function"]["name"] for t in a.tool_schemas()])
