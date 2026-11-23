@@ -562,18 +562,20 @@ async function sendNow(interrupt) {
       text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
     }
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
+    const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
     const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
-    S.stopping = false;
+    if (interrupt && !wasStopping) S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
-    if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
+    if (!interrupt && (r.sent?.after_stop || wasStopping)) toast("Sent. It runs as soon as the current request stops.");
+    else if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
     if (cur.view) cur.view.state = "working";
     renderBar();
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
     S.pendingGoal = null;
-    S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
+    if (interrupt) S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
     toast(e.message, 4000);
@@ -938,6 +940,7 @@ function ingest(cur, v) {
   if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
+  if (!cur.q.length) reconcileOpen(cur, v);
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
@@ -948,6 +951,21 @@ function ingest(cur, v) {
   if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
   return false;
+}
+// What the server says it still waits on is the truth: a card, step or spinner it no longer waits on is closed here (a reopened chat, an old transcript).
+function reconcileOpen(cur, v) {
+  const op = v.open;
+  if (op) {
+    const ids = new Set((op.approvals || []).map(i => "appr-" + i));
+    for (const d of $$(".appr:not(.done)", colEl())) if (!ids.has(d.id)) applyEv({type: "approval_done", id: d.id.slice(5), decision: "stopped", closed: true});
+    const qid = op.question == null ? null : qId({id: op.question});
+    for (const d of $$(".qcard:not(.done)", colEl())) if (d.id !== qid) questionDone({id: d.id.slice(2), source: "stopped", answers: [], text: ""});
+  }
+  if (!["starting", "working", "waiting"].includes(v.state)) {
+    settleSteps("");
+    for (const g of $$(".work:not([data-done])", colEl())) bumpGroup(g, true);
+    cur.group = null;
+  }
 }
 // ---- Server-Sent Events: the open chat's events pushed as they happen
 function startStream(cur) {
@@ -1020,7 +1038,7 @@ function setWorking(text, secs) {
 function workTick(cur) {
   if (!cur) return;
   const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
-  const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
+  const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
@@ -1131,6 +1149,8 @@ function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
+const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
+const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
 function applyEv(ev) {
   const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
@@ -1138,7 +1158,7 @@ function applyEv(ev) {
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
-      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
+      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>${ev.after_stop ? "Runs after the stop: " : "Queued: "}${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
       break; }
     case "user": {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
@@ -1151,13 +1171,15 @@ function applyEv(ev) {
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
       cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
+    case "retry_ok": clearRetry(); break;
     case "assistant":
-      { const txt = stripGoal(ev.text);
+      { const txt = stripGoal(ev.text); if (txt) clearRetry();
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
+      clearRetry();
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
@@ -1171,7 +1193,7 @@ function applyEv(ev) {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
-      const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
+      const out = String(ev.output || ""), stopped = ev.stopped || /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
@@ -1200,7 +1222,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1229,7 +1251,7 @@ function applyEv(ev) {
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
-      { const nn = add(esc(ev.text), "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      { const nn = add(esc(ev.text), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
@@ -1243,6 +1265,7 @@ function applyEv(ev) {
     case "turn_end": {
       settleSteps("");
       closeGroup();
+      if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
