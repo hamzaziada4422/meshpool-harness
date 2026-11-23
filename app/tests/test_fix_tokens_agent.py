@@ -512,3 +512,16 @@ def test_code_chat_leaves_office_schemas_out_until_asked_and_tools_are_capped(tm
     assert not any(n.startswith("mcp__meshpool_office__") for n in names) and len(names) <= 128
     a.office_on = True
     assert any(n.startswith("mcp__meshpool_office__") for n in [t["function"]["name"] for t in a.tool_schemas()])
+
+
+def test_small_job_on_any_lane_skips_the_review_but_decks_and_long_jobs_keep_it(tmp_path):
+    w = _agent(tmp_path, "work")
+    base = {"files": ["memo.docx"], "calls": 6, "final": "Done."}
+    assert w._small_job(base)
+    assert not w._small_job(dict(base, files=["deck.pptx"]))                  # decks and workbooks keep it
+    assert not w._small_job(dict(base, files=["a.md", "b.md", "c.md"]))       # multi-file builds keep it
+    assert not w._small_job(dict(base, calls=12))                             # long jobs keep it
+    assert not w._small_job(dict(base, final="x" * 2000))
+    w.ws.edits = 1
+    w.ws.commands = [{"cmd": "python check.py", "code": 2, "after_edit": 1, "kind": "run"}]
+    assert not w._small_job(base)                                             # a failing check keeps it
