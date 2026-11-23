@@ -298,7 +298,10 @@ def pivot(df, spec: dict) -> dict:
     for s in ser_order:
         vals = []
         for c in cat_order:
-            v = round(red(cell[(c, s)]), 2) if (c, s) in cell else 0
+            if (c, s) not in cell:                              # no source row: a gap, never a made-up 0
+                vals.append(None)
+                continue
+            v = round(red(cell[(c, s)]), 2)
             vals.append(int(v) if float(v).is_integer() else v)
         out.append({"name": s if s is not None else name, "values": vals})
     return {"categories": list(cat_order), "series": out}
@@ -325,17 +328,19 @@ def _compose(spec, pv, fid_total, new_fact) -> tuple[str, list[str], list[str]]:
     meas = spec["measure"]
     cw, sw = _dim_word(spec["category"]), _dim_word(spec["series"]) if spec.get("series") else None
     ordered_c = _axis_ordered(spec["category"])
-    tot = {s["name"]: sum(s["values"]) for s in ser}
+    tot = {s["name"]: sum(v for v in s["values"] if v is not None) for s in ser}
+    have = lambda i: [s for s in ser if s["values"][i] is not None]   # noqa: E731 - the series with a value at i
     c0, cn = cats[0], cats[-1]
 
     def grow(vals):
-        return None if vals[0] <= 0 else (vals[-1] - vals[0]) / vals[0] * 100
+        return None if vals[0] is None or vals[-1] is None or vals[0] <= 0 else \
+            (vals[-1] - vals[0]) / vals[0] * 100
 
     bullets, ids, parts = [], [], []
     if len(ser) >= 2:
         top = max(tot, key=tot.get)
         low = min(tot, key=tot.get)
-        every = all(max(ser, key=lambda s: s["values"][i])["name"] == top for i in range(len(cats)))
+        every = all(max(have(i), key=lambda s: s["values"][i])["name"] == top for i in range(len(cats)) if have(i))
         lead = f"{top} leads every {cw}" if every else f"{top} has the highest {meas}, {_n(tot[top])}"
         parts.append(lead)
         ids += [fid_total[top], fid_total[low]]
@@ -353,17 +358,15 @@ def _compose(spec, pv, fid_total, new_fact) -> tuple[str, list[str], list[str]]:
                 bullets.append(f"{f_} grew fastest: {_n(v[0])} in {c0} to {_n(v[-1])} in {cn}, up {p}%")
                 ids.append(fid)
         elif sw and _axis_ordered(spec["series"]):               # the series are the periods: the total's change
-            vals = [sum(s["values"][i] for s in ser) for i in range(len(cats))]
-            tops = {c: max(ser, key=lambda s: s["values"][i])["name"] for i, c in enumerate(cats)}
-            lead_c = max(cats, key=lambda c: sum(s["values"][cats.index(c)] for s in ser))
-            ctot = {c: sum(s["values"][i] for s in ser) for i, c in enumerate(cats)}
+            ctot = {c: sum(s["values"][i] for s in have(i)) for i, c in enumerate(cats) if have(i)}
+            lead_c = max(ctot, key=ctot.get)
             ids = [new_fact(f"{lead_c} total {meas}: {_n(ctot[lead_c])}")]
             parts = [f"{lead_c} leads {meas} at {_n(ctot[lead_c])}" if True else ""]
             bullets = [f"{lead_c} has the highest total {meas} at {_n(ctot[lead_c])}"]
-            lo_c = min(cats, key=lambda c: ctot[c])
+            lo_c = min(ctot, key=ctot.get)
             ids.append(new_fact(f"{lo_c} total {meas}: {_n(ctot[lo_c])}"))
             bullets.append(f"{lo_c} has the lowest at {_n(ctot[lo_c])}")
-            by = [sum(s["values"][i] for i in range(len(cats))) for s in ser]
+            by = [sum(v for v in s["values"] if v is not None) for s in ser]
             g = grow(by)
             if g is not None and abs(g) >= 1:
                 p = round(abs(g))
@@ -372,12 +375,12 @@ def _compose(spec, pv, fid_total, new_fact) -> tuple[str, list[str], list[str]]:
                 parts.append(f"total {'rose' if g > 0 else 'fell'} {p}% from {ser[0]['name']} to {ser[-1]['name']}")
                 bullets.append(f"Total {meas} {'rose' if g > 0 else 'fell'} {p}% from {ser[0]['name']} to "
                                f"{ser[-1]['name']}")
-            del tops, vals
     else:
         vals = ser[0]["values"]
-        top_i = max(range(len(cats)), key=lambda i: vals[i])
-        low_i = min(range(len(cats)), key=lambda i: vals[i])
-        total = sum(vals)
+        got = [i for i in range(len(cats)) if vals[i] is not None]
+        top_i = max(got, key=lambda i: vals[i])
+        low_i = min(got, key=lambda i: vals[i])
+        total = sum(vals[i] for i in got)
         g = grow(vals) if ordered_c and len(cats) >= 2 else None
         if g is not None and abs(g) >= 1:
             p = round(abs(g))
@@ -417,7 +420,7 @@ def pages(request: str, paths) -> tuple[list[dict], list[dict], list[dict]]:
             pv = pivot(df, spec)
             cats, ser = pv["categories"], pv["series"]
             if not cats or len(cats) > MAX_CATEGORIES or not 1 <= len(ser) <= MAX_SERIES or \
-                    all(v == 0 for s in ser for v in s["values"]):
+                    all(not v for s in ser for v in s["values"]):
                 continue
             if len(cats) < 2 and len(ser) < 2:
                 continue
@@ -427,13 +430,13 @@ def pages(request: str, paths) -> tuple[list[dict], list[dict], list[dict]]:
                 _f.append({"id": fid, "text": text, "source": _n_})
                 return fid
             ftot = {s["name"]: new_fact(f"{s['name']} total {spec['measure']} across {cats[0]} to {cats[-1]}: "
-                                        f"{_n(sum(s['values']))}") for s in ser}
+                                        f"{_n(sum(v for v in s['values'] if v is not None))}") for s in ser}
             cell_ids = []
             if len(cats) * len(ser) <= 100:
                 cell_ids = [new_fact(f"{s['name']} {spec['measure']} in {c}: {_n(v)}")
-                            for s in ser for c, v in zip(cats, s["values"])]
+                            for s in ser for c, v in zip(cats, s["values"]) if v is not None]
             title, bullets, ids = _compose(spec, pv, ftot, new_fact)
-            allv = [v for s in ser for v in s["values"]]
+            allv = [v for s in ser for v in s["values"] if v is not None]
             dec = 0 if all(float(v).is_integer() for v in allv) else (1 if all(abs(v * 10 - round(v * 10)) < 1e-6
                                                                               for v in allv) else 2)
             line = len(cats) > 6
@@ -443,7 +446,7 @@ def pages(request: str, paths) -> tuple[list[dict], list[dict], list[dict]]:
             prov = ids[:4] or list(ftot.values())[:1]
             page = {"archetype": "line_trend" if line else "bar_takeaway", "fixed": True, "node": f"D{len(pgs) + 1}",
                     "section": "The data", "rank": 0, "title": title, "title_prov": prov,
-                    "chart": {"kind": "line" if line else "column", "categories": cats, "unit": "", "decimals": dec,
+                    "chart": {"kind": "line" if line else "column", "categories": cats, "unit": "", "decimals": dec, "gaps": any(v is None for x in ser for v in x["values"]),
                               "series": ser},
                     "takeaway": {"text": what},
                     "bullets": [{"text": b, "prov": [i]} for b, i in zip(bullets, ids)],
@@ -543,7 +546,7 @@ def _compare(exp: dict, cats: list, ser: list) -> dict:
         if single and smap[want_s[0]] is None and len(ser) >= 1:     # one series: its name is the chart's choice
             vals0 = list(eser.values())[0]
             hit = next((k for k, (_, v) in enumerate(ser) if len(v) == len(vals0) and _values_fit(
-                [(e, _f(g), 0) for e, g in zip(vals0, v)])[1] == []), None)
+                [(e, _f(g), 0) for e, g in zip(vals0, v) if e is not None])[1] == []), None)
             smap[want_s[0]] = hit
         miss_c = [w for w, i in cmap.items() if i is None]
         miss_s = [w for w, i in smap.items() if i is None]
@@ -559,6 +562,8 @@ def _compare(exp: dict, cats: list, ser: list) -> dict:
                     ec, es = (w_c, w_s) if orient == "straight" else (w_s, w_c)
                     e = eser[es][ecats.index(ec)] if orient == "straight" else eser[w_c][ecats.index(w_s)]
                     i = cmap[w_c]
+                    if e is None:                              # the file has no value here: a gap or nothing is right
+                        continue
                     pairs.append((e, _f(vals[i]) if i < len(vals) else None, dec, es if orient == "straight" else w_c,
                                   ec if orient == "straight" else w_s))
             sc, bad = _values_fit([(e, g, d) for e, g, d, _, _ in pairs])

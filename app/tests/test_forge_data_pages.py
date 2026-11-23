@@ -229,3 +229,24 @@ def test_the_dossier_does_not_research_a_brief_about_the_attached_data(tmp_path)
     assert d["skipped"] == "the brief is about the attached data; no company to research"
     assert d["identity"]["companies"] == [] and "no company" in (tmp_path / "dossier.json").read_text()
     assert re.search(r"Research dossier", (tmp_path / "dossier.md").read_text())
+
+
+@needs_lo
+def test_a_cell_with_no_source_row_is_a_gap_not_a_zero(tmp_path):
+    from pptx import Presentation
+    from engines.forge.render import render
+    src = tmp_path / "quarterly.csv"
+    src.write_text("\n".join(l for l in (FIX / "quarterly.csv").read_text().splitlines() if l != "East,Q3,905") + "\n")
+    pages, facts, expect = DP.pages(REQ, [src])
+    east = next(s for s in pages[0]["chart"]["series"] if s["name"] == "East")
+    assert east["values"] == [760, 840, None, 1020] and expect[0]["series"]["East"][2] is None
+    assert not any("East revenue in Q3" in f["text"] for f in facts)
+    assert " 0%" not in pages[0]["title"]
+    out = tmp_path / "gap.pptx"
+    assert render(pages, str(out))["errors"] == []
+    ch = next(s.chart for sl in Presentation(str(out)).slides for s in sl.shapes if s.has_chart)
+    assert next(s for s in ch.plots[0].series if s.name == "East").values[2] is None
+    assert DP.check_data(str(out), expect) == []
+    k = {r: list(v) for r, v in CSV.items()}                                    # a deck that leaves the gap passes
+    k["East"][2] = None
+    assert DP.check_data(deck(tmp_path / "g.pptx", [(["Q1", "Q2", "Q3", "Q4"], k)]), expect) == []

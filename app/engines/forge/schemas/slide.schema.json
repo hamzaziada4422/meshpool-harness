@@ -149,6 +149,10 @@
           "minimum": 0,
           "maximum": 3
         },
+        "gaps": {
+          "type": "boolean",
+          "description": "computed pages only: a null value is a source cell with no row (drawn as a gap)"
+        },
         "highlight_categories": {
           "type": "array",
           "items": {
