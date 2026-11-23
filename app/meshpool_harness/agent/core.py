@@ -1611,7 +1611,7 @@ class Agent:
             name = str(t.get("tool", "")).replace("-", "_")
             if re.search(r"(^|__)check_(deck|workbook|document)$", name):
                 last_ok = i if t.get("ok", True) and not re.search(r"\bfail", str(t.get("arg", "")), re.I) else None
-            elif name in ("write_file", "edit", "apply_patch", "shell", "bash") or re.search(r"__(make_|edit_|add_)", name):
+            elif name in ("write_file", "edit", "apply_patch", "shell", "bash") or re.search(r"(^|__)(make_|edit_|add_|convert_)", name):
                 last_write = i
         return last_ok is not None and last_ok > last_write
 
