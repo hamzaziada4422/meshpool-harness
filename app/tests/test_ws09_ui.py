@@ -144,15 +144,16 @@ def _open(page, cid):
 
 def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
     cid = _make_chat(app)
-    found = lambda: [Path(p) for p in glob.glob(str(app["mh"] / "**" / cid / "transcript.json"), recursive=True)]  # noqa: E731
+    found = lambda: [Path(p) for p in glob.glob(str(app["mh"] / "**" / cid / "transcript.state.json"), recursive=True)]  # noqa: E731
     end = time.time() + 30
     while not found() and time.time() < end:         # the transcript is saved a moment after the turn
         time.sleep(0.3)
     time.sleep(1.5)
     app["stop"]()                                    # the app exits with things left open
-    tr = found()[0]
-    data = json.loads(tr.read_text(encoding="utf-8"))
+    tr = found()[0].parent
     sys.path.insert(0, str(REPO / "app"))
+    from meshpool_harness import session_store as SS
+    data = SS.TranscriptLog(tr).read()
     from meshpool_harness.agent import ask as ASK
     qs = ASK.normalize({"questions": [{"question": "Which one?", "options": ["A", "B"]}]})
     extra = [{"type": "approval", "id": n, "kind": "bash", "title": "Run a command", "detail": f"ls {n}"} for n in range(1, 37)]
@@ -160,7 +161,7 @@ def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
     extra += [{"type": "question", "id": "qq1", "questions": qs, "timeout_s": 600}]
     data["events"] = data["events"] + extra
     data["running"] = False
-    tr.write_text(json.dumps(data), encoding="utf-8")
+    SS.TranscriptLog(tr).rewrite(data["events"], False)
     app["start"]()
     page.goto(app["base"] + "/")
     page.wait_for_function("() => typeof S === 'object' && S.projects && S.projects.length > 0", timeout=30000)

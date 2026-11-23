@@ -21,6 +21,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from meshpool_harness import session_store as SS
+
 MAX_MSG = 20000                     # characters kept per message
 MAX_MSGS = 400                      # messages kept per conversation (the most recent)
 
@@ -300,12 +302,12 @@ def write_threads(convs: list[dict]) -> dict:
         d = _sessions() / tid
         d.mkdir(parents=True, exist_ok=True)
         code = cv["kind"] == "code"
-        (d / "session.json").write_text(json.dumps({
+        SS.write_snapshot(d, {
             "id": tid, "workdir": cv["workdir"] or folder, "title": cv["title"], "created": cv["created"],
             "updated": cv["updated"], "model": None, "model_choice": None, "plan": False,
             "harness": "meshpool-code" if code else "meshpool-work", "kind": "code" if code else "cowork",
             "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "messages": cv["messages"],
-            "imported": {"source": cv["source"], "id": cv["id"]}}, ensure_ascii=False), encoding="utf-8")
+            "imported": {"source": cv["source"], "id": cv["id"]}})
         (d / "meta.json").write_text(json.dumps({"imported": cv["source"]}), encoding="utf-8")
         os.utime(d / "session.json", (cv["updated"], cv["updated"]))
         have.add(tid)

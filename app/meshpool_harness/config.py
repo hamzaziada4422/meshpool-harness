@@ -29,6 +29,8 @@ FIELDS = [
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit."),
+    ("MH_MAX_STEPS", "Max steps per reply", "200", "The most tool steps the agent takes for one message. At the limit it "
+     "stops and keeps its work; send a message to continue. 0 means no limit."),
     ("MH_ONBOARDED", "Setup finished", "0", "Set when the first-run steps are done."),
     ("MH_AUTO_SUBSCRIPTIONS", "Let Auto use your ChatGPT subscription", "0",
      "On: Meshpool Auto may pick an agent on your ChatGPT sign-in when you did not choose it as the provider (it "

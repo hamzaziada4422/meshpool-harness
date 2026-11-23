@@ -30,7 +30,8 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/",
+                  "/api/worktree")
 
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
@@ -404,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -516,6 +517,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
                 from meshpool_harness import provider_setup as PS
                 return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                return self._send(200, {**PR.list_rules(PR.user_path()), "path": str(PR.user_path())})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
             if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
@@ -931,6 +935,16 @@ class Handler(BaseHTTPRequestHandler):
                                             "first": rows[0]["title"] if rows else ""})
                 except WEB.WebError as e:
                     return self._send(200, {"ok": False, "error": str(e)})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                b = self._json() or {}
+                kind, rule = b.get("kind"), str(b.get("rule") or "")
+                if kind not in ("allow", "deny") or b.get("action") not in ("add", "remove"):
+                    return self._send(400, {"error": "action is add or remove, kind is allow or deny"})
+                if b["action"] == "add" and PR.check_rule(rule):
+                    return self._send(400, {"error": PR.check_rule(rule)})
+                fn = PR.add_rule if b["action"] == "add" else PR.remove_rule
+                return self._send(200, {**fn(PR.user_path(), kind, rule), "path": str(PR.user_path())})
             if u.path == "/api/permissions":
                 from meshpool_harness.ui.desktop import permissions, request_permission
                 b = self._json()
@@ -1186,6 +1200,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(rewind|fork)", u.path)     # back to a message / a new chat from it
+            if m:
+                s_, act, b = A.get(m.group(1)), m.group(2), self._json()
+                if act == "fork":
+                    return self._send(200, {"id": s_.fork(int(b.get("event_index", -1)))})
+                r = s_.rewind(int(b.get("event_index", -1)), files=b.get("files") is not False)
+                return self._send(200, dict(s_.view(int(b.get("since", 10**9))), text=r.get("text", ""),
+                                            forked=r.get("forked"), undo=r.get("undo")))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:
                 s, b = A.get(m.group(1)), self._json()
@@ -1195,7 +1217,8 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
-                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")))
+                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
+                               files=b.get("files") or None)
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
                 elif act == "stop":
                     s.stop()
@@ -1331,9 +1354,11 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     if desktop:
         LAST_PING[0] = time.time()
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
+    threading.Thread(target=A.purge_due, daemon=True).start()          # chats deleted before the last close
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
+    threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU

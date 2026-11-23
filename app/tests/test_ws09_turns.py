@@ -10,6 +10,7 @@ import time
 import pytest
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS  # noqa: E402
 
 
 @pytest.fixture
@@ -149,7 +150,7 @@ def test_early_return_turn_is_not_running_after_restart(A):
     Turns(s)
     s.send("hello")
     idle(s)
-    tr = json.loads((A.SESSIONS / s.id / "transcript.json").read_text(encoding="utf-8"))
+    tr = SS.TranscriptLog(A.SESSIONS / s.id).read()
     assert tr["running"] is False
     assert any(e["type"] == "turn_end" and e.get("synthetic") for e in tr["events"])
     s.close()
@@ -232,7 +233,7 @@ def test_resume_closes_open_approval_question_and_steps(A):
            {"type": "question", "id": "q0", "questions": [{"question": "Old?"}], "timeout_s": 0},
            {"type": "tool_start", "id": "t2", "name": "bash", "summary": "pwd"},
            {"type": "tool_end", "id": "t2", "name": "bash", "ok": True, "output": "/"}]
-    (A.SESSIONS / sid / "transcript.json").write_text(json.dumps({"events": evs, "running": False}), encoding="utf-8")
+    SS.TranscriptLog(A.SESSIONS / sid).rewrite(evs, False)
     s1 = A.Session(resume_id=sid)
     by = lambda t: [e for e in s1.events if e["type"] == t]           # noqa: E731
     assert [(e["id"], e["decision"], e["closed"]) for e in by("approval_done")] == [(1, "stopped", True)]
@@ -244,7 +245,7 @@ def test_resume_closes_open_approval_question_and_steps(A):
     s1.close()
     s2 = A.Session(resume_id=sid)                                    # opened again: nothing more to close
     assert len(s2.events) == n
-    assert json.loads((A.SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))["running"] is False
+    assert SS.TranscriptLog(A.SESSIONS / sid).read()["running"] is False
 
 
 def test_resume_does_not_relabel_steps_of_finished_turns(A):
@@ -256,7 +257,7 @@ def test_resume_does_not_relabel_steps_of_finished_turns(A):
            {"type": "turn_end"},
            {"type": "user", "text": "two"},
            {"type": "tool_start", "id": "t2", "name": "bash", "summary": "pwd"}]
-    (A.SESSIONS / sid / "transcript.json").write_text(json.dumps({"events": evs, "running": False}), encoding="utf-8")
+    SS.TranscriptLog(A.SESSIONS / sid).rewrite(evs, False)
     s1 = A.Session(resume_id=sid)
     ends = [e for e in s1.events if e["type"] == "tool_end"]
     assert [e["id"] for e in ends] == ["t2"] and ends[0].get("stopped")

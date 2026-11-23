@@ -37,8 +37,9 @@ def test_the_session_is_written_whole_and_marked_unfinished_while_running(tmp_pa
     assert d["unfinished"] is True and not (a.dir / "session.json.tmp").exists()
     a._running = False
     a.save()
-    assert json.loads((a.dir / "session.json").read_text(encoding="utf-8"))["unfinished"] is False
-    assert a.max_steps >= 100
+    from meshpool_harness import session_store as SS
+    assert SS.read(a.dir)["unfinished"] is False   # a mid-turn save is a journal append, read through the store
+    assert a._step_cap() >= 100
 
 
 def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, monkeypatch):
@@ -64,5 +65,5 @@ def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     ok, why = a._permit("bash", {"command": "git push origin main"})
     assert not ok and "saved rule" in why
     assert not a._permit("web_search", {})[0]
-    assert not a._permit("bash", {"command": "ls"})[0]                      # no rule: asks, and the answer here is no
+    assert not a._permit("bash", {"command": "make all"})[0]                      # no rule: asks, and the answer here is no
     assert not a._permit("bash", {"command": "npm test && rm -rf /"})[0]            # an allow rule never covers a destructive command

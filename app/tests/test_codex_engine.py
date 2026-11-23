@@ -339,13 +339,13 @@ def test_ask_mode_is_on_request_and_asks_before_shell_and_patch(tmp_path):
         asked.append((kind, title, detail))
         return "yes", ""
     a = _agent(tmp_path, mode="ask", approve=approve)
-    _script(a, [_call("shell", {"command": ["bash", "-lc", "echo hi"], "workdir": "."}),
+    _script(a, [_call("shell", {"command": ["bash", "-lc", "make hi"], "workdir": "."}),
                 _call("apply_patch", {"input": patch("*** Update File: f.txt", "@@", "-1", "+2")}, "c2"),
                 _call("update_plan", {"plan": [{"step": "x", "status": "pending"}]}, "c3"),
                 {"role": "assistant", "content": "done"}])
     a.send("go")
     assert "<approval_policy>on-request</approval_policy>" in a.bodies[0]["messages"][1]["content"]
-    assert asked[0][0] == "bash" and asked[0][1] == "Run this command?" and "echo hi" in asked[0][2]
+    assert asked[0][0] == "bash" and asked[0][1] == "Run this command?" and "make hi" in asked[0][2]
     assert asked[1][0] == "edit" and "f.txt" in asked[1][1] and "+2" in asked[1][2]
     assert len(asked) == 2                                    # the plan tool needs no approval
     assert (tmp_path / "f.txt").read_text() == "2\n"
@@ -366,7 +366,7 @@ def test_accept_edits_mode_lets_patches_through_but_asks_for_commands(tmp_path):
     via_shell = ["apply_patch", patch("*** Update File: f.txt", "@@", "-2", "+3")]
     _script(a, [_call("apply_patch", {"input": patch("*** Update File: f.txt", "@@", "-1", "+2")}),
                 _call("shell", {"command": via_shell}, "c2"),
-                _call("shell", {"command": ["true"]}, "c3"), {"role": "assistant", "content": "ok"}])
+                _call("shell", {"command": ["make", "x"]}, "c3"), {"role": "assistant", "content": "ok"}])
     a.send("go")
     assert asked == ["bash"] and (tmp_path / "f.txt").read_text() == "3\n"
 

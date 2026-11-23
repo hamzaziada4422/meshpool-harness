@@ -45,9 +45,9 @@ def test_bash_many_runs_each_command(tmp_path):
 def test_bash_many_asks_once_and_shares_bash_always(tmp_path):
     asked = []
     a = Agent(str(tmp_path), mode="ask", approve=lambda k, t, d: (asked.append((k, t, d)), ("always", ""))[1])
-    ok, _ = a._permit("bash_many", {"commands": ["ls", "pwd"]})
-    assert ok and asked[0][0] == "bash" and "ls\npwd" == asked[0][2]
-    ok, _ = a._permit("bash", {"command": "echo hi"})          # "always" for commands covers both tools
+    ok, _ = a._permit("bash_many", {"commands": ["make a", "make b"]})
+    assert ok and asked[0][0] == "bash" and "make a\nmake b" == asked[0][2]
+    ok, _ = a._permit("bash", {"command": "make a -j2"})          # "always" covers the same program and subcommand in both tools
     assert ok and len(asked) == 1
 
 

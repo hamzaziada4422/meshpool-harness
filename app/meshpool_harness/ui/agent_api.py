@@ -11,6 +11,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
@@ -54,10 +55,36 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
+
+
+def agent_token(agent) -> int:
+    f = getattr(agent, "turn_token", None)
+    return f() if callable(f) else 0
+
+
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429|"
                      r"rate.?limit|too many requests|(?:code|status)\W{0,3}429\b|overloaded",
                      re.I)                          # an outage or a key whose slots are full: wait it out
+
+
+def _turn_outcome(evs: list) -> dict:
+    """How a turn ENDED, from its events. An error counts only if nothing came after it: a later reply with text,
+    a text delta or a tool start/end means the agent recovered (Pi reports an error before its own retry)."""
+    err, acted, reply = None, False, ""
+    for e in evs:
+        t = e.get("type")
+        if t == "error":
+            err = e
+        elif err is not None and (t in ("text_delta", "tool_start", "tool_end")
+                                  or (t == "assistant" and (e.get("text") or "").strip())):
+            err = None
+        if t == "tool_end":
+            acted = True
+        if t == "assistant":
+            reply = e.get("text") or ""
+    return {"error": err, "interrupted": any(e.get("type") == "interrupted" for e in evs),
+            "net": bool(err and _NET_RE.search(err.get("text") or "")), "acted": acted, "reply": reply}
 # A turn cut off by a rate limit or an outage (no goal set): the chat waits, then picks the task up by itself, up to
 # RESUME_TRIES times in a row (30 s, 1, 2, 4, 5 min). Typing a message or pressing Stop takes over at once.
 RESUME_NEXT = "Continue where you left off."
@@ -78,8 +105,8 @@ _MOVES = {("starting", "idle"), ("starting", "working"), ("idle", "working"), ("
 
 def _transcript(sid: str) -> dict | None:
     try:
-        return json.loads((SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.TranscriptLog(SESSIONS / sid).read()
+    except OSError:
         return None
 DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
@@ -306,6 +333,10 @@ class _Always(set):
             self._changed()
 
 
+UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
+                   "and say in your summary what needed the user.")
+
+
 class Session:
     incognito = False          # class defaults: tests and old callers build a Session without __init__
     _ck_run, _ck_n, _ck_stop = "", 0, None
@@ -427,7 +458,11 @@ class Session:
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints")
+        outside = self.harness["type"] in ("acp", "pi")
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints", mode="scan" if outside else "journal",
+                              seq_floor=int(read_meta(self.id).get("turn_seq") or 0))
+        if not outside:
+            self.agent.checkpoint = self.cp          # the agent books what its own tools wrote (core._run_tool)
         if self.harness["type"] in ("acp", "pi"):
             self._set_state("idle", expect=("starting",))
             name = self.harness["name"]
@@ -596,14 +631,26 @@ class Session:
         try:
             d = SESSIONS / sid
             d.mkdir(parents=True, exist_ok=True)
-            with self.lock:
-                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP
-                       and not (e.get("type") == "subagent" and e.get("kind") == "tool")][-3000:]   # live only
-            run = bool(getattr(self, "_turn_open", False)) if running is None else running
-            tmp = d / "transcript.json.tmp"
-            tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
-                           encoding="utf-8")
-            C.replace_file(tmp, d / "transcript.json")
+            plock = self.__dict__.get("_plock") or self.__dict__.setdefault("_plock", threading.RLock())
+            with plock:                              # the emit thread and the 1 s timer thread must not interleave
+                log = self.__dict__.get("_tlog")
+                if log is None or log.dir != d:
+                    log = self._tlog = SS.TranscriptLog(d)
+                    self._tlog_n = None
+                run = bool(getattr(self, "_turn_open", False)) if running is None else running
+                with self.lock:
+                    total, epoch = len(self.events), getattr(self, "epoch", 0)
+                    n = getattr(self, "_tlog_n", None)
+                    replace = n is None or epoch != getattr(self, "_tlog_epoch", None) or total < n
+                    src = self.events if replace else self.events[n:]
+                    evs = [{k: v for k, v in e.items() if k != "i"} for e in src if e.get("type") not in _SKIP
+                           and not (e.get("type") == "subagent" and e.get("kind") == "tool")]   # live only
+                if replace:
+                    log.rewrite(evs[-3000:], run)
+                else:
+                    log.append(evs)
+                    log.set_running(run)
+                self._tlog_n, self._tlog_epoch = total, epoch
         except OSError:
             pass
 
@@ -645,10 +692,20 @@ class Session:
         except Exception:  # noqa: BLE001 - the choice just stays in memory
             pass
 
-    def approve(self, kind, title, detail, options=None):
-        if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
-            return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
-                          "and say in your summary what needed the user.")
+    def approve(self, kind, title, detail, options=None, scope=""):
+        sid = getattr(self, "id", None)
+        gone = bool(getattr(self, "deleted", False) or getattr(getattr(self, "agent", None), "deleted", False) or (sid and sid in DELETED))
+        if os.environ.get("MESHPOOL_HEADLESS") == "1" or getattr(self, "scheduled", False) or gone:
+            # `meshpool run-due` with the app closed, an unattended scheduled run, or a chat nobody can open any more:
+            # no one can answer, so it fails fast instead of waiting for ever.
+            note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
+                                                      "and do not retry the action.")
+            if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
+                aid = "ap-" + uuid.uuid4().hex[:10]
+                self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
+                           "options": options, "scope": scope})
+                self.emit({"type": "approval_done", "id": aid, "decision": "no", "reason": note})
+            return "no", note
         auto = self._acp_always_pick(kind, detail, options, title)
         if auto:
             return auto, ""
@@ -662,18 +719,31 @@ class Session:
         if running:
             self._set_state("waiting", token=tok, expect=_BUSY)
         self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
-                   "options": options})
-        if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
+                   "options": options, "scope": scope})
+        if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
-        while not p["ev"].wait(0.5):
+        try:
+            limit = float(os.environ.get("MH_APPROVAL_TIMEOUT_S", "1800"))
+        except ValueError:
+            limit = 1800.0
+        t_end = time.time() + limit if limit > 0 else None
+        timed_out = False
+        while not p["ev"].wait(0.5 if t_end is None else max(0.01, min(0.5, t_end - time.time()))):
             if getattr(self.agent, "_stop", False):
                 break
+            if t_end is not None and time.time() >= t_end:
+                timed_out = True
+                break
+        if timed_out and not p.get("answered"):
+            mins = max(1, round(limit / 60))
+            p["note"] = (f"No answer within {mins} minute{'s' if mins != 1 else ''}, so this was not done. "
+                         "Ask again when you are back.")
         with self.lock:
             self.pendings.pop(aid, None)
             others = any(q.get("in_turn") and q.get("token") == tok for q in self.pendings.values())
         if running and not others:
             self._set_state("working", token=tok, expect=("waiting",))   # not when the turn ended meanwhile
-        shown = p["decision"] if p.get("answered") else "stopped"
+        shown = p["decision"] if p.get("answered") else ("timeout" if timed_out else "stopped")
         if p.get("answered") and options and getattr(self, "id", None):
             try:                                      # "allow always" on an ACP card: remembered for this chat
                 if next((o.get("kind") for o in options if o.get("id") == p["decision"]), "") == "allow_always":
@@ -747,14 +817,16 @@ class Session:
     _STOPPED_NOTE = ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
                      "answer this message instead.")
 
-    def send(self, text: str, images: list | None = None, interrupt: bool = False) -> dict:
+    def send(self, text: str, images: list | None = None, interrupt: bool = False, files: list | None = None) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
         agent and Pi read it before their next step; other harnesses get it as soon as the current turn ends.
         interrupt=True stops the current work and sends the message as the next turn (it does not wait for the stop
         to land); so does any message sent once Stop was pressed. Which of these happens is decided under the lock
         the turn state changes under, so two messages can never both start a turn."""
-        if not text.strip() and not images:
+        if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
+        if files:                                    # saved first: if it fails, nothing was emitted or started
+            text = self._save_files(text, files)
         self.touched = time.time()
         acp = self.harness.get("type") == "acp"
         if interrupt:
@@ -808,6 +880,9 @@ class Session:
                 queued_as, n = "after", len(self._after_stop)
             elif hasattr(self.agent, "steer") and not acp:
                 self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
+                from meshpool_harness import pace as PACE
+                if PACE.classify(text, bool(images)) != "quick":
+                    self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
                 return {"queued": False, "added": True}
             else:
                 self.queue.append((text, images))
@@ -820,6 +895,24 @@ class Session:
             return {"queued": True}
         self._start_turn(text, images, token)
         return {"queued": False}
+
+    def _save_files(self, text: str, files: list) -> str:
+        """Attached files go into this chat's own folder; the message then names them."""
+        import base64
+        from meshpool_harness import project_store as PS
+        from meshpool_harness.ui import workbench as W
+        if not self.workdir:
+            raise ValueError("This chat has no folder to save files in.")
+        saved = []
+        for f in files:
+            f = f if isinstance(f, dict) else {}
+            try:
+                data = base64.b64decode(f.get("data", "") or "")
+            except (ValueError, TypeError):
+                raise ValueError(f"Couldn't read {f.get('name') or 'the file'}.")
+            saved.append(W.attach_to(Path(self.workdir), f.get("name", ""), data)["path"])
+        where = "this chat's folder" if PS.is_scratch(self.workdir) else "the project folder"
+        return text.rstrip() + f"\n\nAttached files (in {where}): {', '.join(saved)}"
 
     def _capability_turn(self, text: str) -> list:
         """Before a message runs: what it asks Meshpool to make (capabilities.needs), and an agent that can make it.
@@ -858,7 +951,9 @@ class Session:
                 # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
                 # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
                 self.emit({"type": "status", "text": "Starting the office tools..."})
-                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
+                end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
+                while not ready.is_set() and time.time() < end and not getattr(self, "_stop_req", False):
+                    ready.wait(0.25)                 # Stop ends the wait
         return caps
 
     def switch_harness(self, hid: str) -> None:
@@ -908,6 +1003,10 @@ class Session:
                 pass
         self._bind_always(a)                         # "Allow in this chat" goes with the chat, not the agent
         self.agent, self.harness = a, new
+        if self.cp:                                   # Meshpool's agent books by its tools, an outside agent by scan
+            a_out = new["type"] in ("acp", "pi")
+            self.cp.mode = "scan" if a_out else "journal"
+            a.checkpoint = None if a_out else self.cp
         try:
             if hasattr(old, "close") and old is not a:
                 old.close()
@@ -1133,12 +1232,16 @@ class Session:
                     synthetic = True
                     return
                 if hasattr(self.agent, "plan"):
+                    changed = bool(self.agent.plan) != self.plan
                     self.agent.plan = self.plan
+                    if changed and hasattr(self.agent, "apply_mode"):
+                        self.agent.apply_mode()      # an agent with its own modes (Codex): the mode the turn runs in
                 idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
                 if self.cp:
                     cp_begun = True
                     try:
-                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
+                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
+                                               event_index=ev0)
                         self._turn_n = (t or {}).get("n")
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
@@ -1173,16 +1276,9 @@ class Session:
                     body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
                     if hasattr(self.agent, "pace_deadline"):
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
-                    elif self.harness["type"] == "pi" and hasattr(self.agent, "steer"):
-                        def wrap(agent=self.agent, turn=self.t_turn):
-                            time.sleep(PACE.QUICK_S + 10)
-                            if (self.state == "working" and self.t_turn == turn and self._turn_id == token
-                                    and not getattr(agent, "_stop", False)):
-                                try:
-                                    agent.steer(PACE.WRAP)
-                                except Exception:  # noqa: BLE001
-                                    pass
-                        threading.Thread(target=wrap, daemon=True).start()
+                    elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
+                        threading.Thread(target=self._pi_quick_wrap,
+                                         args=(self.agent, self.t_turn, agent_token(self.agent), None, token), daemon=True).start()
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 if self.ctx_pending:
@@ -1231,10 +1327,15 @@ class Session:
                         body += "\n\n\u200b" + pend
                 except Exception:  # noqa: BLE001
                     pass
+                # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
+                # a Stop from here on either trips the check below or changes the generation send() checks.
+                gen0 = getattr(self.agent, "_gen", 0)
                 if stopped_before_start():          # Stop pressed while the checkpoint was taken
                     synthetic = True
                     return
                 self._turn_begin()
+                if self.harness.get("type") not in ("acp", "pi") and hasattr(self.agent, "_repair"):
+                    self.agent._expect_gen = gen0     # a Stop since the message was taken ends this turn at once
                 if images:
                     self.agent.send(body, images=images)
                 else:
@@ -1280,18 +1381,12 @@ class Session:
         guard(self._turn_finish)
         with _ACTIVE_LOCK:
             _ACTIVE.get(root, set()).discard(self)
-        if getattr(self, "_turn_shared", False) and self._turn_n is not None:
-            guard(lambda: write_meta(self.id, shared_turns=sorted(set(read_meta(self.id).get("shared_turns") or [])
-                                                                  | {self._turn_n})))
         if self.cp and cp_begun:
-            def end_cp():
-                self.cp.end_turn()
-                self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
-            guard(end_cp)
+            guard(self._end_cp_turn)
         while (not getattr(self.agent, "_stop", False) and not self._stop_req and hasattr(self.agent, "has_steers")
                and guard(self.agent.has_steers)):         # added with Enter just as the turn ended: answer it now
             try:
-                self.agent.resume_steers()
+                self._resume_steers()
             except Exception as e:  # noqa: BLE001
                 guard(self.emit, {"type": "error", "text": str(e)})
                 break
@@ -1352,7 +1447,7 @@ class Session:
                         self.state = "idle"
                     break
             try:
-                agent.resume_steers()
+                self._resume_steers()
             except Exception as e:  # noqa: BLE001
                 skip_late = True
                 try:
@@ -1383,6 +1478,44 @@ class Session:
                         + (self.agent.title or "task")[:60], last.strip()[:200])
         except Exception:  # noqa: BLE001
             pass
+
+    def _end_cp_turn(self):
+        """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
+        if not self.cp:
+            return
+        try:
+            self.cp.end_turn()
+            write_meta(self.id, turn_seq=self.cp.seq)
+            self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _resume_steers(self):
+        """Answer what the user added just as the turn ended, as a turn of its own: its file changes get their own
+        checkpoint (so Undo and the rewound chat agree), titled by the added message."""
+        title, ev_i = "Added message", None
+        with self.lock:
+            for e in reversed(self.events):
+                if e.get("type") == "user" and e.get("steer"):
+                    ev_i = e.get("i")
+                    t = str(e.get("text") or "").strip()
+                    if t:
+                        title = t.splitlines()[0]
+                    break
+            if ev_i is None:
+                ev_i = len(self.events)
+        began = False
+        if self.cp:
+            try:
+                msgs = None if self.harness["type"] in ("acp", "pi") else len(self.agent.messages)
+                began = self.cp.begin_turn(title, msgs, event_index=ev_i) is not None
+            except Exception:  # noqa: BLE001
+                began = False
+        try:
+            return self.agent.resume_steers()
+        finally:
+            if began:
+                self._end_cp_turn()
 
     def grade(self) -> dict:
         """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
@@ -1460,15 +1593,15 @@ class Session:
         """After a turn with a goal: the next turn's message, or None when the goal is met or the user is needed."""
         with self.lock:
             evs = self.events[ev0:]
+        out = _turn_outcome(evs)
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
         if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
             return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
         verdict = found[-1].upper() if found else ""
-        acted = any(e.get("type") == "tool_end" for e in evs)
-        failed = any(e.get("type") in ("error", "interrupted") for e in evs)
-        net = [e for e in evs if e.get("type") == "error" and _NET_RE.search(e.get("text") or "")]
-        if failed and net and not any(e.get("type") == "interrupted" for e in evs):
+        acted = out["acted"]
+        failed = bool(out["error"]) or out["interrupted"]      # ended on an error (not one it recovered from)
+        if out["net"] and not out["interrupted"]:
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
@@ -1479,7 +1612,7 @@ class Session:
             return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal))
         if not failed:
             self._goal_net = 0
-        if verdict == "DONE":
+        if verdict == "DONE" and not out["interrupted"] and not out["error"]:
             done, self.goal = self.goal, ""
             write_meta(self.id, goal="")
             self.emit({"type": "status", "text": f"Goal met: {done}"})
@@ -1520,10 +1653,11 @@ class Session:
             return None
         with self.lock:
             evs = self.events[ev0:]
-        if any(e.get("type") == "interrupted" for e in evs):
+        out = _turn_outcome(evs)
+        if out["interrupted"]:
             self._resume_n = 0
             return None
-        if not any(e.get("type") == "error" and _NET_RE.search(e.get("text") or "") for e in evs):
+        if not out["net"]:
             self._resume_n = 0                       # a good turn (or another kind of error): start the count again
             return None
         n = self._resume_n = getattr(self, "_resume_n", 0) + 1
@@ -1539,38 +1673,73 @@ class Session:
                                              "a message or press Stop to take over."})
         return self._pause(wait, RESUME_NEXT)
 
+    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None, turn_tok: int | None = None):
+        """Pi: when a quick request runs past its time, tell Pi to answer (a note only the model sees). It targets the
+        turn send() starts after tok0 and nothing later; a real task added meanwhile (send) cancels it."""
+        from meshpool_harness import pace as PACE
+        end = time.time() + (PACE.QUICK_S + 10 if wait is None else wait)
+        tok = tok0
+        while tok == tok0 and time.time() < end:          # send() has not started its turn yet
+            time.sleep(0.05)
+            tok = agent_token(agent)
+        if tok == tok0:
+            return False
+        time.sleep(max(0.0, end - time.time()))
+        if (self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False)
+                and getattr(self, "_quick_off", None) != turn and (turn_tok is None or self._turn_id == turn_tok)):
+            try:
+                return bool(agent.nudge(PACE.WRAP, tok))   # only while that same turn runs; no chat message
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
     def set_plan(self, on: bool):
         self.plan = bool(on)
+        if self.state in ("working", "waiting"):     # the running turn keeps its tools; this applies to the next one
+            write_meta(self.id, plan=self.plan)
+            self.emit({"type": "status", "text": f"Plan mode turns {'on' if self.plan else 'off'} from your next "
+                                                 "message."})
+            return
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         if hasattr(self.agent, "apply_mode"):
             self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
+    def _turn_cut(self, turn: int):
+        """Position in the transcript of the user event that started this checkpoint turn, or None (old turns)."""
+        from meshpool_harness import chat_rewind as CR
+        t = next((x for x in (self.cp.turns() if self.cp else []) if x.get("n") == int(turn)), None)
+        if not t:
+            return None
+        with self.lock:
+            return CR.turn_event_pos(self.events, t)
+
     def revert(self, turn: int) -> dict:
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
-        shared = [n for n in read_meta(self.id).get("shared_turns") or [] if n >= int(turn)]
-        if shared:
-            raise ValueError("Another chat, or an edit you saved, changed files in this folder while this chat was "
-                             "working, so Undo cannot tell the changes apart and would remove theirs. Undo by hand "
-                             "or with Git (the Git panel shows what changed).")
+        cut = self._turn_cut(turn)
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
-        if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
+        built_in = self.harness["type"] not in ("acp", "pi")
+        if built_in and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
             self.agent.messages = self.agent.messages[:idx]
             self.agent.save()
             with self.lock:
-                self.events = events_from_messages(self.agent.messages[1:])
+                if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
+                    self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
+                else:
+                    self.events = events_from_messages(self.agent.messages[1:])
         else:
             if hasattr(self.agent, "forget_session"):
                 self.agent.forget_session()          # the harness's own session still holds the undone turns
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
-                users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
-                cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
+                if cut is None:
+                    users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
+                    cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
@@ -1596,8 +1765,33 @@ class Session:
         elif r.get("kept"):
             names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
             msg += f". Kept as they are, because you changed them afterwards: {names}"
-        self.emit({"type": "status", "text": msg + "."})
+        msg += "."
+        if r.get("backup"):
+            msg += f" Copies of the files Undo replaced are in {r['backup']}."
+        self.emit({"type": "status", "text": msg})
         return r
+
+    def rewind(self, event_index: int, files: bool = True) -> dict:
+        """Go back to just before one of the user's messages (the event at `event_index`): the conversation, the
+        transcript and, with `files`, the file changes made from there on. Returns {text, undo[, forked]}."""
+        from meshpool_harness import chat_rewind as CR
+        if self.state in ("working", "waiting"):
+            raise ValueError("Stop the agent before rewinding.")
+        r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self)
+        if r.get("undo"):
+            msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
+                                                                         r["undo"].get("deleted")) else "")
+            if r["undo"].get("notes"):
+                msg += " " + " ".join(r["undo"]["notes"][:5])
+            if r["undo"].get("backup"):
+                msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
+            self.emit({"type": "status", "text": msg.strip()})
+        return r
+
+    def fork(self, event_index: int) -> str:
+        """A new chat with the conversation up to the end of the exchange that starts at this message."""
+        from meshpool_harness import chat_rewind as CR
+        return CR.fork(self.id, CR.message_for_event(self, int(event_index)), session=self)
 
     def stop(self):
         with self.lock:
@@ -1648,6 +1842,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
+                "worktree": meta.get("worktree") or None,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1730,13 +1925,23 @@ def create(body: dict) -> dict:
             plan = SV2.profile()["plan_first"]
         except Exception:  # noqa: BLE001
             plan = False
+    wt, made_wt = _chat_worktree(body, wd, kind, scratch, task)
+    if wt:
+        wd = wt["workdir"]                          # the chat works in its own isolated copy of the folder
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
                     kind=kind, model=model, plan=bool(plan))
     except BaseException:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
+        if made_wt:
+            from meshpool_harness import worktrees as WT
+            WT.discard(wt["id"])
         raise
+    if wt:
+        from meshpool_harness import worktrees as WT
+        WT.set_owner(wt["id"], "chat", s.id)
+        write_meta(s.id, worktree=WT.summary(wt))
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -1788,10 +1993,40 @@ def create(body: dict) -> dict:
     if not scratch and not pid:
         try:
             from meshpool_harness.ui import workbench as W
-            W.add_project(s.workdir)
+            W.add_project(wt["source"] if wt else s.workdir)
         except Exception:  # noqa: BLE001
             pass
     return s.view(0)
+
+
+def _chat_worktree(body: dict, wd: str, kind: str, scratch: bool, task: str) -> tuple:
+    """(record, made here) of the isolated copy a new chat works in, or (None, False). ``worktree_id``: a copy made
+    for it already (a scheduled run); ``worktree: true``: a Code chat asked for one ("Work in an isolated copy")."""
+    from meshpool_harness import worktrees as WT
+    if body.get("worktree_id"):
+        return WT.get(str(body["worktree_id"])), False
+    if body.get("worktree") and not scratch and wd:
+        if kind != "code":
+            raise ValueError("Isolated copies are for Code chats.")
+        return WT.create(wd, owner_kind="chat", title=(task or "").strip()[:80]), True
+    return None, False
+
+
+def worktree_users(folder: str, exclude: str = "") -> list:
+    """Open chats that work directly in ``folder`` (not in an isolated copy of it): a new chat there is offered one."""
+    from meshpool_harness import worktrees as WT
+    want = WT._norm(folder)
+    with LOCK:
+        live = list(LIVE.values())
+    out = []
+    for s in live:
+        if s.id == exclude or getattr(s, "deleted", False) or not s.workdir:
+            continue
+        m = read_meta(s.id)
+        if WT._norm(s.workdir) == want and not m.get("worktree"):
+            out.append({"id": s.id, "title": m.get("title") or nice_title(s.agent.title or "New chat"),
+                        "state": s.state})
+    return out
 
 
 def _short_harness(name: str) -> str:
@@ -1824,12 +2059,16 @@ def _reap_once(idle_s: float) -> list:
 def _start_reaper():
     """MH_IDLE_CLOSE_S (default 900; 0 = never): how long an unused thread keeps its helper processes."""
     idle_s = float(os.environ.get("MH_IDLE_CLOSE_S", "900") or 0)
-    if _REAPER or idle_s <= 0:
+    if _REAPER:
+        return
+    purge_due()                                    # chats deleted before the app last closed
+    if idle_s <= 0:
         return
 
     def loop():
         while True:
             time.sleep(min(60.0, max(5.0, idle_s / 4)))
+            purge_due()
             _reap_once(idle_s)
     th = threading.Thread(target=loop, daemon=True, name="meshpool-reaper")
     _REAPER.append(th)
@@ -1844,7 +2083,7 @@ _OPENING: dict = {}                 # chat id -> lock: only one request builds t
 
 
 def get(sid: str) -> Session:
-    if sid in DELETED:
+    if sid in DELETED or read_meta(sid).get("deleted"):
         raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
@@ -1859,7 +2098,17 @@ def get(sid: str) -> Session:
             return s
         s = Session(resume_id=sid)               # reopen a saved session
         with LOCK:
-            live = LIVE.setdefault(sid, s)
+            dead = sid in DELETED or bool(read_meta(sid).get("deleted"))   # deleted while it was being built
+            live = s if dead else LIVE.setdefault(sid, s)
+        if dead:
+            try:
+                s.deleted = True
+                if getattr(s, "agent", None) is not None:
+                    s.agent.deleted = True
+            except Exception:  # noqa: BLE001
+                pass
+            s.close()
+            raise KeyError(sid)
         if live is not s:
             s.close()
         return live
@@ -1921,6 +2170,9 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
     r["kind"] = m.get("kind") or r.get("kind") or "code"
+    if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from
+        r["worktree"] = m["worktree"].get("id")
+        r["workdir"] = m["worktree"].get("source") or r.get("workdir")
     return r
 
 
@@ -1945,13 +2197,13 @@ def _disk_rows() -> tuple:
                 if p.parent.name.startswith("sub-"):
                     continue
                 try:
-                    st = p.stat()
+                    key = SS.stamp(p.parent)
                     hit_row = _ROWS.get(str(p))
-                    if hit_row and hit_row[0] == st.st_mtime_ns and hit_row[1] == st.st_size:
+                    if hit_row and hit_row[0] == key:
                         rows[hit_row[2]["id"]] = dict(hit_row[2])
                         continue
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    d = SS.read(p.parent)
+                except OSError:
                     continue
                 if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
                     continue
@@ -1960,7 +2212,7 @@ def _disk_rows() -> tuple:
                        "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
                        "model": d.get("model"),
                        "imported": (d.get("imported") or {}).get("source", "")}
-                _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
+                _ROWS[str(p)] = (key, None, row)
                 rows[d["id"]] = dict(row)
         legacy, live_pids = _project_info()
         base = {}
@@ -2007,6 +2259,100 @@ def exists(sid: str) -> bool:
     return bool(re.fullmatch(r"[\w-]+", sid or "")) and (SESSIONS / sid).is_dir()
 
 
+_DEL_LOCK = threading.Lock()
+_DEL_TIMERS: dict = {}
+
+
+def _grace() -> float:
+    try:
+        return float(os.environ.get("MH_DELETE_GRACE_S", "8"))
+    except ValueError:
+        return 8.0
+
+
+def _write_meta_raw(sid: str, m: dict) -> None:
+    from meshpool_harness import fsio
+    fsio.atomic_write_json(_meta_path(sid), m, indent=None)
+    _METAS.pop(sid, None)
+
+
+def _has_user_message(sid: str) -> bool:
+    with LOCK:
+        s = LIVE.get(sid)
+    if s is not None:
+        with s.lock:
+            if any(e.get("type") == "user" for e in s.events):
+                return True
+    tr = _transcript(sid) or {}
+    if any(e.get("type") == "user" for e in tr.get("events") or []):
+        return True
+    return any(m.get("role") == "user" for m in (_saved(sid) or {}).get("messages") or [] if isinstance(m, dict))
+
+
+def _purge(sid: str, force: bool = False) -> None:
+    """Really remove a deleted chat (stop it, its folder, checks records, private folder). Idempotent; a chat that was
+    undeleted meanwhile is left alone."""
+    import shutil
+    with _DEL_LOCK:
+        if sid in DELETED and not (SESSIONS / sid).exists():
+            return
+        m = read_meta(sid)
+        if not force and not m.get("deleted"):
+            return
+        t = _DEL_TIMERS.pop(sid, None)
+        if t and t is not threading.current_thread():
+            t.cancel()
+        scratch_dir = ""
+        if m.get("scratch"):
+            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
+        with LOCK:
+            DELETED.add(sid)
+            list_dirty()
+            s = LIVE.pop(sid, None)
+    if s:
+        s.deleted = True
+        s.agent.deleted = True                        # its last save after stopping must not recreate the thread
+        s.close()
+        end = time.time() + 6
+        while s.state in ("working", "waiting") and time.time() < end:
+            time.sleep(0.1)
+    d = SESSIONS / sid
+    if d.is_dir() and d.parent == SESSIONS:
+        shutil.rmtree(d, ignore_errors=True)
+    list_dirty()
+    try:                                              # its checks records go with it
+        from meshpool_harness import checks as CK
+        for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
+            f.unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    if scratch_dir:                                   # the chat's private folder goes with it
+        from meshpool_harness import project_store as PS
+        PS.remove_scratch(scratch_dir)
+    try:                                              # and its isolated copy (unmerged work stays on its branch)
+        from meshpool_harness import worktrees as WT
+        WT.prune_owner("chat", sid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def purge_due() -> list:
+    """Purge every chat whose delete grace has run out (also after a restart: the page need not be open)."""
+    out, now, grace = [], time.time(), _grace()
+    if not SESSIONS.exists():
+        return out
+    for p in list(SESSIONS.glob("*/meta.json")):
+        sid = p.parent.name
+        m = read_meta(sid)
+        if m.get("deleted") and now - float(m.get("deleted_at") or 0) >= grace:
+            try:
+                _purge(sid)
+                out.append(sid)
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
 def thread_action(sid: str, body: dict) -> dict:
     act = body.get("action")
     if not exists(sid):
@@ -2028,35 +2374,38 @@ def thread_action(sid: str, body: dict) -> dict:
         if not read_meta(sid):
             raise KeyError("Chat not found.")
         write_meta(sid, project_id=pid, project_ctx="" if not pid else None)
-    elif act == "delete":
-        scratch_dir = ""
-        if read_meta(sid).get("scratch"):
-            scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
-        with LOCK:
-            DELETED.add(sid)
-            list_dirty()
-            s = LIVE.pop(sid, None)
-        if s:
-            s.deleted = True
-            s.agent.deleted = True                    # its last save after stopping must not recreate the thread
-            s.close()
-            end = time.time() + 6
-            while s.state in ("working", "waiting") and time.time() < end:
-                time.sleep(0.1)
-        import shutil
-        d = SESSIONS / sid
-        if d.is_dir() and d.parent == SESSIONS:
-            shutil.rmtree(d, ignore_errors=True)
+    elif act == "delete":                             # soft: the server purges it after the grace, page or no page
+        with _DEL_LOCK:
+            if sid in DELETED:
+                raise KeyError("That chat no longer exists. Refresh the list.")
+            write_meta(sid, deleted=True, deleted_at=time.time())
+            old = _DEL_TIMERS.pop(sid, None)
+            if old:
+                old.cancel()
+            if _grace() > 0:
+                t = threading.Timer(_grace(), _purge, args=(sid,))
+                t.daemon = True
+                _DEL_TIMERS[sid] = t
+                t.start()
         list_dirty()
-        try:                                          # its checks records go with it
-            from meshpool_harness import checks as CK
-            for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
-                f.unlink(missing_ok=True)
-        except Exception:  # noqa: BLE001
-            pass
-        if scratch_dir:                               # the chat's private folder goes with it
-            from meshpool_harness import project_store as PS
-            PS.remove_scratch(scratch_dir)
+        if _grace() <= 0:                         # MH_DELETE_GRACE_S=0: no Undo window, gone at once
+            _purge(sid)
+    elif act == "undelete":
+        with _DEL_LOCK:
+            if sid in DELETED or not read_meta(sid).get("deleted"):
+                raise ValueError("This chat was already deleted.")
+            m = read_meta(sid)
+            m.pop("deleted", None)
+            m.pop("deleted_at", None)
+            _write_meta_raw(sid, m)
+            t = _DEL_TIMERS.pop(sid, None)
+            if t:
+                t.cancel()
+        list_dirty()
+    elif act == "discard":                            # a brand-new chat whose first message failed
+        if _has_user_message(sid):
+            raise ValueError("This chat already has messages.")
+        _purge(sid, force=True)
     else:
         raise ValueError("Unknown chat action.")
     return {"ok": True}
@@ -2076,13 +2425,15 @@ def search(q: str) -> list:
         if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
             continue
         try:
-            st = p.stat()
-            key = (st.st_mtime_ns, st.st_size)
+            key = SS.stamp(p.parent)
             hit = _RAW.get(str(p))
             if hit and hit[0] == key:
                 raw, low = hit[1], hit[2]
             else:
-                raw = p.read_text(encoding="utf-8")
+                sd = SS.read(p.parent)
+                if not isinstance(sd, dict):
+                    continue
+                raw = json.dumps(sd, ensure_ascii=False, default=str)
                 low = raw.lower()
                 if _RAW_BYTES[0] + 2 * len(raw) <= _RAW_CAP:      # keep the text of recent searches in memory, up to a cap
                     old_hit = _RAW.get(str(p))
@@ -2197,8 +2548,16 @@ def run_scheduled(t: dict) -> str:
     folder = t.get("folder") or ""
     if folder and not Path(folder).expanduser().is_dir():
         raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
-    v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
+    rf = AS.run_folder(t)                       # a repository: the run gets its own isolated copy
+    try:
+        v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                    "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
+                    "worktree_id": rf.get("worktree_id") or None})
+    except BaseException:
+        if rf.get("worktree_id"):
+            from meshpool_harness import worktrees as WT
+            WT.discard(rf["worktree_id"])
+        raise
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
@@ -2206,6 +2565,21 @@ def run_scheduled(t: dict) -> str:
                           "which ones you made, and finish with a short summary.)"))
     AS.set_thread(t["id"], s.id)
     return s.id
+
+
+def recover_worktrees():
+    """At app start: remove isolated copies whose creation never finished, whose chat was deleted, or whose
+    sub-agent's process is gone. Copies of chats that still exist are kept."""
+    try:
+        from meshpool_harness import worktrees as WT
+
+        def alive(kind, oid, rec):
+            if kind == "chat":                      # no id yet: a chat being made right now
+                return exists(oid) if oid else time.time() - float(rec.get("created") or 0) < 600
+            return WT._default_alive(kind, oid, rec)
+        return WT.recover(alive)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def probe_mcp():
@@ -2233,10 +2607,9 @@ def scheduler_loop():
 
 
 def _saved(sid: str) -> dict | None:
-    p = SESSIONS / sid / "session.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.read(SESSIONS / sid)
+    except OSError:
         return None
 
 

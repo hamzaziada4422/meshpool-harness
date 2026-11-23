@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 from meshpool_harness.harnesses.acp import _kill_tree
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
@@ -556,7 +557,11 @@ class PiAgent:
             # Plan mode only investigates: no edits, no commands, no tools that could change something.
             self._denied.add(tid)
             return False
-        if self.mode == "auto" or kind in self._always or (self.mode == "edits" and kind == "edit"):
+        from meshpool_harness.core import permrules as PR
+        if self.mode == "auto" or (kind != "bash" and kind in self._always) or (self.mode == "edits" and kind == "edit"):
+            return True
+        bpats = [x[5:] for x in self._always if x.startswith("bash:")]
+        if kind == "bash" and PR.granted(str(inp.get("command", "")), bpats):
             return True
         if not self.approve or self._stop:
             self._denied.add(tid)
@@ -571,9 +576,15 @@ class PiAgent:
             title = f"Use {name.split('__', 2)[-1].replace('_', ' ')}" + \
                 (f" ({name.split('__')[1]})" if name.startswith("mcp__") else "") + "?"
             detail = json.dumps(inp, indent=1, ensure_ascii=False)[:3000]
-        choice, note = self.approve(kind, title, detail)
+        pats = PR.grant_patterns(str(inp.get("command", ""))) if kind == "bash" else []
+        scope = (" and ".join(f"`{p}`" for p in pats) + " commands") if pats else \
+            "all file edits" if kind == "edit" else "this tool" if kind != "bash" else ""
+        choice, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
         if choice == "always":
-            self._always.add(kind)
+            if kind == "bash":
+                self._always.update("bash:" + p for p in pats)
+            else:
+                self._always.add(kind)
         if choice in ("yes", "always"):
             return True
         self._denied.add(tid)
@@ -591,6 +602,8 @@ class PiAgent:
 
     def _tell(self, note: str):
         """A note left with a denial reaches Pi as a message before its next step (the gate only says no)."""
+        if self._stop:
+            return                  # Stop is not a refusal: do not tell Pi "I did not allow that"
         if note and note.strip():
             try:
                 self.steer(f"I did not allow that. {note.strip()}")
@@ -625,7 +638,28 @@ class PiAgent:
         return PV.join("key" if prov == "meshpool" else prov, m)
 
     # ---------- turns ------------------------------------------------------------------------------------------
+    def turn_token(self) -> int:
+        """Which turn this is: it changes when send() starts a turn. Pass it to nudge()."""
+        return getattr(self, "_turn_seq", 0)
+
+    def nudge(self, text: str, token: int) -> bool:
+        """Tell Pi something while turn `token` runs, without a chat message (a note only the model sees). False when
+        that turn is over or a later one started: it can never reach another turn."""
+        gate = self.__dict__.setdefault("_turn_gate", threading.Lock())
+        with gate:
+            if token != getattr(self, "_turn_seq", 0) or not getattr(self, "_turn_live", False):
+                return False
+            self._request({"type": "steer", "message": text}, timeout=30)
+            return True
+
+    def _turn_over(self):
+        with self.__dict__.setdefault("_turn_gate", threading.Lock()):
+            self._turn_live = False
+
     def send(self, text: str, images: list | None = None, _show: bool = True) -> str:
+        with self.__dict__.setdefault("_turn_gate", threading.Lock()):
+            self._turn_seq = getattr(self, "_turn_seq", 0) + 1
+            self._turn_live = True
         self._stop = False
         self.start_error = None                          # set when this turn's agent could not start (Session hands off)
         if not self.title:
@@ -694,6 +728,7 @@ class PiAgent:
                     self.close()
                     self._p, self.resume = None, True
                     break
+            self._turn_over()                         # a nudge after this point is refused
             final = "".join(self._text)
             self._flush_text()
             # Text is flushed into the chat at each message boundary, so the buffer is often empty by now: the
@@ -716,6 +751,7 @@ class PiAgent:
             else:
                 self._emit({"type": "error", "text": str(e)})
         finally:
+            self._turn_over()
             for k in self.usage:
                 self.usage[k] += self._turn[k]
             self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),
@@ -817,11 +853,10 @@ class PiAgent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            SS.write_snapshot(self.dir, {
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "harness": self.manifest.get("id"), "kind": self.manifest.get("mode", "code"),
-                "usage": self.usage, "model": self.model, "events": self.events[-2000:]}, ensure_ascii=False),
-                encoding="utf-8")
+                "usage": self.usage, "model": self.model, "events": self.events[-2000:]})
         except OSError:
             pass
 
