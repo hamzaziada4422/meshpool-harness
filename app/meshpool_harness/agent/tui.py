@@ -40,6 +40,7 @@ COMMANDS = [
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
+    ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
     ("tokens", "", "tokens used in this session"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
@@ -265,7 +266,10 @@ class Terminal:
             if not self._text_open and not self.print_mode:
                 self._write("\n", self.out)
             self._text_open = True
-            self._write(chunk, self.out)
+            if self.print_mode:                        # written once the reply is complete: a retry cannot append to it
+                self._pbuf = getattr(self, "_pbuf", "") + chunk
+            else:
+                self._write(chunk, self.out)
             return
         self._text_open = True
         self._partial += chunk
@@ -284,12 +288,16 @@ class Terminal:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
         elif self._text_open:
+            if self.print_mode and getattr(self, "_pbuf", ""):
+                self._write(self._pbuf, self.out)
+            self._pbuf = ""
             self._write("\n", self.out)
         self._text_open = False
         self._md = R.MdState()
 
     # ---------- agent events ----------
     def emit(self, ev: dict):
+        ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
         t, st = ev.get("type"), self.st
         if t == "model_start":
             if self.interactive and not self._turn:
@@ -302,6 +310,8 @@ class Terminal:
         elif t == "stream_reset":
             if self._text_open:
                 self._partial = ""
+                if self.print_mode:                    # the partial reply is discarded, nothing was written yet
+                    self._pbuf, self._text_open = "", False
                 self._flush_text()
                 self.p(st.dim("[connection dropped; the reply restarts below]"))
         elif t == "assistant":
@@ -635,6 +645,15 @@ class Terminal:
                         j = len(buf[:cur].rstrip(" "))
                         j = buf.rfind(" ", 0, j) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
+                    elif k == "word_left":
+                        j = len(buf[:cur].rstrip(" "))
+                        s["cur"] = buf.rfind(" ", 0, j) + 1
+                    elif k == "word_right":
+                        j = buf.find(" ", cur)
+                        j = len(buf) if j < 0 else j
+                        while j < len(buf) and buf[j] == " ":
+                            j += 1
+                        s["cur"] = j
                     elif k in ("up", "ctrl_p"):
                         if menu:
                             s["sel"] = (s["sel"] - 1) % len(menu)
@@ -778,11 +797,16 @@ class Terminal:
             return "no", "No terminal to ask in. Run with --auto."
         if self.stopping:
             return "no", ""
-        self.idle.clear()
-        try:
-            choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
-        finally:
-            self.idle.set()
+        if not hasattr(self, "_approve_lock"):
+            self._approve_lock = threading.Lock()
+        with self._approve_lock:                       # parallel tool calls: one question on the screen at a time
+            if self.stopping:
+                return "no", ""
+            self.idle.clear()
+            try:
+                choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
+            finally:
+                self.idle.set()
         if self.stopping:                 # Ctrl+C while the question was open: the turn is over
             return "no", ""
         if choice == "always" and options:
@@ -885,8 +909,9 @@ class Terminal:
                 a = input(f"  Pick{' (Enter: ' + ','.join(rec) + ')' if rec else ''}, or type your own answer > ").strip()
             except EOFError:
                 return None
-            nums = [int(x) for x in re.split(r"[ ,]+", a or ",".join(rec)) if x.isdigit()]
-            if a and not nums or any(not 1 <= n <= len(opts) for n in nums):
+            toks = [x for x in re.split(r"[ ,]+", a or ",".join(rec)) if x]
+            nums = [int(x) for x in toks if x.isdigit()]
+            if a and (not nums or len(nums) != len(toks)) or any(not 1 <= n <= len(opts) for n in nums):
                 answers.append({"selected": [], "other": a})
             else:
                 answers.append({"selected": [opts[n - 1]["label"] for n in nums], "other": ""})
@@ -900,7 +925,12 @@ def ask_key(force: bool = False) -> bool:
     if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")):
         return True
     if not sys.stdin.isatty():
-        print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})", file=sys.stderr)
+        if force:                                    # `meshpool login` itself, run without a terminal
+            print("meshpool login needs an interactive terminal to ask for the key. Without one, set "
+                  f"MESHPOOL_API_KEY=... in the environment, or add it to {C.config_path()}.", file=sys.stderr)
+        else:
+            print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})",
+                  file=sys.stderr)
         return False
     from meshpool_harness.agent import onboard
     return onboard.key_step(Style(_enable_ansi()), header=True)
@@ -1084,6 +1114,15 @@ class Session:
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
                             "edits": "File edits are allowed; commands are still asked.",
                             "auto": "Edits and commands are allowed without asking."}[mode]))
+
+    def cmd_trust(self, arg):
+        from meshpool_harness.agent import extras as EX
+        t, st = self.term, self.term.st
+        root = self.agent.root
+        if EX.project_trusted(root):
+            return t.p(st.dim("  This folder is already trusted."))
+        EX.trust_project(root)
+        t.p(st.green(f"  Trusted {root}: its .meshpool hooks and allow rules now apply."))
 
     def cmd_tokens(self, arg):
         u = self.agent.usage
@@ -1292,7 +1331,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 return 1
             wd = str(folder)
         elif not ask_key():
-            term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
+            if sys.stdin.isatty():              # not a terminal: ask_key already said it
+                term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
     # The terminal runs MeshPool Code, or the official Codex when it is set as the default.
     hid = HR.default_for("code")

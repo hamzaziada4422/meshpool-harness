@@ -3,6 +3,7 @@ responses out, so the rest of Meshpool (agent loop, tools) never knows which wir
 from __future__ import annotations
 
 import json
+import os
 
 VERSION = "2023-06-01"
 
@@ -40,7 +41,7 @@ def _blocks(content) -> list:
     return out
 
 
-def to_request(body: dict) -> dict:
+def to_request(body: dict, cache: bool | None = None) -> dict:
     system, msgs = [], []
 
     def push(role: str, blocks: list) -> None:
@@ -51,13 +52,19 @@ def to_request(body: dict) -> dict:
         else:
             msgs.append({"role": role, "content": list(blocks)})
 
+    pending, nsyn = [], 0                            # ids made up for tool calls that came without one
     for m in body.get("messages") or []:
         role = m.get("role")
         if role == "system":
             system.append(_text_of(m.get("content")))
         elif role == "tool":
-            push("user", [{"type": "tool_result", "tool_use_id": m.get("tool_call_id", ""),
-                           "content": _text_of(m.get("content")) or "(no output)"}])
+            c = m.get("content")
+            tid = m.get("tool_call_id") or (pending.pop(0) if pending else "toolu_unknown")
+            if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+                res = _blocks(c) or "(no output)"        # screenshots and charts the tool returned reach the model
+            else:
+                res = _text_of(c) or "(no output)"
+            push("user", [{"type": "tool_result", "tool_use_id": tid, "content": res}])
         elif role == "assistant":
             blocks = _blocks(m.get("content"))
             for c in m.get("tool_calls") or []:
@@ -66,14 +73,23 @@ def to_request(body: dict) -> dict:
                     args = json.loads(f.get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                blocks.append({"type": "tool_use", "id": c.get("id", ""), "name": f.get("name", ""),
+                cid = c.get("id")
+                if not cid:
+                    nsyn += 1
+                    cid = f"toolu_synth_{nsyn}"
+                    pending.append(cid)
+                blocks.append({"type": "tool_use", "id": cid, "name": f.get("name", ""),
                                "input": args if isinstance(args, dict) else {}})
             push("assistant", blocks)
         else:
             push("user", _blocks(m.get("content")) or [{"type": "text", "text": "(empty)"}])
     out = {"model": body["model"], "max_tokens": int(body.get("max_tokens") or 8192), "messages": msgs}
+    cache = (os.environ.get("MH_ANTHROPIC_CACHE", "1") != "0") if cache is None else cache
     if system:
-        out["system"] = "\n\n".join(s for s in system if s)
+        text = "\n\n".join(s for s in system if s)
+        # Explicit cache breakpoints (the Messages API caches only what is marked): the instructions, the tools and
+        # the end of the conversation so far. Everything before a marker is read from the cache on the next call.
+        out["system"] = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}] if cache else text
     if body.get("temperature") is not None:
         out["temperature"] = body["temperature"]
     tools = []
@@ -83,11 +99,16 @@ def to_request(body: dict) -> dict:
             tools.append({"name": f["name"], "description": f.get("description", ""),
                           "input_schema": f.get("parameters") or {"type": "object", "properties": {}}})
     if tools:
+        if cache:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
         out["tools"] = tools
         tc = body.get("tool_choice")
         out["tool_choice"] = ({"type": "any"} if tc == "required" else
                               {"type": "tool", "name": tc["function"]["name"]} if isinstance(tc, dict) else
                               {"type": "auto"})
+    if cache and msgs and msgs[-1]["content"] and isinstance(msgs[-1]["content"][-1], dict) \
+            and msgs[-1]["content"][-1].get("type") in ("text", "tool_result", "tool_use"):
+        msgs[-1]["content"][-1] = dict(msgs[-1]["content"][-1], cache_control={"type": "ephemeral"})
     return out
 
 

@@ -32,6 +32,23 @@ PROTOCOL_VERSION = 1
 
 
 
+def _kill_group(proc) -> None:
+    """Without psutil: end the process and its whole process group (POSIX) or tree (Windows taskkill /T)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=15,
+                           creationflags=0x08000000)
+        else:
+            import signal
+            os.killpg(proc.pid, signal.SIGKILL)      # started with start_new_session: its pid is the group id
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _kill_tree(proc) -> None:
     """End a harness process and everything it started (commands, MCP servers)."""
     if not proc:
@@ -40,6 +57,9 @@ def _kill_tree(proc) -> None:
         import psutil
         root = psutil.Process(proc.pid)
         kids = root.children(recursive=True)
+    except ImportError:
+        _kill_group(proc)
+        return
     except Exception:  # noqa: BLE001
         kids = []
     for k in kids:
@@ -47,6 +67,7 @@ def _kill_tree(proc) -> None:
             k.kill()
         except Exception:  # noqa: BLE001
             pass
+
 
 class ACPError(Exception):
     pass
@@ -198,7 +219,9 @@ def office_extra(workdir: str) -> dict:
     spec = office_server([workdir])
     env_ = {e["name"]: e["value"] for e in spec["env"]}
     env_.setdefault("OFFICE_WAIT_S", "280")
-    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330}}
+    # per_call_project: one office process for the whole app; each call carries its own chat's folder
+    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330,
+                           "per_call_project": True}}
 
 
 def _auth_failure(text: str) -> bool:
@@ -337,6 +360,18 @@ class ACPAgent:
                                    stdout=subprocess.PIPE, stderr=self._err, cwd=str(self.root), env=env, **kw)
         self._alive = True
         threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
+        try:
+            return self._handshake(m)
+        except BaseException:                  # a failed or timed-out handshake must not leave a half-started process
+            dead, self._p = self._p, None
+            _kill_tree(dead)
+            try:
+                dead.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+    def _handshake(self, m) -> bool:
         init = self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False,
@@ -411,6 +446,10 @@ class ACPAgent:
             import psutil
             root = psutil.Process(self._p.pid)
             procs = root.children(recursive=True) + [root]
+        except ImportError:
+            procs = []
+            if self._p:
+                _kill_group(self._p)
         except Exception:  # noqa: BLE001
             procs = []
         for pr in procs:
@@ -442,7 +481,8 @@ class ACPAgent:
                 if not any(path == r or r in path.parents for r in (self.root, ups)):
                     return self._respond(rid, error={"code": -32602, "message": "reads through Meshpool are limited "
                                                      "to the project folder and attached files"})
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                from meshpool_harness.core.tools import read_src, shown
+                lines = shown(read_src(path)[0]).splitlines(keepends=True)
                 start = max(0, int(p.get("line") or 1) - 1)
                 lim = p.get("limit")
                 return self._respond(rid, {"content": "".join(lines[start:start + int(lim)] if lim else lines[start:])})
@@ -450,8 +490,17 @@ class ACPAgent:
                 path = Path(p["path"]).resolve()
                 if self.root not in path.parents and path != self.root:
                     return self._respond(rid, error={"code": -32602, "message": "writes are limited to the project folder"})
+                if ".git" in path.relative_to(self.root).parts:
+                    return self._respond(rid, error={"code": -32602, "message": "writes inside .git are not allowed"})
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(p.get("content", ""), encoding="utf-8")
+                from meshpool_harness.core.tools import read_src, write_src
+                eol, bom = "\n", False
+                if path.is_file():                   # keep the file's own line ending and BOM
+                    try:
+                        _t, eol, bom = read_src(path)
+                    except OSError:
+                        pass
+                write_src(path, p.get("content", ""), eol, bom)
                 return self._respond(rid, None)
             self._respond(rid, error={"code": -32601, "message": f"method not supported: {m}"})
         except ACPError:

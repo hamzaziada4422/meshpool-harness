@@ -424,9 +424,11 @@ def browser_tabs(switch_to: int | None = None, close: int | None = None) -> str:
         B.ensure()
         pages = B.ctx.pages
         if close is not None and 0 <= int(close) < len(pages) and len(pages) > 1:
+            was_current = pages[int(close)] is B.page
             pages[int(close)].close()
             pages = B.ctx.pages
-            B.page = pages[-1]
+            if was_current or B.page not in pages:
+                B.page = pages[-1]
         if switch_to is not None and 0 <= int(switch_to) < len(pages):
             B.page = pages[int(switch_to)]
             B.page.bring_to_front()

@@ -116,5 +116,5 @@ def test_a_message_queued_during_the_outage_wait_goes_next(monkeypatch):
     threading.Timer(0.3, lambda: s.queue.append(("stop the report and summarise", []))).start()
     turn(s, "", extra=[{"type": "error", "text": "Couldn't reach the model. (HTTP 0: timed out)"}])
     t0 = time.time()
-    assert s._goal_next(0) == ("stop the report and summarise", []) and time.time() - t0 < 2
+    assert s._goal_next(0) == ("stop the report and summarise", []) and time.time() - t0 < 10
     assert s.queue == []

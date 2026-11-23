@@ -144,7 +144,7 @@ def insert_position(task: str) -> int | None:
     if re.search(r"\b(at|to) the (start|beginning|front)\b|\bbefore (the )?first slide\b", t):
         return 1
     words = "|".join(_WORDN)
-    m = re.search(r"\b(after|before|as|at|in position|into position)\s+(?:slide|page|position)?\s*(?:number\s*)?"
+    m = re.search(r"\b(after|before|as|at|in position|into position)\s+(?:slide|page|position)\s*(?:number\s*)?"
                   r"(\d{1,3}|" + words + r")\b", t) or \
         re.search(r"\b(after|before)\s+the\s+(" + words + r")\s+(?:slide|page)\b", t)
     if not m:

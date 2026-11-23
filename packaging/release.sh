@@ -1,6 +1,8 @@
 #!/bin/bash
 # Publish a Meshpool release to GitHub from a computer where `gh` is signed in.
-# Usage: packaging/release.sh 0.0.1 NOTES.md Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe update-manifest.json
+# Usage: packaging/release.sh 0.0.1 NOTES.md Meshpool.dmg Meshpool-Intel.dmg Meshpool-Setup.exe update-manifest.json Meshpool-src.tar.gz Meshpool-Linux-x64.tar.gz
+# Meshpool-src.tar.gz (git archive, see .github/workflows/release.yml) is what the in-app code update installs: without it
+# in-app updates fail. Prefer the Release workflow, which builds and attaches every file.
 # update-manifest.json comes from packaging/updater/make_manifest.py (docs/plan/AUTO_UPDATE.md); it is hashed into SHA256SUMS.txt.
 # Creates the release as a draft, uploads each file with retries (slow or shaky connections are fine; a file that
 # fails is retried, and a rerun skips files already uploaded unless they were rebuilt), checks the sizes on GitHub,

@@ -8,15 +8,15 @@
 <p align="center"><strong>One desktop agent for code, documents, spreadsheets, decks and research, on any model.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Version 0.0.1 beta" src="https://img.shields.io/badge/version-0.0.1%20beta-1670E8"></a>
-  <img alt="Mac and Windows app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows-16181D">
+  <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Latest version (beta)" src="https://img.shields.io/github/v/release/hamzaziada4422/meshpool-harness?include_prereleases&label=version%20(beta)&color=1670E8"></a>
+  <img alt="Mac, Windows and Linux app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows%20%7C%20Linux-16181D">
   <img alt="Command line on macOS, Linux and Windows" src="https://img.shields.io/badge/CLI-macOS%20%7C%20Linux%20%7C%20Windows-16181D">
 </p>
 
 Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own OpenAI-compatible key, or the ChatGPT plan you already pay for.
 
 > [!NOTE]
-> **Meshpool 0.0.1 is a beta.** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
+> **Meshpool is a beta (currently 0.0.10).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
 
 ## Why Meshpool
 
@@ -55,6 +55,7 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 | Mac with Apple silicon | [Meshpool.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool.dmg) |
 | Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+| Linux, 64-bit Intel or AMD | [Meshpool-Linux-x64.tar.gz](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Linux-x64.tar.gz) (see [SETUP.md](docs/SETUP.md)) |
 
 **Setup guide** ([full guide](https://github.com/hamzaziada4422/meshpool-harness/blob/main/docs/SETUP.md))
 
@@ -87,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/mai
 Macs, Apple silicon and Intel, need macOS 11 or later (browser use needs macOS 13). Meshpool is not yet signed by Apple or Microsoft, which is why your computer asks you to confirm it once. The pictures of the macOS and Windows prompts are illustrations; the wording on your computer may differ slightly.
 
 
-**Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser.
+**Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser. The terminal install does not include LibreOffice, so decks are not rendered for review and workbook formulas are not recalculated; the desktop app has both.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | sh
@@ -101,7 +102,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 
 - **Work and Code modes.** Work is a chat with a live progress panel and the files the task made. Code adds diff, terminal, Git, pull request and CI panels.
 - **Agents:** Meshpool Auto, Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or your own, on your Meshpool key, any OpenAI-compatible key, or your ChatGPT plan ([providers](docs/PROVIDERS.md)).
-- **Files in and out:** PDF (scans included, with offline OCR), Word, Excel, PowerPoint, Power BI, CSV and images in; Word, Excel, PowerPoint and PDF out.
+- **Files in and out:** PDF, Word, Excel, PowerPoint, Power BI (the model schema; the data model needs `pip install pbixray`), CSV and images in; Word, Excel, PowerPoint and PDF out. Reading text in scanned PDFs and pictures (OCR) is optional and not included: run `pip install rapidocr onnxruntime` (macOS 13 or later, Windows, Linux) in the Python Meshpool uses; without it you get the file's own text only.
 - **Web research** across many sources, with links you can check, and **browser use** that works out of the box (it opens pages, reads the elements, clicks and types; Playwright and Chromium set themselves up on first use).
 - **58 connectors** (GitHub, Linear, Jira, Slack, Notion, Google Drive, HubSpot, Stripe and more) plus any remote MCP server. Sign-in goes straight from your computer to the app.
 - **About 100 skills**, and the skills, MCP servers, memories and instructions you already have in Claude Code, Codex, Cursor, OpenClaw, Hermes and others, imported in a click with a preview (`meshpool import agents --dry-run`). Logins are never read.

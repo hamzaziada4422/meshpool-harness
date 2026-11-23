@@ -9,8 +9,10 @@ Meshpool endpoint, or another OpenAI-compatible endpoint the user set):
 """
 from __future__ import annotations
 
+import base64
 import os
-from urllib.parse import urlparse
+import re
+from urllib.parse import quote, urlparse
 
 from meshpool_harness import config as C
 
@@ -30,7 +32,10 @@ SUPPORTS = {
 
 
 def _cfg(k: str) -> str:
-    return (C.read().get(k) or os.environ.get(k) or "").strip()
+    env = os.environ.get(k)
+    if env and k not in C._INJECTED:                  # a value the shell set wins over the saved file
+        return env.strip()
+    return (C.read().get(k) or env or "").strip()
 
 
 def host(url: str) -> str:
@@ -61,6 +66,157 @@ def key_wire() -> str:
     if w in ("openai", "anthropic"):
         return w
     return "anthropic" if host(key_base()).endswith("anthropic.com") else "openai"
+
+
+# ---------- how a request to the key endpoint is addressed and authorised ---------------------------------------------
+# One place decides the URL and the headers for every call to the key endpoint (chat, model list, probes), so Azure
+# OpenAI, Foundry, Anthropic-style and custom-header endpoints work the same way everywhere.
+AZURE_SUFFIXES = (".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com")
+AZURE_API_VERSION = "2024-10-21"             # the current GA data-plane version of Azure OpenAI chat completions
+AZURE_MODELS_API_VERSION = "2024-05-01-preview"   # the Foundry /models (model inference) route
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+SCHEMES = ("", "bearer", "basic", "token", "raw")
+
+
+def keyless_ok(base: str | None = None) -> bool:
+    """A local or LAN server (localhost, 127.x, 10.x, 192.168.x, 172.16-31.x, *.local, *.lan, a bare host name) may be
+    used with no key at all."""
+    h = host(base if base is not None else key_base())
+    if not h:
+        return False
+    if h in ("localhost", "0.0.0.0", "::1") or h.endswith((".local", ".lan", ".localhost", ".internal")):
+        return True
+    m = re.match(r"^(\d+)\.(\d+)\.\d+\.\d+$", h)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        return a in (10, 127) or (a == 192 and b == 168) or (a == 172 and 16 <= b <= 31) or (a == 169 and b == 254)
+    return "." not in h and ":" not in h
+
+
+def is_azure(base: str | None = None) -> bool:
+    h = host(base if base is not None else key_base())
+    return h.endswith(AZURE_SUFFIXES)
+
+
+def azure_version(base: str = "") -> str:
+    """The api-version to send: MESHPOOL_AZURE_API_VERSION (settings or environment), else the one pasted in the base
+    URL's query, else the current GA version."""
+    v = _cfg("MESHPOOL_AZURE_API_VERSION")
+    if not v and base and "api-version=" in base:
+        m = re.search(r"api-version=([^&#\s]+)", base)
+        v = m.group(1) if m else ""
+    return v or AZURE_API_VERSION
+
+
+def azure_deployment(base: str) -> str:
+    """The deployment named in an address like https://RES.openai.azure.com/openai/deployments/DEP, else ""."""
+    m = re.match(r"^/openai/deployments/([^/]+)", urlparse(base).path)
+    return m.group(1) if m else ""
+
+
+def looks_jwt(k: str) -> bool:
+    return k.count(".") == 2 and k.startswith("eyJ")
+
+
+def auth_headers(k: str, base: str | None = None, wire: str | None = None, header: str | None = None,
+                 scheme: str | None = None) -> dict:
+    """The authentication header(s) for the key endpoint. No key, no header (a local or LAN server). A custom header
+    name and scheme (MH_AUTH_HEADER, MH_AUTH_SCHEME: bearer, basic, token or raw) win; else Anthropic-style endpoints
+    send x-api-key with anthropic-version, Azure sends api-key (or Authorization: Bearer for an Entra token) and
+    everything else Authorization: Bearer. The key is sent exactly as saved."""
+    k = k or ""
+    base = base if base is not None else key_base()
+    wire = wire or key_wire()
+    header = (_cfg("MH_AUTH_HEADER") if header is None else header).strip()
+    scheme = (_cfg("MH_AUTH_SCHEME") if scheme is None else scheme).strip().lower()
+    if header and not _HEADER_NAME.match(header):
+        header = ""
+    if scheme not in SCHEMES:
+        scheme = ""
+    out = {}
+    if wire == "anthropic":
+        from meshpool_harness.core import anthropic_wire as AW
+        out["anthropic-version"] = AW.VERSION
+    if not k:
+        return out
+    if not header and not scheme:
+        if wire == "anthropic":
+            header, scheme = "x-api-key", "raw"
+        elif is_azure(base) and not looks_jwt(k):
+            header, scheme = "api-key", "raw"
+        else:
+            header, scheme = "Authorization", "bearer"
+    header = header or "Authorization"
+    if not scheme:
+        scheme = "bearer" if header.lower() == "authorization" else "raw"
+    if scheme == "bearer":
+        v = f"Bearer {k}"
+    elif scheme == "token":
+        v = f"Token {k}"
+    elif scheme == "basic":
+        v = "Basic " + (base64.b64encode(k.encode("utf-8")).decode() if ":" in k else k)
+    else:
+        v = k
+    out[header] = v
+    return out
+
+
+def chat_url(base: str, model: str = "", path: str = "chat/completions", version: str = "") -> str:
+    """The URL of a call. Azure OpenAI puts the deployment (the model name) in the path and an api-version in the
+    query; the /openai/v1 route and every other endpoint use {base}/{path}."""
+    base = (base or "").rstrip("/")
+    if "?" in base:
+        base = base.split("?", 1)[0].rstrip("/")
+    if not is_azure(base):
+        return f"{base}/{path}"
+    u = urlparse(base)
+    origin, p = f"{u.scheme}://{u.netloc}", u.path.rstrip("/")
+    if p.startswith("/openai/v1"):
+        v = version or _cfg("MESHPOOL_AZURE_API_VERSION")
+        return f"{origin}{p}/{path}" + (f"?api-version={quote(v)}" if v else "")
+    if p.startswith("/models"):
+        return f"{origin}{p}/{path}?api-version={quote(version or _cfg('MESHPOOL_AZURE_API_VERSION') or AZURE_MODELS_API_VERSION)}"
+    dep = azure_deployment(base) or model
+    if path in ("models", "info") or not dep:
+        return f"{origin}/openai/{path}?api-version={quote(version or azure_version())}"
+    return f"{origin}/openai/deployments/{quote(dep, safe='')}/{path}?api-version={quote(version or azure_version())}"
+
+
+def adapt_body(base: str, body: dict) -> dict:
+    """Azure's chat completions take max_completion_tokens (every current model, the reasoning ones only that)."""
+    if is_azure(base) and "max_tokens" in body and "max_completion_tokens" not in body:
+        body = dict(body)
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    return body
+
+
+def chat_target(base: str, key_: str, model: str, path: str = "chat/completions") -> tuple[str, dict]:
+    """(URL, auth headers) for a call to `base`. The saved custom header and scheme apply to the saved endpoint only:
+    the local ChatGPT relay or another host gets the standard form for its kind."""
+    mine = is_key_endpoint(base)
+    h = auth_headers(key_, base, wire_for(base), None if mine else "", None if mine else "")
+    return chat_url(base, model, path), h
+
+
+def _norm_base(u: str) -> str:
+    return (u or "").strip().rstrip("/").lower()
+
+
+def is_key_endpoint(base: str) -> bool:
+    """Whether `base` is the key endpoint: the one in use now, or the saved or environment one (they can differ
+    when the shell overrides the saved address)."""
+    b = _norm_base(base)
+    return bool(b) and b in {_norm_base(key_base()), _norm_base(C.read().get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("OPENAI_BASE_URL", ""))}
+
+
+def wire_for(base: str) -> str:
+    """The wire to speak to `base`, decided from the address the request really goes to: the key endpoint's wire
+    for the key endpoint (whatever spelling of its address), else Anthropic for an anthropic.com host, else OpenAI."""
+    if is_key_endpoint(base):
+        return key_wire()
+    return "anthropic" if host(base).endswith("anthropic.com") else "openai"
 
 
 def key_problem(k: str | None) -> str:
@@ -113,7 +269,7 @@ def join(prov: str, model: str) -> str:
 
 def ready(prov: str) -> bool:
     from meshpool_harness import harnesses as HR
-    return {"key": lambda: bool(key()),
+    return {"key": lambda: bool(key()) or keyless_ok(),
             "chatgpt": lambda: HR.signed_in("codex")}[prov]()
 
 

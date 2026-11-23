@@ -43,6 +43,13 @@ _READ_ONLY = re.compile(r"\b(read|open|summari[sz]e|what(?:'s| is) in|explain|re
                         r"attached|that)\b", re.I)
 
 
+# A how-to or explain question, or a request for a summary, is about reading, not making, unless it names a making verb.
+_QUESTION = re.compile(r"^\W*(?:how (?:do|can|should|would|could|to)\b|what(?:'s| is| are| does)\b|why\b|explain\b|where\b)", re.I)
+_SUMMARY = re.compile(r"\b(?:summary|summaries|summari[sz]e|tl;?dr|overview) ?(?:of|for)?\b", re.I)
+_DO_MAKE = re.compile(r"\b(make|create|build|generate|produce|prepare|put together|draft|write|design|convert|export|"
+                      r"turn (?:this|it|that|these|them) into|save (?:it )?as)\b", re.I)
+
+
 def _rx(words: str) -> re.Pattern | None:
     return re.compile(r"(?<![a-z0-9])(?:" + words + r")(?![a-z0-9])", re.I) if words else None
 
@@ -59,6 +66,8 @@ def needs(text: str) -> list[str]:
     if not t.strip():
         return []
     make = bool(_MAKE.search(t))
+    if _QUESTION.search(t) or (_SUMMARY.search(t) and not _DO_MAKE.search(t)):
+        return []
     if not make and _READ_ONLY.search(t):
         return []
     out = []

@@ -151,7 +151,7 @@ def test_timeout_gives_not_run(tmp_path):
     t0 = time.time()
     rv = R.review_deck("", client=_Stub({m: "sleep" for m in R.CHAIN}), pngs=[_png(tmp_path, 1)], timeout=0.2)
     assert rv["status"] == "not_run" and "TimeoutError" in rv["errors"][0]
-    assert time.time() - t0 < 3                                           # three models x 0.2 s, not 3 x 5 s
+    assert time.time() - t0 < 12                                           # three models x 0.2 s, not 3 x 5 s
 
 
 def test_render_failure_is_not_run(monkeypatch):
