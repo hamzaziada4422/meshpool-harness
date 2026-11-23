@@ -987,6 +987,7 @@ class Server:
         self.log_dir, self.roots = log_dir, roots
         self._entry: _Entry | None = None      # the shared process of a stdio server (see the pool above)
         self._key = ""
+        self.get_model = None                  # () -> the chat's model; sent with calls of a per-call-project server
         self._inflight: dict[int, object] = {}   # request id -> transport, for Stop (notifications/cancelled)
         self.timed_out = False                 # the start only ran out of time: not a verdict on the server
 
@@ -1250,6 +1251,12 @@ class Server:
         """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
         if self.spec.get("per_call_project") and self.roots:
             args = {**args, "_project": str(Path(self.roots[0]).resolve())}
+            try:
+                model = self.get_model() if self.get_model else ""
+            except Exception:  # noqa: BLE001
+                model = ""
+            if model:
+                args["_model"] = str(model)                  # the chat's model, for engines that call one
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
@@ -1312,6 +1319,7 @@ class Manager:
         self._names: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
         self.last_images: list[dict] = []
+        self.model = None                              # str or () -> str: the chat's model (set by the agent)
         self.closed = False
         self._threads: list = []
         self._sig = None
@@ -1337,6 +1345,7 @@ class Manager:
                 self.disabled.append(name)
                 continue
             s = Server(name, self._with_chat(spec), log_dir, self.roots)
+            s.get_model = lambda: self.model() if callable(self.model) else self.model
             self.servers[name] = s
             bad = recently_failed(name, spec) if use_health else None
             if bad is not None:                       # failed a moment ago: do not make every thread wait for it

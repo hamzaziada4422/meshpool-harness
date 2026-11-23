@@ -162,7 +162,8 @@ def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
     timeout = float(timeout if timeout is not None else os.environ.get("OFFICE_JOB_TIMEOUT_S", "1800"))
     env = dict(os.environ, PYTHONPATH=str(APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     env.pop("MH_EVENT_LOG", None)
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}     # CREATE_NO_WINDOW: no console flashes up
+    kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;
+    # its own process group, so Stop and the timeout end LibreOffice and model-written scripts too, not only the engine
     try:
         proc = subprocess.Popen(j["cmd"], cwd=str(j["out"]), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace", **kw)
@@ -174,6 +175,8 @@ def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
             except subprocess.TimeoutExpired:
                 stop = bool(should_stop and should_stop())
                 if stop or time.time() > end:
+                    from meshpool_harness.agent.mcp import kill_tree
+                    kill_tree(proc)
                     proc.kill()
                     proc.communicate()
                     j["result"], j["stopped"] = {}, stop

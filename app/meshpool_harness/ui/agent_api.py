@@ -399,6 +399,7 @@ class Session:
                 self.mcp.close()
                 return
             self.agent.mcp = self.mcp
+            self.mcp.model = lambda: getattr(self.agent, "model", None) or ""
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
             txt = ("MCP: " + ", ".join(f"{s['name']} ({len(s['tools'])} tools)" for s in ok)) if ok else "No MCP servers enabled."
