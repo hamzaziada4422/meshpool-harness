@@ -38,7 +38,8 @@ KEEP_BACKUPS = 20
 _SECRET = re.compile(r"(^\.env|token|secret|credential|oauth|\.pem$|\.key$|^id_rsa|\.config$|^mcp.*\.json$|^connectors.*\.json$)", re.I)
 PREVIEW_EXT = {".pdf", ".pptx", ".ppt", ".pptm", ".ppsx", ".pps", ".potx", ".odp", ".docx", ".doc", ".docm", ".dotx", ".odt",
                ".rtf", ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".key", ".pages", ".numbers",
-               ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+               ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+               ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".mp4", ".mov", ".m4v", ".webm", ".ogv"}
 
 
 class Conflict(Exception):

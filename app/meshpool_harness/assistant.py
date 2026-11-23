@@ -1143,3 +1143,43 @@ def run_folder(t: dict) -> dict:
     except (WT.WorktreeError, OSError, TimeoutError):
         return plain
     return {"workdir": rec["workdir"], "worktree_id": rec["id"]}
+
+
+# ---------- the app's and the terminal's one entry point (moved from ui/server.py) -----------------------------------
+
+def api_view() -> dict:
+    rows = [dict(t, describe=describe(t), status=status(t)) for t in tasks()]
+    return {"instructions": instructions(), "memory": memory(), "settings": settings(), "tasks": rows,
+            "tasks_problem": tasks_problem()}
+
+
+def api_action(b: dict) -> dict:
+    act = b.get("action")
+    if act == "instructions":
+        set_instructions(b.get("text", ""), base=b.get("base"))
+    elif act == "memory":
+        set_memory(b.get("text", ""), base=b.get("base"))
+    elif act == "settings":
+        save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
+    elif act == "task_add":
+        add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
+                 b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
+                 b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
+                 b.get("skip_if_missed_h"))
+    elif act == "task_update":
+        update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at", "minutes",
+                                                              "folder", "harness", "kind", "enabled",
+                                                              "only_on_change", "skip_if_missed_h")})
+    elif act == "tasks_reset":
+        reset_tasks()
+    elif act == "task_delete":
+        delete_task(b.get("id", ""))
+    elif act == "task_run":
+        from meshpool_harness.ui import agent_api as A
+        t = next((x for x in tasks() if x["id"] == b.get("id")), None)
+        if not t:
+            raise ValueError("That task is gone.")
+        return dict(api_view(), thread=A.run_scheduled(t))
+    else:
+        raise ValueError("Unknown action.")
+    return api_view()

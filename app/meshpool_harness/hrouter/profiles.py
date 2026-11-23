@@ -7,8 +7,8 @@ the compaction limit, the spec-text set ("methods"), lean tools, per-step method
      "methods": null | "<name>", "lean_tools": bool, "step_methods": bool,
      "engine": "meshpool"|"pi"|"hermes", "engine_style": "meshpool"|"codex", "extends": "<profile>"}
 
-engine_style "codex" (code routes of the MeshPool engine only): Codex's base instructions, tools (shell, apply_patch,
-update_plan) and loop, with MeshPool's routing method on the first message (app/defaults/engines/codex,
+engine_style "codex" (code routes of the Meshpool engine only): Codex's base instructions, tools (shell, apply_patch,
+update_plan) and loop, with Meshpool's routing method on the first message (app/defaults/engines/codex,
 docs/plan/CODEX_ENGINE.md).
 
 Assignment (app/defaults/profiles.json, then <data folder>/profiles.json, then MH_PROFILES_FILE; later wins):
@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 ENGINES = ("meshpool", "pi", "hermes")
-STYLES = ("meshpool", "codex")      # how the MeshPool agent itself runs: its own prompt and tools, or Codex's design
+STYLES = ("meshpool", "codex")      # how the Meshpool agent itself runs: its own prompt and tools, or Codex's design
 
 FULL = {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000, "methods": None,
         "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool"}
@@ -39,7 +39,7 @@ BUILTIN = {
     "lean": {"plan": "off", "review": False, "mutation": False, "methods": "v2"},
     "lean+plan": {"extends": "lean", "plan": "auto"},
     "lean+review": {"extends": "lean", "review": True},
-    # Codex's design under MeshPool's routing: no plan/review/mutation rounds, the method text of "lean-stop"
+    # Codex's design under Meshpool's routing: no plan/review/mutation rounds, the method text of "lean-stop"
     "codex": {"plan": "off", "review": False, "mutation": False, "step_methods": False, "methods": "v2-stop",
               "engine_style": "codex"},
 }

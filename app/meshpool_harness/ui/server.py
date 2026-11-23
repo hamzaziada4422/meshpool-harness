@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
+from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
 
 APP = C.APP
@@ -49,18 +50,8 @@ LOCK = threading.Lock()
 
 def get_settings() -> dict:
     from meshpool_harness import providers as PV
-    vals = C.read()
-    fields = []
-    for key, label, default, help_ in C.FIELDS:
-        v = vals.get(key, "")
-        item = {"key": key, "label": label, "default": default, "help": help_}
-        if key in C.SECRET:
-            item["set"] = bool(v)
-            item["hint"] = ("ends in " + v[-4:]) if len(v) >= 8 else ("set" if v else "")
-            item["value"] = ""
-        else:
-            item["value"] = v
-        fields.append(item)
+    from meshpool_harness import settings_api as SA
+    fields = SA.values()
     from meshpool_harness.ui import desktop as Dk
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
@@ -71,95 +62,20 @@ def get_settings() -> dict:
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
-def _key_follows_host(vals: dict, typed_key: str = ""):
-    """A saved key belongs to its endpoint: moving to another host needs that host's key, or the saved one is sent
-    to the new host."""
-    from meshpool_harness import providers as PV
-    new = vals.get("MESHPOOL_BASE_URL")
-    if new and PV.host(new) and PV.host(new) != PV.host(PV.key_base()) and PV.key() \
-            and not (vals.get("MESHPOOL_API_KEY") or typed_key):
-        raise ValueError(f"Enter the API key for {PV.host(new)} too: your saved key is for {PV.host(PV.key_base())} "
-                         "and is not sent anywhere else.")
-
-
 def save_settings(body: dict) -> dict:
-    allowed = {f[0] for f in C.FIELDS}
-    vals = {}
-    for k, v in (body.get("values") or {}).items():
-        if k not in allowed:
-            continue
-        v = re.sub(r"[\r\n]", "", str(v)).strip()
-        if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
-            v = C.clean_key(v)           # quotes, "Bearer ", line breaks, a pasted zero-width space
-        if k in C.SECRET and v == "":
-            continue                     # blank key field = keep the saved key
-        vals[k] = v
-    if vals.get("MESHPOOL_BASE_URL"):
-        u = urlparse(vals["MESHPOOL_BASE_URL"])
-        if u.scheme not in ("http", "https") or not u.netloc:
-            raise ValueError("The server address must start with http:// or https:// and name a host.")
-    from meshpool_harness import providers as PV
-    new = vals.get("MESHPOOL_BASE_URL")
-    from meshpool_harness import provider_setup as PS
-    if new and not vals.get("MESHPOOL_API_KEY") and not PS._same_endpoint(new, PV.key_base()) and PV.key() \
-            and PV.keyless_ok(new):
-        vals["MESHPOOL_API_KEY"] = ""    # a local server needs no key: the old endpoint's key goes, not to this server
-    _key_follows_host(vals)
-    from meshpool_harness import browser_use as BU
-    BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
-    if vals.get("GITHUB_TOKEN"):
-        try:
-            from meshpool_harness.ui import agent_api as _A
-            _A.mcp_save({"name": "github", "enabled": True})
-        except Exception:
-            pass
-    if vals:
-        C.write(vals)
-        for k, v in vals.items():
-            if v:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
+    from meshpool_harness import settings_api as SA
+    SA.save_settings(body)
     return get_settings()
 
 
 def assistant_view() -> dict:
     from meshpool_harness import assistant as AS
-    rows = [dict(t, describe=AS.describe(t), status=AS.status(t)) for t in AS.tasks()]
-    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows,
-            "tasks_problem": AS.tasks_problem()}
+    return AS.api_view()
 
 
 def assistant_action(b: dict) -> dict:
     from meshpool_harness import assistant as AS
-    act = b.get("action")
-    if act == "instructions":
-        AS.set_instructions(b.get("text", ""), base=b.get("base"))
-    elif act == "memory":
-        AS.set_memory(b.get("text", ""), base=b.get("base"))
-    elif act == "settings":
-        AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
-    elif act == "task_add":
-        AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
-                    b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
-                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
-                    b.get("skip_if_missed_h"))
-    elif act == "task_update":
-        AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
-                                                                   "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change", "skip_if_missed_h")})
-    elif act == "tasks_reset":
-        AS.reset_tasks()
-    elif act == "task_delete":
-        AS.delete_task(b.get("id", ""))
-    elif act == "task_run":
-        t = next((x for x in AS.tasks() if x["id"] == b.get("id")), None)
-        if not t:
-            raise ValueError("That task is gone.")
-        return dict(assistant_view(), thread=A.run_scheduled(t))
-    else:
-        raise ValueError("Unknown action.")
-    return assistant_view()
+    return AS.api_action(b)
 
 
 def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
@@ -457,8 +373,8 @@ class Handler(BaseHTTPRequestHandler):
             if not p.is_file() or p.stat().st_size > 60_000_000:
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-            if not (ctype.startswith("image/") or ctype == "application/pdf"):
-                return self._send(415, {"error": "only images and PDFs are served"})
+            if not (ctype.startswith(("image/", "audio/", "video/")) or ctype == "application/pdf"):
+                return self._send(415, {"error": "only images, audio, video and PDFs are served"})
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition("inline", p.name),
                                                           "X-Content-Type-Options": "nosniff",
                                                           "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
@@ -554,7 +470,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__,
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
-                return self._send(200, {"sessions": A.listing()})
+                q = parse_qs(u.query)
+                def _n(k):
+                    try:
+                        return max(0, int(q.get(k, ["0"])[0]))
+                    except ValueError:
+                        return 0
+                return self._send(200, A.listing_page(_n("limit"), _n("offset")))
             if u.path == "/api/styles":
                 from meshpool_harness import styles as ST
                 return self._send(200, ST.listing())
@@ -582,8 +504,9 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == "/api/capabilities":
                     return self._send(200, {"features": SV.capabilities()})
                 if u.path == "/api/spend":
-                    return self._send(200, {"key": SV.key_spend(q.get("fresh") == "1"), "days": SV.usage_by_day(),
-                                            "billing_url": SV.BILLING_URL})
+                    from meshpool_harness import usage_view as UV
+                    r = UV.summary(fresh=q.get("fresh") == "1", parts=("days", "key"))
+                    return self._send(200, {"key": r["key"], "days": r["days"], "billing_url": SV.BILLING_URL})
                 return self._send(200, SV.data_info())
             m = re.fullmatch(r"/api/pj(?:/(p_[0-9a-f]{10}))?", u.path)
             if m:                                                  # projects: name, instructions, knowledge, memory
@@ -650,7 +573,8 @@ class Handler(BaseHTTPRequestHandler):
                     since = float(q.get("since") or 0)
                 except ValueError:
                     since = 0.0
-                return self._send(200, W.usage(since))
+                from meshpool_harness import usage_view as UV
+                return self._send(200, UV.summary(since=since, parts=("usage",))["usage"])
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
             if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
@@ -1001,9 +925,7 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 return self._send(200, W.set_favorite(b.get("id", ""), bool(b.get("on"))))
             if u.path == "/api/models/default":
-                C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
-                C.load_into_env(override=True)
-                return self._send(200, W.models())
+                return self._send(200, W.set_default_model(self._json().get("id", "")))
             if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify", "/api/browser-use"):
                 from meshpool_harness.ui import settings_v2 as SV
                 b = self._json()
@@ -1031,36 +953,18 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/pj/(p_[0-9a-f]{10})", u.path)
             if m:
                 from meshpool_harness import project_store as PS
-                pid, b = m.group(1), self._json()
-                act = b.get("action", "update")
-                if act == "update":
-                    kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
-                    return self._send(200, PS.update(pid, **kw))
-                if act == "delete":
-                    PS.delete(pid)
-                    return self._send(200, {"ok": True})
-                if act == "memory_set":
-                    PS.memory_set(pid, b.get("text", ""))
-                elif act == "memory_add":
-                    PS.memory_add(pid, b.get("text", ""))
-                elif act == "memory_clear":
-                    PS.memory_clear(pid)
-                elif act == "knowledge_add":
-                    import base64
-                    PS.knowledge_add(pid, b.get("name", ""), base64.b64decode(b.get("data", "")))
-                elif act == "knowledge_remove":
-                    PS.knowledge_remove(pid, b.get("name", ""))
-                else:
-                    raise ValueError("Unknown project action.")
-                return self._send(200, PS.detail(pid))
+                return self._send(200, PS.api_action(m.group(1), self._json()))
             if u.path == "/api/projects":
                 b = self._json()
                 act = b.get("action", "add")
                 if act == "pick":
-                    from meshpool_harness.ui.desktop import choose_folder, has_folder_picker
-                    if not has_folder_picker():          # the UI asks the user to type or paste the path instead
+                    from meshpool_harness.ui import desktop as DK
+                    if not DK.has_folder_picker():       # the UI asks the user to type or paste the path instead
                         return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
-                    path = choose_folder(b.get("start", ""))
+                    try:
+                        path = DK.choose_folder(b.get("start", ""))
+                    except DK.PickerUnavailable:         # the dialog could not open: same typed-path fallback
+                        return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
@@ -1089,22 +993,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"projects": W.projects()})
             if u.path == "/api/skills":
                 from meshpool_harness import skills as SK
-                b = self._json()
-                act = b.get("action")
-                if act == "create":
-                    SK.create(b.get("name", ""), b.get("description", ""), b.get("body", ""))
-                elif act == "update":
-                    SK.update(b.get("id", ""), b.get("text", ""))
-                elif act == "toggle":
-                    SK.toggle(b.get("id", ""), bool(b.get("on")))
-                elif act == "remove":
-                    SK.remove(b.get("id", ""))
-                elif act == "upload":
-                    import base64
-                    SK.add_files([(f["name"], base64.b64decode(f["data"])) for f in b.get("files") or []])
-                elif act == "open":                       # the page shows the folder in its own file tree
-                    SK.folder().mkdir(parents=True, exist_ok=True)
-                return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+                return self._send(200, SK.api_action(self._json()))
             if u.path == "/api/plugins":
                 from meshpool_harness import plugins as PL
                 return self._send(200, PL.api_action(self._json()))
@@ -1199,24 +1088,9 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
             if m:
-                s_, act, b = A.get(m.group(1)), m.group(2), self._json()
-                if act == "model":
-                    s_.set_model(b.get("model", ""))
-                elif act == "harness":
-                    s_.switch_harness(b.get("harness", ""))
-                elif act == "route":
-                    s_.set_route(b.get("spec", ""))
-                elif act == "plan":
-                    s_.set_plan(bool(b.get("on")))
-                elif act == "goal":
-                    s_.set_goal(b.get("text", ""))
-                elif act == "style":
-                    s_.set_style(b.get("style", ""))
-                else:
-                    s_.revert(int(b.get("turn", 0)))
-                return self._send(200, s_.view(int(b.get("since", 10**9))))
+                return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(rewind|fork)", u.path)     # back to a message / a new chat from it
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
@@ -1232,25 +1106,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, s.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
             if m:
-                s, act, b = A.get(m.group(1)), m.group(2), self._json()
-                if act == "send":
-                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
-                               files=b.get("files") or None)
-                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
-                elif act == "stop":
-                    s.stop()
-                elif act == "grade":
-                    s.grade()
-                elif act == "answer":
-                    s.answer(str(b.get("id", "")), b.get("decision", "no"), b.get("note", ""))
-                elif act == "compact":
-                    if s.state in ("working", "waiting"):
-                        raise ValueError("Wait for the task to finish or stop it, then compact.")
-                    r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
-                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), compacted=r))
-                else:
-                    s.set_mode(b.get("mode", "ask"))
-                return self._send(200, s.view(int(b.get("since", 10**9))))
+                return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
         except KeyError as e:
             msg = str(e).strip("'\"")
             if not msg or msg == "None":
@@ -1301,6 +1157,7 @@ from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the t
 class _Server(ThreadingHTTPServer):
     # Windows' SO_REUSEADDR lets a second server bind a port already in use, so the free-port search never moved on
     allow_reuse_address = os.name != "nt"
+    request_queue_size = 128                     # P-13: the default of 5 drops connections when many tabs reconnect at once
 
 
 def _running() -> bool:

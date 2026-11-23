@@ -1,5 +1,5 @@
 """The "codex" engine style: Codex's apply_patch, shell and update_plan, its base instructions, and its loop (no review,
-mutation or plan rounds), under MeshPool's routing. No network and no model calls (the transport is scripted)."""
+mutation or plan rounds), under Meshpool's routing. No network and no model calls (the transport is scripted)."""
 import json
 import sys
 from pathlib import Path
@@ -242,7 +242,7 @@ def test_the_codex_profile_is_defined_and_the_default_style_is_unchanged():
 def test_system_prompt_is_codex_text_with_attribution_kept_in_the_file(tmp_path):
     a = _agent(tmp_path)
     sp = a.messages[0]["content"]
-    assert sp.startswith("You are a coding agent running in MeshPool")
+    assert sp.startswith("You are a coding agent running in Meshpool")
     assert "Please keep going until the query is completely resolved" in sp              # upstream wording
     assert "Use the `apply_patch` tool to edit files" in sp and "*** Begin Patch" in sp and "## `update_plan`" in sp
     assert "Codex CLI, an open source project led by OpenAI" in sp                       # says what it is built on
@@ -307,7 +307,7 @@ def test_tool_list_is_exactly_the_codex_set_plus_mcp(tmp_path):
     _script(a, [_call("bash", {"command": "echo hi"}), {"role": "assistant", "content": "done"}])
     a.send("go")
     out = [m["content"] for m in a.messages if m["role"] == "tool"][0]
-    assert "unknown tool 'bash'" in out and "shell, apply_patch, update_plan" in out          # no MeshPool tools
+    assert "unknown tool 'bash'" in out and "shell, apply_patch, update_plan" in out          # no Meshpool tools
 
 
 def test_route_method_rides_on_the_first_message_not_the_system_prompt(tmp_path):

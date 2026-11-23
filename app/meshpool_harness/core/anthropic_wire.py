@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 
 VERSION = "2023-06-01"
@@ -95,6 +96,15 @@ def to_request(body: dict, cache: bool | None = None) -> dict:
         out["system"] = [blk]
     if body.get("temperature") is not None:
         out["temperature"] = body["temperature"]
+    eff = str(body.get("reasoning_effort") or "").lower()
+    if eff:                                          # modelcaps decided this model takes an effort: Messages names it
+        if _NEW_EFFORT.search(str(body.get("model") or "")):
+            out["output_config"] = {"effort": {"xhigh": "max"}.get(eff, eff)}
+        else:
+            budget = {"low": 2048, "medium": 8192, "high": 24576, "xhigh": 32768}.get(eff, 8192)
+            out["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            out["max_tokens"] = max(out["max_tokens"], budget + 4096)
+            out.pop("temperature", None)             # extended thinking takes no temperature
     tools = []
     for t in body.get("tools") or []:
         f = t.get("function") or {}
@@ -117,6 +127,8 @@ def to_request(body: dict, cache: bool | None = None) -> dict:
 
 
 _EPHEMERAL = {"type": "ephemeral"}
+# models that take output_config.effort (Opus 4.5+, Sonnet 4.6+, the 5 family); older ones get a thinking budget
+_NEW_EFFORT = re.compile(r"(opus-4[-.][5-9]|sonnet-4[-.][6-9]|haiku-4[-.][5-9]|(opus|sonnet|haiku)-[5-9])", re.I)
 
 
 def _cache_on() -> bool:

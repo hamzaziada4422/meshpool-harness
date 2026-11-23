@@ -120,6 +120,54 @@ def _profile_fonts(profile: Path) -> None:
         pass
 
 
+_LIVE: set = set()          # LibreOffice runs in flight (P-04: killed with their whole process tree on timeout and at exit)
+
+
+def _kill_tree(proc) -> None:
+    import signal
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, timeout=15)
+        else:
+            os.killpg(proc.pid, signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
+def kill_all_soffice() -> None:
+    """Stop every LibreOffice run this process started, with everything it started."""
+    for pr in list(_LIVE):
+        _kill_tree(pr)
+
+
+import atexit as _atexit
+_atexit.register(kill_all_soffice)
+
+
+def _run_tree(cmd: list, timeout: int):
+    """subprocess.run(capture_output, text) that runs the command in its own process group (a job on Windows) and kills
+    the whole tree when the timeout passes: soffice starts a second process that plain kill() leaves running."""
+    kw: dict = {"start_new_session": True} if os.name != "nt" else {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+    pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+    _LIVE.add(pr)
+    try:
+        out, err = pr.communicate(timeout=timeout)
+    except BaseException:
+        _kill_tree(pr)
+        try:
+            pr.communicate(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+    finally:
+        _LIVE.discard(pr)
+    return subprocess.CompletedProcess(cmd, pr.returncode, out, err)
+
+
 def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path:
     """Headless convert with a throwaway profile, so parallel runs never share a lock."""
     from meshpool_harness import office_runtime
@@ -129,8 +177,8 @@ def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
         _profile_fonts(Path(profile))
-        r = subprocess.run([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--convert-to", to,
-                            "--outdir", str(out_dir), str(src)], capture_output=True, text=True, timeout=timeout)
+        r = _run_tree([exe, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--convert-to", to,
+                       "--outdir", str(out_dir), str(src)], timeout)
     ext = to.split(":")[0]
     out = Path(out_dir) / (Path(src).stem + "." + ext)
     if not out.exists():

@@ -1,6 +1,6 @@
 """Task classifier for harness selection: which kind of work is this request?
 
-The categories are the route keys MeshPool already uses, at the level that matters when choosing a harness (the
+The categories are the route keys Meshpool already uses, at the level that matters when choosing a harness (the
 scorecard in defaults/harness_scorecard.json is keyed by them).
 
   Stage 1  the zero-token signals (route._decide) give a category and a confidence. Most requests end here.

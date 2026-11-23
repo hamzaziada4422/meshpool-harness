@@ -25,6 +25,14 @@ FIELDS = [
      "endpoint. Empty uses the current GA version."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
      "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
+    ("MH_REASONING_EFFORT", "Reasoning effort", "", "How hard models that take an effort level think: off, low, medium, "
+     "high or xhigh. Empty: each model's own default. A chat can override it (/effort, --effort)."),
+    ("MH_OTEL", "OpenTelemetry export", "0", "1 sends spans and metrics (ids, names, counts, durations, cost; no text) to "
+     "the endpoint below. Off by default; nothing is sent without an endpoint."),
+    ("MH_OTEL_ENDPOINT", "OpenTelemetry endpoint", "", "An OTLP/HTTP collector, e.g. http://localhost:4318. "
+     "OTEL_EXPORTER_OTLP_ENDPOINT also works."),
+    ("MH_OTEL_CONTENT", "OpenTelemetry: include text", "0", "1 adds prompt, reply and tool-argument text (cut to 2 KB) "
+     "to the exported spans. Off by default."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Ask asks before every change and command. Accept edits changes files without asking but asks before "
      "commands. Full access never asks."),

@@ -127,7 +127,7 @@ async function providerPage(b, close) {
     </details>
     <div class="pvact"><button class="btn primary" id="pvTest">Test connection</button><span class="pvres" id="pvRes" role="status"></span></div>
     <div id="pvModels" hidden></div>
-    <div class="pvact"><button class="btn primary" id="pvSave" disabled>Save</button><span class="pvres" id="pvSaveRes" role="status"></span></div>`;
+    <div class="pvact"><button class="btn primary" id="pvSave" disabled title="No changes to save yet">Save</button><span class="pvres" id="pvSaveRes" role="status"></span></div>`;
   const say = (id, cls, t) => { const el = $("#" + id, b); el.className = "pvres " + cls; el.textContent = t; };
   const key = () => ($("#pvKey", b)?.value || "").trim();
   const drawModels = () => {
@@ -214,7 +214,7 @@ async function stylesPage(b, close) {
         <label class="field"><span>Name</span><input id="stName" maxlength="40" value="${esc(ed.name)}" placeholder="For example: Plain and friendly"></label>
         <label class="field"><span>Instructions</span><textarea id="stIns" rows="5" maxlength="2000" placeholder="How should Meshpool write? For example: Write in short, warm sentences. Avoid jargon.">${esc(ed.instruction)}</textarea></label>
         ${ed.showSample ? `<label class="field"><span>Your writing sample</span><textarea id="stSample" rows="5" maxlength="6000" placeholder="Paste a few paragraphs you wrote.">${esc(ed.sample)}</textarea><small>One short model call turns it into instructions. Without a key, your text is kept as the instructions.</small></label>
-          <div class="stact"><button class="btn" type="button" id="stMake" ${ed.busy ? "disabled" : ""}>${ed.busy ? "Reading…" : "Make instructions"}</button></div>`
+          <div class="stact"><button class="btn" type="button" id="stMake" ${ed.busy ? `disabled title="Working on it..."` : ""}>${ed.busy ? "Reading…" : "Make instructions"}</button></div>`
           : `<button class="linkbtn" type="button" id="stSampleOn">Start from a writing sample</button>`}
         <div class="res ${ed.note ? "ok" : ""}" id="stNote" role="status">${esc(ed.note)}</div>
         <div class="stact" style="margin-top:8px"><button class="btn primary" type="submit">Save style</button><button class="btn" type="button" id="stCancel">Cancel</button></div></form>`

@@ -1,4 +1,4 @@
-"""Terminal front end for the MeshPool coding agent.
+"""Terminal front end for the Meshpool coding agent.
 
   meshpool                       start a session in the current folder
   meshpool --dir PATH            start in another folder
@@ -33,7 +33,7 @@ from meshpool_harness.agent.tui_render import Style
 COMMANDS = [
     ("help", "", "show the commands"),
     ("model", "[id]", "pick the model"),
-    ("login", "", "sign in: MeshPool key, another provider, or ChatGPT"),
+    ("login", "", "sign in: Meshpool key, another provider, or ChatGPT"),
     ("clear", "", "start a new conversation in this folder"),
     ("compact", "", "shorten old tool output to free context"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
@@ -49,16 +49,29 @@ COMMANDS = [
     ("rewind", "[turn]", "undo to a turn and edit its message"),
     ("attach", "PATH...", "send files or pictures with your next message"),
     ("resume", "[search]", "switch to another chat"),
-    ("mcp", "", "MCP servers and their tools"),
+    ("mcp", "[list|on NAME|off NAME|test NAME]", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
-    ("tokens", "", "tokens used in this session"),
+    ("usage", "[days]", "usage and cost: this chat and the ledger (/tokens, /cost)"),
+    ("receipt", "", "what the last turn cost and which model ran it"),
+    ("effort", "[low|medium|high|xhigh|off]", "how hard the model thinks, for this chat"),
+    ("fork", "[turn]", "start a new chat from this one, up to a turn"),
+    ("chats", "[search]", "list or search your chats"),
+    ("rename", "TITLE", "rename this chat"),
+    ("delete", "", "delete this chat"),
+    ("project", "[list|use ID|show ID|memory ID ...]", "projects: list, move this chat into one, memory"),
+    ("memory", "[list|add TEXT|forget ID|search Q]", "what Meshpool remembers about you"),
+    ("skills", "[list|show ID|enable ID|disable ID]", "your skills"),
+    ("schedule", "[list|run ID|enable ID|disable ID|delete ID]", "scheduled tasks"),
+    ("settings", "[KEY [VALUE]]", "show or change a setting"),
+    ("checks", "", "what the checks found on the last piece of work"),
+    ("worktree", "[list|diff ID|merge ID|discard ID]", "isolated copies of this folder"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
     ("setup", "", "first-run walkthrough: key, folder, skills"),
     ("exit", "", "quit"),
 ]
-ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "tokens"}
+ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "usage", "tokens": "usage"}
 MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
@@ -135,7 +148,7 @@ class Terminal:
         self._branch_v = ""
         self.model = ""
         self.provider = ""
-        self.effort = os.environ.get("MH_EFFORT") or os.environ.get("MH_REASONING_EFFORT") or ""
+        self.effort = os.environ.get("MH_REASONING_EFFORT") or ""
         self.mode = "ask"
         self.modes = MODES
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -157,7 +170,7 @@ class Terminal:
         return max(20, shutil.get_terminal_size((100, 24)).columns)
 
     def _write(self, s: str, to=None):
-        (to or self.out).write(s)
+        (to or self.out).write(R.safe(s))
         (to or self.out).flush()
 
     def p(self, s="", end="\n", to=None):
@@ -392,7 +405,7 @@ class Terminal:
         self.cost = self._price()
 
     def _price(self) -> float | None:
-        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). MeshPool has no
+        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). Meshpool has no
         price list, so without those variables no dollar figure is shown."""
         try:
             pi, po = float(os.environ["MH_PRICE_IN"]), float(os.environ["MH_PRICE_OUT"])
@@ -449,22 +462,22 @@ class Terminal:
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
-            lines, hidden = R.shell_block(info["summary"], out, took, st, self.width, meta=meta,
-                                          limit=self.output_limit, ok=ok)
+            lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
+                                    limit=self.output_limit, ok=ok)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)
         else:
-            self.scroll(["  " + x for x in R.tool_line(name, info["summary"], out, ok, took, st, self.width - 4,
-                                                       info["diff"], bool(info["mcp"]))])
+            self.scroll(["  " + x for x in R.guard(R.tool_line, st, name, info["summary"], out, ok, took, st, self.width - 4,
+                                                    info["diff"], bool(info["mcp"]))])
 
     def expand_last(self):
         """Ctrl+O: print the last shell output in full (the screen above is append-only, so it is printed again)."""
         b = self.last_block
         if not b:
             return self.scroll(["  " + self.st.dim("Nothing to expand.")])
-        lines, _ = R.shell_block(b["command"], b["output"], b["took"], self.st, self.width, meta=b["meta"], limit=0,
-                                 ok=b["ok"])
+        lines, _ = R.guard(R.shell_block, self.st, b["command"], b["output"], b["took"], self.st, self.width,
+                           meta=b["meta"], limit=0, ok=b["ok"])
         self.scroll(lines)
 
     # ---------- facts for the screen ----------
@@ -480,7 +493,7 @@ class Terminal:
         except Exception:  # noqa: BLE001
             label = prov
         self.provider = "ChatGPT subscription" if prov == "chatgpt" else (
-            "MeshPool API" if label.lower() == "meshpool" else f"{label} API")
+            "Meshpool API" if label.lower() == "meshpool" else f"{label} API")
         self.mode = getattr(agent, "mode", self.mode) or "ask"
         self.modes = ["ask", "auto"] if hasattr(agent, "manifest") else MODES
         self.cwd = self.cwd_label or str(getattr(agent, "root", self.cwd))
@@ -747,7 +760,7 @@ class Terminal:
         lines = []
         while True:
             try:
-                line = input("❯ " if sys.stdin.isatty() and not lines else "")
+                line = input(R.safe("❯ ") if sys.stdin.isatty() and not lines else "")
             except EOFError:
                 return "\n".join(lines).strip() if lines else None
             if line.endswith("\\"):
@@ -898,7 +911,7 @@ class Terminal:
                 return "always", ""
             if a in ("n", "no"):
                 try:
-                    note = input("  What should MeshPool do instead? (Enter to skip) > ").strip()
+                    note = input("  What should Meshpool do instead? (Enter to skip) > ").strip()
                 except EOFError:
                     note = ""
                 return "no", note
@@ -966,7 +979,7 @@ def ask_key(force: bool = False) -> bool:
 
 
 def logo_lines(color: bool) -> list[str]:
-    """The MeshPool mark, for terminals."""
+    """The Meshpool mark, for terminals."""
     return R.logo(B.depth() if color else 0)
 
 
@@ -1174,13 +1187,11 @@ class Session(SharedCommands):
         EX.trust_project(root)
         t.p(st.green(f"  Trusted {root}: its .meshpool hooks and allow rules now apply."))
 
-    def cmd_tokens(self, arg):
-        u = self.agent.usage
-        pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
-        self.term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
-                    f"{u['out']:,} output tokens.")
-
     def cmd_mcp(self, arg):
+        sub = arg.split(None, 1)
+        if sub and sub[0] in ("list", "on", "off", "test", "enable", "disable", "library"):
+            word = {"on": "enable", "off": "disable"}.get(sub[0], sub[0])
+            return self._cli(["mcp", word] + (sub[1].split() if len(sub) > 1 else []))
         _mcp_status(self.term, self.mcp)
 
     def cmd_init(self, arg):
@@ -1311,7 +1322,7 @@ class Session(SharedCommands):
         from meshpool_harness import provider_setup as PS
         from meshpool_harness import providers as PV
         t, st = self.term, self.term.st
-        kinds = ["MeshPool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
+        kinds = ["Meshpool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
         i = t.choose("Sign in", [], kinds)
         if i is None:
             return
@@ -1383,7 +1394,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
          json_out: bool = False, mode: str | None = None, agent: str | None = None, project: str | None = None,
          incognito: bool = False, attach: list | None = None, output_last_message: str | None = None,
-         model: str | None = None, worktree_id: str | None = None) -> int:
+         model: str | None = None, worktree_id: str | None = None, effort: str | None = None) -> int:
     """The terminal. A chat is the app's chat (meshpool_harness.chats, the same Session the web page uses): this only
     draws it, answers its questions at the prompt, and reports the outcome. Exit codes: 0 done, 1 failed, 3 done but
     something was not allowed (-p cannot ask)."""
@@ -1415,7 +1426,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
             "plan": True if pm == "plan" else None, "incognito": incognito, "project_id": project or "",
-            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or ""}
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
     elif agent:

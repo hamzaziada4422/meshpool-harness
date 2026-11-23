@@ -422,7 +422,8 @@ class ACPAgent:
                 self._err.close()              # the log of a process that exited
             except OSError:
                 pass
-        self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import RotatingFile      # H-23: rotates by size while the harness runs
+        self._err = RotatingFile(log_dir / f"{m.get('id', 'acp')}.log")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(self.root), env=env, **kw)
@@ -872,17 +873,31 @@ class ACPAgent:
         if not (bare and bare != "default" and self.acp_session):
             return                             # "default": the harness's own account picks the model
         now = getattr(self, "model_now", None) or ""
-        if bare == now or now.startswith((bare + "[", bare + "/")):
-            return                             # already on it; switching anyway makes Hermes rebuild its agent
-        # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
         ids = [m["id"] for m in self.available_models or [] if m.get("id")]
-        want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
-                                                        bare)
+        eff = (getattr(self, "effort", "") or "").lower()
+        pick = f"{bare}[{eff}]" if eff and eff not in ("off", "none", "default") else ""
+        if pick and pick in ids:                   # the chat's effort level: Codex's own id for this model at that level
+            if pick == now:
+                return
+            want = pick
+        else:
+            if bare == now or now.startswith((bare + "[", bare + "/")):
+                return                         # already on it; switching anyway makes Hermes rebuild its agent
+            # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
+            want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
+                                                            bare)
         try:
             self._request("session/set_model", {"sessionId": self.acp_session, "modelId": want}, timeout=60)
             self.model_now = want
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
+
+    effort = ""
+
+    def set_effort(self, level: str):
+        self.effort = level or ""
+        if self.model and self.acp_session and self._p and self._p.poll() is None:
+            self._apply_model()
 
     def set_model(self, model: str):
         self.model = model or None

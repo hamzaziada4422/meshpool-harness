@@ -1,8 +1,8 @@
-"""Codex's apply_patch: the patch parser and the line matcher, in Python, for MeshPool's "codex" engine style.
+"""Codex's apply_patch: the patch parser and the line matcher, in Python, for Meshpool's "codex" engine style.
 
 Derived from OpenAI Codex CLI (https://github.com/openai/codex), codex-rs/apply-patch/src/{parser,streaming_parser,
 seek_sequence,file_update,text_file}.rs at commit 097558c1bdfc6318cb0ce80a64816ca4d61c7814. Copyright 2025 OpenAI,
-Apache License 2.0 (app/defaults/engines/codex/LICENSE). Re-implemented in Python by MeshPool; error texts follow the
+Apache License 2.0 (app/defaults/engines/codex/LICENSE). Re-implemented in Python by Meshpool; error texts follow the
 upstream ones so the model sees what it saw with Codex.
 
 This module is pure: it turns a patch into hunks and a file's text plus the hunks' chunks into the new text. Reading
