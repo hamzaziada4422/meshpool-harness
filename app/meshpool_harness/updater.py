@@ -319,15 +319,19 @@ def install_lock():
         finally:
             _HELD.n -= 1
         return
+    lock = fsio.file_lock(C.home() / "updates" / "install", timeout=0)
     try:
-        with fsio.file_lock(C.home() / "updates" / "install", timeout=0):
-            _HELD.n = 1
-            try:
-                yield
-            finally:
-                _HELD.n = 0
+        lock.__enter__()
     except TimeoutError:
         raise UpdateBusy("An update is already being installed.") from None
+    try:
+        _HELD.n = 1
+        try:
+            yield
+        finally:
+            _HELD.n = 0
+    finally:
+        lock.__exit__(*sys.exc_info())
 
 
 def _recover() -> None:

@@ -460,3 +460,12 @@ def test_wait_for_exit(tmp_path):
     finally:
         q.kill()
         q.wait()
+
+
+def test_timeout_raised_by_the_body_is_not_reported_as_busy():
+    # a socket timeout inside the locked body (a slow download) must stay a TimeoutError, not "already being installed"
+    with pytest.raises(TimeoutError):
+        with U.install_lock():
+            raise TimeoutError("timed out")
+    with U.install_lock():                                               # and the lock was released
+        pass
