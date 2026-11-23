@@ -39,6 +39,7 @@ COMMANDS = [
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
+    ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
     ("tokens", "", "tokens used in this session"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
@@ -872,8 +873,9 @@ class Terminal:
                 a = input(f"  Pick{' (Enter: ' + ','.join(rec) + ')' if rec else ''}, or type your own answer > ").strip()
             except EOFError:
                 return None
-            nums = [int(x) for x in re.split(r"[ ,]+", a or ",".join(rec)) if x.isdigit()]
-            if a and not nums or any(not 1 <= n <= len(opts) for n in nums):
+            toks = [x for x in re.split(r"[ ,]+", a or ",".join(rec)) if x]
+            nums = [int(x) for x in toks if x.isdigit()]
+            if a and (not nums or len(nums) != len(toks)) or any(not 1 <= n <= len(opts) for n in nums):
                 answers.append({"selected": [], "other": a})
             else:
                 answers.append({"selected": [opts[n - 1]["label"] for n in nums], "other": ""})
@@ -1072,6 +1074,15 @@ class Session:
                             "edits": "File edits are allowed; commands are still asked.",
                             "auto": "Edits and commands are allowed without asking."}[mode]))
 
+    def cmd_trust(self, arg):
+        from meshpool_harness.agent import extras as EX
+        t, st = self.term, self.term.st
+        root = self.agent.root
+        if EX.project_trusted(root):
+            return t.p(st.dim("  This folder is already trusted."))
+        EX.trust_project(root)
+        t.p(st.green(f"  Trusted {root}: its .meshpool hooks and allow rules now apply."))
+
     def cmd_tokens(self, arg):
         u = self.agent.usage
         pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
@@ -1269,7 +1280,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                 return 1
             wd = str(folder)
         elif not ask_key():
-            term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
+            if sys.stdin.isatty():              # not a terminal: ask_key already said it
+                term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
     # The terminal runs MeshPool Code, or the official Codex when it is set as the default.
     hid = HR.default_for("code")

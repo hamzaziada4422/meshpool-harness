@@ -505,7 +505,8 @@ def import_export(path: str, client=None) -> dict:
         try:
             from meshpool_harness.core.client import LiveClient
             client = client or LiveClient("context_import")
-            r = client.chat(model=os.environ.get("MH_CONTEXT_MODEL", "gpt-6-luna"), max_tokens=2000, temperature=0.1,
+            r = client.chat(model=(os.environ.get("MH_CONTEXT_MODEL") or os.environ.get("MH_MODEL_FAST")
+                                   or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"), max_tokens=2000, temperature=0.1,
                             task_id="context-import", role="worker", messages=[
                                 {"role": "system", "content": "From these conversation titles and first messages, write "
                                  "what a new assistant should know about this person, in the format below. Only lasting "
@@ -515,6 +516,6 @@ def import_export(path: str, client=None) -> dict:
             got = import_context_text(r["choices"][0]["message"].get("content") or "")
             done.update(memory=got["memory"], instructions=got["instructions"], skipped=got["skipped"])
         except Exception as e:  # the export still counts: projects were imported
-            done["skipped"].append(f"context from conversations: {type(e).__name__}")
+            done["skipped"].append(f"context from conversations: {type(e).__name__}: {str(e)[:160]}")
     done["conversations_seen"] = len(convs)
     return done

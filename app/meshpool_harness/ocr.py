@@ -176,23 +176,28 @@ def _heif():
         pass
 
 
-def pdf_page_images(path: str | Path, pages: list[int], dpi: int = 200) -> list[tuple[int, object]]:
-    """Each page as an image: rendered with PDFium (works for any scan, any encoding), else the page's largest
-    embedded image."""
+def pdf_page_images(path: str | Path, pages: list[int], dpi: int = 200):
+    """Each page as an image, one at a time (so a long scan is never held in memory all at once): rendered with PDFium
+    (works for any scan, any encoding), else the page's largest embedded image."""
     try:
         import pypdfium2 as pdfium
         doc = pdfium.PdfDocument(str(path))
-        out = []
-        for i in pages:
-            if 0 <= i < len(doc):
-                out.append((i, doc[i].render(scale=dpi / 72).to_pil()))
-        doc.close()
-        return out
     except Exception:  # noqa: BLE001
-        pass
+        doc = None
+    if doc is not None:
+        try:
+            for i in pages:
+                if 0 <= i < len(doc):
+                    try:
+                        img = doc[i].render(scale=dpi / 72).to_pil()
+                    except Exception:  # noqa: BLE001 - one bad page does not stop the rest
+                        continue
+                    yield (i, img)
+        finally:
+            doc.close()
+        return
     from pypdf import PdfReader
     r = PdfReader(str(path))
-    out = []
     for i in pages:
         try:
             imgs = list(r.pages[i].images)
@@ -200,8 +205,7 @@ def pdf_page_images(path: str | Path, pages: list[int], dpi: int = 200) -> list[
             continue
         if imgs:
             big = max(imgs, key=lambda im: len(im.data))
-            out.append((i, big.image if getattr(big, "image", None) is not None else big.data))
-    return out
+            yield (i, big.image if getattr(big, "image", None) is not None else big.data)
 
 
 os.environ.setdefault("OMP_NUM_THREADS", str(max(1, min(4, (os.cpu_count() or 2) - 1))))

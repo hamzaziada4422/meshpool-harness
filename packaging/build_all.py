@@ -362,12 +362,12 @@ if __name__ == "__main__":
     if "--check-pins" in sys.argv[1:]:
         check_pins()
         sys.exit(0)
-    if any(a in ("--only=win", "--only=windows") for a in sys.argv[1:]):   # only the Windows job repairs winres.json
+    only = next((x.split("=", 1)[1] for x in sys.argv[1:] if x.startswith("--only=")), "mac-arm64,mac-x64,win")
+    if "win" in only.split(","):         # only the Windows job runs --winres to repair it, so only it can be held up by it
         check_winres()
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir()
-    only = next((x.split("=", 1)[1] for x in sys.argv[1:] if x.startswith("--only=")), "mac-arm64,mac-x64,win")
     for a in ("mac-arm64", "mac-x64"):
         if a in only.split(","):
             mac_app(a)

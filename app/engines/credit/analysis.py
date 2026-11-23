@@ -96,6 +96,7 @@ class Loan:
     floating: bool = True                     # rate stress applies
     refinance_existing: bool = False          # proceeds repay existing funded debt
     purpose: str = ""
+    defaulted: tuple = ()                     # fields the request did not state (rate, amort_years): assumptions
 
 
 @dataclass
@@ -139,6 +140,8 @@ def _div(a, b):
 
 def ebitda(fin: Financials, y: str) -> float | None:
     da = _mag(fin.v(y, "da"))
+    if da is None:
+        da = 0.0                              # no D&A row: EBITDA = operating income (the workbook does the same)
     oi = fin.v(y, "operating_income")
     if oi is None:
         pt, ie = fin.v(y, "pretax_income"), _mag(fin.v(y, "interest_expense"))
@@ -362,6 +365,57 @@ def match_label(label: str) -> str | None:
     return best
 
 
+def _parse_cell(x):
+    """(value, ok). Handles 1,234.5 and 1.234,5 / 12,5 (decimal comma), (123) negatives and $; text such as
+    '12%', 'n/a' or '1.2M' is not a number here (ok False) and is reported, not guessed."""
+    if x is None or (isinstance(x, str) and x.strip() in ("", "-", "--")):
+        return None, True
+    if isinstance(x, bool):
+        return None, False
+    if isinstance(x, (int, float)):
+        return float(x), True
+    t = str(x).strip().replace("$", "").replace("\u2212", "-").replace(" ", "")
+    neg = t.startswith("(") and t.endswith(")")
+    t = t.strip("()")
+    if not re.fullmatch(r"[-+]?[\d.,]+", t):
+        return None, False
+    if "," in t and "." in t:
+        dec = "," if t.rfind(",") > t.rfind(".") else "."
+        t = t.replace("." if dec == "," else ",", "").replace(dec, ".")
+    elif "," in t:
+        if re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+", t):
+            t = t.replace(",", "")                     # 1,234 / 1,234,567: thousands
+        elif t.count(",") == 1:
+            t = t.replace(",", ".")                    # 12,5: decimal comma
+        else:
+            return None, False
+    elif t.count(".") > 1:
+        if re.fullmatch(r"[-+]?\d{1,3}(\.\d{3})+", t):
+            t = t.replace(".", "")                     # 1.234.567: European thousands
+        else:
+            return None, False
+    try:
+        v = float(t)
+    except ValueError:
+        return None, False
+    return (-v if neg else v), True
+
+
+_UNIT_SCALE = [(re.compile(r"(?i)in\s+billions?|\$\s*bn\b|\(\s*bn\s*\)"), 1000.0, "billions"),
+               (re.compile(r"(?i)in\s+thousands?|\$\s*000|\$\s*k\b|\(\s*000s?\s*\)|000s\b"), 0.001, "thousands"),
+               (re.compile(r"(?i)in\s+millions?|\$\s*m\b|\(\s*mm?\s*\)"), 1.0, "millions")]
+
+
+def _unit_scale(rows: list, hdr_i: int):
+    """(factor to $m, note). Looks for 'in thousands' / 'in millions' in the title rows and the header's first cell."""
+    text = " ".join(str(c) for r in rows[:hdr_i + 1] for c in r[:1] + (r[1:2] if r is not rows[hdr_i] else [])
+                    if c not in (None, ""))
+    for rx, f, nm in _UNIT_SCALE:
+        if rx.search(text):
+            return f, (f"unit: table is in {nm}; converted to $m" if f != 1.0 else None)
+    return 1.0, None
+
+
 def from_table(path: str, name: str | None = None, sheet: str | None = None) -> Financials:
     """A borrower spread from CSV or Excel: first column line labels, a header row of years, values in one unit.
     Labels are mapped to standard keys by synonyms; costs may be positive or negative (they are normalised).
@@ -374,9 +428,18 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
         ws = wb[sheet] if sheet else wb.worksheets[0]
         rows = [list(r) for r in ws.iter_rows(values_only=True)]
     else:
-        with p.open(newline="") as f:
-            rows = [r for r in csv.reader(f)]
-    hdr_i = next(i for i, r in enumerate(rows) if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1)
+        try:
+            with p.open(newline="", encoding="utf-8-sig") as f:
+                rows = [r for r in csv.reader(f)]
+        except UnicodeDecodeError:                       # an Excel "CSV" saved in the Windows code page
+            with p.open(newline="", encoding="cp1252", errors="replace") as f:
+                rows = [r for r in csv.reader(f)]
+    hdr_i = next((i for i, r in enumerate(rows)
+                  if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1), None)
+    if hdr_i is None:
+        raise ValueError(f"{p.name}: no header row with years such as FY2024 (years must be in columns after the "
+                         "line labels)")
+    scale, unit_note = _unit_scale(rows, hdr_i)
     hdr = rows[hdr_i]
     cols = [(j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()) for j, c in enumerate(hdr)
             if j > 0 and c is not None and re.search(r"(19|20)\d{2}", str(c))]
@@ -402,14 +465,15 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
             not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
         for (j, _), y in zip(cols, years):
             x = r[j] if j < len(r) else None
-            try:
-                v = float(str(x).replace(",", "").replace("(", "-").replace(")", "").replace("$", "")) \
-                    if x not in (None, "", "-") else None
-            except ValueError:
-                v = None
+            v, ok = _parse_cell(x)
+            if not ok:
+                unmapped.append(f"{r[0]} / {hdr[j]}: cell {x!r} is not a plain number and was skipped")
             if v is None or k in vals[y]:
                 continue
+            v *= scale
             vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
             srcs[y][k] = f"{p.name}, row '{r[0]}', column {hdr[j]}"
+    if unit_note:
+        unmapped.append(unit_note)
     srcs["_unmapped"] = unmapped
     return Financials(name or p.stem, years, vals, srcs)

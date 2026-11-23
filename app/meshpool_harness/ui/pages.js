@@ -180,7 +180,7 @@ async function pagePlugins() {
   const draw = () => {
     const {conns, skills, plugins} = G.plg, tab = G.tab.plugins || "all", q = (G.q.plugins || "").toLowerCase();
     const mine = [
-      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? new URL(c.url || "https://custom.local").host : "Meshpool directory", on: c.enabled, desc: c.description})) : []),
+      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? (() => { try { return new URL(c.url || "https://custom.local").host; } catch { return c.name || "Custom"; } })() : "Meshpool directory", on: c.enabled, desc: c.description})) : []),
       ...(tab !== "connectors" ? skills.filter(s => s.enabled).map(s => ({kind: "skill", id: s.id, name: s.name, by: "On this computer", on: true, desc: s.description})) : []),
       ...(tab === "all" ? plugins.map(p => ({kind: "plugin", id: p.name, name: p.name, by: p.version ? "v" + p.version : "Installed", on: p.enabled, desc: p.description || ""})) : []),
     ].filter(x => !q || (x.name + x.desc).toLowerCase().includes(q));

@@ -1006,6 +1006,12 @@ class Agent:
         cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
         if cmd:
             text = cmd
+        ignored = EX.untrusted_config(self.root)
+        if ignored and not getattr(self, "_trust_noted", False):
+            self._trust_noted = True
+            self.emit({"type": "status", "text": "This folder has " + " and ".join(".meshpool/" + n for n in ignored)
+                       + ", which can run commands or pre-approve them. They are ignored until you trust the folder "
+                       "(type /trust)."})
         blocked, note = EX.run_hooks(self.root, "UserPromptSubmit", {"prompt": text})
         if blocked:
             self.emit({"type": "error", "text": "A hook stopped this message: " + note})

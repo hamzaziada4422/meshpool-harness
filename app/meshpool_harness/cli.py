@@ -23,6 +23,7 @@ import shutil
 import sys
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -261,10 +262,18 @@ def main(argv=None):
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
         os._exit(0)                              # agent helper threads and servers must not keep a background job alive
-    if argv[0] == "scheduler" and len(argv) > 1 and argv[1] in ("install", "uninstall"):
+    if argv[0] == "scheduler":
         from meshpool_harness import scheduler_os as SO
+        sub_cmd = argv[1] if len(argv) > 1 else ""
+        if sub_cmd == "status":
+            print("Installed: scheduled tasks also run while Meshpool is closed." if SO.installed()
+                  else "Not installed: scheduled tasks run only while Meshpool is open.")
+            return 0
+        if sub_cmd not in ("install", "uninstall"):
+            print("Usage: meshpool scheduler install | uninstall | status")
+            return 0 if sub_cmd in ("", "help", "-h", "--help") else 1
         try:
-            print(SO.install() if argv[1] == "install" else SO.uninstall())
+            print(SO.install() if sub_cmd == "install" else SO.uninstall())
         except RuntimeError as e:
             print(str(e))
             return 1
@@ -283,7 +292,11 @@ def main(argv=None):
                 r = CI.import_local([what])
                 print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
                 return 0
-            r = CI.import_export(os.path.expanduser(what))
+            try:
+                r = CI.import_export(os.path.expanduser(what))
+            except (OSError, ValueError, zipfile.BadZipFile) as e:
+                print(f"Could not import {what}: {e}")
+                return 1
             print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
                   f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
@@ -306,7 +319,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     for c in ("route", "run"):
         p = sub.add_parser(c)
-        p.add_argument("request")
+        p.add_argument("request", nargs="?")
         p.add_argument("--files", nargs="*", default=[])
         p.add_argument("--engine")
         p.add_argument("--workdir")
@@ -326,6 +339,11 @@ def main(argv=None):
     ck.add_argument("--live", action="store_true")
     sub.add_parser("install-browser", help="install Playwright and Chromium for the browser engine")
     a = ap.parse_args(argv)
+    if a.cmd in ("route", "run"):
+        if not a.request and a.files:                 # `--files a.csv "request"`: --files took the request too
+            a.request = a.files.pop()
+        if not a.request:
+            ap.error(f"{a.cmd}: the request is required")
     if a.cmd == "ui":
         from meshpool_harness.ui.server import serve
         return serve(a.port, open_browser=not a.no_browser)

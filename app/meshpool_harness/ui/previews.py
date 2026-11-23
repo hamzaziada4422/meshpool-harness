@@ -130,6 +130,12 @@ def _convert_job(src: Path, key: str) -> None:
     try:
         with _CONVERT:
             if (out / "doc.pdf").exists():
+                if not (out / "meta.json").exists():          # a crash between the two writes: finish the job
+                    part = out / f"meta.{os.getpid()}.{threading.get_ident()}.tmp"
+                    part.write_text(json.dumps({"total": _pdf_pages(out / "doc.pdf")}))
+                    os.replace(part, out / "meta.json")
+                with _JOBS_LOCK:
+                    _JOBS.pop(key, None)
                 return
             from engines.forge.common import soffice_convert
             tmp = _dir() / (key + ".tmp")

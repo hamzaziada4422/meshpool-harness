@@ -286,12 +286,12 @@ async function retry010(n) {
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
-  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), n = msgs.indexOf(mine) + 1;
+  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1, n = +mine?.dataset.turn || idx;
   const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
   e.stopImmediatePropagation();
   const fill = () => { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); };
-  if (S.cur.busy || n < 1) { fill(); return toast("Edit it and send to ask again.", 3500); }
-  if (n < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
+  if (S.cur.busy || idx < 1) { fill(); return toast("Edit it and send to ask again.", 3500); }
+  if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
   try { await rewind010(n); fill(); toast("Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
 }, true);
 const _ev010b = ev010;

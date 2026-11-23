@@ -210,8 +210,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> bytes:
         n = int(self.headers.get("Content-Length") or 0)
+        if n < 0:
+            raise ValueError("Bad request.")
         if n > 260 * 1024 * 1024:
-            raise ValueError("File is larger than 150 MB.")
+            raise ValueError("File is larger than 260 MB.")
         return self.rfile.read(n) if n else b""
 
     def _json(self) -> dict:
@@ -362,7 +364,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
+            hdr = {"Content-Disposition": _disposition(disp, p.name)}
+            if ctype in ("text/html", "image/svg+xml", "application/xhtml+xml"):
+                hdr["Content-Security-Policy"] = "sandbox"       # a page an agent wrote must not reach the app's token
+            return self._send(200, p.read_bytes(), ctype, hdr)
         m = re.fullmatch(r"/api/agent/([\w-]+)/events", u.path)
         if m:                                         # a chat's events pushed as they happen (EventSource cannot set headers)
             q = parse_qs(u.query)
@@ -566,6 +571,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path == "/show":                  # a second launch of the app asks this one to come to the front
+            if "json" not in (self.headers.get("Content-Type") or "").lower():
+                return self._send(403, {"error": "forbidden"})     # a web page cannot send this without a preflight
             shown = any(fn() for fn in list(ON_SHOW))
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
@@ -670,8 +677,12 @@ class Handler(BaseHTTPRequestHandler):
                 if b.get("file"):
                     import base64
                     import tempfile
+                    try:
+                        raw = base64.b64decode(b["file"].get("data", ""))
+                    except ValueError:
+                        raise ValueError("That file could not be read.") from None
                     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-                        tf.write(base64.b64decode(b["file"].get("data", "")))
+                        tf.write(raw)
                     try:
                         return self._send(200, IM.import_export(tf.name))
                     finally:
@@ -684,17 +695,25 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import chat_import as CI
                 import tempfile
                 n = int(self.headers.get("Content-Length") or 0)
-                if n > 8 * 1024 ** 3:
+                if n < 0 or n > 8 * 1024 ** 3:
                     raise ValueError("That file is larger than 8 GB.")
                 q = parse_qs(u.query)
-                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-                    left = n
-                    while left > 0:
-                        chunk = self.rfile.read(min(left, 1 << 20))
-                        if not chunk:
-                            break
-                        tf.write(chunk)
-                        left -= len(chunk)
+                tf = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+                try:
+                    with tf:
+                        left = n
+                        while left > 0:
+                            chunk = self.rfile.read(min(left, 1 << 20))
+                            if not chunk:
+                                break
+                            tf.write(chunk)
+                            left -= len(chunk)
+                except BaseException:                 # the upload was cut off: do not leave the partial file
+                    try:
+                        os.unlink(tf.name)
+                    except OSError:
+                        pass
+                    raise
                 want_ctx = q.get("context", ["1"])[0] != "0"
                 try:
                     r = CI.import_export(tf.name, chats=q.get("chats", ["1"])[0] != "0", context=False)
@@ -1065,7 +1084,9 @@ class Handler(BaseHTTPRequestHandler):
 
 # Files the operating system runs rather than shows when "opened"
 RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat", ".cmd", ".ps1", ".exe", ".msi",
-            ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool"}
+            ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool",
+            ".pif", ".msc", ".msp", ".inf", ".scf", ".application", ".appref-ms", ".gadget", ".ws", ".sct",
+            ".terminal", ".workflow", ".action", ".pkg", ".mpkg", ".dmg", ".desktop", ".appimage", ".run"}
 
 
 def _open_web(url: str) -> None:

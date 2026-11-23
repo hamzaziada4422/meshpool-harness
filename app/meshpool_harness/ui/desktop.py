@@ -384,8 +384,9 @@ def choose_folder(start: str = "") -> str:
             pass
     try:
         if sys.platform == "darwin":
+            q = str(start).replace("\\", "\\\\").replace('"', '\\"')
             script = (f'POSIX path of (choose folder with prompt "Choose a project folder for Meshpool" '
-                      f'default location (POSIX file "{start}"))')
+                      f'default location (POSIX file "{q}"))')
             r = subprocess.run(["osascript", "-e", "activate", "-e", script], capture_output=True, text=True,
                                timeout=600)
             return r.stdout.strip().rstrip("/") if r.returncode == 0 else ""
@@ -393,11 +394,11 @@ def choose_folder(start: str = "") -> str:
             ps = ("Add-Type -AssemblyName System.Windows.Forms;"
                   "$f = New-Object System.Windows.Forms.FolderBrowserDialog;"
                   "$f.Description = 'Choose a project folder for Meshpool';"
-                  f"$f.SelectedPath = '{start}';"
+                  "$f.SelectedPath = $env:MESHPOOL_PICK_START;"
                   "$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true};"
                   "if ($f.ShowDialog($owner) -eq 'OK') { Write-Output $f.SelectedPath }")
             r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", ps], capture_output=True, text=True,
-                               timeout=600, creationflags=NO_WINDOW)
+                               timeout=600, creationflags=NO_WINDOW, env=dict(os.environ, MESHPOOL_PICK_START=str(start)))
             return r.stdout.strip()
         if shutil.which("zenity"):
             r = subprocess.run(["zenity", "--file-selection", "--directory", f"--filename={start}/"],
@@ -512,9 +513,9 @@ def install_cli(admin: bool = False) -> dict:
     _link(bindir / "meshpool", cli)
     added = []
     line = 'export PATH="$HOME/.local/bin:$PATH"  # added by Meshpool'
-    for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc", Path.home() / ".bash_profile"):
-        if rc.name != ".zshrc" and not rc.exists():
-            continue
+    shell = Path(os.environ.get("SHELL") or ("/bin/zsh" if sys.platform == "darwin" else "")).name
+    mine = {"zsh": (".zshrc",), "bash": (".bashrc",)}.get(shell, ())       # only the user's own shell's start-up file
+    for rc in (Path.home() / n for n in mine):
         txt = rc.read_text(encoding="utf-8", errors="replace") if rc.exists() else ""
         if ".local/bin" not in txt:
             with open(rc, "a", encoding="utf-8") as f:

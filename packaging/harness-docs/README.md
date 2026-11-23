@@ -40,10 +40,14 @@ Inside a session: `/help`, `/clear`, `/auto`, `/model`, `/mcp`, `/tokens`, `/ini
 
 ## Settings
 
-Settings are shared with the Meshpool app:
+The desktop app keeps its settings here:
 
 - macOS: `~/Library/Application Support/Meshpool/meshpool.config` and `mcp.json`
 - Windows: `%APPDATA%\Meshpool\meshpool.config` and `mcp.json`
+- Linux: `~/.local/share/Meshpool/meshpool.config` and `mcp.json`
+
+The command line installed by `install.sh` / `install.ps1` keeps its own copy in `~/.meshpool-cli` (set `MESHPOOL_HOME` to
+make both use the same folder), so log in once in each.
 
 `meshpool.config` holds `MESHPOOL_API_KEY`, `MESHPOOL_BASE_URL`, `MH_MODEL` and tokens such as `GITHUB_TOKEN`.
 `mcp.json` uses the common `mcpServers` format most MCP apps use; set `"disabled": false` on a server to turn it on.

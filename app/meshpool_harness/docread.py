@@ -96,26 +96,31 @@ def _pdf(p: Path, pages: str | None = None, lang: str = "auto", ocr_mode: str = 
     r = PdfReader(str(p))
     if r.is_encrypted:
         try:
-            r.decrypt("")
+            ok = int(r.decrypt(""))                # 0 (NOT_DECRYPTED) means a password is needed; it does not raise
         except Exception:  # noqa: BLE001
+            ok = 0
+        if not ok:
             return f"{p.name} is password-protected."
     n = len(r.pages)
     meta = r.metadata or {}
     head = f"# {p.name}\n{n} pages" + (f", title: {meta.get('/Title')}" if meta.get("/Title") else "") + "\n"
     idx = _page_set(pages, n)
     texts: list[str] = []
+    miner = True
     for i in idx:
         try:
             t = r.pages[i].extract_text() or ""
         except Exception:  # noqa: BLE001
             t = ""
-        if len(t.strip()) < 20:
+        if len(t.strip()) < 20 and miner:
             try:                                   # pdfminer handles some layouts pypdf misses
                 from pdfminer.high_level import extract_text
                 t2 = extract_text(str(p), page_numbers=[i]) or ""
                 t = t2 if len(t2.strip()) > len(t.strip()) else t
+                if not t2.strip():
+                    miner = False                  # a scan: pdfminer finds nothing and re-reads the file every time
             except Exception:  # noqa: BLE001
-                pass
+                miner = False
         texts.append(t.strip())
     # The text layer is always kept. "auto" OCRs only pages with no or almost no text (scans, perhaps with a stamped
     # page number); "always" OCRs every page as well and adds what it reads next to the text layer.
