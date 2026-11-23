@@ -607,7 +607,9 @@ class Session:
                 # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
                 # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
                 self.emit({"type": "status", "text": "Starting the office tools..."})
-                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
+                end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
+                while not ready.is_set() and time.time() < end and not self._stop_req:
+                    ready.wait(0.25)                 # Stop ends the wait
         return caps
 
     def switch_harness(self, hid: str) -> None:
@@ -785,6 +787,9 @@ class Session:
             pass
 
     def _start_turn(self, text: str, images: list | None):
+        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits)
+            self.state = "working"
+        self._stop_req = False
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
             from meshpool_harness import providers as PV
@@ -794,17 +799,15 @@ class Session:
                     self.emit({"type": "user", "text": text, "images": []})
                     self.emit({"type": "error", "text": bad})
                     self.emit({"type": "turn_end"})
+                    self.state = "idle"
                     return
         except Exception:  # noqa: BLE001
             pass
-        with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
-            self.state = "working"
         try:
             caps = self._capability_turn(text)
         except BaseException:
             self.state = "idle"
             raise
-        self._stop_req = False
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
 
@@ -916,6 +919,9 @@ class Session:
                         body += "\n\n\u200b" + pend
                 except Exception:  # noqa: BLE001
                     pass
+                # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
+                # a Stop from here on either trips the check below or changes the generation send() checks.
+                gen0 = getattr(self.agent, "_gen", 0)
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
                     self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
@@ -923,6 +929,8 @@ class Session:
                     self.emit({"type": "turn_end"})
                     return
                 self._turn_begin()
+                if self.harness.get("type") not in ("acp", "pi") and hasattr(self.agent, "_repair"):
+                    self.agent._expect_gen = gen0     # a Stop since the message was taken ends this turn at once
                 if images:
                     self.agent.send(body, images=images)
                 else:

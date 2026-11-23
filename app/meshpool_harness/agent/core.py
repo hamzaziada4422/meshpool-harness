@@ -641,6 +641,44 @@ def _has_images(messages: list) -> bool:
                for m in messages)
 
 
+def _blind_copy(messages: list) -> list:
+    """The messages with every image part replaced by a short text, for a model that cannot see images.
+    Copies only what it changes; the chat history keeps its images."""
+    out = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list) and any(p.get("type") == "image_url" for p in c):
+            m = dict(m, content=[{"type": "text", "text": "[image left out: this model cannot see images]"}
+                                 if p.get("type") == "image_url" else p for p in c])
+        out.append(m)
+    return out
+
+
+def _pair_tool_results(msgs: list) -> list:
+    """A request must answer every assistant tool call with one tool message, and carry no tool message that
+    answers nothing. Returns a repaired copy (the history is not changed)."""
+    out, i, n = [], 0, len(msgs)
+    while i < n:
+        m = msgs[i]
+        if m.get("role") == "tool":
+            i += 1                                   # answers no call before it: drop
+            continue
+        out.append(m)
+        i += 1
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            ids = [c.get("id") for c in m["tool_calls"]]
+            got: dict = {}
+            while i < n and msgs[i].get("role") == "tool":
+                t = msgs[i]
+                if t.get("tool_call_id") in ids and t["tool_call_id"] not in got:
+                    got[t["tool_call_id"]] = t
+                i += 1
+            for cid in ids:
+                out.append(got.get(cid) or {"role": "tool", "tool_call_id": cid,
+                                            "content": "Not run: the turn ended before this call ran."})
+    return out
+
+
 def _drop_images(messages: list, keep: int = 0) -> None:
     """Replace all but the latest `keep` images in the conversation with a short note."""
     seen = 0
@@ -1058,9 +1096,11 @@ class Agent:
             names = [n for n in names if n not in drop]
         ms = ([x for x in self.mcp.schemas()
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
-               and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
-              if self.mcp else [])
-        return T.schemas(names) + self._lazy_apply(ms)
+               and not x["function"]["name"].endswith("run_subtasks")   # delegate_task instead
+               and not (self.profile == "code" and not getattr(self, "office_on", False)   # about 3k tokens per call:
+                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__"))]
+              if self.mcp else [])             # a Code chat gets the office tools once a message asks for a file
+        return (T.schemas(names) + self._lazy_apply(ms))[:128]    # no endpoint takes more than 128 tools
 
     def _lazy_apply(self, ms: list) -> list:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
@@ -1193,6 +1233,9 @@ class Agent:
         """Run one user request to the end of the agent's turn. Returns the final reply text.
         images: [{"mime": "image/png", "data": base64, "name": ...}] attached by the user."""
         self._stop = False
+        exp = self.__dict__.pop("_expect_gen", None)       # the front end's Stop generation when it took the message
+        if exp is not None and getattr(self, "_gen", 0) != exp:
+            self._stop = True                              # Stop came before this turn began: it ends at once
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
         from meshpool_harness.agent import extras as EX
@@ -1257,7 +1300,12 @@ class Agent:
         self._stop = False
         return self._turn()
 
+    def _begin_turn_state(self):
+        """Reset what must not leak from one turn into the next. New turn-scoped state goes here."""
+        self._n429 = 0                               # rate-limit backoff step: every turn starts at the short wait
+
     def _turn(self) -> str:
+        self._begin_turn_state()
         turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
@@ -1871,7 +1919,7 @@ class Agent:
     def _attach_images(self, shots: list):
         """Tool results cannot carry images on the chat API, so screenshots follow as a user message. Only the latest
         two images stay in the conversation; older ones become a short note to keep requests small."""
-        if os.environ.get("MH_VISION", "1") == "0" or getattr(self, "_no_vision", False):
+        if os.environ.get("MH_VISION", "1") == "0" or self._model_is_blind():
             return
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
         # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
@@ -1890,6 +1938,14 @@ class Agent:
         for _, im in shots[-2:]:
             parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
         self.messages.append({"role": "user", "content": parts})
+
+    def _model_is_blind(self) -> bool:
+        """True when this chat's current model refused images earlier (a bare model id in _no_vision_models)."""
+        try:
+            from meshpool_harness import providers as PV
+            return PV.split(self.current_model())[1] in getattr(self, "_no_vision_models", ())
+        except Exception:  # noqa: BLE001
+            return False
 
     # ---------- model ------------------------------------------------------------------------------------------
     def receipt(self) -> str:
@@ -2017,7 +2073,7 @@ class Agent:
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
-        msgs, body = apply(prof, list(self.messages), body, "worker")
+        msgs, body = apply(prof, _pair_tool_results(list(self.messages)), body, "worker")
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
@@ -2029,6 +2085,8 @@ class Agent:
             _drop_images(msgs, keep=keep)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
+        if self._model_is_blind() and _has_images(msgs):     # the history keeps the images; this model never gets them
+            msgs = _blind_copy(msgs)
         body["messages"] = msgs
         caps = self._caps(model, prof)
         eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
@@ -2105,9 +2163,9 @@ class Agent:
                     extra = {k: v for k, v in body.items() if k not in ("model", "messages", "max_tokens", "temperature")}
                     if "reasoning_effort" in extra:      # the Responses API names it reasoning.effort
                         extra["reasoning"] = {"effort": extra.pop("reasoning_effort")}
-                    resp = SimpleLedger("agent").chat(model=body["model"], messages=body["messages"],
-                                                      max_tokens=body.get("max_tokens", 8192),
-                                                      temperature=body.get("temperature"), extra=extra, retries=0)
+                    resp = self._wait(SimpleLedger("agent").chat, model=body["model"], messages=body["messages"],
+                                      max_tokens=body.get("max_tokens", 8192),
+                                      temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
                     h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
@@ -2196,12 +2254,18 @@ class Agent:
                     self.emit({"type": "status", "text": "The conversation was longer than the model can take; "
                                                          "older tool outputs were shortened before trying again."})
                     continue
-                if kind == "vision" and _has_images(body["messages"]) and not getattr(self, "_no_vision", False):
-                    self._no_vision = True                 # this model does not take images: continue without them
-                    _drop_images(self.messages, keep=0)
-                    _drop_images(body["messages"], keep=0)
-                    self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left out. "
-                                                         "For computer use, choose a vision model in Settings."})
+                if kind == "vision" and _has_images(body["messages"]):
+                    # This model does not take images: leave them out of what it is sent, for this model only.
+                    # The history keeps them, so a vision model chosen later sees them again.
+                    bare = PV.split(self.current_model())[1]
+                    seen = self.__dict__.setdefault("_no_vision_models", set())
+                    if bare not in seen:
+                        seen.add(bare)
+                        self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left "
+                                                             "out. For computer use, choose a vision model in "
+                                                             "Settings."})
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
                     continue
                 if kind == "quota":                        # spent: a retry or a wait cannot help
                     raise RuntimeError("QUOTA: " + msg)
@@ -2383,7 +2447,7 @@ class Agent:
         resp = None
         for _ in range(3):
             try:
-                resp, _s = self._post(base, key, body, False)
+                resp, _s = self._wait(self._post, base, key, body, False)
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):
@@ -2454,7 +2518,7 @@ class Agent:
             if self.mode != "auto" or getattr(self.ws, "container", None):
                 return ""       # it runs the project's tests on this computer: only where commands run unasked, never beside a sandbox
             from meshpool_harness.core import mutate as MU
-            alive = MU.survivors(self.root, set(self.ws.turn_files))
+            alive = self._wait(MU.survivors, self.root, set(self.ws.turn_files), should_stop=lambda: self._stop)
             self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")
             if not alive:
                 return ""
@@ -2875,6 +2939,8 @@ class Agent:
             allowed, note = (False, "") if steer else self._permit(name, args)
             if steer:
                 out, ok = steer, False
+            elif not allowed and self._stop:
+                raise Interrupted()                    # Stop is not a refusal: _repair writes "Not run"
             elif not allowed:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
@@ -3182,4 +3248,5 @@ class Agent:
         a.model = best.get("model_choice")
         a.plan = bool(best.get("plan"))
         a.unfinished = bool(best.get("unfinished"))
+        a._repair("Not run: the app closed before this call finished.")
         return a

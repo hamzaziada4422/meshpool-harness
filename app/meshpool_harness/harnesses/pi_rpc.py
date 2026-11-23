@@ -494,6 +494,8 @@ class PiAgent:
 
     def _tell(self, note: str):
         """A note left with a denial reaches Pi as a message before its next step (the gate only says no)."""
+        if self._stop:
+            return                  # Stop is not a refusal: do not tell Pi "I did not allow that"
         if note and note.strip():
             try:
                 self.steer(f"I did not allow that. {note.strip()}")
