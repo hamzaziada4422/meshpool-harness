@@ -152,3 +152,41 @@ def test_pi_quick_wrap_never_reaches_next_turn(tmp_path):
     assert p.nudge(PACE.WRAP, tok) is False
     p._turn_seq, p._turn_live = 2, True                                  # a later turn started
     assert p.nudge(PACE.WRAP, tok) is False and p.sent == []
+
+
+def _pi_session(p):
+    from meshpool_harness.ui import agent_api as A
+    s = A.Session.__new__(A.Session)
+    s.state, s.t_turn, s.agent = "working", 1.0, p
+    return s
+
+
+def test_pi_wrap_thread_targets_the_turn_send_starts(tmp_path):
+    """The wrap waits for send() to start its turn, then nudges that turn only."""
+    p = _pi(tmp_path)
+    s = _pi_session(p)
+    tok0 = p.turn_token()
+    threading.Timer(0.2, lambda: (setattr(p, "_turn_seq", tok0 + 1), setattr(p, "_turn_live", True))).start()
+    assert s._pi_quick_wrap(p, 1.0, tok0, wait=0.6) is True
+    assert p.sent == [{"type": "steer", "message": PACE.WRAP}]
+
+
+def test_pi_wrap_cancelled_when_a_real_task_is_added(tmp_path):
+    p = _pi(tmp_path)
+    s = _pi_session(p)
+    p._turn_seq, p._turn_live = 1, True
+    s._quick_off = 1.0                     # Session.send set this when a non-quick message joined the turn
+    assert s._pi_quick_wrap(p, 1.0, 0, wait=0.2) is False and p.sent == []
+
+
+def test_session_send_marks_a_real_task_added_to_a_quick_turn(tmp_path):
+    from meshpool_harness.ui import agent_api as A
+    p = _pi(tmp_path)
+    p.steer = lambda text, images=None: None
+    s = A.Session.__new__(A.Session)
+    s.state, s.t_turn, s.agent, s.harness, s.lock, s.queue = "working", 7.0, p, {"type": "pi"}, threading.Lock(), []
+    s._body = lambda text, images: text
+    s.send("what time is it in Tokyo?")
+    assert getattr(s, "_quick_off", None) is None          # a quick follow-up keeps the quick budget
+    s.send("create a file report.md summarising the project and add tests")
+    assert s._quick_off == 7.0

@@ -586,6 +586,9 @@ class Session:
                 with self.lock:                      # the turn may be ending: decide under the lock it ends under
                     if self.state in ("working", "waiting"):
                         self.agent.steer(self._body(text, images), images=images)
+                        from meshpool_harness import pace as PACE
+                        if PACE.classify(text, bool(images)) != "quick":
+                            self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
                         return {"queued": False, "added": True}
                 self._start_turn(text, images)       # it ended meanwhile: this message starts the next turn
                 return {"queued": False}
@@ -892,21 +895,8 @@ class Session:
                     if hasattr(self.agent, "pace_deadline"):
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
                     elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
-                        def wrap(agent=self.agent, turn=self.t_turn, tok0=agent_token(self.agent)):
-                            end = time.time() + PACE.QUICK_S + 10
-                            tok = tok0
-                            while tok == tok0 and time.time() < end:      # send() has not started its turn yet
-                                time.sleep(0.05)
-                                tok = agent_token(agent)
-                            if tok == tok0:
-                                return
-                            time.sleep(max(0.0, end - time.time()))
-                            if self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False):
-                                try:
-                                    agent.nudge(PACE.WRAP, tok)   # only while that same turn runs; no chat message
-                                except Exception:  # noqa: BLE001
-                                    pass
-                        threading.Thread(target=wrap, daemon=True).start()
+                        threading.Thread(target=self._pi_quick_wrap,
+                                         args=(self.agent, self.t_turn, agent_token(self.agent)), daemon=True).start()
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 if self.ctx_pending:
@@ -1202,6 +1192,26 @@ class Session:
                                              f"the task up again in {wait:.0f} s (try {n} of {RESUME_TRIES}). Type "
                                              "a message or press Stop to take over."})
         return self._pause(wait, RESUME_NEXT)
+
+    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None):
+        """Pi: when a quick request runs past its time, tell Pi to answer (a note only the model sees). It targets the
+        turn send() starts after tok0 and nothing later; a real task added meanwhile (send) cancels it."""
+        from meshpool_harness import pace as PACE
+        end = time.time() + (PACE.QUICK_S + 10 if wait is None else wait)
+        tok = tok0
+        while tok == tok0 and time.time() < end:          # send() has not started its turn yet
+            time.sleep(0.05)
+            tok = agent_token(agent)
+        if tok == tok0:
+            return False
+        time.sleep(max(0.0, end - time.time()))
+        if (self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False)
+                and getattr(self, "_quick_off", None) != turn):
+            try:
+                return bool(agent.nudge(PACE.WRAP, tok))   # only while that same turn runs; no chat message
+            except Exception:  # noqa: BLE001
+                return False
+        return False
 
     def set_plan(self, on: bool):
         self.plan = bool(on)
