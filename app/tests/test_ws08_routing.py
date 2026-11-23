@@ -78,8 +78,10 @@ def chat(home, monkeypatch):
 
 @pytest.mark.parametrize("task", ["make a powerpoint about coffee", "edit the contract.docx",
                                   "clean this csv and chart revenue"])   # the last two reached Work before the fix
-def test_create_with_auto_in_code_mode_runs_an_office_task_on_meshpool_code(chat, task):
+def test_create_with_auto_in_code_mode_runs_an_office_task_on_meshpool_code(chat, task, monkeypatch):
     A, proj, made = chat
+    real = HR.load_all                              # only Meshpool's own agents: what is installed here must not matter
+    monkeypatch.setattr(HR, "load_all", lambda: [h for h in real() if h["id"].startswith("meshpool-")])
     v = A.create({"kind": "code", "harness": "meshpool-auto", "task": task, "workdir": str(proj)})
     made.append(v["id"])
     s = A.LIVE[v["id"]]
