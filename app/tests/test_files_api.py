@@ -197,3 +197,20 @@ def test_open_in_editor_no_longer_starts_a_program(proj, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("a program was started"))
     r = W.open_editor(str(proj))
     assert r["ok"] and r["open"]["root"] == str(proj.resolve()) and "Meshpool editor" in r["message"]
+
+
+def test_the_terminal_app_never_launches_an_editor_or_a_viewer():
+    from pathlib import Path
+    import meshpool_harness.agent.tui as T
+    src = Path(T.__file__).read_text(encoding="utf-8")
+    for word in ("EDITOR", "VISUAL", "xdg-open", "startfile", "webbrowser", "\"open\"", "'open'", "osascript"):
+        assert word not in src, word
+
+
+def test_no_page_script_posts_to_a_removed_open_route():
+    from pathlib import Path
+    ui = Path(S.__file__).parent
+    for js in ui.glob("*.js"):
+        text = js.read_text(encoding="utf-8")
+        for route in ("/api/open-path", "/api/open-file", "/api/open-data", "/api/open-editor", "/api/company/open"):
+            assert route not in text, (js.name, route)

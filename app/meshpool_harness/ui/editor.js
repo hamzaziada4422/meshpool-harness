@@ -33,7 +33,11 @@ function fsTree(host, root, opts = {}) {
   host.innerHTML = `<div class="fs-search"><input type="search" class="fs-q" aria-label="Search files by name" placeholder="Search files" autocomplete="off" spellcheck="false"></div>
     <ul class="fs-tree" role="tree" aria-label="Files and folders"></ul><ul class="fs-res" role="list" aria-label="Search results" hidden></ul><div class="fs-note" role="status" aria-live="polite" hidden></div>`;
   const tree = $(".fs-tree", host), res = $(".fs-res", host), q = $(".fs-q", host), note = $(".fs-note", host);
-  const pick = (p, el) => { $$(".fsr.on", host).forEach(x => x.classList.remove("on")); el?.classList.add("on"); if (opts.onFile) opts.onFile(p); else openPreview(root, p); };
+  const pick = (p, el) => {
+    $$(".fsr.on", host).forEach(x => x.classList.remove("on")); el?.classList.add("on");
+    PVX.backNext = {root, rel: p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "", file: p};   // the viewer's back arrow returns to this folder
+    openPreview(root, p);
+  };
   const row = (e, flat) => {
     const li = document.createElement("li"); li.setAttribute("role", e.dir ? "treeitem" : "none"); if (e.dir) li.setAttribute("aria-expanded", "false");
     const b = document.createElement("button"); b.type = "button"; b.className = "fsr" + (e.dir ? " dir" : ""); b.dataset.path = e.path; b.dataset.dir = e.dir ? "1" : "";
@@ -97,21 +101,21 @@ function fsTree(host, root, opts = {}) {
 function openFolderInApp(root, rel = "") {
   root = root || (typeof curRoot === "function" ? curRoot() : ""); if (!root) return;
   const here = typeof curRoot === "function" && curRoot() && root === curRoot();
-  if (here && typeof panelSet === "function") {
+  if (here && !PVX.open && typeof panelSet === "function") {
     S.fsOpen = {root, path: rel};
     togglePanel(panelSet().includes("files") ? "files" : "outputs", true);
     return;
   }
   edFolderPane(root, rel);
 }
-async function edFolderPane(root, rel) {
+async function edFolderPane(root, rel, file) {
   if (!await edGuard()) return;
   PVX.root = root; PVX.path = rel || ""; PVX.snippet = null;
   const name = rel ? rel.split("/").pop() : (root.split(/[\\/]/).filter(Boolean).pop() || "Folder");
   pvShell(name, "Folder", null);
   PVX.m = {kind: "folder"};
   $("#pvStage").innerHTML = `<div class="fs-host"></div>`;
-  fsTree($(".fs-host"), root, {open: rel, onFile: p => { PVX.backNext = {root, rel}; openPreview(root, p); }});
+  fsTree($(".fs-host"), root, {open: file || rel});
 }
 // A file or a folder, from anywhere in the app.
 function openInApp(root, path, isDir) { return isDir ? openFolderInApp(root, path) : openPreview(root, path); }

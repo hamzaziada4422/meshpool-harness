@@ -36,7 +36,7 @@ function pvEnsure() {
   $("#pvPrev").onclick = () => pvGo(PVX.page - 1);
   $("#pvNext").onclick = () => pvGo(PVX.page + 1);
   $$("#pvSeg button").forEach(b => b.onclick = () => { if (PVX.m?.kind === "editor") return edMode(b.dataset.v === "code" ? "src" : "view"); PVX.code = b.dataset.v === "code"; pvBody(); });
-  $("#pvBack").onclick = async () => { const b = PVX.back; if (b && await edGuard()) edFolderPane(b.root, b.rel); };
+  $("#pvBack").onclick = async () => { const b = PVX.back; if (b && await edGuard()) edFolderPane(b.root, b.rel, b.file); };
   // The only route to the system file manager: a menu item a person picks on purpose, never a click on the file itself.
   $("#pvMore").onclick = e => {
     if (!PVX.root || (PVX.m?.kind !== "folder" && !PVX.path)) return;

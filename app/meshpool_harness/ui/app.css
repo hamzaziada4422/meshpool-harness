@@ -1065,12 +1065,12 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .fsr{display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;border:0;background:none;color:var(--ink);padding:4px 10px;text-align:left;font:inherit;cursor:pointer;white-space:nowrap;min-height:28px}
 .fsr:hover{background:var(--hover)}.fsr.on{background:var(--sel)}
 .fsr svg{width:14px;height:14px;color:var(--ink-3);flex:none}
-.fsc{width:12px;display:inline-grid;flex:none}.fsc svg{width:11px;height:11px;transition:transform var(--t-fast)}.fsr.open .fsc svg{transform:rotate(90deg)}
+.fsc{width:12px;display:inline-grid;flex:none}.fsc svg{width:11px;height:11px;transform:rotate(-90deg);transition:transform var(--t-fast)}.fsr.open .fsc svg{transform:none}
 .fsn{overflow:hidden;text-overflow:ellipsis;min-width:0}.fsd{color:var(--ink-3);font-size:var(--fs-xs);overflow:hidden;text-overflow:ellipsis;margin-left:4px}
 .fs-res .fsc{display:none}
 .fs-note,.fs-note-i{padding:6px 12px;color:var(--ink-3);font-size:var(--fs-xs);list-style:none}
 .fs-host{flex:1;min-height:0;overflow:auto}
-.pv-back svg{transform:rotate(180deg)}
+.pv-back svg{transform:rotate(90deg)}
 .ed{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--surface)}
 .ed-bar{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--line-2);background:var(--surface)}
 .ed-bar .sp,.ed-warn .sp{flex:1}
@@ -1079,7 +1079,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .ed-find{display:flex;align-items:center;gap:6px;padding:6px 10px;border-bottom:1px solid var(--line-2);background:var(--fill)}
 .ed-find input{flex:1;min-width:0;border:1px solid var(--line-3);border-radius:var(--r-s);background:var(--bg);color:var(--ink);padding:5px 8px;font:var(--fs-s) var(--body)}
 .ed-fc{font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap;min-width:56px}
-#edFp svg{transform:rotate(-90deg)}#edFn svg{transform:rotate(90deg)}
+#edFp svg{transform:rotate(180deg)}
 .ed-warn{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;background:var(--warn-bg);color:var(--ink);border-bottom:1px solid var(--line-2);font-size:var(--fs-s)}
 .ed-view{flex:1;min-height:0;overflow:auto}
 .ed-box{position:relative;flex:1;min-height:0;overflow:hidden;background:var(--surface)}

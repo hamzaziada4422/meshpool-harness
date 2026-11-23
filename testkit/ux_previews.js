@@ -62,9 +62,8 @@ fs.mkdirSync(shots, {recursive: true});
   await p.click('#pvThumbs .pv-th[data-i="1"]'); await viewerReady();
   check("clicking a thumbnail jumps there", /2 \/ 5/.test(await p.textContent("#pvCount")));
   await shot(p, "03-deck-slide2");
-  check("Open in PowerPoint is offered", /Open in PowerPoint/.test(await p.textContent("#pvOpen")));
-  await p.click("#pvOpen"); await p.waitForTimeout(300);
-  check("it uses the existing open-file call", opened.length === 1 && /deck\.pptx/.test(opened[0]));
+  check("no button opens the deck in another program", await p.evaluate(() => !$("#pvOpen") && $("#pvAlt").hidden));
+  check("nothing asked the computer to open the deck", opened.length === 0);
   await p.keyboard.press("Escape"); await p.waitForTimeout(250);
   check("Esc closes the viewer and brings the panel back", await p.evaluate(() => $("#pvp").hidden && !$("#app").classList.contains("pvopen")));
 
