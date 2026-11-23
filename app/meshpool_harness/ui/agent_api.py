@@ -1587,7 +1587,7 @@ def _live_file(sid: str) -> Path:
     return SESSIONS / sid / "live.json"
 
 
-def _claim(sid: str) -> None:
+def _claim(sid: str, write: bool = True) -> None:
     """Record that this process has the chat open. Another live process holding it refuses (ChatBusy); a dead one's
     claim (a crash) is taken over."""
     f = _live_file(sid)
@@ -1600,8 +1600,9 @@ def _claim(sid: str) -> None:
         where = "the terminal" if rec.get("frontend") == "terminal" else "the Meshpool app"
         raise ChatBusy(f"This chat is open in {where} (process {pid}). Close it there, or fork it: "
                        f"meshpool chats fork {sid}")
+    if not write or not f.parent.is_dir():
+        return
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
         tmp = f.with_name("live.json.tmp")
         tmp.write_text(json.dumps({"pid": os.getpid(), "frontend": os.environ.get("MESHPOOL_FRONTEND") or "app",
                                    "t": time.time()}), encoding="utf-8")
@@ -1665,14 +1666,9 @@ def get(sid: str, no_mcp: bool = False) -> Session:
             s = LIVE.get(sid)
         if s:
             return s
-        if not _saved(sid):
-            raise KeyError(sid)
-        _claim(sid)                              # refuses while another running process has this chat open
-        try:
-            s = Session(resume_id=sid, no_mcp=no_mcp)    # reopen a saved session
-        except BaseException:
-            _release(sid)
-            raise
+        _claim(sid, write=False)                 # refuses while another running process has this chat open
+        s = Session(resume_id=sid, **({"no_mcp": True} if no_mcp else {}))    # reopen a saved session
+        _claim(sid)
         with LOCK:
             live = LIVE.setdefault(sid, s)
         if live is not s:
