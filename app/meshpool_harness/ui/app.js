@@ -1229,7 +1229,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1370,8 +1370,11 @@ document.addEventListener("keydown", e => {            // from an empty message 
   if (e.key === "Enter") { if ($(".qsend", d).disabled) return; e.preventDefault(); e.stopPropagation(); d._submit(); return; }
   qKeys(e, d);
 }, true);
+// A card by id in the chat column, also while a reopened chat's history is replayed into the off-screen column
+// (document.getElementById cannot see it there, so a closing event left the card live).
+function cardEl(id) { const c = colEl(); return (c && c.querySelector("#" + CSS.escape(String(id)))) || document.getElementById(id); }
 function questionDone(ev) {
-  const d = document.getElementById(qId(ev)); if (!d || d.classList.contains("done")) return;
+  const d = cardEl(qId(ev)); if (!d || d.classList.contains("done")) return;
   const src = ev.source, ans = ev.answers || [], typed = src === "user" && /^You replied/.test(ev.text || "");
   const qs = $$(".qq", d).map(fs => $(".qtext", fs)?.textContent || "");
   const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
