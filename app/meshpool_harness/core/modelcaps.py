@@ -88,6 +88,16 @@ def _host(base: str) -> str:
         return ""
 
 
+def _hostkey(base: str) -> str:
+    """The key learned facts are stored under: host and port, so two servers on one machine do not share them."""
+    try:
+        u = urlparse(base or "")
+        h = (u.hostname or "").lower()
+        return f"{h}:{u.port}" if h and u.port else h
+    except ValueError:
+        return ""
+
+
 def _local(base: str) -> bool:
     from meshpool_harness.core import context as CX
     return CX._is_local(base or "")
@@ -198,7 +208,7 @@ def first_byte_timeout(base: str, model: str, default: float) -> float:
             t = max(t, 900.0)
     _ensure_loaded()
     with _LOCK:
-        fb = float((_LEARNED.get((_host(base), _bare(model))) or {}).get("first_byte_s") or 0)
+        fb = float((_LEARNED.get((_hostkey(base), _bare(model))) or {}).get("first_byte_s") or 0)
     if fb:
         t = max(t, 3 * fb)
     return min(t, 3600.0)
@@ -220,7 +230,7 @@ def observe_first_byte(base: str, model: str, seconds: float) -> None:
         return
     _ensure_loaded()
     with _LOCK:
-        prev = float((_LEARNED.get((_host(base), _bare(model))) or {}).get("first_byte_s") or 0)
+        prev = float((_LEARNED.get((_hostkey(base), _bare(model))) or {}).get("first_byte_s") or 0)
     new = round(max(prev * 0.8, float(seconds)), 1)
     if prev and abs(new - prev) < 0.1 * prev:
         return
@@ -230,7 +240,7 @@ def observe_first_byte(base: str, model: str, seconds: float) -> None:
 def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
     bare = _bare(str(model))
     _ensure_loaded()
-    key = (_host(base), bare, json.dumps((profile or {}).get("caps") or {}, sort_keys=True), os.environ.get("MH_CAPS", ""),
+    key = (_hostkey(base), bare, json.dumps((profile or {}).get("caps") or {}, sort_keys=True), os.environ.get("MH_CAPS", ""),
            os.environ.get("MH_WIRE", ""))
     with _LOCK:
         hit = _CACHE.get(key)
@@ -253,7 +263,7 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
                 put("efforts", tuple(row["efforts"]), "name")
             break
     # 2. the kind of endpoint
-    h = key[0]
+    h = _host(base)
     if h.endswith("anthropic.com"):
         put("wire", "messages", "host")
         put("cache", "explicit", "host")
@@ -296,7 +306,7 @@ def learn(base: str, model: str, **fields) -> None:
     """Remember what a reply showed (usage_cached, usage_reasoning, reasoning "none" after a refused parameter, a refused
     field, no_tools ...). "refused" is merged, not replaced. Persisted per endpoint+model (see _PERSIST)."""
     _ensure_loaded()
-    host, bare = _host(base), _bare(model)
+    host, bare = _hostkey(base), _bare(model)
     with _LOCK:
         d = _LEARNED.setdefault((host, bare), {})
         delta = {}
