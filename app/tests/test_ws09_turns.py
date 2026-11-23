@@ -18,7 +18,9 @@ def A(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "mh" / "meshpool.config"))
     monkeypatch.setenv("MH_AUTO_RESUME", "0")
-    monkeypatch.delenv("MESHPOOL_API_KEY", raising=False)   # turns copy the settings file into os.environ and remember
+    for k in C.ENDPOINT_NAMES:                               # turns copy the settings file into os.environ and remember
+        monkeypatch.setenv(k, "x")                           # it in config's globals; setenv first so teardown removes
+        monkeypatch.delenv(k)                                # whatever a test's turn copied in
     monkeypatch.setattr(C, "_INJECTED", set())               # it in config's globals: each test starts from its own file
     monkeypatch.setattr(C, "SHELL", {})
     (tmp_path / "mh").mkdir()
