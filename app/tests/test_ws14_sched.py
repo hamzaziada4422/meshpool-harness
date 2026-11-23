@@ -167,10 +167,13 @@ def test_M18_05_corrupt_file_is_kept_and_blocks_writes():
 def test_M18_06_own_message_clears_scheduled(monkeypatch):
     s = A.Session.__new__(A.Session)
     s.scheduled, s.state, s.queue, s.touched = {"id": "t1"}, "idle", [], 0
+    s.lock, s._turn_id, s._stop_req, s._interrupting = __import__("threading").RLock(), 0, False, None
+    s.events, s.pendings, s._retry_open, s._turn_open = [], {}, False, False
+    s.changed = __import__("threading").Condition(s.lock)
     s.agent = types.SimpleNamespace()
     s.harness = {"type": "meshpool"}
     sent = []
-    monkeypatch.setattr(s, "_start_turn", lambda *a, **k: sent.append(a), raising=False)
+    monkeypatch.setattr(s, "_start_turn", lambda *a, **k: (sent.append(a), setattr(s, "state", "idle")), raising=False)
     s._system_send = True
     s.send("hello")                                                    # the run's own prompt
     assert s.scheduled

@@ -1373,11 +1373,14 @@ class Session:
                                 "all" if not self.harness.get("lean") else "none")
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
-                            rules=outside, tools=tools,
+                            lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
                             office=tools != "none" or bool(getattr(self.agent, "office_on", False)))
-                        write_meta(self.id, memory_exclude_sent=ex)
-                        if pid:
-                            write_meta(self.id, project_ctx=pid)
+
+                        def spend_ctx(pid=pid, ex=ex):
+                            self.ctx_pending = False
+                            write_meta(self.id, ctx_pending=False, memory_exclude_sent=ex,
+                                       **({"project_ctx": pid} if pid else {}))
+                        commits.append(spend_ctx)
                     except Exception:  # noqa: BLE001
                         self.ctx_pending = False
                 else:                               # a chat moved into a project later gets the project once, next turn
