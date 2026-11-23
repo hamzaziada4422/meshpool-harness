@@ -51,9 +51,9 @@ def fake_npx(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(home))
     monkeypatch.setattr(H, "unsupported", lambda hid: "")
     monkeypatch.setattr(H, "npx", lambda: str(script))
-    H.stop_login()
+    getattr(H, "stop_login", lambda: None)()
     yield starts
-    H.stop_login()
+    getattr(H, "stop_login", lambda: None)()
     for line in (starts.read_text().splitlines() if starts.exists() else []):
         for pid in map(int, line.split()):
             try:
@@ -82,7 +82,7 @@ def test_m15_03_stop_login_kills_tree(fake_npx):
     (npx_pid, child), = recorded(fake_npx)
     pidfile = C.home() / "codex-login.json"
     assert pidfile.is_file() and alive(child)
-    H.stop_login()
+    getattr(H, "stop_login", lambda: None)()
     assert wait_dead(npx_pid) and wait_dead(child)
     assert not pidfile.exists()
     assert not H.login("codex").get("already")      # and a new sign-in can start
@@ -114,6 +114,24 @@ def test_m15_03_second_instance_sees_running_login(fake_npx):
         other.wait()
         r = H.login("codex")                              # the recorded pid is dead: stale, so it starts
         assert not r.get("already") and len(recorded(fake_npx)) == 1
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_m15_03_stale_record_with_reused_pid_does_not_block(fake_npx):
+    """A record left by a crashed app whose pid now belongs to an unrelated process must not block sign-in forever."""
+    from meshpool_harness import fsio
+    other = subprocess.Popen(["sleep", "60"])
+    try:
+        fsio.atomic_write_json(C.home() / "codex-login.json",
+                               {"pid": other.pid, "started": time.time() - H.LOGIN_TIMEOUT_S - 120})
+        r = H.login("codex")
+        assert not r.get("already") and len(recorded(fake_npx)) == 1
+        (C.home() / "codex-login.json").write_text("{")          # a damaged record names no sign-in
+        getattr(H, "stop_login", lambda: None)()
+        r = H.login("codex")
+        assert not r.get("already")
     finally:
         other.kill()
         other.wait()

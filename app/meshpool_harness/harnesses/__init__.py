@@ -448,7 +448,7 @@ def _clear_login(proc) -> None:
             rec = fsio.read_json(_login_file(), None)
             if isinstance(rec, dict) and rec.get("pid") == proc.pid:
                 _login_file().unlink(missing_ok=True)
-    except (TimeoutError, OSError, ValueError):
+    except (TimeoutError, OSError, ValueError, fsio.CorruptFile):
         pass
 
 
