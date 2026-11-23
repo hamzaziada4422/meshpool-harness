@@ -52,11 +52,13 @@ def script(monkeypatch, *replies):
     seen = []
 
     def fake(self, turn):
+        self.emit({"type": "model_start"})
         for k, v in {"in": 100, "cached": 0, "out": 10, "calls": 1}.items():
             turn[k] += v
             self.usage[k] += v
         self.emit({"type": "usage", "in": 100, "cached": 0, "out": 10, "calls": 1, "model": "m"})
         seen.append(list(self.messages))
+        self.emit({"type": "model_end"})
         return next(it), False
     monkeypatch.setattr(core.Agent, "_chat", fake)
     return seen

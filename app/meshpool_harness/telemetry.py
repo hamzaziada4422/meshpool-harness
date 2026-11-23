@@ -235,7 +235,8 @@ def on_event(st: "_Turn", ev: dict) -> None:
         sp = st.tools.pop(ev.get("id"), None)
         counter("meshpool.tool.calls", 1, {"tool.name": ev.get("name", ""), "ok": bool(ev.get("ok"))})
         if sp:
-            sp.end(bool(ev.get("ok")), ok=bool(ev.get("ok")), denied=bool(ev.get("denied")))
+            sp.attrs["ok"] = bool(ev.get("ok"))
+            sp.end(bool(ev.get("ok")), denied=bool(ev.get("denied")))
     elif t == "assistant" and st.turn and content_on():
         st.turn.attrs["meshpool.reply"] = _text(ev.get("text"))
     elif t == "task_receipt":
