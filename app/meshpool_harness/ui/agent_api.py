@@ -468,18 +468,19 @@ class Session:
 
     def approve(self, kind, title, detail, options=None, scope=""):
         sid = getattr(self, "id", None)
-        gone = bool(getattr(self, "deleted", False) or getattr(self.agent, "deleted", False) or (sid and sid in DELETED))
-        if os.environ.get("MESHPOOL_HEADLESS") == "1" or self.scheduled or gone:
+        gone = bool(getattr(self, "deleted", False) or getattr(getattr(self, "agent", None), "deleted", False) or (sid and sid in DELETED))
+        if os.environ.get("MESHPOOL_HEADLESS") == "1" or getattr(self, "scheduled", False) or gone:
             # `meshpool run-due` with the app closed, an unattended scheduled run, or a chat nobody can open any more:
             # no one can answer, so it fails fast instead of waiting for ever.
             note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
                                                       "and do not retry the action.")
-            with self.lock:
-                self._n += 1
-                n = self._n
-            self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
-                       "options": options, "scope": scope})
-            self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
+            if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
+                with self.lock:
+                    self._n = getattr(self, "_n", 0) + 1
+                    n = self._n
+                self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
+                           "options": options, "scope": scope})
+                self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
             return "no", note
         with self.lock:
             self._n += 1
