@@ -408,7 +408,8 @@ def main(argv=None):
         eng, conf, why = decide(a.request, a.files, a.output_format, a.workdir)
         print(json.dumps({"engines": eng, "confidence": conf, "reason": why}, indent=1))
         return 0
-    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format, model=a.model)
+    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format,
+                      **({"model": a.model} if getattr(a, "model", None) else {}))
     print(json.dumps(res, indent=1))
     return 0 if res["ok"] else 1
 
