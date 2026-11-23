@@ -384,3 +384,64 @@ def test_pptx_regions_as_categories_accepted(tmp_path):
     prs.slides[1].shapes.add_chart(XL_CHART_TYPE.BAR_CLUSTERED, Inches(1), Inches(1), Inches(6), Inches(4), cd)
     prs.save(str(w / "deck.pptx"))
     assert grade("pptx_chart", w)["ok"] is True
+
+
+# ----------------------------------------------------------------------------- X-08 regressions: frames are not charts
+
+def _table_pdf(path, border=False, big_fill=False):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+
+    def deco(c, doc):
+        if border:
+            p = c.beginPath()
+            p.moveTo(50, 50); p.lineTo(550, 50); p.lineTo(550, 800); p.lineTo(50, 800); p.lineTo(50, 50)
+            c.drawPath(p, stroke=1, fill=0)
+        if big_fill:
+            c.setFillGray(0.95)
+            c.rect(40, 40, 520, 770, stroke=0, fill=1)
+    SimpleDocTemplate(str(path), pagesize=A4).build(
+        [Paragraph("Sales report", getSampleStyleSheet()["Title"]), ref._sales_table(mf.sales_by_region())],
+        onFirstPage=deco)
+
+
+def test_stroked_border_box_is_not_a_chart(tmp_path):
+    _table_pdf(tmp_path / "a.pdf", border=True)
+    assert not gk.pdf_chart_evidence(tmp_path / "a.pdf")["chart"]
+    _table_pdf(tmp_path / "b.pdf", border=True, big_fill=True)
+    assert not gk.pdf_chart_evidence(tmp_path / "b.pdf")["chart"]
+
+
+def test_border_plus_matplotlib_line_chart_passes(tmp_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from pypdf import PdfReader, PdfWriter, Transformation
+    _table_pdf(tmp_path / "t.pdf", border=True)
+    fig, ax = plt.subplots()
+    ax.plot([1, 2, 3, 4], [10, 25, 15, 30])
+    fig.savefig(tmp_path / "l.pdf")
+    plt.close(fig)
+    wr = PdfWriter(clone_from=str(tmp_path / "t.pdf"))
+    wr.pages[0].merge_page(PdfReader(str(tmp_path / "l.pdf")).pages[0])
+    wr.write(str(tmp_path / "m.pdf"))
+    assert gk.pdf_chart_evidence(tmp_path / "m.pdf")["chart"]
+    assert gk.pdf_chart_evidence(tmp_path / "l.pdf")["polylines"] >= 1
+
+
+def test_reportlab_line_chart_passes(tmp_path):
+    from reportlab.graphics.charts.lineplots import LinePlot
+    from reportlab.graphics.shapes import Drawing
+    from reportlab.graphics import renderPDF
+    from reportlab.pdfgen.canvas import Canvas
+    d = Drawing(400, 200)
+    lp = LinePlot()
+    lp.x, lp.y, lp.width, lp.height = 30, 30, 330, 140
+    lp.data = [[(1, 10), (2, 25), (3, 15), (4, 30)]]
+    d.add(lp)
+    c = Canvas(str(tmp_path / "r.pdf"))
+    renderPDF.draw(d, c, 50, 500)
+    c.save()
+    assert gk.pdf_chart_evidence(tmp_path / "r.pdf")["chart"]

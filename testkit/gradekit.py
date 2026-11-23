@@ -239,7 +239,7 @@ def _walk_content(reader, stream, resources, ctm, out, depth=0):
     if depth > 4:
         return
     cs = ContentStream(stream, reader)
-    stack, pts, curves, run, maxrun = [], [], 0, 0, 0
+    stack, pts, curves, diag = [], [], 0, 0
 
     def T(x, y):
         return (x * ctm[0] + y * ctm[2] + ctm[4], x * ctm[1] + y * ctm[3] + ctm[5])
@@ -257,11 +257,11 @@ def _walk_content(reader, stream, resources, ctm, out, depth=0):
                 pts += [T(x, y), T(x + w, y), T(x + w, y + h), T(x, y + h)]
             elif op == b"m":
                 pts.append(T(float(operands[0]), float(operands[1])))
-                run = 0
             elif op == b"l":
-                pts.append(T(float(operands[0]), float(operands[1])))
-                run += 1
-                maxrun = max(maxrun, run)
+                q = T(float(operands[0]), float(operands[1]))
+                if pts and abs(q[0] - pts[-1][0]) > 0.5 and abs(q[1] - pts[-1][1]) > 0.5:
+                    diag += 1  # only non-axis-aligned segments can be part of a line chart
+                pts.append(q)
             elif op in (b"c", b"v", b"y"):
                 v = [float(o) for o in operands]
                 pts += [T(v[i], v[i + 1]) for i in range(0, len(v), 2)]
@@ -272,11 +272,11 @@ def _walk_content(reader, stream, resources, ctm, out, depth=0):
                     box = (min(xs), min(ys), max(xs), max(ys))
                     if op in _FILL:
                         out["fills"].append(box + (curves,))
-                    if op in _STROKE and maxrun >= 4 and (box[2] - box[0]) > 5 and (box[3] - box[1]) > 5:
+                    if op in _STROKE and diag >= 3 and (box[2] - box[0]) > 5 and (box[3] - box[1]) > 5:
                         out["polylines"] += 1
-                pts, curves, run, maxrun = [], 0, 0, 0
+                pts, curves, diag = [], 0, 0
             elif op == b"n":
-                pts, curves, run, maxrun = [], 0, 0, 0
+                pts, curves, diag = [], 0, 0
             elif op == b"Do" and resources is not None:
                 xo = resources.get("/XObject")
                 xo = xo.get_object() if xo is not None else {}
