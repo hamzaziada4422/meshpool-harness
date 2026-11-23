@@ -1245,6 +1245,7 @@ class Agent:
         cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
         if cmd:
             text = cmd
+        self._auto_route(text)
         ignored = EX.untrusted_config(self.root)
         if ignored and not getattr(self, "_trust_noted", False):
             self._trust_noted = True
@@ -1289,6 +1290,19 @@ class Agent:
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0], "images": [im.get("name", "image") for im in images or []],
                    "plan": self.plan})
         return self._turn()
+
+    def _auto_route(self, text: str) -> None:
+        """A chat created without a task (terminal CLI, `meshpool -p`, ACP) is routed on its first message, like an app
+        chat, so it runs the shipped default profile instead of FULL (X-02). MH_AUTO_ROUTE=0 turns it off."""
+        if (self.route is not None or len(self.messages) > 1 or self.plan or not (text or "").strip()
+                or getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0)
+                or os.environ.get("MH_AUTO_ROUTE", "") == "0"):
+            return
+        try:
+            from meshpool_harness import hrouter as HRR
+            self.set_route(HRR.route(text, workdir=str(self.root), kind="code" if self.profile == "code" else "cowork"), text)
+        except Exception:  # noqa: BLE001
+            self.route = None
 
     def has_steers(self) -> bool:
         """True when the user added something (steer) that no turn has read yet."""
