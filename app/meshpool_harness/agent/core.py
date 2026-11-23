@@ -1180,7 +1180,7 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
-    def _wait(self, fn, *a, **kw):
+    def _wait(self, fn, *a, on_stop=None, **kw):
         """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
         second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
         box: dict = {}
@@ -1196,6 +1196,11 @@ class Agent:
             t.join(0.15)
             if self._stop:
                 self._abort_live()                 # close the model stream now, not when it next sends a byte
+                if on_stop:
+                    try:
+                        on_stop()                  # e.g. tell an MCP server to drop the call (notifications/cancelled)
+                    except Exception:  # noqa: BLE001
+                        pass
                 raise Interrupted()
         if "e" in box:
             raise box["e"]
@@ -3382,7 +3387,7 @@ class Agent:
             elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:
                 out = self._lazy.stub(name, getattr(self, "_lazy_all", [])) or "tool not loaded"
             elif is_mcp:
-                out, err = self._wait(self.mcp.call, name, args)
+                out, err = self._wait(self.mcp.call, name, args, on_stop=getattr(self.mcp, "abort_calls", None))
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
                 post += self._repeat_note(name, args, ok)

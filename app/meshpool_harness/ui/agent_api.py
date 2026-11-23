@@ -2,6 +2,7 @@
 The page polls for events and answers approval requests."""
 from __future__ import annotations
 
+import errno
 import json
 import re
 import os
@@ -458,6 +459,7 @@ class Session:
                 self.mcp.close()
                 return
             self.agent.mcp = self.mcp
+            self.mcp.model = lambda: getattr(self.agent, "model", None) or ""
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
             txt = ("MCP: " + ", ".join(f"{s['name']} ({len(s['tools'])} tools)" for s in ok)) if ok else "No MCP servers enabled."
@@ -468,6 +470,9 @@ class Session:
             self.emit({"type": "status", "text": txt})
         except Exception as e:
             self.emit({"type": "status", "text": f"MCP did not start: {e}"})
+            if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
+                self.emit({"type": "error", "text": "This chat could not start its tools: the computer's limit of open "
+                                                    "files was reached. Close chats you are not using and try again."})
         if self.state == "starting":
             self.state = "idle"
 
@@ -1687,12 +1692,16 @@ def _create(body: dict, made: list) -> dict:
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
                     kind=kind, model=model, plan=bool(plan), no_mcp=bool(body.get("no_mcp")))
-    except BaseException:
+    except BaseException as e:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
         if made_wt:
             from meshpool_harness import worktrees as WT
             WT.discard(wt["id"])
+        if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
+            # not "[Errno 24] Too many open files": say what to do (the page shows this text where Send was pressed)
+            raise ValueError("Meshpool cannot start another chat: this computer's limit of open files was reached. "
+                             "Close the chats you are not using, then send again.") from e
         raise
     made.clear()                                    # the chat exists: it owns its folder now
     if wt:

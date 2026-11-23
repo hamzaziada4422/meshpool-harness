@@ -39,6 +39,13 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
 
+## Designs followed (no code copied)
+
+| Source | License | Used for |
+|---|---|---|
+| Model Context Protocol specification, `notifications/cancelled` and initialize timeouts (modelcontextprotocol.io) | MIT | Cancelling an MCP call on Stop or timeout (`app/meshpool_harness/agent/mcp.py`) |
+| Visual Studio Code, shell environment resolution (`src/vs/platform/shell/node/shellEnv.ts`, Microsoft) | MIT | Reading the login shell's environment once for MCP servers, with a recursion guard (`login_shell_env` in `agent/mcp.py`); re-implemented, not copied |
+
 ## Python packages
 
 | Package | Version | License |

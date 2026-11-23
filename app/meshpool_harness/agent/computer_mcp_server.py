@@ -24,7 +24,7 @@ from pathlib import Path
 from meshpool_harness.agent.mcp_stdio import Tool, ToolFailed, image_png, serve, text
 
 MAX_W = int(os.environ.get("MH_SCREEN_MAX_W", "1366"))
-STATE = {"scale": 1.0}                       # screen units per screenshot pixel, from the latest screenshot
+STATE = {"scale": None}                      # screen units per screenshot pixel; None until known (see _scale)
 
 MODS = {"cmd": "cmd", "command": "cmd", "meta": "cmd", "super": "cmd", "win": "cmd", "windows": "cmd",
         "ctrl": "ctrl", "control": "ctrl", "alt": "alt", "option": "alt", "opt": "alt", "shift": "shift"}
@@ -344,8 +344,17 @@ def os_() -> Mac | Win:
     return _OS
 
 
+def _scale() -> float:
+    """Screen units per screenshot pixel. Known after the first screenshot; before that it is what the screenshot will
+    be (the screen's width, scaled down to MAX_W), so a click that comes first lands where the agent means."""
+    if STATE["scale"] is None:
+        sw, _ = os_().screen_size()
+        STATE["scale"] = sw / max(1, min(MAX_W, sw))
+    return STATE["scale"]
+
+
 def _pt(x, y) -> tuple[float, float]:
-    s = STATE["scale"]
+    s = _scale()
     return float(x) * s, float(y) * s
 
 
@@ -575,6 +584,10 @@ TOOLS = {
 
 
 def main():
+    try:
+        _scale()                                         # known from the start, not only after the first screenshot
+    except Exception:  # noqa: BLE001  unsupported platform or no permission yet: the tools say so when called
+        pass
     TOOLS["type_text"].fn = lambda text="": type_text(text_=text)
     serve("meshpool-computer", TOOLS, serial=True,
           instructions="Take a screenshot first, act with pixel coordinates from it, then take another to check.")

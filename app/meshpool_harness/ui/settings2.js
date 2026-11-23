@@ -306,7 +306,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
       const mode = normMode(get0("MH_AGENT_PERMISSIONS"));
       const bu = (feat.features.find(f => f.id === "browser") || {}).browser_use;
-      const row = f => toggleRow(f.id, f.name, f.desc, f.on, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : "", !f.available);
+      const row = f => toggleRow(f.id, f.name, f.desc, f.on && f.available, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : f.reason ? `<small class="why" style="color:var(--del)">Not available here: ${esc(f.reason)}</small>` : "", !f.available);
       b.innerHTML = `${close}<h3>Capabilities</h3><p class="lead">What Meshpool can do for you. Changes apply to new chats; chats already open keep what they started with.</p>
         <ul class="rows2" id="capL">${feat.features.filter(f => !f.advanced).map(row).join("")}</ul>
         <h3 style="font-size:16px;margin:20px 0 4px">Always available</h3><p class="lead">Making Word documents, slides, spreadsheets and PDFs, reading your files, and running scripts are part of Meshpool. Meshpool asks first, unless you change that here.</p>

@@ -100,8 +100,29 @@ def capabilities() -> list[dict]:
             row["browser_use"] = browser_use()              # which browser: Meshpool's, the installed one, or attached
         if c["id"] == "computer":
             row["computer_status"] = computer_status()      # what is missing (macOS permissions, Windows lock, Linux)
+        why = unavailable_reason(c["id"], row)
+        if why:                                             # not a switch that looks usable and then fails in a chat
+            row.update(available=False, on=False, reason=why)
         out.append(row)
     return out
+
+
+def unavailable_reason(cid: str, row: dict | None = None) -> str:
+    """Why this capability cannot work on this computer at all ("" when it can, or only needs setting up)."""
+    if cid == "computer":
+        st = (row or {}).get("computer_status") or computer_status()
+        if not st.get("supported"):
+            return st.get("summary") or "Computer use is not supported on this computer."
+    if cid == "browser":
+        import importlib.util
+        if importlib.util.find_spec("playwright") is None:
+            return ("Browser use needs the Playwright package, which is not installed with this copy of Meshpool. "
+                    "Reinstall Meshpool or run: pip install playwright")
+        bu = (row or {}).get("browser_use") or browser_use()
+        cur = next((m for m in bu.get("modes") or [] if m["id"] == bu.get("mode")), None)
+        if cur is not None and not cur.get("available"):
+            return f"The chosen browser is not available: {cur.get('detail') or cur.get('name')}. Pick another under Browser for browser use."
+    return ""
 
 
 def browser_use() -> dict:
@@ -144,6 +165,9 @@ def set_capability(cid: str, on: bool) -> list[dict]:
         from meshpool_harness.agent import mcp as M
         if _server_on(c["server"]) is None:
             raise ValueError(f"{c['name']} isn't set up on this computer.")
+        why = unavailable_reason(c["id"]) if on else ""
+        if why:
+            raise ValueError(why)
 
         def toggle(servers):
             s = servers[c["server"]]

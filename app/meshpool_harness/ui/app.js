@@ -2138,7 +2138,7 @@ async function renderSection(sec) {
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
     $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
-    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res"; /* each server has its own colour: one broken server does not paint the working ones red */ RES("mRes").innerHTML = rows.map(s => `<div class="srv ${s.status === "connected" ? "ok" : s.status === "starting" ? "wait" : "bad"}">${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error || s.status)}</div>`).join("") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
     drawMcpLibrary(b);
   } else if (sec === "permissions") {
     const draw = async body => {
@@ -2641,7 +2641,7 @@ async function restartApp(bootBefore) {
 (async () => {
   shell();
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
-    const ma = e.target.closest("[data-ma]"); if (!ma) return;
+    const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
     const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
     else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));

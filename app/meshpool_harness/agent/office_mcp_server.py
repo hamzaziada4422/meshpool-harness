@@ -85,7 +85,8 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     why = OJ.check_request(engine, request)
     if why:                                      # before the job folder: nothing is built
         return f"Refused, nothing was built: {why}", True
-    jid, reused = OJ.start(engine, request, paths, _project(), scope=_scope())   # one request, one engine run
+    jid, reused = OJ.start(engine, request, paths, _project(), scope=_scope(),
+                           model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
     if reused == "refused":
         return OJ.refusal_text(jid), False
     if reused == "done":
@@ -845,12 +846,15 @@ def _as_mcp(fn, props: dict):
     from meshpool_harness.agent.mcp_stdio import ToolFailed
 
     def call(**args):
-        _CALL.project = args.pop("_project", None)       # one server process for every chat: the caller's folder
+        from meshpool_harness.agent.mcp_stdio import private_args
+        priv = private_args()                            # one server process for every chat: the caller's folder
+        _CALL.project = args.pop("_project", None) or priv.get("_project")
+        _CALL.model = args.pop("_model", None) or priv.get("_model")    # and its model (else the engine uses MH_MODEL)
         extra = sorted(k for k in args if k not in props) if props else []
         try:
             text, err = fn(**{k: v for k, v in args.items() if k not in extra})
         finally:
-            _CALL.project = None
+            _CALL.project = _CALL.model = None
         if extra:
             text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         if err:

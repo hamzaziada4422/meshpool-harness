@@ -91,6 +91,47 @@ def _home() -> Path:
     return Path(os.environ.get("MESHPOOL_HOME") or Path.home() / ".meshpool")
 
 
+class ProfileLock:
+    """An exclusive, OS-level lock on a file next to the profile folder: gone when its holder dies, so never stale."""
+
+    def __init__(self, path: Path):
+        self.path, self.f = path, None
+
+    def acquire(self, who: str = "") -> str:
+        """"" when held now, else a message for the person: who has the browser, and what to do."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        f = open(self.path, "a+")
+        try:
+            if os.name == "nt":
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            f.seek(0)
+            holder = f.read().strip()
+            f.close()
+            return ("The browser is in use by another chat" + (f" ({holder})" if holder else "")
+                    + ": Meshpool's browser keeps your sign-ins in one profile, which only one chat can use at a time. "
+                      "Wait for that chat to finish with the browser (or call browser_close there), then try again.")
+        f.seek(0)
+        f.truncate()
+        f.write(f"chat {who or 'unknown'}, pid {os.getpid()}")
+        f.flush()
+        self.f = f
+        return ""
+
+    def release(self):
+        f, self.f = self.f, None
+        if f is not None:
+            try:
+                f.close()
+            except OSError:
+                pass
+
+
 class Browser:
     """One Playwright session on a dedicated thread (Playwright's sync API is bound to the thread that started it)."""
 
@@ -101,11 +142,17 @@ class Browser:
         self.channel = ""
         self.profile = profile              # a profile folder name of its own (the in-app sign-in browser)
         self.notice = ""                    # said once, in the next page description (a last-resort browser was used)
+        self.popup_note = ""                # said once: the page opened a new tab and the agent followed it
+        self.lock = None                    # the profile folder's lock (one browser per profile)
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _loop(self):
         while True:
-            fn, box, done = self.q.get()
+            fn, box, done, skip = self.q.get()
+            if skip.is_set():                       # the client gave up (Stop, timeout) before its turn: never run it
+                box["e"] = ToolFailed("cancelled before it ran")
+                done.set()
+                continue
             try:
                 box["r"] = fn()
             except BaseException as e:  # noqa: BLE001
@@ -113,10 +160,21 @@ class Browser:
             done.set()
 
     def run(self, fn, timeout: float = 240):
-        box, done = {}, threading.Event()
-        self.q.put((fn, box, done))
-        if not done.wait(timeout):
-            raise ToolFailed("The browser did not respond in time.")
+        """Run fn on the browser thread. A call the client cancelled (notifications/cancelled) or that timed out is
+        dropped if it is still queued, so it cannot run later, on a different page, and act twice."""
+        from meshpool_harness.agent.mcp_stdio import cancel_check
+        cancelled = cancel_check()
+        box, done, skip = {}, threading.Event(), threading.Event()
+        self.q.put((fn, box, done, skip))
+        end = time.time() + timeout
+        while not done.wait(0.1):
+            if cancelled():
+                skip.set()
+                raise ToolFailed("Cancelled. The browser may already have started this step: check the page before "
+                                 "repeating it.")
+            if time.time() > end:
+                skip.set()
+                raise ToolFailed("The browser did not respond in time.")
         if "e" in box:
             raise box["e"]
         return box["r"]
@@ -185,11 +243,46 @@ class Browser:
             self._launch_meshpool(headless, own)
         self.mode = mode
         self.ctx.set_default_timeout(20000)
+        self._watch_popups()
         if self.page is None or self.page.is_closed():
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
 
+    def _watch_popups(self):
+        """A link with target=_blank, window.open, a form that posts to a new tab: carry on in the tab the current page
+        opened (the agent otherwise kept reading the old page). browser_tabs switches back."""
+        ctx = self.ctx
+        if getattr(ctx, "_mp_popups", False):
+            return
+        ctx._mp_popups = True
+
+        def follow(p):
+            try:
+                if self.page is not None and p.opener() is self.page:
+                    self.page = p
+                    self.popup_note = "A new tab opened from the page; now on that tab (browser_tabs switches back)."
+            except Exception:  # noqa: BLE001
+                pass
+        ctx.on("page", follow)
+
+    def _lock_profile(self, prof: Path):
+        """One browser per profile folder: Chromium cannot share it, and a second chat that tried got a confusing
+        launch error. Say who has it, in plain words. The lock goes when this process ends."""
+        if self.cdp is not None:
+            return
+        who = os.environ.get("MH_CHAT_ID", "")
+        lk = ProfileLock(prof.with_name(prof.name + ".lock"))
+        err = lk.acquire(who)
+        if err:
+            raise ToolFailed(err)
+        self.lock = lk
+
     def _launch(self, prof: Path, **kw):
         prof.mkdir(parents=True, exist_ok=True)
+        if getattr(self, "lock", None) is None or self.lock.path != prof.with_name(prof.name + ".lock"):
+            if getattr(self, "lock", None) is not None:
+                self.lock.release()
+                self.lock = None
+            self._lock_profile(prof)
         return self.pw.chromium.launch_persistent_context(
             str(prof), headless=kw.pop("headless"), no_viewport=True,
             args=["--no-first-run", "--no-default-browser-check", "--window-size=1280,900"], **kw)
@@ -275,6 +368,9 @@ class Browser:
         except Exception:  # noqa: BLE001
             pass
         self.ctx = self.page = self.cdp = None
+        if self.lock is not None:
+            self.lock.release()
+            self.lock = None
         try:
             if self.pw is not None:
                 self.pw.stop()
@@ -302,6 +398,9 @@ class Browser:
         s = self.page.evaluate(SNAPSHOT_JS)
         tabs = len(self.ctx.pages)
         head = [note] if note else []
+        if self.popup_note and self.popup_note not in " ".join(head):
+            head.append(self.popup_note)
+        self.popup_note = ""
         if self.notice:
             head.append(self.notice)
             self.notice = ""
