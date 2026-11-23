@@ -726,6 +726,24 @@ def _destructive(args: dict) -> bool:
                                     + " " + " ".join(map(str, args.get("commands") or []))))
 
 
+def _bad_reply(resp) -> str:
+    """Why a successful HTTP reply is not a model reply (an error body, no choices, a null message, a content filter
+    with nothing in it), or "" when it is one."""
+    if not isinstance(resp, dict):
+        return "not a JSON object"
+    ch = resp.get("choices")
+    if not ch or not isinstance(ch, list) or not isinstance(ch[0], dict):
+        e = resp.get("error")
+        e = (e.get("message") if isinstance(e, dict) else e) or ""
+        return ("error: " + str(e)[:160]) if e else "no choices"
+    m = ch[0].get("message")
+    if not isinstance(m, dict):
+        return "no message"
+    if ch[0].get("finish_reason") == "content_filter" and not (m.get("content") or m.get("tool_calls")):
+        return "blocked by a content filter"
+    return ""
+
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
 
@@ -1148,12 +1166,23 @@ class Agent:
                 cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 cut = {calls[i]["id"] for i in cut}
+                for c in calls:                        # a call without a name makes every later request invalid
+                    if not isinstance(c.get("function"), dict):
+                        c["function"] = {"arguments": "{}"}
+                    if not c["function"].get("name"):
+                        c["function"]["name"] = "unknown"
                 content = msg.get("content") or ""
                 self._scrubber = None                  # the next reply starts a fresh stream scrubber
                 if "<memory-context>" in content:
                     from meshpool_harness.assistant import scrub
                     content = scrub(content)
-                keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
+                if not calls and not content.strip() and not said:
+                    # nothing said and nothing asked for: not a reply to keep in the history
+                    self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
+                    self.emit({"type": "error", "text": "The model returned an empty reply. Send your message again, "
+                                                        "or switch to another model."})
+                    return ""
+                keep = {"role": "assistant", "content": content or ""}
                 if calls:
                     keep["tool_calls"] = calls
                 self.messages.append(keep)
@@ -1394,8 +1423,11 @@ class Agent:
         try:
             f = c.get("function", {})
             name, args = f.get("name", ""), str(f.get("arguments", ""))
-            if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
-                return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
+            bg = self.ws.__dict__.get("_bg") or {}
+            if any(e["p"].poll() is None for e in list(bg.values())) or not self._inspection(name, args):
+                # a background command is running (its output changes with no edit), or the call is not a read-only
+                # look: a flaky check or an MCP call can rightly repeat with no edit
+                return self._run_tool(c, cut=cut)
             exact = name + ":" + args[:2000]
             # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
             # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
@@ -1658,6 +1690,9 @@ class Agent:
                         ok = True
                     finally:
                         h.release(ok, slot)
+                bad = _bad_reply(resp)
+                if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
+                    raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
                 self._first_scale = 1.0
                 break
             except (Interrupted, KeyboardInterrupt):

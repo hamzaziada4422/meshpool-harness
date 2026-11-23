@@ -265,7 +265,10 @@ class Terminal:
             if not self._text_open and not self.print_mode:
                 self._write("\n", self.out)
             self._text_open = True
-            self._write(chunk, self.out)
+            if self.print_mode:                        # written once the reply is complete: a retry cannot append to it
+                self._pbuf = getattr(self, "_pbuf", "") + chunk
+            else:
+                self._write(chunk, self.out)
             return
         self._text_open = True
         self._partial += chunk
@@ -284,12 +287,16 @@ class Terminal:
                 rest, self._partial = self._partial, ""
                 self.scroll(["  " + x if x else "" for x in R.markdown(rest, self.width - 2, self.st, self._md)])
         elif self._text_open:
+            if self.print_mode and getattr(self, "_pbuf", ""):
+                self._write(self._pbuf, self.out)
+            self._pbuf = ""
             self._write("\n", self.out)
         self._text_open = False
         self._md = R.MdState()
 
     # ---------- agent events ----------
     def emit(self, ev: dict):
+        ev = {k: (R.safe_text(v) if isinstance(v, str) else v) for k, v in ev.items()}   # model text never drives the tty
         t, st = ev.get("type"), self.st
         if t == "model_start":
             if self.interactive and not self._turn:
@@ -302,6 +309,8 @@ class Terminal:
         elif t == "stream_reset":
             if self._text_open:
                 self._partial = ""
+                if self.print_mode:                    # the partial reply is discarded, nothing was written yet
+                    self._pbuf, self._text_open = "", False
                 self._flush_text()
                 self.p(st.dim("[connection dropped; the reply restarts below]"))
         elif t == "assistant":
@@ -766,11 +775,16 @@ class Terminal:
             return "no", "No terminal to ask in. Run with --auto."
         if self.stopping:
             return "no", ""
-        self.idle.clear()
-        try:
-            choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
-        finally:
-            self.idle.set()
+        if not hasattr(self, "_approve_lock"):
+            self._approve_lock = threading.Lock()
+        with self._approve_lock:                       # parallel tool calls: one question on the screen at a time
+            if self.stopping:
+                return "no", ""
+            self.idle.clear()
+            try:
+                choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
+            finally:
+                self.idle.set()
         if self.stopping:                 # Ctrl+C while the question was open: the turn is over
             return "no", ""
         if choice == "always" and options:
