@@ -643,7 +643,11 @@ def finance_workbook(paths: list[str]) -> str | None:
         if not str(p).lower().endswith((".xlsx", ".xlsm")) or not Path(p).exists():
             continue
         try:
-            names = {k.lower() for k in load_workbook(p, read_only=False).defined_names.keys()}
+            wb = load_workbook(p, read_only=True)
+            try:
+                names = {k.lower() for k in wb.defined_names.keys()}
+            finally:
+                wb.close()
         except Exception:                                      # noqa: BLE001
             continue
         if names & {"dcf_per_share", "comps_ev_ebitda_median", "weighted_value_per_share", "ts_revenue_final",

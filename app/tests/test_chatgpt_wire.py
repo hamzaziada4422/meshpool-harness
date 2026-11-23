@@ -172,7 +172,7 @@ def test_expired_token_is_refreshed_first_and_written_back(mock, tmp_path):
     saved = json.loads(p.read_text())
     assert saved["tokens"]["refresh_token"] == "rt-2"          # the rotated pair, for the Codex CLI too
     assert saved["tokens"]["access_token"] in mock.valid
-    assert saved["last_refresh"].startswith(time.strftime("%Y-"))
+    assert saved["last_refresh"][:4].isdigit() and abs(int(saved["last_refresh"][:4]) - time.gmtime().tm_year) <= 1   # UTC vs local year at New Year
     assert (p.stat().st_mode & 0o777) == 0o600
 
 

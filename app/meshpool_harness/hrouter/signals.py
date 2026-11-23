@@ -85,7 +85,7 @@ SUB = [  # (sub, pattern, weight). Checked in order; the heaviest total wins.
 _SUB = [(s, re.compile(p, re.I | re.M), w) for s, p, w in SUB]
 
 FAMILY_WORDS = {
-    "browser": r"\b(click|fill (in|out) (the|a|this) form|log ?in to|sign ?in to|on (the )?website|in the browser|"
+    "browser": r"\b(click|fill (in|out) (the|a|this)( \w+)? form|log ?in to|sign ?in to|on (the )?website|in the browser|"
                r"browse to|navigate to|scrape|book (a|the) |submit (the|a) form)\b",
     "research": r"\b(research\w*|sources?|citations?|cite|look up|find out|latest|news|market (size|share|map)|"
                 r"competitors?|landscape|due diligence|literature|papers?|arxiv|study|studies|10-k|filings?)\b",
@@ -96,12 +96,29 @@ FAMILY_WORDS = {
     "automation": r"\b(every (day|morning|week|monday|hour)|schedule\w*|remind me|each (day|week)|daily|weekly|"
                   r"when (a|an|new) .{0,30}(arrives|comes in|is added)|watch (the|this|my) folder|automat\w+)\b",
     "writing": r"\b(rewrite|rephrase|reword|proofread|polish|shorten|tighten|translate|tone|friendlier|more formal|"
-               r"summari[sz]e (this|the following|it)|tl;?dr|draft (an?|the|my) (email|reply|message|post|tweet|bio)|"
+               r"summari[sz]e (this|the following|it)|tl;?dr|draft (an?|the|my)( \w+){0,2} (email|reply|message|post|tweet|bio)|"
                r"reply to (this|the|her|him|them)|write (an?|the|my) (email|reply|message|post|tweet|caption|bio))\b",
     "code": r"\b(code|repo(sitory)?|function|class|method|module|script|compile\w*|tests?|unit test|api|endpoint|"
-            r"bug|stack ?trace|traceback|refactor|pull request|commit|lint|type ?error|npm|pip|cargo|git)\b",
+            r"bug|stack ?trace|traceback|refactor|pull request|commit|lint|type ?error|npm|pip|cargo|git|cli|"
+            r"memory leak|github actions|dockerfile|docker|ci/cd)\b|(?<![\w-])--[a-z][\w-]*",
 }
+# explicit navigation to a site or web app (Cowork browser work): decisive, so it counts double
+_NAV = re.compile(r"\b(?:go to|open|visit|head to|log ?in to|sign ?in to)\s+(?:the |my |a )?(?:[\w-]+\.(?:com|org|io|net|ai|co)\b|"
+                  r"amazon|gmail|google|linkedin|twitter|facebook|youtube|github|website|site|portal|dashboard|inbox)\b|"
+                  r"\b(?:check|read|open) my (?:gmail|e-?mail|inbox|calendar)\b|\bcontact form\b", re.I)
 _FAM = {k: re.compile(v, re.I) for k, v in FAMILY_WORDS.items()}
+
+MAX_TEXT_CHARS = 8000
+
+
+def cap_text(text):
+    """User text bounded for the regex signals: the start and the end of a huge paste say what is asked, and no
+    pattern can then run for long (a 3 MB unbroken token froze the whole server)."""
+    if text and len(text) > MAX_TEXT_CHARS:
+        h = MAX_TEXT_CHARS // 2
+        return text[:h] + "\n" + text[-h:]
+    return text
+
 
 OFFICE_EXT = {".pptx": "docs", ".ppt": "docs", ".key": "docs", ".xlsx": "docs", ".xlsm": "docs", ".xls": "docs",
               ".docx": "docs", ".doc": "docs", ".pdf": "docs", ".csv": "data", ".tsv": "data", ".parquet": "data",
@@ -110,6 +127,7 @@ OFFICE_EXT = {".pptx": "docs", ".ppt": "docs", ".key": "docs", ".xlsx": "docs", 
 
 def languages_in(text: str, files: list[str] | None = None) -> dict[str, float]:
     """Language -> evidence weight from file extensions, pasted errors, code fences and words."""
+    text = cap_text(text)
     w: dict[str, float] = {}
     for f in files or []:
         lang = EXT_LANG.get(Path(f).suffix) or EXT_LANG.get(Path(f).suffix.lower())
@@ -124,7 +142,7 @@ def languages_in(text: str, files: list[str] | None = None) -> dict[str, float]:
                                                                                                 m.group(1).lower())
         if tag in set(EXT_LANG.values()):
             w[tag] = w.get(tag, 0) + 2
-    for m in re.finditer(r"\b[\w/.-]+(\.[A-Za-z]{1,5})\b", text or ""):
+    for m in re.finditer(r"\b[\w/.-]{1,200}(\.[A-Za-z]{1,5})\b", text or ""):
         lang = EXT_LANG.get(m.group(1))
         if lang:
             w[lang] = w.get(lang, 0) + 1.5
@@ -165,6 +183,7 @@ def is_repo(workdir: str | None) -> bool:
 
 def pasted_error(text: str) -> str | None:
     """The language of an error report pasted into the request, or None."""
+    text = cap_text(text)
     for lang, rx in _ERR:
         if rx.search(text or ""):
             return lang
@@ -195,6 +214,7 @@ _LEAD_FEATURE = re.compile(r"\s*(please\s+)?(add|implement|create|build|support|
 
 def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
     """The kind of code work: debug, test, refactor, review, terminal, explain or build."""
+    text = cap_text(text)
     if not has_error and _TEST_MAIN.search(text or "") and not re.search(
             r"\b(fix|debug)\b.{0,30}\b(failing|broken) tests?\b", text or "", re.I):
         return "test", ["test"]
@@ -232,17 +252,29 @@ def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
 
 def families(text: str, files: list[str] | None = None) -> dict[str, float]:
     """Family -> evidence weight from words and attachments."""
+    text = cap_text(text)
     w: dict[str, float] = {}
     for fam, rx in _FAM.items():
         n = len(rx.findall(text or ""))
         if n:
             w[fam] = w.get(fam, 0) + n
-    named = re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
+    nav = len(_NAV.findall(text or ""))
+    if nav:
+        w["browser"] = w.get("browser", 0) + 2 * min(nav, 2)
+    ss = len(re.findall(r"\b(?:spreadsheet|excel|xlsx|workbook)\b", text or "", re.I))
+    if ss and w.get("data"):             # a chart, forecast or analysis of a spreadsheet is data work, not a document
+        w["docs"] = w.get("docs", 0) - ss
+        w["data"] += ss
+        if w["docs"] <= 0:
+            w.pop("docs")
+    named = re.findall(r"[\w./-]{1,200}\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
     if named and not files:              # "orders.csv", "events.jsonl" named in the question: a data file, as attached
         w["data"] = w.get("data", 0) + 2
     for f in files or []:
         ext = Path(f).suffix.lower()
-        if ext in OFFICE_EXT:
+        if ext in (".xlsx", ".xlsm", ".xls") and w.get("data"):
+            w["data"] += 2                  # data words plus a spreadsheet: the data method, not the document one
+        elif ext in OFFICE_EXT:
             w[OFFICE_EXT[ext]] = w.get(OFFICE_EXT[ext], 0) + 2
         elif EXT_LANG.get(ext):
             w["code"] = w.get("code", 0) + 2
@@ -257,6 +289,7 @@ _SNIPPET = re.compile(r"\b((only|just) (the|a|an) (query|regex|command|code|answ
 
 def snippet_request(text: str) -> bool:
     """A request for one short piece of code or a formula, answered in the reply (no project, no files)."""
+    text = cap_text(text)
     return bool(_SNIPPET.search(text or "")) and len((text or "").split()) <= 60
 
 
@@ -304,11 +337,13 @@ _ALG_WEAK = re.compile(r"\b(overlap\w*|touching|sorted|maximal|empty|inclusive|e
 
 
 def _algorithm(text: str) -> bool:
+    text = cap_text(text)
     return bool(_ALG_STRONG.search(text or "")) or len(set(m.lower() for m in _ALG_WEAK.findall(text or ""))) >= 3
 
 
 def variant(sub: str, text: str) -> str:
     """The most specific kind of job within a sub-task (first match wins; order is by how decisive the signal is)."""
+    text = cap_text(text)
     for name, rx in _VAR.get(sub, []):
         if name == "cli" and _algorithm(text):     # after "feature", before the surface-area variants
             return "algorithm"

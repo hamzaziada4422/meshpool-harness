@@ -320,7 +320,7 @@ def test_anthropic_wire_round_trip():
             "tools": [{"type": "function", "function": {"name": "ls", "description": "d",
                                                         "parameters": {"type": "object", "properties": {}}}}]}
     r = AW.to_request(body)
-    assert r["system"] == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
+    assert (r["system"] if isinstance(r["system"], str) else r["system"][0]["text"]) == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
     assert [m["role"] for m in r["messages"]] == ["user", "assistant", "user"]
     assert r["messages"][1]["content"][0] == {"type": "tool_use", "id": "t1", "name": "ls", "input": {"p": "."}}
     assert [b["type"] for b in r["messages"][2]["content"]] == ["tool_result", "text"]

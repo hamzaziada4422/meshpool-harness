@@ -83,7 +83,9 @@ jobs:
           for k in ("arms", "suites", "budget", "models", "fast_model", "probe_filter", "repeats", "cap_start_spend",
                     "cap_usd"):
               v = ins.get(k) or c.get(k, "")
-              print(f"{k}={v}")
+              # dispatch inputs are untrusted text that later lands in shell lines: keep only plain characters
+              import re
+              print(f"{k}=" + re.sub(r"[^A-Za-z0-9_.,:=/+ -]", "", str(v)))
           PY
         env:
           INPUTS: ${{ toJSON(inputs) }}
@@ -181,9 +183,11 @@ jobs:
           import json, os
           c = json.load(open("testkit/loop/ci.json")).get("swe", {})
           ins = json.loads(os.environ["INPUTS"] or "{}")
-          print("n=" + str(ins.get("swe_n") or c.get("n", 12)))
-          print("model=" + (ins.get("model") or c.get("model", "deepseek-v4.1-flash")))
-          print("arms=" + (ins.get("swe_arms") or c.get("arms", "routed,base,pi")))
+          import re
+          def clean(v): return re.sub(r"[^A-Za-z0-9_.,:=/+ -]", "", str(v))   # inputs are untrusted: plain characters only
+          print("n=" + clean(ins.get("swe_n") or c.get("n", 12)))
+          print("model=" + clean(ins.get("model") or c.get("model", "deepseek-v4.1-flash")))
+          print("arms=" + clean(ins.get("swe_arms") or c.get("arms", "routed,base,pi")))
           PY
         env:
           INPUTS: ${{ toJSON(inputs) }}

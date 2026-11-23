@@ -54,7 +54,28 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _error(self, code: int, msg: str, kind: str = "invalid_request_error"):
+        self.close_connection = True          # the request body may be unread: do not reuse the connection
         self._json(code, {"error": {"message": msg, "type": kind}})
+
+    _too_big = False
+
+    def _read_chunked(self):
+        """The body of a Transfer-Encoding: chunked request, or None when malformed or over MAX_BODY."""
+        data = b""
+        try:
+            while True:
+                size = int(self.rfile.readline(64).split(b";")[0].strip() or b"0", 16)
+                if size == 0:
+                    while self.rfile.readline(1024).strip():     # trailers
+                        pass
+                    return data
+                if len(data) + size > MAX_BODY:
+                    self._too_big = True
+                    return None
+                data += self.rfile.read(size)
+                self.rfile.readline(4)                            # the CRLF after the chunk
+        except (ValueError, OSError):
+            return None
 
     def do_GET(self):
         if not self._authorized():
@@ -70,11 +91,20 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(401, "Missing or wrong relay token.", "authentication_error")
         if self.path.rstrip("/") not in ("/v1/chat/completions", "/chat/completions"):
             return self._error(404, "Not found.")
-        n = int(self.headers.get("Content-Length") or 0)
-        if n <= 0 or n > MAX_BODY:
-            return self._error(413 if n > MAX_BODY else 400, "Bad request size.")
+        if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
+            raw = self._read_chunked()
+            if raw is None:
+                return self._error(413 if self._too_big else 400, "Bad request size.")
+        else:
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = 0
+            if n <= 0 or n > MAX_BODY:
+                return self._error(413 if n > MAX_BODY else 400, "Bad request size.")
+            raw = self.rfile.read(n)
         try:
-            body = json.loads(self.rfile.read(n))
+            body = json.loads(raw)
         except ValueError:
             return self._error(400, "The body is not JSON.")
         stream = bool(body.get("stream"))

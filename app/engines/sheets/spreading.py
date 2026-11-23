@@ -149,6 +149,9 @@ def _get(url: str, user_agent: str, timeout: float = 30.0) -> bytes:
                 return r.read()
         except Exception as e:                       # 429 / transient network errors: back off, stay polite
             last = e
+            code = getattr(e, "code", None)
+            if isinstance(code, int) and 400 <= code < 500 and code != 429:
+                break                                # 404/403 and the like will not change on retry
             time.sleep(1.0 + attempt)
     raise RuntimeError(f"SEC request failed for {url}: {last}")
 
@@ -166,11 +169,11 @@ def fetch_companyfacts(cik, user_agent: str | None = None, cache_dir: str | None
     if cache_dir:
         p = Path(cache_dir) / f"CIK{c}.json"
         if p.exists():
-            return json.loads(p.read_text())
+            return json.loads(p.read_text(encoding="utf-8"))
     data = json.loads(_get(API.format(cik=c), user_agent))
     if cache_dir:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
-        (Path(cache_dir) / f"CIK{c}.json").write_text(json.dumps(data))
+        (Path(cache_dir) / f"CIK{c}.json").write_text(json.dumps(data), encoding="utf-8")
     return data
 
 
@@ -184,7 +187,7 @@ def cik_for_ticker(ticker: str, user_agent: str | None = None) -> str:
 
 
 def load_companyfacts(path) -> dict:
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 # ------------------------------------------------------------------------------------------------- spreading
@@ -591,7 +594,7 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
                     tags.add(cell.tag)
                 else:
                     continue
-                B.define_name(wb, nm(key, y), f"'{ws.title}'!${c}${r}")
+                B.define_name(wb, nm(key, y), f"{B._q(ws.title)}!${c}${r}")
             if key in DERIVED:
                 src = "Derived: " + DERIVED[key][3]
             elif tags:
@@ -633,7 +636,7 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
             ok_years.append(c)
         if ok_years and "Checks" in wb.sheetnames:
             B.add_check(wb, f"Historicals: {label[7:].split(',')[0].split(' minus')[0]} ({len(ok_years)} years)",
-                        "=" + "+".join(f"ABS('{ws.title}'!{c}{r})" for c in ok_years))
+                        "=" + "+".join(f"ABS({B._q(ws.title)}!{c}{r})" for c in ok_years))
         check_rows.append(r)
         r += 1
     if sp.gaps:

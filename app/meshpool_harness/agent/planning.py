@@ -32,8 +32,10 @@ def every() -> int:
 
 def signals(text: str) -> dict:
     text = (text or "").split("\n\n​")[0]
+    size = len(text.strip())
+    text = text[:4000]                          # the file pattern is slow on a huge pasted line: scan the start
     reqs = max(len(_REQ_LINE.findall(text)), len(_REQ_INLINE.findall(text)))
-    return {"reqs": reqs, "files": len({f.lower() for f in _FILE.findall(text)}), "len": len(text.strip())}
+    return {"reqs": reqs, "files": len({f.lower() for f in _FILE.findall(text)}), "len": size}
 
 
 def needed(route, text: str, plan_mode: bool = False) -> bool:

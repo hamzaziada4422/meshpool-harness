@@ -81,6 +81,9 @@ def build_user(request: str, change: str, last_cmd: dict | None) -> str:
 def findings(reply: str) -> str:
     """The reviewer's findings, or '' when it found nothing (LGTM, empty)."""
     r = (reply or "").strip()
-    if not r or r.upper().startswith("LGTM"):
+    if not r or re.fullmatch(r"(?i)lgtm[\s.!]*", r):
+        return ""
+    # "LGTM, all good" is clean; "LGTM, but the loop is off by one" is not
+    if re.match(r"(?i)lgtm\b", r) and not re.search(r"(?i)\b(but|however|except|although|though|still|yet|unless|nit|issue|bug|wrong|missing|fix)\b|^\s*\d+[.)]", r):
         return ""
     return r[:2500]

@@ -279,8 +279,19 @@ def _kdir(pid: str) -> Path:
     return _exists(pid) / "knowledge"
 
 
+_RESERVED = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
+
+
 def _safe_name(name: str) -> str:
-    return re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    n = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).rstrip(". ")
+    if n in (".", ".."):
+        n = ""
+    if n.partition(".")[0].lower() in _RESERVED:           # CON, NUL, PRN ... cannot be file names on Windows
+        n = "_" + n
+    if len(n) > 120:                                       # keep the extension, cut the middle
+        stem, dot, ext = n.rpartition(".")
+        n = (stem[:100] + dot + ext[:15]) if dot and len(ext) <= 15 and stem else n[:120]
+    return n or "file"
 
 
 def _index(d: Path) -> dict:

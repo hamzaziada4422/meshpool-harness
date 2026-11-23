@@ -1,6 +1,6 @@
 ---
 name: interview-plan
-description: Build an interview plan: stages, questions per competency and a scoring guide. Use when the user prepares interviews for a role or a candidate.
+description: 'Build an interview plan: stages, questions per competency and a scoring guide. Use when the user prepares interviews for a role or a candidate.'
 ---
 
 # Interview plan

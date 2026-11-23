@@ -1,7 +1,9 @@
 """Workbook QA: LibreOffice recalculation, error scan, circular refs, hardcoded numbers, structure."""
 from __future__ import annotations
 
+import atexit
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -20,7 +22,11 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     soffice = find_soffice()
     if not soffice:
         raise RuntimeError(f"LibreOffice not installed ({missing_reason()})")
-    out = Path(out_dir or tempfile.mkdtemp(prefix="recalc_"))
+    if out_dir:
+        out = Path(out_dir)
+    else:
+        out = Path(tempfile.mkdtemp(prefix="recalc_"))
+        atexit.register(shutil.rmtree, str(out), True)      # the converted copy is scratch: do not leave it in /tmp
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
         subprocess.run([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
@@ -29,6 +35,7 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
 
 
+MAX_SCAN_ROWS = 20000
 PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
 
 
@@ -45,13 +52,16 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
         recalced, wb_v = None, None                  # no LibreOffice: structure checks only
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         recalced, wb_v = None, None                  # recalculation failed: structure checks, and say so
-        issues.append(f"Could not recalculate the workbook to check its values ({type(e).__name__}); formulas and "
-                      "structure were checked, values were not.")
+        issues.append({"check": "recalc_failed", "cell": "",
+                       "detail": f"Could not recalculate the workbook to check its values ({type(e).__name__}); "
+                                 "formulas and structure were checked, values were not."})
     n_formula = n_numeric_const = n_ph = 0
-    for ws in wb_f.worksheets:
-        wv = wb_v[ws.title] if wb_v is not None else None
+    for si, ws in enumerate(wb_f.worksheets):
+        wv = None
+        if wb_v is not None:                          # LibreOffice truncates long sheet names: fall back to position
+            wv = wb_v[ws.title] if ws.title in wb_v.sheetnames else wb_v.worksheets[si]
         is_calc = bool(CALC_SHEETS.search(ws.title)) and not INPUT_SHEETS.search(ws.title)
-        for row in ws.iter_rows():
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):   # huge data tabs are sampled
             for c in row:
                 v = c.value
                 if v is None:
@@ -68,7 +78,7 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                                                      "from a plain string, not an f-string, so Excel shows #N/A. "
                                                      "Write it with f'...' so the row number goes in."})
                         continue
-                    if cv is None and wv is not None:
+                    if cv is None and wv is not None and '""' not in v:   # ="" results read back as None
                         issues.append({"check": "formula_no_value", "cell": f"{ws.title}!{c.coordinate}",
                                        "detail": v[:80]})
                     if isinstance(cv, str) and cv.startswith(ERRORS):
@@ -107,6 +117,11 @@ def value(xlsx_path: str, ref: str):
         if "not installed" in str(e):
             return None                              # no LibreOffice: value unknown, not a failure
         raise
+    return read_ref(wb, ref)
+
+
+def read_ref(wb, ref: str):
+    """Value of 'Sheet!A1' or a defined name in an already-loaded (recalculated) workbook."""
     if "!" in ref:
         sh, cell = ref.split("!", 1)
         return wb[sh.strip("'")][cell.replace("$", "")].value

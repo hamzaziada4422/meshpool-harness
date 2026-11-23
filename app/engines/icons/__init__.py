@@ -41,7 +41,16 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ENGINES = HERE.parent
 BUNDLES = HERE / "bundles"
-CACHE = Path(os.environ.get("MESHPOOL_ICON_CACHE") or Path(tempfile.gettempdir()) / "meshpool_icons")
+def _user_tag() -> str:
+    try:
+        return str(os.getuid())                     # POSIX
+    except AttributeError:
+        import getpass
+        return re.sub(r"\W+", "_", getpass.getuser())
+
+
+# per-user default: a shared /tmp/meshpool_icons would let another local user pre-plant SVGs
+CACHE = Path(os.environ.get("MESHPOOL_ICON_CACHE") or Path(tempfile.gettempdir()) / f"meshpool_icons_{_user_tag()}")
 
 _LUCIDE = {"family": "lucide", "license": "ISC", "license_file": ENGINES / "slides" / "icons" / "LICENSE-lucide.txt",
            "version": "0.460.0", "source": "https://lucide.dev (npm lucide-static)"}
@@ -564,7 +573,7 @@ def path(name: str, set: str | None = None) -> Path | None:
             return SETS[s]["dir"] / f"{n}.svg"
         out = _cache_path(s, n)
         if not out.is_file():
-            out.parent.mkdir(parents=True, exist_ok=True)
+            out.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             tmp = out.with_suffix(f".{os.getpid()}.tmp")
             tmp.write_text(_icons(s)[n], encoding="utf-8")
             os.replace(tmp, out)

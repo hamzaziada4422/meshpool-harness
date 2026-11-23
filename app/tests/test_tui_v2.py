@@ -191,10 +191,7 @@ def test_no_color_keeps_layout_drops_colours(monkeypatch):
     t.emit({"type": "tool_start", "id": "1", "name": "bash", "summary": "ls"})
     t.emit({"type": "tool_end", "id": "1", "name": "bash", "ok": True, "output": "a\nb"})
     t.keys_factory = lambda: FakeKeys(lambda: None)
-    try:
-        t.read_input()
-    except Exception:  # noqa: BLE001
-        pass
+    t.read_input()
     raw = out.getvalue()
     assert "\x1b[38" not in raw and "\x1b[48" not in raw and "\x1b[1m" not in raw and "\x1b[2m" not in raw
     assert "$ ls" in raw and "Took" in raw and "─" * 80 in raw

@@ -37,18 +37,18 @@ Before searching, clarify what you're actually trying to find:
 Search systematically through the source tiers below, adapting to what is connected. Don't stop at the first result — cross-reference across sources.
 
 **Tier 1 — Official Internal Sources (highest confidence):**
-- ~~knowledge base (if connected): product docs, runbooks, FAQs, policy documents
-- ~~cloud storage: internal documents, specs, guides, past research
+- knowledge base (if connected): product docs, runbooks, FAQs, policy documents
+- cloud storage: internal documents, specs, guides, past research
 - Product roadmap (internal-facing): feature timelines, priorities
 
 **Tier 2 — Organizational Context:**
-- ~~CRM notes: account notes, activity history, previous answers, opportunity details
-- ~~support platform (if connected): previous resolutions, known issues, workarounds
+- CRM notes: account notes, activity history, previous answers, opportunity details
+- support platform (if connected): previous resolutions, known issues, workarounds
 - Meeting notes: previous discussions, decisions, commitments
 
 **Tier 3 — Team Communications:**
-- ~~chat: search for the topic in relevant channels; check if teammates have discussed or answered this before
-- ~~email: search for previous correspondence on this topic
+- chat: search for the topic in relevant channels; check if teammates have discussed or answered this before
+- email: search for previous correspondence on this topic
 - Calendar notes: meeting agendas and post-meeting notes
 
 **Tier 4 — External Sources:**
@@ -108,7 +108,7 @@ If no connected sources yield results:
 - Perform web research on the topic
 - Ask the user for internal context:
   - "I couldn't find this in connected sources. Do you have internal docs or knowledge base articles about this?"
-  - "Has your team discussed this topic before? Any ~~chat channels I should check?"
+  - "Has your team discussed this topic before? Any chat channels I should check?"
   - "Is there a subject matter expert who would know the answer?"
 - Be transparent about limitations:
   - "This answer is based on web research only — please verify against your internal documentation before sharing with the customer."

