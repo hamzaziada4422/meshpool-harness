@@ -235,3 +235,16 @@ def test_cowork_prompt_no_longer_asks_to_confirm_assumptions_at_the_end(tmp_path
     text = core.WORK_SYSTEM
     assert "Before you finish, confirm anything important you assumed" not in text
     assert "A vague request" in text
+
+
+# ---------- the headless CLI can run Cowork --------------------------------------------------------------------------------
+def test_cli_profile_flag_reaches_the_agent(monkeypatch):
+    import os
+    from meshpool_harness import cli
+    import meshpool_harness.agent.tui as tui
+    seen = {}
+    monkeypatch.delenv("MH_AGENT_PROFILE", raising=False)
+    monkeypatch.setattr(tui, "main", lambda *a, **k: seen.update(profile=os.environ.get("MH_AGENT_PROFILE")) or 0)
+    assert cli.main(["-p", "hello", "--profile", "work", "--auto"]) == 0
+    assert seen["profile"] == "work"
+    monkeypatch.delenv("MH_AGENT_PROFILE", raising=False)

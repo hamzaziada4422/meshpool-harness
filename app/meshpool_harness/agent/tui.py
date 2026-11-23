@@ -1318,7 +1318,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         term.spin.stop()
     pm = os.environ.get("MH_PERMISSION_MODE", "")
     mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
-    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode)
+    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode,
+              profile="work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")   # --profile work: Cowork
     if sub:
         from meshpool_harness.harnesses.acp import ACPAgent
         if resume or session:
