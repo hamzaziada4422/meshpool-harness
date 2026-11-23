@@ -436,7 +436,7 @@ class Session:
         except OSError:
             pass
 
-    def approve(self, kind, title, detail, options=None):
+    def approve(self, kind, title, detail, options=None, scope=""):
         if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
             return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
                           "and say in your summary what needed the user.")
@@ -447,7 +447,7 @@ class Session:
             self.pendings[p["id"]] = p
         self.state = "waiting"
         self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
-                   "options": options})
+                   "options": options, "scope": scope})
         if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
         while not p["ev"].wait(0.5):

@@ -64,5 +64,5 @@ def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     ok, why = a._permit("bash", {"command": "git push origin main"})
     assert not ok and "saved rule" in why
     assert not a._permit("web_search", {})[0]
-    assert not a._permit("bash", {"command": "ls"})[0]                      # no rule: asks, and the answer here is no
+    assert not a._permit("bash", {"command": "make all"})[0]                      # no rule: asks, and the answer here is no
     assert not a._permit("bash", {"command": "npm test && rm -rf /"})[0]            # an allow rule never covers a destructive command

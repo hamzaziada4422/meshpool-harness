@@ -459,7 +459,11 @@ class PiAgent:
             # Plan mode only investigates: no edits, no commands, no tools that could change something.
             self._denied.add(tid)
             return False
-        if self.mode == "auto" or kind in self._always or (self.mode == "edits" and kind == "edit"):
+        from meshpool_harness.core import permrules as PR
+        if self.mode == "auto" or (kind != "bash" and kind in self._always) or (self.mode == "edits" and kind == "edit"):
+            return True
+        bpats = [x[5:] for x in self._always if x.startswith("bash:")]
+        if kind == "bash" and PR.granted(str(inp.get("command", "")), bpats):
             return True
         if not self.approve or self._stop:
             self._denied.add(tid)
@@ -474,9 +478,15 @@ class PiAgent:
             title = f"Use {name.split('__', 2)[-1].replace('_', ' ')}" + \
                 (f" ({name.split('__')[1]})" if name.startswith("mcp__") else "") + "?"
             detail = json.dumps(inp, indent=1, ensure_ascii=False)[:3000]
-        choice, note = self.approve(kind, title, detail)
+        pats = PR.grant_patterns(str(inp.get("command", ""))) if kind == "bash" else []
+        scope = (" and ".join(f"`{p}`" for p in pats) + " commands") if pats else \
+            "all file edits" if kind == "edit" else "this tool" if kind != "bash" else ""
+        choice, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
         if choice == "always":
-            self._always.add(kind)
+            if kind == "bash":
+                self._always.update("bash:" + p for p in pats)
+            else:
+                self._always.add(kind)
         if choice in ("yes", "always"):
             return True
         self._denied.add(tid)
