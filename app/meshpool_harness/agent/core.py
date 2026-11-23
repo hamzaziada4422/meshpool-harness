@@ -1039,6 +1039,8 @@ class Agent:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):
                     return bool(getattr(self, "office_on", False))
+                if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
+                    return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
