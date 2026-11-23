@@ -43,6 +43,23 @@ New modules (owned by this workstream, no overlap with other sessions):
   - `normalize_roles` (H-05), `fix_tool_ids` (H-19), `sanitize_schemas` (H-21), `cap_images` (P-06),
     `strip_tools` + `text_tools_prompt` + `parse_text_tool_calls` (W-02), `prepare(body, caps, base)`.
 
+## Re-check on the new base (370427e, audit branch merged)
+
+The base now has `core/context.py` (window from override / learned / Ollama `/api/show` / LM Studio / `/models`,
+`fit()`, `max_output()`, `compact_chars()`, silent-truncation learning) and `core/modelcaps.py` (ModelCaps). Result:
+
+- G-14, P-02: compaction already sized to the window (`_maybe_compact` uses `CTX.compact_chars`). Status
+  "already fixed"; add tests for an 8K and a 32K window over 40 exchanges.
+- H-09: context errors now retried up to 4 times with `fit(tighten)`; verify with a test, fix only gaps.
+- H-02: truncation is learned but the cut reply is still used; vLLM `max_model_len` is not read from `/models`.
+- W-02, W-04 (422 is still `fatal`; `prompt_cache_key` cannot be dropped on refusal), S-11, H-05, H-06, H-19,
+  H-21, P-06: still reproduce. W-03: output caps on large windows still refused every call; an output-size error
+  still compacts the history.
+
+Changed design: no separate capability store. Learned facts go into `ModelCaps` (new fields, persisted per
+endpoint+model with `fsio`); the refusal parser is a new module `core/refusals.py`; `core/compat.py` stays as
+planned. `agent/core.py` edits were announced to the session that owns cost work there.
+
 ## Items
 
 ### W-02 models or servers without tool calling fail every turn
