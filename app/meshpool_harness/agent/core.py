@@ -1592,6 +1592,18 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _small_job(self, info: dict) -> bool:
+        """Any lane: under 10 tool calls, one or two files that are not a deck, workbook or web page, a short final
+        answer and no failing command after the last edit. A reviewer loop on a one-page document cost 30 to 60
+        percent more than the job. Decks, workbooks, pages, multi-file builds and long jobs keep the review."""
+        files = [str(f) for f in info.get("files") or []]
+        if info.get("calls", 99) >= 10 or not files or len(files) > 2 or len(info.get("final") or "") >= 1500:
+            return False
+        if any(f.lower().endswith((".pptx", ".xlsx", ".xlsm", ".html", ".htm", ".pbix")) for f in files):
+            return False
+        after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        return not after or after[-1].get("code") == 0
+
     def _small_code_verified(self) -> bool:
         """A code task (not a document, deck or app) where the agent ran something after its last edit and the last
         such run succeeded. The independent grader on these cost 2 to 4 times the task itself (measured: $0.0086 against
@@ -1624,8 +1636,9 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
-            if why.startswith("files made") and self._small_code_verified() and os.environ.get("MH_GRADER_SMALL", "0") != "1":
-                return False, final        # a small code change whose own checks passed: no second model loop (MH_GRADER_SMALL=1 keeps it)
+            if why.startswith("files made") and os.environ.get("MH_GRADER_SMALL", "0") != "1" and (
+                    self._small_code_verified() or self._small_job(info)):
+                return False, final        # a small job, or a code change whose own checks passed: no second model loop
             rounds = g.get("grade_rounds", 0)
             self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
                        + (f" (round {rounds + 1})" if rounds else "") + "..."})
