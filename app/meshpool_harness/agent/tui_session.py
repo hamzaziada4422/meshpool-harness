@@ -1,0 +1,421 @@
+"""The terminal as a front end of the app's chat engine (ui/agent_api.Session, reached through meshpool_harness.chats).
+
+The terminal draws; the Session thinks. A chat started here is the chat the app shows (same transcript, checkpoints,
+checks, receipts, memory and routing), and every slash command here calls the Session method the app's button calls.
+Nothing in this file decides what a chat does.
+
+  TermFrontend    attaches to a Session: draws its events, answers its approvals, waits for a turn to end
+  SharedCommands  the slash commands that map one-to-one onto Session methods (mixed into tui.Session)
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import threading
+import time
+
+DENIED_NOTE = ("Not allowed in -p mode: nobody can approve it. Re-run with --auto, --permission-mode edits, or "
+               "--allowed-tools.")
+_QUIET = ("Starting MCP servers", "No MCP servers enabled")          # status lines the terminal shows its own way
+_NO_STREAM = ("text_delta", "token", "delta", "thinking")
+
+
+class TermFrontend:
+    """One terminal attached to one Session."""
+
+    def __init__(self, s, term, headless: bool = False, stream: bool = False):
+        self.term, self.headless, self.stream = term, headless, stream
+        self.denied: list[dict] = []
+        self.s = None
+        self.attach(s)
+
+    # -- wiring
+    def attach(self, s):
+        self.s = s
+        s.listeners.append(self.on_event)
+        self.term.agent = s.agent
+        if s.harness["type"] not in ("acp", "pi"):
+            if not self.headless:
+                s.agent.ask = self.term.ask_questions        # ask_user questions are answered in the terminal
+            else:
+                s.agent.headless = True                      # one request, no one to answer questions
+        if self.headless:
+            s.auto_resume = False                            # a script gets the failure now, not after a 12 minute wait
+        self.sub = s.harness["id"] if s.harness["type"] == "acp" else None
+
+    def detach(self):
+        try:
+            self.s.listeners.remove(self.on_event)
+        except ValueError:
+            pass
+
+    def rebind(self, new):
+        """Move the terminal to another chat (/clear, /resume): the old one is closed (its transcript stays)."""
+        old = self.s
+        self.detach()
+        self.attach(new)
+        try:
+            old.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.term.refresh_facts(new.agent)
+
+    @property
+    def can_ask(self) -> bool:
+        return bool(sys.stdin and sys.stdin.isatty()) or bool(self.term.keys_factory)
+
+    # -- events
+    def on_event(self, ev: dict):
+        t = ev.get("type")
+        if t == "approval":
+            return self._approval(ev)
+        if self.stream and t not in _NO_STREAM:
+            sys.__stdout__.write(json.dumps({k: v for k, v in ev.items() if k not in ("i", "t")},
+                                            ensure_ascii=False, default=str) + "\n")
+            sys.__stdout__.flush()
+        if t == "status" and str(ev.get("text", "")).startswith(_QUIET):
+            return
+        if t == "status" and str(ev.get("text", "")).startswith("MCP: ") and "Failed" not in ev["text"]:
+            return
+        if t == "status" and not ev.get("text"):
+            return
+        self.term.emit(ev)
+
+    def _approval(self, ev: dict):
+        s, term = self.s, self.term
+        aid = ev["id"]
+        if self.headless and not self.can_ask:
+            self.denied.append({"kind": ev.get("kind"), "title": ev.get("title")})
+            return s.answer(aid, "no", DENIED_NOTE)
+        d, note = term.approve(ev.get("kind", ""), ev.get("title", ""), ev.get("detail", ""), ev.get("options"))
+        if self.headless and d == "no" and not note and not term.stopping:
+            self.denied.append({"kind": ev.get("kind"), "title": ev.get("title")})
+        try:
+            s.answer(aid, d, note)
+        except ValueError:                                   # stopped meanwhile: the approval is gone
+            pass
+
+    # -- turns
+    def wait_ready(self):
+        """The first message waits for the MCP servers (with a spinner while they start)."""
+        s = self.s
+        if s._mcp_ready.is_set():
+            return
+        if not self.headless:
+            self.term.spin.start("Starting MCP servers")
+        try:
+            s._mcp_ready.wait(float(os.environ.get("MH_MCP_START_S", "60")) + 5)
+        finally:
+            self.term.spin.stop()
+
+    def _wait(self):
+        s = self.s
+        with s.changed:
+            while s.state in ("working", "waiting"):
+                s.changed.wait(0.25)
+
+    def send(self, text: str, images: list | None = None):
+        s, term = self.s, self.term
+        term.stopping = term.failed = False
+        term.started = True
+        self.wait_ready()
+        term.turn_begin()
+        try:
+            s.send(text, images)
+            self._wait()
+        except KeyboardInterrupt:
+            term.turn_finish()
+            term.p(term.st.amber("\n  Stopped."))
+            term.failed = True
+            self.stop()
+        except ValueError as e:                              # an update is installing, an empty message...
+            term.emit({"type": "error", "text": str(e)})
+        finally:
+            term.turn_finish()
+            for th in threading.enumerate():                 # file registration and insights run just after the turn
+                if th.name == "meshpool-after-turn":
+                    th.join(3.0)
+            term.refresh_facts(s.agent)
+
+    def run(self, fn):
+        """Run a Session action that starts a turn on its own (/grade) and wait for it to end."""
+        term = self.term
+        term.stopping = term.failed = False
+        term.turn_begin()
+        try:
+            fn()
+            self._wait()
+        except KeyboardInterrupt:
+            term.turn_finish()
+            self.stop()
+        finally:
+            term.turn_finish()
+            term.refresh_facts(self.s.agent)
+
+    def stop(self):
+        from meshpool_harness.agent.tui import _stop_turn
+        term, s = self.term, self.s
+        term.stopping = True
+        term.spin.stop()
+        try:
+            s.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        _stop_turn(term, s.agent)
+        end = time.time() + 4
+        while s.state in ("working", "waiting") and time.time() < end:
+            time.sleep(0.1)
+
+    # -- the result of a headless run
+    def reply(self) -> str:
+        a = self.s.agent
+        for m in reversed(getattr(a, "messages", None) or []):
+            if m.get("role") == "assistant" and isinstance(m.get("content"), str) and m["content"].strip():
+                return m["content"]
+        with self.s.lock:
+            for e in reversed(self.s.events):
+                if e.get("type") == "assistant" and str(e.get("text") or "").strip():
+                    return e["text"]
+        return ""
+
+    def result(self, failed: bool) -> dict:
+        a = self.s.agent
+        out = {"type": "result", "ok": not failed, "result": self.reply(), "session_id": self.s.id,
+               "chat_id": self.s.id, "usage": dict(getattr(a, "usage", {}) or {}),
+               "steps": len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"]),
+               "denied": list(self.denied)}
+        rv = getattr(a, "last_review", None)
+        if rv:                                               # the independent check of a big task (agent/grader.py)
+            out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
+        return out
+
+    def denial_note(self) -> str:
+        if not self.denied:
+            return ""
+        titles = "; ".join(str(d.get("title") or d.get("kind")) for d in self.denied[:5])
+        more = f" (and {len(self.denied) - 5} more)" if len(self.denied) > 5 else ""
+        return (f"{len(self.denied)} action(s) were not allowed: {titles}{more}. In -p mode nobody can approve them; "
+                "re-run with --auto, --permission-mode edits, or --allowed-tools edit,bash:...")
+
+
+_IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
+
+
+def collect_attachments(paths: list, workdir: str) -> tuple[str, list]:
+    """(text to add to the message, images) for files the user attached with /attach or --attach. Pictures go as
+    images (the same {name, mime, data} the app sends); other files are named with @ (copied into the folder first
+    when they live elsewhere, the way the app's attach button does)."""
+    import base64
+    from pathlib import Path
+    root = Path(workdir).resolve()
+    names, images = [], []
+    for raw in paths:
+        p = Path(os.path.expanduser(raw))
+        if not p.is_file():
+            raise ValueError(f"Attachment not found: {raw}")
+        if p.suffix.lower() in _IMAGES:
+            images.append({"name": p.name, "mime": _IMAGES[p.suffix.lower()],
+                           "data": base64.b64encode(p.read_bytes()).decode()})
+        elif root in p.resolve().parents:
+            names.append("@" + p.resolve().relative_to(root).as_posix())
+        else:
+            from meshpool_harness.ui import workbench as W
+            names.append("@" + W.attach(str(root), p.name, p.read_bytes())["path"])
+    return ("Attached: " + " ".join(names)) if names else "", images
+
+
+# ---------- slash commands that call the Session ---------------------------------------------------------------
+
+class SharedCommands:
+    """Mixed into tui.Session. Needs self.s (the shared Session), self.front, self.term and self.agent."""
+
+    def _need_shared(self) -> bool:
+        if getattr(self, "s", None) is None:
+            self.term.p(self.term.st.dim("  Not available in this session."))
+            return False
+        return True
+
+    def _rebind(self):
+        self.agent = self.s.agent
+        self.sub = self.front.sub
+        self.term.agent = self.agent
+        self.term.refresh_facts(self.agent)
+
+    def cmd_plan(self, arg):
+        if not self._need_shared():
+            return
+        t, st = self.term, self.term.st
+        on = (not self.s.plan) if arg == "" else arg.lower() in ("on", "1", "yes", "true")
+        self.s.set_plan(on)
+        t.p(st.dim("  Plan first: the agent investigates and replies with a plan before changing anything."
+                   if on else "  Plan mode is off."))
+
+    def cmd_goal(self, arg):
+        if not self._need_shared():
+            return
+        if not arg:
+            return self.term.p(self.term.st.dim(f"  Goal: {self.s.goal or 'none'}. /goal <text> sets one, /goal off clears it."))
+        self.s.set_goal("" if arg.lower() in ("off", "clear", "none") else arg)
+        if self.s.goal:
+            self.send(self.s.goal)                           # the goal is the first request; the Session keeps going
+
+    def cmd_style(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import styles as ST
+        t, st = self.term, self.term.st
+        rows = ST.listing()["styles"]
+        ids = [r["id"] for r in rows]
+        if not arg:
+            cur = self.s.style_id()
+            i = t.choose("Writing style", [], [f"{r.get('name', r['id'])}" + ("  (current)" if r["id"] == cur else "")
+                                               for r in rows])
+            if i is None:
+                return
+            arg = ids[i]
+        self.s.set_style(arg)
+        t.p(st.dim(f"  Style: {arg}."))
+
+    def cmd_agent(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import chats
+        t, st = self.term, self.term.st
+        hs = [h for h in chats.harness_info()["harnesses"] if h.get("ready", True) and h.get("available", True)
+              and not h.get("unsupported") and h["id"] != "meshpool-auto"]
+        if not arg:
+            cur = self.s.harness["id"]
+            i = t.choose("Switch agent", [], [h["name"] + ("  (current)" if h["id"] == cur else "") for h in hs])
+            if i is None:
+                return
+            arg = hs[i]["id"]
+        self.s.switch_harness(arg)
+        self._rebind()
+        t.p(st.dim(f"  Now using {self.s.harness['name']}."))
+
+    def cmd_mode(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import harnesses as HR
+        kinds = {"code": "code", "work": "cowork", "cowork": "cowork"}
+        if arg not in kinds:
+            return self.term.p(self.term.st.dim("  /mode code | work. Auto picks the agent when a chat starts: "
+                                                "meshpool --mode auto. (/auto sets what the agent may do without asking.)"))
+        self.s.switch_harness(HR.own_for(kinds[arg]))
+        self._rebind()
+        self.term.p(self.term.st.dim(f"  Now using {self.s.harness['name']}."))
+
+    def _turn_pick(self, arg: str, title: str):
+        t = self.term
+        turns = self.s.cp.turns() if self.s.cp else []
+        if not turns:
+            t.p(t.st.dim("  No turns are recorded yet" + (f" ({self.s.cp.disabled})." if self.s.cp and self.s.cp.disabled else ".")))
+            return None
+        if arg.isdigit():
+            return int(arg)
+        i = t.choose(title, [], [f"{x['n']}. {x.get('title') or ''}" + ("  (" + str(len(x['changed'])) + " files)"
+                                                                       if x.get('changed') else "") for x in turns],
+                     sel=len(turns) - 1)
+        return None if i is None else turns[i]["n"]
+
+    def _show_patch(self, patch: str):
+        t, st = self.term, self.term.st
+        for ln in patch.splitlines()[:400]:
+            if ln.startswith("+") and not ln.startswith("+++"):
+                t.p("  " + st.green(ln))
+            elif ln.startswith("-") and not ln.startswith("---"):
+                t.p("  " + st.red(ln))
+            else:
+                t.p("  " + st.dim(ln))
+
+    def cmd_diff(self, arg):
+        if not self._need_shared():
+            return
+        n = int(arg) if arg.isdigit() else None
+        d = self.s.cp.diff(n) if self.s.cp else {"patch": "", "note": "No checkpoints for this chat."}
+        if not d.get("patch"):
+            return self.term.p(self.term.st.dim("  " + (d.get("note") or "No changes recorded.")))
+        self._show_patch(d["patch"])
+
+    def cmd_undo(self, arg):
+        if not self._need_shared():
+            return
+        t = self.term
+        n = self._turn_pick(arg, "Undo from which turn?")
+        if n is None:
+            return
+        d = self.s.cp.diff(n)
+        if d.get("patch"):
+            self._show_patch(d["patch"])
+        i = t.choose(f"Undo turn {n} and everything after it?", [], ["Undo", "Cancel"], sel=1)
+        if i == 0:
+            self.s.revert(n)
+            self._rebind()
+
+    def cmd_rewind(self, arg):
+        """Undo to a turn and put that turn's message back in the box to edit and send again."""
+        if not self._need_shared():
+            return
+        n = self._turn_pick(arg, "Rewind to which turn?")
+        if n is None:
+            return
+        with self.s.lock:
+            users = [e for e in self.s.events if e.get("type") == "user" and not e.get("steer")]
+        text = users[n - 1].get("text", "") if 0 < n <= len(users) else ""
+        self.s.revert(n)
+        self._rebind()
+        self.term.prefill = text
+
+    def cmd_grade(self, arg):
+        if not self._need_shared():
+            return
+        t, st = self.term, self.term.st
+        t.p(st.dim("  A separate reviewer is checking the last piece of work..."))
+        try:
+            self.front.run(self.s.grade)
+        except ValueError as e:
+            t.p(st.amber(f"  {e}"))
+
+    def cmd_attach(self, arg):
+        if not self._need_shared():
+            return
+        text, images = collect_attachments([a for a in arg.split() if a], self.s.workdir)
+        if not text and not images:
+            return self.term.p(self.term.st.dim("  /attach PATH [PATH...] then your message follows."))
+        self.pending_attach = (text, images)
+        self.term.p(self.term.st.dim(f"  {len(images)} image(s) and {text.count('@') if text else 0} file(s) "
+                                     "will go with your next message."))
+
+    def cmd_clear(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import chats
+        t = self.term
+        v = chats.create(dict(self.front.body, task=""))
+        new = chats.get(v["id"], no_mcp=bool(self.front.body.get("no_mcp")))
+        self.front.rebind(new)
+        self._rebind()
+        t.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        t.ctx_tokens, t.started, t.last_block = 0, False, None
+        if t.interactive:
+            t._write(t._clear_seq() + "\x1b[2J\x1b[H")
+        t.startup()
+
+    def cmd_resume(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import chats
+        t, st = self.term, self.term.st
+        rows = chats.search(arg) if arg else chats.listing()
+        rows = [r for r in rows if r.get("id") != self.s.id][:30]
+        if not rows:
+            return t.p(st.dim("  No other chats."))
+        i = t.choose("Resume which chat?", [], [f"{r.get('title') or 'Chat'}  {st.dim(str(r.get('workdir') or ''))}"
+                                                for r in rows])
+        if i is None:
+            return
+        new = chats.get(rows[i]["id"], no_mcp=bool(self.front.body.get("no_mcp")))
+        self.front.rebind(new)
+        self._rebind()
+        t.p(st.dim(f"  Resumed: {new.agent.title or 'chat'} ({len(getattr(new.agent, 'messages', [])) - 1} messages)."))

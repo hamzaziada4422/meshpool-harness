@@ -1278,12 +1278,7 @@ def _open_web(url: str) -> bool:
     return False
 
 
-def _client_error(e: Exception) -> str:
-    if isinstance(e, zipfile.BadZipFile):
-        return "That file is not a valid zip file."
-    if isinstance(e, (TypeError, AttributeError)):
-        return f"The request has a missing or wrong value ({e})."
-    return str(e).strip("'\"")
+from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the terminal says the same)
 
 
 class _Server(ThreadingHTTPServer):

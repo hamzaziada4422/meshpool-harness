@@ -286,11 +286,16 @@ UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be appro
 
 class Session:
     incognito = False          # class defaults: tests and old callers build a Session without __init__
+    auto_resume = True         # wait out an outage and carry on (the terminal's -p turns it off: a script wants the failure)
+    listeners = ()             # front ends that watch the events (the terminal): callables taking the stored event
+    _saved_mtime = 0.0
     _ck_run, _ck_n, _ck_stop = "", 0, None
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
-                 harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
+                 harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
+                 no_mcp: bool = False):
         self.events: list[dict] = []
+        self.listeners: list = []
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
         self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
@@ -412,7 +417,19 @@ class Session:
                 self.emit({"type": "status", "text": f"Meshpool no longer includes the agent this chat started with. "
                                                      f"It continues in {self.harness['name']}."})
                 self.agent.save()
-            threading.Thread(target=self._start_mcp, daemon=True).start()
+            if no_mcp:                                   # the terminal's --no-mcp: no servers, ready at once
+                self.state = "idle"
+                self._mcp_ready.set()
+            else:
+                threading.Thread(target=self._start_mcp, daemon=True).start()
+        self._mark_saved()
+
+    def _mark_saved(self):
+        """Remember when session.json was last written by this Session, to notice another front end's writes."""
+        try:
+            self._saved_mtime = (SESSIONS / self.id / "session.json").stat().st_mtime
+        except (OSError, AttributeError):
+            pass
 
     def _start_mcp(self):
         try:
@@ -465,6 +482,11 @@ class Session:
             self._persist()                          # moments a restart must not lose: write now
         elif ev.get("type") in _KEEP:
             self._persist_soon()
+        for fn in list(self.listeners):                  # outside the lock: a listener may call back into the Session
+            try:
+                fn(ev)
+            except Exception:  # noqa: BLE001 - a front end's drawing never breaks the turn
+                pass
 
     def _persist_soon(self):
         """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
@@ -1346,7 +1368,7 @@ class Session:
     def _resume_next(self, ev0: int):
         """After a turn with no goal: when it ended on a rate limit or an outage (not Stop), wait and pick the task
         up again by itself, so a long task is not left half done. None when there is nothing to pick up."""
-        if os.environ.get("MH_AUTO_RESUME", "1") == "0":
+        if os.environ.get("MH_AUTO_RESUME", "1") == "0" or not self.auto_resume:
             return None
         with self.lock:
             evs = self.events[ev0:]
@@ -1540,6 +1562,7 @@ class Session:
     def close(self):
         self._closed = True                           # an MCP start still running closes its servers when it finishes
         self.stop()
+        _release(getattr(self, "id", ""))
         if self.mcp:
             self.mcp.close()
         if hasattr(self.agent, "close"):
@@ -1619,7 +1642,7 @@ def create(body: dict) -> dict:
         wd = wt["workdir"]                          # the chat works in its own isolated copy of the folder
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                    kind=kind, model=model, plan=bool(plan))
+                    kind=kind, model=model, plan=bool(plan), no_mcp=bool(body.get("no_mcp")))
     except BaseException:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
@@ -1678,6 +1701,7 @@ def create(body: dict) -> dict:
         PS.touch(pid)
     with LOCK:
         LIVE[s.id] = s
+    _claim(s.id)
     _start_reaper()
     if not scratch and not pid:
         try:
@@ -1764,6 +1788,66 @@ def _start_reaper():
     th.start()
 
 
+class ChatBusy(ValueError):
+    """The chat is open in another running Meshpool process (the terminal or the app): two would overwrite each other."""
+
+
+def _live_file(sid: str) -> Path:
+    return SESSIONS / sid / "live.json"
+
+
+def _claim(sid: str, write: bool = True) -> None:
+    """Record that this process has the chat open. Another live process holding it refuses (ChatBusy); a dead one's
+    claim (a crash) is taken over."""
+    f = _live_file(sid)
+    try:
+        rec = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rec = {}
+    pid = rec.get("pid")
+    if isinstance(pid, int) and pid != os.getpid() and HR._pid_alive(pid):
+        where = "the terminal" if rec.get("frontend") == "terminal" else "the Meshpool app"
+        raise ChatBusy(f"This chat is open in {where} (process {pid}). Close it there, or fork it: "
+                       f"meshpool chats fork {sid}")
+    if not write or not f.parent.is_dir():
+        return
+    try:
+        tmp = f.with_name("live.json.tmp")
+        tmp.write_text(json.dumps({"pid": os.getpid(), "frontend": os.environ.get("MESHPOOL_FRONTEND") or "app",
+                                   "t": time.time()}), encoding="utf-8")
+        C.replace_file(tmp, f)
+    except OSError:
+        pass
+
+
+def _release(sid: str) -> None:
+    if not sid:
+        return
+    f = _live_file(sid)
+    try:
+        if json.loads(f.read_text(encoding="utf-8")).get("pid") == os.getpid():
+            f.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _stale(s: Session) -> bool:
+    """An idle chat whose session.json another process has written since: its copy here is out of date."""
+    if (getattr(s, "state", "") != "idle" or getattr(s, "pendings", None)
+            or not hasattr(getattr(s, "agent", None), "messages") or not getattr(s, "id", "")):
+        return False
+    try:
+        m = (SESSIONS / s.id / "session.json").stat().st_mtime
+    except OSError:
+        return False
+    if m <= s._saved_mtime + 0.001:
+        return False
+    if len(saved_messages(s.id)) != len([x for x in s.agent.messages if x.get("role") != "system"]):
+        return True
+    s._saved_mtime = m                                  # same content: our own write
+    return False
+
+
 class ProjectMissing(ValueError):
     """The chat's project folder was moved or deleted: its history can be read but not continued."""
 
@@ -1771,11 +1855,17 @@ class ProjectMissing(ValueError):
 _OPENING: dict = {}                 # chat id -> lock: only one request builds the Session of a saved chat
 
 
-def get(sid: str) -> Session:
+def get(sid: str, no_mcp: bool = False) -> Session:
     if sid in DELETED or read_meta(sid).get("deleted"):
         raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
+    if s and _stale(s):                          # another front end wrote this chat: show what it wrote
+        with LOCK:
+            if LIVE.get(sid) is s:
+                del LIVE[sid]
+        s.close()
+        s = None
     if s:
         return s
     with LOCK:
@@ -1785,7 +1875,9 @@ def get(sid: str) -> Session:
             s = LIVE.get(sid)
         if s:
             return s
-        s = Session(resume_id=sid)               # reopen a saved session
+        _claim(sid, write=False)                 # refuses while another running process has this chat open
+        s = Session(resume_id=sid, **({"no_mcp": True} if no_mcp else {}))    # reopen a saved session
+        _claim(sid)
         with LOCK:
             dead = sid in DELETED or bool(read_meta(sid).get("deleted"))   # deleted while it was being built
             live = s if dead else LIVE.setdefault(sid, s)
@@ -1800,6 +1892,7 @@ def get(sid: str) -> Session:
             raise KeyError(sid)
         if live is not s:
             s.close()
+            _claim(sid)
         return live
 
 
@@ -2224,6 +2317,8 @@ def close_all():
 
 
 def _notify(title: str, body: str):
+    if os.environ.get("MESHPOOL_FRONTEND") == "terminal":     # the terminal shows its own prompt
+        return
     try:
         from meshpool_harness.ui.desktop import notify
         notify(title, body)
