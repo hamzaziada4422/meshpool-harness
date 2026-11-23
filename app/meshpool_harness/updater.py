@@ -1,7 +1,11 @@
 """Update Meshpool from its GitHub releases, from inside the app.
 
-check()   -> the latest release and whether it is newer than this copy
-install() -> brings this copy up to that release, the safest way this kind of install allows:
+check()   -> the latest release and whether it is newer than this copy (the version on disk, not the one running)
+prepare() -> downloads, checks and stages a code update beside the app folders; the running code is not touched
+apply_staged() -> swaps a staged update in (journalled, so a kill half way is repaired at the next start by
+             meshpool_recover.py) and installs new packages for the command-line copy after the swap
+install() -> for the in-place kinds this only prepares; the server then applies and restarts in one step. The safest
+  way this kind of install allows:
   - command-line install (~/.meshpool-cli) and Windows app: the release's app code replaces this copy's code in place
     (the bundled runtimes, Pi and Hermes are kept); new Python packages, if the release lists any, are installed for
     the command-line copy, while the Windows app gets the full installer instead;
@@ -18,22 +22,26 @@ and install() is what the Update button runs for the command-line and in-place c
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import platform
 import re
+import secrets
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import urllib.request
 from pathlib import Path
 
 import meshpool_harness as MH
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 REPO = os.environ.get("MESHPOOL_REPO", "hamzaziada4422/meshpool-harness")
 API = os.environ.get("MESHPOOL_UPDATE_API") or f"https://api.github.com/repos/{REPO}/releases?per_page=30"
@@ -43,7 +51,12 @@ APP = C.APP                                  # the folder that holds meshpool_ha
 CODE_DIRS = ("meshpool_harness", "engines", "profiles", "defaults")   # what a code update replaces; vendor/ is kept
 CLI_REQ = "requirements-cli.txt"     # the package list the command line and the bundled runtimes are installed from
 SUMS = "SHA256SUMS.txt"              # published with each release by packaging/release.sh
+TOP_FILES = ("meshpool_recover.py", "sitecustomize.py")   # shipped beside the code folders: start-up recovery (M11-06)
+NOTICES = ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")
+JOURNAL = ".update-journal.json"
+QUIT_DEADLINE = 60                   # seconds the quit hooks get in restart() before the process exits (M11-03)
 _CACHE: dict = {}
+_HELD = threading.local()            # install_lock() depth of this thread: the lock is re-entrant inside one thread
 _PRE = re.compile(r"\d[.-]?(alpha|beta|preview|pre|rc|dev|a|b|c)(?![a-z])\.?(\d*)", re.I)
 
 
@@ -83,31 +96,63 @@ def kind() -> str:
     return "cli"
 
 
-def check(force: bool = False) -> dict:
-    if not force and _CACHE.get("t", 0) > time.time() - 6 * 3600:
-        return _CACHE["v"]
-    cur = MH.__version__
+def installed_version() -> str:
+    """The version of the code on disk. It differs from MH.__version__ (the code that runs) after an update was
+    swapped in and the app has not restarted yet."""
     try:
-        with _get(API) as r:
-            rel = json.loads(r.read())
-    except Exception as e:  # noqa: BLE001
-        code = getattr(e, "code", None)
-        why = ("GitHub is limiting update checks right now (rate limit); try again later" if code in (403, 429)
-               else f"GitHub answered {code}" if code else f"Could not reach GitHub ({type(e).__name__})")
-        return {"ok": False, "current": cur, "error": f"Could not check for updates: {why}."}
-    rel = _pick(rel if isinstance(rel, list) else [rel], cur)
+        text = (APP / "meshpool_harness" / "__init__.py").read_text(encoding="utf-8")
+        m = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return MH.__version__
+
+
+def _on_disk(running: str) -> tuple:
+    """(the version on disk, the newer of it and the running version, whether a restart is pending)."""
+    disk = installed_version()
+    return disk, (disk if _key(disk) > _key(running) else running), _key(disk) > _key(running)
+
+
+def check(force: bool = False, timeout: float | None = None) -> dict:
+    """The latest release and whether it is newer than this copy. "Newer" is measured against the version on disk
+    (an update already swapped in counts), "current" stays the version that runs; pending_restart says the two differ.
+    "tags" lists every release this copy may be offered, newer or not (the background updater drops what vanished)."""
+    running = MH.__version__
+    disk, cur, pending = _on_disk(running)
+    now = time.time()
+    if not force and _CACHE.get("t", 0) > now - 6 * 3600 and "rels" in _CACHE:
+        rels = _CACHE["rels"]
+    else:
+        try:
+            with _get(API, timeout=20 if timeout is None else timeout) as r:
+                rels = json.loads(r.read())
+        except Exception as e:  # noqa: BLE001
+            code = getattr(e, "code", None)
+            why = ("GitHub is limiting update checks right now (rate limit); try again later" if code in (403, 429)
+                   else f"GitHub answered {code}" if code else f"Could not reach GitHub ({type(e).__name__})")
+            return {"ok": False, "current": running, "pending_restart": pending, "checked_at": now,
+                    "error": f"Could not check for updates: {why}."}
+        rels = rels if isinstance(rels, list) else [rels]
+        _CACHE.update(t=now, rels=rels)
+    tags = [r["tag_name"] for r in sorted(_candidates(rels, cur), key=lambda r: _key(r["tag_name"]), reverse=True)]
+    rel = _pick(rels, cur)
     if not rel:
-        v = {"ok": True, "current": cur, "latest": cur, "tag": "", "newer": False, "notes": "", "kind": kind(),
-             "url": f"https://github.com/{REPO}/releases", "assets": []}
-        _CACHE.update(t=time.time(), v=v)
+        v = {"ok": True, "current": running, "latest": cur, "tag": "", "newer": False, "notes": "", "kind": kind(),
+                "url": f"https://github.com/{REPO}/releases", "assets": [], "tags": tags, "checked_at": now,
+                "pending_restart": pending}
+        _CACHE["v"] = v                       # the last check, for the page's status (autoupdate.status)
         return v
     tag = rel.get("tag_name") or ""
-    v = {"ok": True, "current": cur, "latest": tag.lstrip("v"), "tag": tag, "newer": _key(tag) > _key(cur),
-         "prerelease": bool(rel.get("prerelease")), "notes": (rel.get("body") or "")[:4000], "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
-         "published": rel.get("published_at"), "kind": kind(),
-         "assets": [{"name": a.get("name"), "url": a.get("browser_download_url"), "size": a.get("size")}
-                    for a in rel.get("assets") or []]}
-    _CACHE.update(t=time.time(), v=v)
+    v = {"ok": True, "current": running, "latest": tag.lstrip("v"), "tag": tag, "newer": _key(tag) > _key(cur),
+            "prerelease": bool(rel.get("prerelease")), "notes": (rel.get("body") or "")[:4000],
+            "url": rel.get("html_url") or f"https://github.com/{REPO}/releases",
+            "published": rel.get("published_at"), "kind": kind(),
+            "assets": [{"name": a.get("name"), "url": a.get("browser_download_url"), "size": a.get("size")}
+                       for a in rel.get("assets") or []],
+            "tags": tags, "checked_at": now, "pending_restart": pending}
+    _CACHE["v"] = v
     return v
 
 
@@ -124,14 +169,19 @@ def _legacy(r: dict, releases: list, cur: str) -> bool:
     return bool(first) and (not r.get("published_at") or r["published_at"] < first)
 
 
-def _pick(releases: list, cur: str) -> dict | None:
-    """The newest published release this copy may move to, or None. Never a draft, never a release that is not
-    newer than this copy, never one from the old 2.x line, and a prerelease only when this copy is a prerelease."""
+def _candidates(releases: list, cur: str) -> list:
+    """Every release this copy may be offered, whether or not it is newer: never a draft, never one still uploading
+    (no SHA256SUMS.txt), never one from the old 2.x line, and a prerelease only when this copy is a prerelease."""
     ok = [r for r in releases if isinstance(r, dict) and not r.get("draft") and r.get("tag_name")
           and ("assets" not in r or any((a or {}).get("name") == SUMS for a in r["assets"] or []))]   # still uploading
     if not _is_pre(cur):
         ok = [r for r in ok if not r.get("prerelease") and not _is_pre(r["tag_name"])]
-    ok = [r for r in ok if not _legacy(r, releases, cur) and _key(r["tag_name"]) > _key(cur)]
+    return [r for r in ok if not _legacy(r, releases, cur)]
+
+
+def _pick(releases: list, cur: str) -> dict | None:
+    """The newest published release this copy may move to, or None: a candidate that is newer than this copy."""
+    ok = [r for r in _candidates(releases, cur) if _key(r["tag_name"]) > _key(cur)]
     return max(ok, key=lambda r: _key(r["tag_name"]), default=None)
 
 
@@ -249,15 +299,85 @@ def _installer(v: dict, why: str) -> dict:
             "message": f"Downloaded Meshpool {v['latest']} and opened the installer. {why} {step}"}
 
 
-def _swap_all(pairs: list) -> None:
-    """Move each staged folder into place by renaming. Every old folder is kept as a backup until all the new ones
-    are in; if any rename fails, the folders already swapped are put back as they were and the error is raised."""
-    done = []                                           # (dst, backup or None)
+class UpdateBusy(Exception):
+    """Another update is being installed (by this app, a second window or another process)."""
+
+
+class _RollbackFailed(OSError):
+    """A swap failed and the old folders could not all be put back: the journal is kept for start-up recovery."""
+
+
+@contextlib.contextmanager
+def install_lock():
+    """Exclusive across threads and processes. Re-entrant inside one thread, so prepare()/apply_staged() can take it
+    themselves while a caller (the server) already holds it around prepare + apply. Raises UpdateBusy when busy."""
+    depth = getattr(_HELD, "n", 0)
+    if depth:
+        _HELD.n = depth + 1
+        try:
+            yield
+        finally:
+            _HELD.n -= 1
+        return
     try:
-        for staged, dst in pairs:
-            old = dst.with_name(f".{dst.name}.old")
+        with fsio.file_lock(C.home() / "updates" / "install", timeout=0):
+            _HELD.n = 1
+            try:
+                yield
+            finally:
+                _HELD.n = 0
+    except TimeoutError:
+        raise UpdateBusy("An update is already being installed.") from None
+
+
+def _recover() -> None:
+    """Put the copy back if an earlier update was killed half way (only while holding install_lock())."""
+    try:
+        try:
+            import meshpool_recover as R
+        except ImportError:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("meshpool_recover", APP / "meshpool_recover.py")
+            if not spec or not spec.loader or not (APP / "meshpool_recover.py").is_file():
+                return
+            R = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(R)
+        R.recover(APP)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _journal(pairs: list, info: dict, phase: str) -> None:
+    fsio.atomic_write_json(APP / JOURNAL, {
+        "version": 1, "tag": info.get("tag", ""), "phase": phase, "pid": os.getpid(), "time": time.time(),
+        "stage": info.get("stage", ""),
+        "pairs": [{"staged": str(s), "dest": str(d), "backup": str(o), "existed": had} for s, d, o, had in pairs]})
+
+
+def _rollback(done: list) -> bool:
+    """Put every swapped folder back as it was. True when every one is back."""
+    clean = True
+    for dst, old, had in reversed(done):
+        failed = dst.with_name(f".{dst.name}.failed")
+        shutil.rmtree(failed, ignore_errors=True)
+        try:
+            dst.rename(failed)
+            if had:
+                old.rename(dst)
+        except OSError:
+            clean = False
+        shutil.rmtree(failed, ignore_errors=True)
+    return clean
+
+
+def _swap_dirs(pairs: list) -> list:
+    """Move each staged folder into place by renaming, keeping every old folder as a backup (pairs are
+    (staged, dst, backup, dst existed)). On an OSError the folders already swapped are put back and the error is
+    raised (_RollbackFailed when they could not all be put back). Returns what to delete or roll back later."""
+    done = []
+    try:
+        for staged, dst, old, had in pairs:
             shutil.rmtree(old, ignore_errors=True)
-            had = dst.exists()
             if had:
                 dst.rename(old)
             try:
@@ -266,22 +386,12 @@ def _swap_all(pairs: list) -> None:
                 if had:
                     old.rename(dst)
                 raise
-            done.append((dst, old if had else None))
-    except OSError:
-        for dst, old in reversed(done):
-            failed = dst.with_name(f".{dst.name}.failed")
-            shutil.rmtree(failed, ignore_errors=True)
-            try:
-                dst.rename(failed)
-                if old:
-                    old.rename(dst)
-            except OSError:
-                pass
-            shutil.rmtree(failed, ignore_errors=True)
+            done.append((dst, old, had))
+    except OSError as e:
+        if not _rollback(done):
+            raise _RollbackFailed(str(e)) from None
         raise
-    for _, old in done:
-        if old:
-            shutil.rmtree(old, ignore_errors=True)
+    return done
 
 
 def _requirements(src: Path, new: Path) -> tuple:
@@ -294,14 +404,29 @@ def _requirements(src: Path, new: Path) -> tuple:
     return new / "requirements.txt", APP / "requirements.txt"   # a release from before the record existed
 
 
-def install(auto: bool = False) -> dict:
-    """Bring this copy up to date. auto=True is the background caller: it never opens an installer, and says
-    need_installer when only the full installer will do."""
-    v = check(force=True)
-    if not v.get("ok"):
-        return v
-    if not v["newer"]:
-        return {"ok": True, "action": "none", "message": f"Meshpool {v['current']} is the latest version."}
+def _safe(tag: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "_", tag or "x")
+
+
+def _sweep(tag: str) -> None:
+    """Remove stale stages of this tag and the old-style .<name>.new folders (only while holding the lock)."""
+    for d in APP.glob(f".update-{_safe(tag)}-*"):
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+    for name in CODE_DIRS:
+        shutil.rmtree(APP / f".{name}.new", ignore_errors=True)
+
+
+def prepare(v: dict, auto: bool = False) -> dict:
+    """Download, check and stage the release's code beside the app folders without touching the running code.
+    Returns {"ok": True, "action": "staged", "stage", "tag", "latest", "packages"}, {"ok": False, "need_installer": True,
+    "error"} or {"ok": False, "error"}. Raises UpdateBusy when another update is being installed."""
+    with install_lock():
+        _recover()
+        return _prepare(v, auto)
+
+
+def _prepare(v: dict, auto: bool) -> dict:
     k = v["kind"]
     if k == "dev":
         return {"ok": False, "error": "This copy runs from a git checkout. Run git pull in it to update."}
@@ -309,11 +434,6 @@ def install(auto: bool = False) -> dict:
         return {"ok": False, "error": f"Meshpool {v['latest']} is available. Download Meshpool-Linux-x64.tar.gz from the "
                                       "release page and unpack it in place of this folder; your data is kept.",
                 "url": v["url"]}
-    if k in ("mac-app", "win-app"):
-        from meshpool_harness import autoupdate as AU
-        r = AU.manual_install(v) if not auto else None
-        if r is not None:
-            return r
     inst = (lambda v, why: {"ok": False, "need_installer": True, "error": why}) if auto else _installer
     if k == "win-app" and not (APP.parent / "bin" / "meshpool.cmd").exists():
         # An install from before the terminal command moved to its own bin folder: a code update cannot fix the
@@ -337,65 +457,188 @@ def install(auto: bool = False) -> dict:
                 {"ok": False, "error": "This release cannot be checked, so it was not installed. Download it from the "
                                        "release page.", "url": v.get("url", "")}
         src_url, want = a["url"], sums[SRC_ASSET]
-    with tempfile.TemporaryDirectory() as tmp:
-        t = Path(tmp)
-        tgz = _download(src_url, t / "src.tgz")
-        if want and _sha256(tgz) != want and _sha256(tgz) != (_fresh_sums(v) or {}).get(SRC_ASSET):
-            return {"ok": False, "error": "The update did not match the release's checksum, so nothing was changed. "
-                                          "The release may have been updating on GitHub: try again in a few minutes."}
-        with tarfile.open(tgz) as tf:
-            try:
-                tf.extractall(t, filter="data")
-            except TypeError:                         # Python without the tarfile filter: check paths ourselves
-                for m in tf.getmembers():
-                    if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or m.issym() or m.islnk():
-                        return {"ok": False, "error": "The release download looks unsafe. Nothing was changed."}
-                tf.extractall(t)
-        src = next((d for d in t.iterdir() if d.is_dir() and (d / "app" / "meshpool_harness").is_dir()), None)
-        if not src:
-            return {"ok": False, "error": "The release download did not contain the app. Nothing was changed."}
-        new = src / "app"
-        got = re.search(r'__version__ = "([^"]+)"', (new / "meshpool_harness" / "__init__.py").read_text())
-        if not got or _ver(got.group(1)) != _ver(v["tag"]):
-            return {"ok": False, "error": "The release download has a different version than its tag. Nothing was "
-                                          "changed."}
-        req_new_p, req_old_p = _requirements(src, new)
-        req_new = req_new_p.read_text(encoding="utf-8") if req_new_p.exists() else ""
-        req_old = req_old_p.read_text(encoding="utf-8") if req_old_p.exists() else None
-        if req_new.strip() and (req_old is None or req_new.strip() != req_old.strip()):
-            if k == "win-app":
+    _sweep(v["tag"])
+    stage = APP / f".update-{_safe(v['tag'])}-{secrets.token_hex(4)}"
+    pkgs = None
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            t = Path(tmp)
+            tgz = _download(src_url, t / "src.tgz")
+            if want and _sha256(tgz) != want and _sha256(tgz) != (_fresh_sums(v) or {}).get(SRC_ASSET):
+                return {"ok": False, "error": "The update did not match the release's checksum, so nothing was changed. "
+                                              "The release may have been updating on GitHub: try again in a few minutes."}
+            with tarfile.open(tgz) as tf:
+                try:
+                    tf.extractall(t, filter="data")
+                except TypeError:                         # Python without the tarfile filter: check paths ourselves
+                    for m in tf.getmembers():
+                        if m.name.startswith(("/", "\\")) or ".." in Path(m.name).parts or m.issym() or m.islnk():
+                            return {"ok": False, "error": "The release download looks unsafe. Nothing was changed."}
+                    tf.extractall(t)
+            src = next((d for d in t.iterdir() if d.is_dir() and (d / "app" / "meshpool_harness").is_dir()), None)
+            if not src:
+                return {"ok": False, "error": "The release download did not contain the app. Nothing was changed."}
+            new = src / "app"
+            got = re.search(r'__version__ = "([^"]+)"', (new / "meshpool_harness" / "__init__.py").read_text())
+            if not got or _ver(got.group(1)) != _ver(v["tag"]):
+                return {"ok": False, "error": "The release download has a different version than its tag. Nothing was "
+                                              "changed."}
+            req_new_p, req_old_p = _requirements(src, new)
+            req_new = req_new_p.read_text(encoding="utf-8") if req_new_p.exists() else ""
+            req_old = req_old_p.read_text(encoding="utf-8") if req_old_p.exists() else None
+            needs_pkgs = bool(req_new.strip() and (req_old is None or req_new.strip() != req_old.strip()))
+            if needs_pkgs and k == "win-app":
                 return inst(v, "This release needs new bundled packages.")
-            r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", str(req_new_p)],
-                               capture_output=True, text=True, timeout=900)
-            if r.returncode:
-                return {"ok": False, "error": "Installing the new release's packages failed; nothing else was changed. "
-                                              + r.stderr[-400:]}
-        pairs = []
+            try:
+                stage.mkdir()
+                dirs, files = [], []
+                for name in CODE_DIRS:
+                    if (new / name).is_dir():
+                        shutil.copytree(new / name, stage / name, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+                        dirs.append(name)
+                if (new / "requirements.txt").exists():
+                    shutil.copy2(new / "requirements.txt", stage / "requirements.txt")
+                    files.append("requirements.txt")
+                if (src / "packaging" / CLI_REQ).exists():
+                    shutil.copy2(src / "packaging" / CLI_REQ, stage / CLI_REQ)
+                    files.append(CLI_REQ)
+                for f in NOTICES:
+                    if (src / f).exists() and (APP / f).exists():
+                        shutil.copy2(src / f, stage / f)
+                        files.append(f)
+                for f in TOP_FILES:
+                    if (new / f).exists():
+                        shutil.copy2(new / f, stage / f)
+                        files.append(f)
+                old = None
+                if needs_pkgs:
+                    pkgs = str(stage / (CLI_REQ if req_new_p.name == CLI_REQ else "requirements.txt"))
+                    old = str(req_old_p) if req_old_p.exists() else None
+                fsio.atomic_write_json(stage / ".complete", {
+                    "tag": v["tag"], "latest": v["latest"], "kind": k, "dirs": dirs, "files": files,
+                    "packages": pkgs, "packages_old": old, "created": time.time()})   # last: the stage is whole
+            except OSError as e:
+                shutil.rmtree(stage, ignore_errors=True)
+                if k == "win-app":
+                    return inst(v, "Meshpool could not replace its files while it runs.")
+                return {"ok": False, "error": f"Could not stage Meshpool's files ({type(e).__name__}: {e}). Nothing was "
+                                              "changed. Close other Meshpool windows and try again."}
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return {"ok": True, "action": "staged", "stage": str(stage), "tag": v["tag"], "latest": v["latest"],
+            "packages": pkgs}
+
+
+def discard_stage(path) -> None:
+    """Delete a stage folder made by prepare() (only a .update-* folder directly inside the app folder)."""
+    p = Path(path)
+    try:
+        ok = p.name.startswith(".update-") and p.is_dir() and p.resolve().parent == APP.resolve()
+    except OSError:
+        return
+    if ok:
+        shutil.rmtree(p, ignore_errors=True)
+
+
+def _pip(req: str) -> tuple:
+    """(ok, the end of stderr) of pip install -r req."""
+    try:
+        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-r", req],
+                           capture_output=True, text=True, timeout=900)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, f"{type(e).__name__}: {e}"
+    return r.returncode == 0, (r.stderr or "")[-400:]
+
+
+def apply_staged(st) -> dict:
+    """Swap a staged update in. st is prepare()'s result or the stage folder. Raises UpdateBusy when another update is
+    being installed. The caller restarts the app afterwards (restart())."""
+    with install_lock():
+        _recover()
+        return _apply(st)
+
+
+def _apply(st) -> dict:
+    stage = Path(st["stage"] if isinstance(st, dict) else st)
+    try:
+        marker = fsio.read_json(stage / ".complete")
+    except fsio.CorruptFile:
+        marker = None
+    if not isinstance(marker, dict) or not stage.name.startswith(".update-"):
+        return {"ok": False, "need_installer": False,
+                "error": "The update was not completely prepared, so nothing was changed. Try again."}
+    k = marker.get("kind", "cli")
+    pairs = []
+    for name in marker.get("dirs") or []:
+        dst = APP / name
+        pairs.append((stage / name, dst, dst.with_name(f".{name}.old"), dst.exists()))
+    info = {"tag": marker.get("tag", ""), "stage": str(stage)}
+    _journal(pairs, info, "swapping")                 # before the first rename: a kill from here on is repaired
+    try:
+        done = _swap_dirs(pairs)
+    except OSError as e:
+        if not isinstance(e, _RollbackFailed):        # everything is back: nothing for start-up recovery to do
+            (APP / JOURNAL).unlink(missing_ok=True)
+            discard_stage(stage)
+        return {"ok": False, "need_installer": k == "win-app",
+                "error": f"Could not replace Meshpool's files ({type(e).__name__}: {e}). Nothing was changed. "
+                         "Close other Meshpool windows and try again."}
+    if marker.get("packages"):
+        _journal(pairs, info, "packages")
+        ok, err = _pip(marker["packages"])
+        if not ok:
+            back = _rollback(done)
+            restored = False
+            if back and marker.get("packages_old"):
+                restored, _ = _pip(marker["packages_old"])
+            if back:
+                (APP / JOURNAL).unlink(missing_ok=True)
+                discard_stage(stage)
+                state = ("Meshpool's code is back to the previous version, and its packages were reinstalled from the "
+                         "previous list." if restored else
+                         "Meshpool's code is back to the previous version, but its packages may be partly new (the "
+                         "previous list could not be reinstalled). If Meshpool misbehaves, run the installer again.")
+            else:
+                state = "Meshpool's files could not all be put back; the next start repairs them."
+            return {"ok": False, "need_installer": False,
+                    "error": f"Installing the new release's packages failed. {state} {err}".strip()}
+    _journal(pairs, info, "files")
+    for f in marker.get("files") or []:
         try:
-            for name in CODE_DIRS:
-                if (new / name).is_dir():
-                    staged = APP / f".{name}.new"
-                    shutil.rmtree(staged, ignore_errors=True)
-                    shutil.copytree(new / name, staged, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-                    pairs.append((staged, APP / name))
-            _swap_all(pairs)
-        except OSError as e:
-            for staged, _ in pairs:
-                shutil.rmtree(staged, ignore_errors=True)
-            if k == "win-app":
-                return inst(v, "Meshpool could not replace its files while it runs.")
-            return {"ok": False, "error": f"Could not replace Meshpool's files ({type(e).__name__}: {e}). Nothing was "
-                                          "changed. Close other Meshpool windows and try again."}
-        for f in ("requirements.txt",):
-            if (new / f).exists():
-                shutil.copy2(new / f, APP / f)
-        if (src / "packaging" / CLI_REQ).exists():
-            shutil.copy2(src / "packaging" / CLI_REQ, APP / CLI_REQ)
-        for f in ("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md"):
-            if (src / f).exists() and (APP / f).exists():
-                shutil.copy2(src / f, APP / f)
+            fsio.atomic_write_bytes(APP / f, (stage / f).read_bytes())
+        except OSError:
+            pass                                       # the record or a notice: the next update retries it
+    (APP / JOURNAL).unlink(missing_ok=True)            # every step succeeded
+    for _, old, _had in done:
+        shutil.rmtree(old, ignore_errors=True)
+    discard_stage(stage)
     _CACHE.clear()
-    return {"ok": True, "action": "restart", "message": f"Updated to Meshpool {v['latest']}. Restart to use it."}
+    return {"ok": True, "action": "restart",
+            "message": f"Updated to Meshpool {marker.get('latest', '')}. Restart to use it."}
+
+
+def install(auto: bool = False) -> dict:
+    """Prepare an update. auto=True is the background caller: it never opens an installer, and says need_installer
+    when only the full installer will do. The in-place kinds are only staged here (the server applies and restarts in
+    one step, apply_staged()); the running code is never swapped by this call."""
+    v = check(force=True)
+    if not v.get("ok") and not v.get("pending_restart"):
+        return v
+    if not v.get("ok") or not v["newer"]:
+        if v.get("pending_restart"):
+            return {"ok": True, "action": "restart",
+                    "message": f"Meshpool {installed_version()} is installed. Restart to use it."}
+        return {"ok": True, "action": "none", "message": f"Meshpool {v['current']} is the latest version."}
+    if v["kind"] in ("mac-app", "win-app") and not auto:
+        from meshpool_harness import autoupdate as AU
+        r = AU.manual_install(v)
+        if r is not None:
+            return r
+    try:
+        return prepare(v, auto)
+    except UpdateBusy as e:
+        return {"ok": False, "busy": True, "error": str(e)}
 
 
 def _relaunch_cmd() -> list:
@@ -414,16 +657,46 @@ def _relaunch_cmd() -> list:
     return [exe, "-c", boot, *sys.argv[1:]]
 
 
+def wait_for_exit(pid: int, timeout: float) -> bool:
+    """True when process pid has exited (or does not exist), False when it is still running after timeout seconds."""
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32                      # type: ignore[attr-defined]
+        h = k.OpenProcess(0x00100000, False, int(pid))  # SYNCHRONIZE
+        if not h:
+            return True                                 # no such process (or already gone)
+        try:
+            return k.WaitForSingleObject(h, max(0, int(timeout * 1000))) == 0
+        finally:
+            k.CloseHandle(h)
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            pass                                        # alive, owned by someone else
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
 def restart(on_quit=()) -> None:
-    """Start a new copy of the app (it waits for this one to close) and close this one."""
-    env = dict(os.environ, MESHPOOL_RESTART_WAIT="1", PYTHONPATH=str(APP))
+    """Start a new copy of the app (it waits for this process to exit) and close this one. The quit hooks get at most
+    QUIT_DEADLINE seconds: a hook that hangs must not keep the old process, and so the update, from finishing."""
+    env = dict(os.environ, MESHPOOL_RESTART_WAIT=str(os.getpid()), PYTHONPATH=str(APP))
     kw = {"creationflags": 0x00000008 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
     subprocess.Popen(_relaunch_cmd(), env=env, cwd=os.getcwd(),
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **kw)
-    for f in on_quit:
-        try:
-            f()
-        except Exception:  # noqa: BLE001
-            pass
-    time.sleep(0.5)
+
+    def run_hooks():
+        for f in on_quit:
+            try:
+                f()
+            except Exception:  # noqa: BLE001
+                pass
+    t = threading.Thread(target=run_hooks, daemon=True)
+    t.start()
+    t.join(QUIT_DEADLINE)
     os._exit(0)
