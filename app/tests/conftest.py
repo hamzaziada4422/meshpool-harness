@@ -59,6 +59,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.core import gateway as GW
     GW.reset()
+    env_before = dict(os.environ)       # app code may load a test's config into os.environ (C.load_into_env): undone below
     from meshpool_harness.core import modelcaps as MCAPS
     monkeypatch.setenv("MH_CAPS_LEARNED", str(tmp_path / "caps_learned.json"))   # learned facts never reach the real folder
     MCAPS.reset()
@@ -85,6 +86,8 @@ def _offline_gateway(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
     yield
+    os.environ.clear()                  # e.g. MH_API_WIRE=anthropic from one test sent later agents down the wrong wire
+    os.environ.update(env_before)
     GW.reset()
     MCAPS.reset()
     _forget_learned()
