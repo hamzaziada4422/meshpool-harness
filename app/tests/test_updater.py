@@ -277,7 +277,7 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
                                                          "assets": [], "url": "u"})
     from meshpool_harness import autoupdate as AU
     seen = []                                   # the full installer is now fetched by the background updater
-    monkeypatch.setattr(AU, "pipeline", lambda v, download=True: seen.append(v["tag"]))
+    monkeypatch.setattr(AU, "pipeline", lambda v, download=True, manual=False: seen.append((v["tag"], download, manual)))
     r = U.install()
     assert r["action"] == "downloading"
     import time
@@ -285,7 +285,7 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
         if seen:
             break
         time.sleep(0.05)
-    assert seen == ["v0.2.0"]
+    assert seen == [("v0.2.0", True, True)]                      # the user's click is always a manual download
 
 
 def test_a_release_still_uploading_is_not_offered():

@@ -947,8 +947,7 @@ def manual_install(v: dict) -> dict | None:
             return None
     if st in WORKING:
         return {"ok": True, "action": "downloading", "message": "The update is downloading in the background."}
-    is_pre = bool(v.get("prerelease") or U._is_pre(v["tag"]))
-    threading.Thread(target=pipeline, args=(v, True, True) if is_pre else (v, True), daemon=True).start()
+    threading.Thread(target=pipeline, args=(v, True, True), daemon=True).start()
     return {"ok": True, "action": "downloading",
             "message": f"Downloading Meshpool {v['latest']} in the background. Meshpool will say when it is ready."}
 
