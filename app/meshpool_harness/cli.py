@@ -123,7 +123,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions"}
 
 
 def _agent_parser():
@@ -152,7 +152,8 @@ def _agent_parser():
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
     ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
-    ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
+    ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
+                    help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
@@ -237,6 +238,45 @@ _HELP = {
 }
 
 
+def _permissions_cmd(argv) -> int:
+    ap = argparse.ArgumentParser(prog="meshpool permissions", description="List or edit the saved allow/deny rules. "
+                                 "A rule is a tool name (edit, mcp__github__*) or bash: and a command pattern (bash:npm test*).")
+    ap.add_argument("action", nargs="?", choices=["list", "allow", "deny", "remove"], default="list")
+    ap.add_argument("rule", nargs="?", help="the rule to add or remove")
+    ap.add_argument("--project", action="store_true", help="use <dir>/.meshpool/permissions.json instead of the user file")
+    ap.add_argument("--dir", default=".", help="the project folder (with --project, and for listing)")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return int(e.code or 0)
+    from meshpool_harness.core import permrules as PR
+    path = PR.project_path(a.dir) if a.project else PR.user_path()
+    if a.action == "list":
+        for label, p in (("user", PR.user_path()), ("project", PR.project_path(a.dir))):
+            r = PR.list_rules(p)
+            print(f"{label} rules ({p}):")
+            for k in ("allow", "deny"):
+                for x in r[k]:
+                    print(f"  {k:5} {x}")
+            if not (r["allow"] or r["deny"]):
+                print("  (none)")
+        return 0
+    if not a.rule:
+        print(f"Usage: meshpool permissions {a.action} RULE [--project] [--dir DIR]", file=sys.stderr)
+        return 2
+    try:
+        if a.action == "remove":
+            PR.remove_rule(path, "allow", a.rule)
+            PR.remove_rule(path, "deny", a.rule)
+        else:
+            PR.add_rule(path, a.action, a.rule)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(f"{a.action}: {a.rule} ({path})")
+    return 0
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
@@ -290,7 +330,7 @@ def main(argv=None):
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
         if a.profile:
             os.environ["MH_AGENT_PROFILE"] = a.profile
-        if a.max_turns:
+        if a.max_turns is not None:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
@@ -313,6 +353,8 @@ def main(argv=None):
         return WT.cli(argv[1:])
     if argv[0] == "agent":
         return main(argv[1:] or [])
+    if argv[0] == "permissions":
+        return _permissions_cmd(argv[1:])
     if argv[0] == "acp":
         ap = argparse.ArgumentParser(prog="meshpool acp", description="Serve the Meshpool agent over ACP on stdio.")
         ap.add_argument("--profile", choices=["code", "work"], default="code")

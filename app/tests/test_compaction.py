@@ -87,6 +87,7 @@ def test_a_three_hundred_step_task_finishes_and_never_overflows(tmp_path, monkey
     send valid requests every time, and still deliver the final answer."""
     monkeypatch.setenv("MH_COMPACT_MODEL", "0")
     monkeypatch.setenv("MH_COMPACT_CHARS", "30000")
+    monkeypatch.setenv("MH_MAX_STEPS", "400")         # a long task by choice: the 200-step default (S-08) is raised
     (tmp_path / "a.txt").write_text("hello\n")
     a = Agent(str(tmp_path), mode="auto")
     n = {"i": 0}
