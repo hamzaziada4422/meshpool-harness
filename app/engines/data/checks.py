@@ -53,7 +53,9 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
         v, pct = _num(tok)
         if v is None:
             continue
-        if tok[0] in "-−" and m.start() > 0 and answer[m.start() - 1].isalnum():
+        i0 = m.start()
+        if (tok[0] in "-−" and i0 > 0 and answer[i0 - 1].isalnum()) or \
+                (tok[0] not in "-−" and i0 > 1 and answer[i0 - 1] in "-−" and answer[i0 - 2].isalpha()):
             continue                                   # "COVID-19", "Top-20": a hyphen, not a minus sign
         if v in TRIVIAL or _year(tok):
             continue
