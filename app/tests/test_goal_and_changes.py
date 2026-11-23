@@ -48,8 +48,9 @@ def test_goal_pauses_for_the_user_errors_and_no_progress(monkeypatch):
 
 
 def test_runs_stop_only_at_a_very_high_ceiling_by_default(tmp_path):
-    assert Agent(str(tmp_path)).max_steps == 2000          # a runaway turn stops; long real tasks never get near it
-    assert Agent(str(tmp_path), max_steps=12).max_steps == 12
+    # S-08/G-04: 200 steps per reply by default (MH_MAX_STEPS, 0 = none); the next message continues
+    assert Agent(str(tmp_path))._step_cap() == 200
+    assert Agent(str(tmp_path), max_steps=12)._step_cap() == 12
 
 
 def test_branch_changes(tmp_path, monkeypatch):

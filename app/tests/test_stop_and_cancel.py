@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest  # noqa: E402
 
 from meshpool_harness.agent import core  # noqa: E402
-from meshpool_harness.agent.core import Agent, Interrupted, _pair_tool_results  # noqa: E402
+from meshpool_harness.agent.core import Agent, _pair_tool_results  # noqa: E402
 from meshpool_harness.core import gateway as GW  # noqa: E402
 
 TURN = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -89,8 +89,9 @@ def test_stop_cuts_reviewer_call(tmp_path):
     a._post = lambda base, key, body, stream: (release.wait(30), _ok())[1]
     _later(0.3, a.stop)
     t0 = time.time()
-    with pytest.raises(Interrupted):
+    with pytest.raises(Exception) as ei:              # by name: another test may have reloaded agent.core
         a._aux_complete("sys", "user", dict(TURN))
+    assert type(ei.value).__name__ == "Interrupted"
     release.set()
     assert time.time() - t0 < 2
 

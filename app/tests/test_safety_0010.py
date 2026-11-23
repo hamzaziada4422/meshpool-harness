@@ -38,7 +38,7 @@ def test_the_session_is_written_whole_and_marked_unfinished_while_running(tmp_pa
     a._running = False
     a.save()
     assert json.loads((a.dir / "session.json").read_text(encoding="utf-8"))["unfinished"] is False
-    assert a.max_steps >= 100
+    assert a._step_cap() >= 100
 
 
 def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, monkeypatch):

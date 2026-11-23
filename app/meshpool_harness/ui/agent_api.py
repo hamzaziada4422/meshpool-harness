@@ -637,7 +637,7 @@ class Session:
                 # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
                 self.emit({"type": "status", "text": "Starting the office tools..."})
                 end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
-                while not ready.is_set() and time.time() < end and not self._stop_req:
+                while not ready.is_set() and time.time() < end and not getattr(self, "_stop_req", False):
                     ready.wait(0.25)                 # Stop ends the wait
         return caps
 
