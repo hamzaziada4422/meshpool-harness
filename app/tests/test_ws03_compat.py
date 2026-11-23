@@ -601,11 +601,11 @@ def test_p06_image_prefix_stays_cacheable(tmp_path, monkeypatch):
             {"type": "text", "text": f"Image returned by screenshot {i}:"},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{i:04d}" + "A" * 3000}}]})
         cur = json.dumps(a._body()["messages"])
-        if prev:
+        if prev and i >= 6:                                         # once more than 4 images are in the chat
             common = len(__import__("os").path.commonprefix([prev, cur]))
             fr.append(common / len(prev))
         prev = cur
-    assert sum(fr) / len(fr) >= 0.45
+    assert sum(fr) / len(fr) >= 0.6                                 # the old cut moved every call: about 0.42
 
 
 # ----------------------------------------------------------------------------------------------------- caps by host and port
