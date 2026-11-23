@@ -37,7 +37,7 @@ class Server:
                 self.wfile.write(raw)
 
             def do_GET(self):
-                if outer.models is not None and self.path.rstrip("/").endswith("/models"):
+                if outer.models is not None and self.path.split("?")[0].rstrip("/").endswith("/models"):
                     return self._send(200, outer.models)
                 self._send(404, {"error": "not found"})
 
@@ -664,3 +664,16 @@ def test_live_client_no_tools_is_learned_and_applied_first(env):
     srv.reqs.clear()
     LiveClient("phase_2_build").chat(model=MODEL, messages=msgs, tools=tools)
     assert [bool(r.get("tools")) for r in srv.chats()] == [False]
+
+
+# ----------------------------------------------------------------------------------------------------- W-02 (/models)
+
+def test_w02_models_without_tools_parameter_sends_no_tools_first(env, tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_PROBE_CONTEXT", "1")
+    monkeypatch.delenv("MESHPOOL_CONTEXT_WINDOW")
+    MC.reset()
+    srv = env(lambda body, n: (400, {"error": "x does not support tools"}) if body.get("tools") else reply("plain"),
+              models={"object": "list", "data": [{"id": MODEL, "supported_parameters": ["temperature", "max_tokens"]}]})
+    assert make_agent(tmp_path).send("hello") == "plain"
+    rs = srv.chats()
+    assert len(rs) == 1 and not has_tools(rs[0])                    # zero refused requests

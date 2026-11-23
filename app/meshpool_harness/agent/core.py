@@ -2158,7 +2158,11 @@ class Agent:
         from meshpool_harness import providers as PV
         from meshpool_harness.core import modelcaps as MC
         prov, bare = PV.split(model)
-        return MC.resolve(PV.endpoint(prov)[0], bare, prof)
+        base, key = PV.endpoint(prov)
+        if prov != "chatgpt":
+            from meshpool_harness.core import context as CTX
+            CTX.note_models(base, key)               # /models says "no tools": known before the first request
+        return MC.resolve(base, bare, prof)
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()

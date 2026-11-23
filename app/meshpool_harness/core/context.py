@@ -166,6 +166,27 @@ def _failed(k) -> None:
         _FAILED[k] = time.time()
 
 
+def _note_tools(base: str, it: dict) -> None:
+    """An entry whose supported_parameters (OpenRouter style) lack "tools": no tools for it, before the first request."""
+    try:
+        sp = it.get("supported_parameters")
+        mid = str(it.get("id") or it.get("name") or "")
+        if mid and isinstance(sp, list) and sp and "tools" not in sp:
+            from meshpool_harness.core import modelcaps as MC
+            MC.learn(base, mid, no_tools=True)
+    except Exception:  # noqa: BLE001 - metadata only
+        pass
+
+
+def note_models(base: str, key: str = "") -> None:
+    """Read the endpoint's /models list once before the first request (what _listed learns is applied from then on)."""
+    try:
+        if base and os.environ.get("MH_PROBE_CONTEXT", "1") != "0":
+            _listed(base, key)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _listed(base: str, key: str) -> dict:
     """{model id: context tokens} from the endpoint's /models list. Kept once it has been read; a failed read is not
     remembered (it is retried after a minute), so a slow start never pins the wrong windows for the whole run."""
@@ -181,6 +202,7 @@ def _listed(base: str, key: str) -> dict:
         for it in items or []:
             if not isinstance(it, dict):
                 continue
+            _note_tools(base, it)
             for k in ("max_input_tokens", "loaded_context_length", "context_length", "context_window", "max_context",
                       "max_context_length", "inputTokenLimit", "max_model_len"):
                 v = it.get(k) or (it.get("top_provider") or {}).get(k)
