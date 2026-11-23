@@ -1,6 +1,6 @@
 """Forge tools for Meshpool Work (Cowork): exposed through the meshpool-office MCP server.
 
-check_deck(path, slide_count?)   -> P0-P19 report with repair messages (P0: opens in PowerPoint without repair)
+check_deck(path, slide_count?, data_files?, request?) -> P0-P19 report (+ P22 against the data) with repair messages (P0: opens in PowerPoint without repair)
 check_workbook(path)             -> X0-X13 report after a headless recalculation (X0: opens in Excel without repair)
 check_document(path)             -> does a .docx/.pptx/.xlsx open in Office without a repair prompt
 measure_office_file(path)        -> anatomy of a .pptx, .xlsx or .pdf (how it is built), with evidence IDs
@@ -32,7 +32,17 @@ def _sidecar(path: Path, name: str):
         return None
 
 
-def check_deck(path: str, slide_count: int | None = None, render: bool = True) -> tuple[str, bool]:
+def _p22(path: str, data_files, request) -> list[dict]:
+    """P22: the charts of the deck against the data files the request asks a pivot of ([] when none are asked)."""
+    if not data_files or not (request or "").strip():
+        return []
+    from . import data_pages
+    _, _, expect = data_pages.pages(request, [data_files] if isinstance(data_files, str) else data_files)
+    return data_pages.check_data(path, expect)
+
+
+def check_deck(path: str, slide_count: int | None = None, render: bool = True, data_files=None,
+               request: str | None = None) -> tuple[str, bool]:
     from .validate_pptx import report_text, validate
     p = Path(path)
     if not p.exists():
@@ -40,6 +50,10 @@ def check_deck(path: str, slide_count: int | None = None, render: bool = True) -
     brief = {"slide_count": int(slide_count)} if slide_count else _sidecar(p, "brief")
     res = validate(str(p), brief=brief, provenance=_sidecar(p, "provenance"), storyline=_sidecar(p, "storyline"),
                    render=render)
+    p22 = _p22(str(p), data_files, request)
+    res["failures"] += p22
+    if p22:
+        res["rules"]["P22"] = "fail"
     return report_text(res, 30) + _scope_note(res), False
 
 
@@ -104,7 +118,7 @@ def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]
     return json.dumps(summary, indent=1, default=str)[:8000], False
 
 
-def qa_summary(files: list[str]) -> str:
+def qa_summary(files: list[str], data_files=None, request: str | None = None) -> str:
     """One line per produced deck/workbook, for appending to an engine job's report."""
     lines = []
     for f in files:
@@ -112,6 +126,8 @@ def qa_summary(files: list[str]) -> str:
             if f.endswith(".pptx"):
                 from .validate_pptx import validate
                 r = validate(f, render=False)
+                if _p22(f, data_files, request):
+                    r["rules"]["P22"] = "fail"
             elif f.endswith(".xlsx"):
                 from .validate_xlsx import validate
                 r = validate(f)
@@ -238,8 +254,12 @@ TOOLS = {
                    "charts and tables, theme fonts and colours, text fit, grid, density, action titles, storyline, "
                    "sourced numbers, text matching the charts, archetypes, slide count, editability, alt text. Returns "
                    "each failure as a fix instruction (e.g. 'Slide 4, Body 2: text overflows by 3 lines at 14pt; cut "
-                   "to 45 words'). `slide_count` is the count the brief asked for.",
-                   {"path": S, "slide_count": {"type": "integer"}}, ["path"]),
+                   "to 45 words'). `slide_count` is the count the brief asked for. With `data_files` (the .csv/.xlsx the "
+                   "deck is about) and `request` (what the deck was asked to show, e.g. 'revenue by quarter for each "
+                   "region') it also runs P22: some native chart must hold the categories, series and values the "
+                   "request asks of those files; a missing series or category is named.",
+                   {"path": S, "slide_count": {"type": "integer"}, "data_files": {"type": "array", "items": S},
+                    "request": S}, ["path"]),
     "check_workbook": (check_workbook, "Check an Excel workbook (.xlsx) against Meshpool's 14 financial-model rules "
                        "after recalculating it: opens in Excel without a repair prompt, no hardcoded numbers in calculations, no numbers buried in formulas, no "
                        "balancing plugs, historicals tie, no #REF!/#NAME? errors, no circular references, consistent "

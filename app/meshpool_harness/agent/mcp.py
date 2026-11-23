@@ -1102,9 +1102,9 @@ class Manager:
 
     def _with_chat(self, spec: dict) -> dict:
         """The browser server learns which chat it serves, so the app can find its live view; the assistant server
-        learns it to schedule tasks in the chat's own mode."""
-        if self.chat and any("browser_mcp_server" in str(a) or "assistant_mcp_server" in str(a)
-                             for a in spec.get("args") or []):
+        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat."""
+        if self.chat and any(x in str(a) for a in spec.get("args") or []
+                             for x in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
             return {**spec, "env": {**(spec.get("env") or {}), "MH_CHAT_ID": self.chat}}
         return spec
 

@@ -507,7 +507,7 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
     w = t.get("when")
     if w == "once":
         try:
-            at = datetime.fromisoformat(t["at"])
+            at = datetime.fromisoformat(str(t["at"]).replace("Z", "+00:00"))
         except (KeyError, ValueError):
             return None
         return at.timestamp() if not t.get("last_run") else None
@@ -540,7 +540,7 @@ def _check_task(t: dict) -> dict:
     t["prompt"] = str(t["prompt"]).strip()
     if when == "once":
         try:
-            datetime.fromisoformat(str(t.get("at") or ""))
+            datetime.fromisoformat(str(t.get("at") or "").replace("Z", "+00:00"))
         except ValueError:
             raise ValueError("For a one-time task give `at` as a local date and time, like 2026-11-20T09:00.")
     if when in ("daily", "weekdays", "weekly"):
