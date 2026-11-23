@@ -492,8 +492,10 @@ class _Stub:
         return {"choices": [{"message": {"content": json.dumps(how(messages))}}]}
 
 
-def test_clarity_pass_guards_facts_and_falls_back():
+def test_clarity_pass_guards_facts_and_falls_back(monkeypatch):
     from engines.forge import clarity
+    monkeypatch.setenv("MH_MODEL", "main")
+    monkeypatch.setenv("FORGE_CLARITY_MODEL", "small")
 
     def edits(messages):
         ids = [ln.split(":")[0] for ln in messages[1]["content"].split("\n") if ln.startswith("s")]
@@ -501,9 +503,9 @@ def test_clarity_pass_guards_facts_and_falls_back():
                           {"id": ids[1], "issue": "x", "text": "Volume fell 9% overall"}]}       # number changed
     slides = [{"archetype": "bar_takeaway", "title": "Revenue grew 20% as pricing levers unlocked upside",
                "bullets": ["Volume fell 4% overall"]}]
-    stub = _Stub({"gpt-6.1-terra": edits})                     # luna missing: falls back to terra
+    stub = _Stub({"main": edits})                              # the small model is missing: falls back to main
     rep = clarity.review(slides, stub, main_model="main")
-    assert stub.calls[:2] == ["gpt-6-luna", "gpt-6.1-terra"] and rep["model"] == "gpt-6.1-terra"
+    assert stub.calls == ["small", "main"] and rep["model"] == "main"
     assert slides[0]["title"] == "Revenue grew 20% because prices rose"
     assert slides[0]["bullets"][0] == "Volume fell 4% overall"     # a rewrite that changes a number is refused
     assert rep["rejected"][0]["why"] == "numbers changed"
@@ -513,14 +515,15 @@ def test_clarity_pass_guards_facts_and_falls_back():
                                _Stub({"main": lambda m: {"edits": []}}), main_model="main")
     assert main_only["model"] == "main"                         # last resort: the main model, same rubric
     md, _ = clarity.review_markdown("# Memo\n\n| a | b |\n|---|---|\n\nThe plan leverages synergies to unlock value.",
-                                    _Stub({"gpt-6-luna": lambda m: {"edits": [{"id": "s1.0", "text": "The plan cuts costs."}]}}))
+                                    _Stub({"small": lambda m: {"edits": [{"id": "s1.0", "text": "The plan cuts costs."}]}}))
     assert "The plan cuts costs." in md and "| a | b |" in md
 
 
-def test_clarity_pass_leaves_document_headings_alone():
+def test_clarity_pass_leaves_document_headings_alone(monkeypatch):
     """A memo heading is a label: the slide rubric ('a title stays one sentence with a verb') once turned
     '# Northwind Instruments: valuation and strategic options' into 'Northwind Instruments considers ...'."""
     from engines.forge import clarity
+    monkeypatch.setenv("FORGE_CLARITY_MODEL", "small")
     seen = []
 
     def rewrite_all(messages):
@@ -529,7 +532,7 @@ def test_clarity_pass_leaves_document_headings_alone():
         return {"edits": [{"id": i, "text": "Rewritten line with four words"} for i in ids]}
     md = ("# Northwind Instruments: valuation and strategic options\n\n## Risks to the base case forecast\n\n"
           "The plan leverages synergies to unlock value.\n- The buyback is paused for the review.")
-    out, rep = clarity.review_markdown(md, _Stub({"gpt-6-luna": rewrite_all}))
+    out, rep = clarity.review_markdown(md, _Stub({"small": rewrite_all}))
     assert len(seen) == 2 and rep["changed"] == 2                  # the prose line and the bullet, not the headings
     assert out.startswith("# Northwind Instruments: valuation and strategic options\n\n## Risks to the base case")
     assert out.endswith("Rewritten line with four words\n- Rewritten line with four words")

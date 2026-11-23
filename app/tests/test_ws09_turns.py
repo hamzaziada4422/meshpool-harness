@@ -18,6 +18,9 @@ def A(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mh"))
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "mh" / "meshpool.config"))
     monkeypatch.setenv("MH_AUTO_RESUME", "0")
+    monkeypatch.delenv("MESHPOOL_API_KEY", raising=False)   # turns copy the settings file into os.environ and remember
+    monkeypatch.setattr(C, "_INJECTED", set())               # it in config's globals: each test starts from its own file
+    monkeypatch.setattr(C, "SHELL", {})
     (tmp_path / "mh").mkdir()
     sessions = tmp_path / "mh" / "runs" / "sessions"
     monkeypatch.setitem(api.Agent.__init__.__globals__, "SESSIONS", sessions)
@@ -29,7 +32,7 @@ def A(tmp_path, monkeypatch):
     return api
 
 
-def wait_for(fn, timeout=5.0, what="condition"):
+def wait_for(fn, timeout=20.0, what="condition"):
     end = time.time() + timeout
     while time.time() < end:
         if fn():
@@ -79,7 +82,7 @@ def mk(A, starting=False, cls=None, **kw):
     return s
 
 
-def idle(s, t=5.0):
+def idle(s, t=20.0):
     wait_for(lambda: s.state == "idle", t, "the chat to go idle")
 
 

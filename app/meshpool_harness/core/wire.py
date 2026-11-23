@@ -12,6 +12,9 @@ import time
 import urllib.error
 import urllib.request
 
+from . import stream as ST
+from meshpool_harness.core import http as _mhttp
+
 
 def to_responses(body: dict) -> dict:
     """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable).
@@ -270,69 +273,121 @@ def _first_then_idle(r, idle):
                 pass
 
 
-def sse_to_chat(lines) -> dict:
-    """Assemble a streamed chat-completions reply (SSE lines) into the non-streamed response shape: content,
-    tool calls (deltas merged by index), reasoning text and the final usage chunk."""
-    content, reasoning, calls, usage, finish, rid = [], [], {}, {}, None, None
-    done, plain, events = False, [], 0
-    for raw in lines:
-        line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else str(raw).strip()
-        if not line.startswith("data:"):
-            if len(plain) < 400 and line and not line.startswith((":", "event:", "id:", "retry:")):
-                plain.append(line)                       # a server that ignored stream:true answers with plain JSON
+def _decode_sse_data(data: str) -> list:
+    """The JSON values (or the string "[DONE]") one SSE event's data text holds. A server that forgets the blank line
+    between events delivers several JSON lines as one event: when the joined text does not decode, try each line."""
+    data = data.strip()
+    if data == "[DONE]":
+        return [data]
+    try:
+        return [json.loads(data)]
+    except ValueError:
+        if "\n" not in data:
+            return []
+    out = []
+    for ln in data.split("\n"):
+        ln = ln.strip()
+        if ln == "[DONE]":
+            out.append(ln)
             continue
-        events += 1
-        data = line[5:].strip()
-        if data == "[DONE]":
-            done = True
-            break
         try:
-            ev = json.loads(data)
+            out.append(json.loads(ln))
         except ValueError:
             continue
-        if not isinstance(ev, dict):
-            continue
-        if ev.get("error"):                              # an error event after HTTP 200 (overload, rejected request)
-            err = ev["error"]
-            msg = err.get("message") or json.dumps(err)[:300] if isinstance(err, dict) else str(err)[:300]
-            code = err.get("code") or err.get("status") if isinstance(err, dict) else None
-            code = int(code) if str(code).isdigit() and 400 <= int(code) < 600 else 502
-            raise RuntimeError(f"meshpool HTTP {code}: {msg}")
-        rid = ev.get("id") or rid
-        if ev.get("usage"):
-            usage = ev["usage"]
-        for ch in ev.get("choices") or []:
-            if not isinstance(ch, dict):
+    return out
+
+
+def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check=None) -> dict:
+    """Assemble a streamed chat-completions reply (SSE lines) into the non-streamed response shape: content,
+    tool calls (deltas merged by index), reasoning text and the final usage chunk.
+    on_text gets the answer text as it arrives (without <think> blocks), on_reasoning the reasoning deltas and the
+    think text. data_idle: end the read when only keep-alives arrive for that many seconds. check(): once per line."""
+    from .stream import ThinkSplitter, iter_sse
+    content, reasoning, calls, usage, finish, rid = [], [], {}, {}, None, None
+    done, plain, events = False, [], 0
+    by_index: dict = {}                                  # provider index -> key of the call slot currently using it
+    splitter = ThinkSplitter() if (on_text or on_reasoning) else None
+
+    def live(c, r):
+        if c and on_text:
+            on_text(c)
+        if r and on_reasoning:
+            on_reasoning(r)
+
+    def tee(src):                                        # iter_sse drops non-field lines: keep them for the JSON fallback
+        for raw in src:
+            line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else str(raw).strip()
+            if len(plain) < 400 and line and not line.startswith(("data", ":", "event:", "id:", "retry:")):
+                plain.append(line)                       # a server that ignored stream:true answers with plain JSON
+            yield raw
+
+    for _name, data in iter_sse(tee(lines), data_idle=data_idle, check=check):
+        events += 1
+        for ev in _decode_sse_data(data):
+            if ev == "[DONE]":
+                done = True
+                break
+            if not isinstance(ev, dict):
                 continue
-            if isinstance(ch.get("usage"), dict) and ch["usage"] and not usage:
-                usage = ch["usage"]                      # Moonshot puts the usage inside the choice
-            d = ch.get("delta") or {}
-            if d.get("content"):
-                content.append(d["content"])
-            if d.get("reasoning_content"):
-                reasoning.append(d["reasoning_content"])
-            for tc in d.get("tool_calls") or []:
-                idx = tc.get("index")
-                if idx is None:                          # no index: a new call id starts a new call
-                    idx = max(calls) if calls else 0
-                    if tc.get("id") and calls.get(idx, {}).get("id") and calls[idx]["id"] != tc["id"]:
-                        idx += 1
-                cur = calls.get(idx)
-                if cur is not None and cur["function"]["name"] and cur["function"]["arguments"] and (
-                        (tc.get("id") and cur["id"] and tc["id"] != cur["id"])
-                        or ((tc.get("function") or {}).get("name") and not tc.get("id"))):
-                    idx = max(calls) + 1                 # a second call that reuses the index (parallel calls, one index)
-                slot = calls.setdefault(idx, {"id": "", "type": "function",
-                                              "function": {"name": "", "arguments": ""}})
-                if tc.get("id"):
-                    slot["id"] = tc["id"]
-                f = tc.get("function") or {}
-                slot["function"]["name"] += f.get("name") or ""
-                a = f.get("arguments")
-                if a is not None and not isinstance(a, str):         # a server that sends the object, not its text
-                    a = json.dumps(a, ensure_ascii=False)
-                slot["function"]["arguments"] += a or ""
-            finish = ch.get("finish_reason") or finish
+            if ev.get("error"):                          # an error event after HTTP 200 (overload, rejected request)
+                err = ev["error"]
+                msg = err.get("message") or json.dumps(err)[:300] if isinstance(err, dict) else str(err)[:300]
+                code = err.get("code") or err.get("status") if isinstance(err, dict) else None
+                code = int(code) if str(code).isdigit() and 400 <= int(code) < 600 else 502
+                raise RuntimeError(f"meshpool HTTP {code}: {msg}")
+            rid = ev.get("id") or rid
+            if ev.get("usage"):
+                usage = ev["usage"]
+            for ch in ev.get("choices") or []:
+                if not isinstance(ch, dict):
+                    continue
+                if isinstance(ch.get("usage"), dict) and ch["usage"] and not usage:
+                    usage = ch["usage"]                  # Moonshot puts the usage inside the choice
+                d = ch.get("delta") or {}
+                if d.get("content"):
+                    content.append(d["content"])
+                    if splitter is not None and isinstance(d["content"], str):
+                        live(*splitter.feed(d["content"]))
+                rc = d.get("reasoning_content") or (d.get("reasoning") if isinstance(d.get("reasoning"), str) else "")
+                if rc:
+                    reasoning.append(rc)
+                    live("", rc)
+                for tc in d.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    f = tc.get("function") or {}
+                    tid = tc.get("id")
+                    idx = tc.get("index")
+                    if idx is None:                      # no index: a new call id starts a new call
+                        key = max(calls) if calls else None
+                        if key is not None and tid and calls[key]["id"] and calls[key]["id"] != tid:
+                            key = None
+                    else:
+                        key = by_index.get(idx)
+                        cur = calls.get(key)
+                        if cur is not None and (
+                                (tid and cur["id"] and tid != cur["id"])            # another id: another call (W-07)
+                                or (f.get("name") and not tid and cur["function"]["name"]
+                                    and cur["function"]["arguments"])):             # a name without id after its arguments
+                            key = None
+                    if key is None:
+                        key = max(calls) + 1 if calls else 0
+                        calls[key] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    if idx is not None:
+                        by_index[idx] = key
+                    slot = calls[key]
+                    if tid:
+                        slot["id"] = tid
+                    slot["function"]["name"] += f.get("name") or ""
+                    a = f.get("arguments")
+                    if a is not None and not isinstance(a, str):         # a server that sends the object, not its text
+                        a = json.dumps(a, ensure_ascii=False)
+                    slot["function"]["arguments"] += a or ""
+                finish = ch.get("finish_reason") or finish
+        if done:
+            break
+    if splitter is not None:
+        live(*splitter.flush())
     if not events and plain:                             # not SSE at all: a whole JSON reply (or an error body)
         try:
             whole = json.loads("\n".join(plain))
@@ -343,7 +398,8 @@ def sse_to_chat(lines) -> dict:
         if isinstance(whole, dict) and whole.get("error"):
             err = whole["error"]
             msg = (err.get("message") if isinstance(err, dict) else str(err)) or json.dumps(err)[:300]
-            raise RuntimeError(f"meshpool HTTP 502: {msg}")
+            raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(msg)[:200]}")   # a 200: not transient
+        raise RuntimeError("meshpool HTTP 200 but not a model reply: " + "\n".join(plain)[:200])
     if finish is None and not done:                      # closed cleanly mid-reply: do not pass a cut-off reply on
         raise RuntimeError("HTTP 0: the stream ended before the reply was complete")
     msg = {"role": "assistant", "content": "".join(content) or None}
@@ -381,7 +437,7 @@ class SimpleLedger:
         return out
 
     def _chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
-              temperature=None, extra=None, timeout=600, retries=2, **_):
+              temperature=None, extra=None, timeout=600, retries=2, key_only=False, **_):
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -390,12 +446,16 @@ class SimpleLedger:
             body.pop("max_tokens", None)
         if os.environ.get("MH_CACHE_KEY") == "1" and task_id:
             root = task_id.split("-esc")[0]
-            body["prompt_cache_key"] = root
-            body["user"] = root
+            from meshpool_harness.core import modelcaps as _MC   # fields this endpoint refused for this model before
+            gone = _MC.refused(self.base_url, model)
+            for k in ("prompt_cache_key", "user"):
+                if k not in gone:
+                    body[k] = root
         wire = os.environ.get("MH_WIRE", "chat")
         from meshpool_harness import providers as PV
         prov, body["model"] = PV.split(body["model"])    # the model's provider decides where the call goes
-        if prov == "chatgpt":                            # the user's ChatGPT sign-in (core/chatgpt.py)
+        if prov == "chatgpt" and not key_only:           # the user's ChatGPT sign-in (core/chatgpt.py); key_only: the check
+            #                                                tests the key endpoint, whatever the settings say
             from meshpool_harness.core import chatgpt as CG
             out = from_responses(CG.chat(body, task_id=task_id, idle=int(os.environ.get("MH_STREAM_IDLE_S", "120"))))
             log_usage_line(task_id, body["model"], out["usage"])
@@ -403,45 +463,59 @@ class SimpleLedger:
         base_url, api_key = self.base_url, self.api_key
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
-        anthropic = PV.wire_for(base_url) == "anthropic"           # an Anthropic-style key endpoint: Messages API, not streamed
-        stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat" and not anthropic
+        anthropic = PV.wire_for(base_url) == "anthropic"           # an Anthropic-style key endpoint: Messages API
+        stream = os.environ.get("MH_STREAM", "1") == "1" and (wire == "chat" or anthropic)
+        if wire == "chat":
+            body["messages"] = ST.prepare_messages(body.get("messages") or [])
         if stream:
             body["stream"] = True
-            body["stream_options"] = {"include_usage": True}
+            if not anthropic:
+                body["stream_options"] = {"include_usage": True}
             idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
             body = AW.to_request(body)
+            if stream:
+                body["stream"] = True
         elif wire == "responses":
             body = to_responses(body)
         path = "messages" if anthropic else "responses" if wire == "responses" else "chat/completions"
         url, auth = PV.chat_target(base_url, api_key, body.get("model", ""), path)   # Azure path, api-version, key header
         if not anthropic and wire != "responses":
             body = PV.adapt_body(base_url, body)
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+        req = urllib.request.Request(url, data=ST.encode_body(body), method="POST",
                                      headers={**auth, "Content-Type": "application/json",
+                                              **({"Accept": "text/event-stream"} if stream else {}),
                                               "X-Harness-Task-Id": task_id,
                                               **({"session_id": task_id.split("-esc")[0]}
                                                  if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
-        status, raw, retry_after = 0, b"", ""
+        status, raw, retry_after, sse_reply = 0, b"", "", False
         gw_tries = 0
         attempt = 0
         while True:
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with _mhttp.open(req, timeout) as r:
                     status = r.status
-                    raw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and status == 200
-                           else r.read())
+                    sse_reply = stream and status == 200 and (
+                        not anthropic or "event-stream" in (r.headers.get("Content-Type") or "").lower())
+                    if sse_reply:
+                        lines = _first_then_idle(r, idle)
+                        if anthropic:
+                            asm = AW.StreamAssembler()
+                            for ev_name, ev_data in ST.iter_sse(lines, data_idle=timeout):
+                                asm.feed(ev_name, ev_data)
+                            raw = json.dumps(asm.result()).encode()
+                        else:
+                            raw = json.dumps(sse_to_chat(lines, data_idle=timeout)).encode()
+                    else:
+                        raw = ST.read_body(r, timeout)
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
-                ra = (getattr(e, "headers", None) or {}).get("Retry-After") if getattr(e, "headers", None) else None
-                try:                                     # seconds (an HTTP-date is ignored); never wait more than a minute
-                    retry_after = f" [retry-after: {min(60.0, max(1.0, float(str(ra).strip())))}]" if ra else ""
-                except ValueError:
-                    retry_after = ""
+                ra = ST.retry_after_seconds(getattr(e, "headers", None))
+                retry_after = f" [retry-after: {ra:g}]" if ra is not None else ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
+                raw, status = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):
@@ -455,6 +529,14 @@ class SimpleLedger:
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
             raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
+        from meshpool_harness import provider_setup as _PS
+        shape = ("openai" if anthropic and sse_reply                  # a streamed Anthropic reply is assembled as chat
+                 else "anthropic" if anthropic else "responses" if wire == "responses" else "openai")
+        if not _PS._is_reply(shape, payload):
+            txt = payload.get("raw") if isinstance(payload, dict) and "raw" in payload else _PS._not_reply_msg(payload)
+            if isinstance(payload, dict) and not payload.get("error") and "raw" not in payload:
+                txt = json.dumps(payload)[:200]
+            raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(txt)[:200]}")
         if anthropic:
-            return AW.from_response(payload)
+            return normalize_reply(payload) if sse_reply else AW.from_response(payload)
         return from_responses(payload) if wire == "responses" else normalize_reply(payload)

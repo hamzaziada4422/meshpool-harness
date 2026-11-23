@@ -111,3 +111,33 @@ def test_research_stays_on_the_subject_company():
     cost = NS(text="Our share repurchase program is under a $4,000 authorization.",
               source=NS(label="COSTCO WHOLESALE CORP 10-Q", url="https://www.sec.gov/x/cost-20260510.htm"))
     assert not _mentions(msft, ["Costco"]) and _mentions(cost, ["Costco"])
+
+
+class _Counting(Model):
+    def __init__(self, ident):
+        super().__init__()
+        self.n, self.ident = 0, ident
+
+    def chat(self, **kw):
+        self.n += 1
+        if "which companies it is about" in kw["messages"][0]["content"]:
+            return {"choices": [{"message": {"content": json.dumps(self.ident)}}]}
+        return super().chat(**kw)
+
+
+NO_CO = {"companies": [], "decision": "", "questions": ["What were the sales by region?"]}
+
+
+def test_require_company_stops_after_identify_when_no_company(tmp_path):
+    c = _Counting(NO_CO)
+    d = D.build_dossier("From sales.csv make a report", [], client=c, models=["m"], out_dir=str(tmp_path / "o"),
+                        search_fn=search, fetch_fn=fetch, require_company=True)
+    assert c.n == 1 and d["facts"] == [] and d["questions"] == [] and d["open"] == []
+    assert not (tmp_path / "o").exists()
+
+
+def test_default_still_researches_the_briefs_questions_without_a_company(tmp_path):
+    c = _Counting(NO_CO)
+    d = D.build_dossier("From sales.csv make a report", [], client=c, models=["m"], out_dir=str(tmp_path),
+                        search_fn=search, fetch_fn=fetch)
+    assert d["questions"] and (tmp_path / "dossier.md").exists()

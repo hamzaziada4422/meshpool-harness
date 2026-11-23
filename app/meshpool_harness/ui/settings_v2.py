@@ -14,6 +14,7 @@ from pathlib import Path
 
 from meshpool_harness import assistant as AS
 from meshpool_harness import config as C
+from meshpool_harness.core import http as _mhttp
 
 BILLING_URL = "https://meshpool.ai"          # where keys and accounts are managed
 
@@ -177,7 +178,7 @@ def key_spend(force: bool = False) -> dict:
                                                    "messages": [{"role": "user", "content": "1"}]})).encode()
             url, auth = PV.chat_target(base, key, mdl)
             r = urllib.request.Request(url, data=body, headers={**auth, "Content-Type": "application/json"})
-            with urllib.request.urlopen(r, timeout=20) as resp:
+            with _mhttp.open(r, 20) as resp:
                 sp, mx = resp.headers.get("x-litellm-key-spend"), resp.headers.get("x-litellm-key-max-budget")
                 if sp not in (None, ""):
                     res.update(available=True, spent=round(float(sp), 4))

@@ -22,8 +22,10 @@ sentence, concrete numbers instead of adjectives. No jargon or filler ("leverage
 "furthermore", "in order to"). Say exactly what happened, how much, and what to do next."""
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 15, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 15, model: str | None = None,
           client=None, phase: str = "phase_2_build") -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}

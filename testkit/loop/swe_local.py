@@ -14,6 +14,7 @@ import json
 import random
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -63,19 +64,40 @@ def drop_worktree(task: dict, dest: str) -> None:
     subprocess.run(["git", "-C", task["repo"]["path"], "worktree", "remove", "--force", dest], capture_output=True)
 
 
+def _head_file(workdir: str, rel: str) -> bytes | None:
+    """The committed content of rel at HEAD, read without touching the workspace (None: not in HEAD)."""
+    r = subprocess.run(["git", "-C", workdir, "show", f"HEAD:{rel}"], capture_output=True)
+    return r.stdout if r.returncode == 0 else None
+
+
 def grade(task: dict, workdir: str) -> tuple[bool, str]:
+    """Official SWE-bench grading on a scratch COPY of the workspace: the workdir (a git worktree whose .git is a file
+    pointing at the shared clone) is never written, and its index is never touched."""
+    sys.path.insert(0, str(HERE.parent))
+    import gradekit as GK
     g = task["grade"]["swe"]
-    p = Path(workdir) / ".swe_test.patch"
-    p.write_text(g["test_patch"])
-    # the agent must not have touched the test files: restore them, then apply the official patch
-    subprocess.run(["git", "checkout", "HEAD", "--", *g["test_files"]], cwd=workdir, capture_output=True)
-    a = subprocess.run(["git", "apply", "--whitespace=nowarn", str(p)], cwd=workdir, capture_output=True, text=True)
-    if a.returncode:
-        return False, "test patch did not apply: " + a.stderr[-200:]
-    py = str(Path(task.get("path_prepend", "")) / "python") if task.get("path_prepend") else "python3"
-    r = subprocess.run([py, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-rA", "--no-header", "-o",
-                        "addopts=", *g["test_files"]], cwd=workdir, capture_output=True, text=True,
-                       timeout=task["grade"].get("timeout", 900))
+    with GK.scratch_copy(workdir) as w:
+        gitfile = w / ".git"
+        if gitfile.is_file():                      # worktree link into the shared clone: never let git act through it
+            gitfile.unlink()
+        # the agent must not have touched the test files: restore them from HEAD, then apply the official patch
+        for rel in g["test_files"]:
+            data = _head_file(workdir, rel)
+            tgt = w / rel
+            if data is None:
+                tgt.unlink(missing_ok=True)
+            else:
+                tgt.parent.mkdir(parents=True, exist_ok=True)
+                tgt.write_bytes(data)
+        pf = w.parent / "swe_test.patch"           # outside the copy: the tests never see it
+        pf.write_text(g["test_patch"])
+        a = subprocess.run(["git", "apply", "--whitespace=nowarn", str(pf)], cwd=w, capture_output=True, text=True)
+        if a.returncode:
+            return False, "test patch did not apply: " + a.stderr[-200:]
+        py = str(Path(task.get("path_prepend", "")) / "python") if task.get("path_prepend") else "python3"
+        r = subprocess.run([py, "-m", "pytest", "-p", "no:cacheprovider", "-q", "-rA", "--no-header", "-o",
+                            "addopts=", *g["test_files"]], cwd=w, capture_output=True, text=True,
+                           timeout=task["grade"].get("timeout", 900))
     status = {}
     for line in r.stdout.splitlines():
         m = re.match(r"(PASSED|FAILED|ERROR)\s+(\S+)", line)
@@ -83,8 +105,10 @@ def grade(task: dict, workdir: str) -> tuple[bool, str]:
             status[m.group(2).split("::")[-1].split("[")[0]] = m.group(1)
     need = g["f2p"] + g["p2p"]
     bad = [t for t in need if status.get(t.split("::")[-1].split("[")[0].split(" ")[0]) != "PASSED"]
+    cnt = GK.count_tests(r.stdout)
     if bad:
-        return False, f"{len(bad)}/{len(need)} required tests not passing (e.g. {bad[0][:80]})"
+        return False, (f"{len(bad)}/{len(need)} required tests not passing (e.g. {bad[0][:80]}); "
+                       f"{cnt['passed']} passed, {cnt['failed']} failed, {cnt['errors']} errors")
     return True, "ok"
 
 

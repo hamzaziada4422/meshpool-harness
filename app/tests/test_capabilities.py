@@ -81,10 +81,10 @@ def test_codex_style_shows_office_tools_only_once_a_message_asks_for_a_file(tmp_
     a.mcp = _MCP(["mcp__meshpool_office__make_deck", "mcp__meshpool-assistant__search_chats", "mcp__github__search"])
     names = [t["function"]["name"] for t in a.tool_schemas()]
     assert "mcp__meshpool_office__make_deck" not in names and "mcp__github__search" in names
-    assert "mcp__meshpool-assistant__search_chats" not in names
+    assert "mcp__meshpool-assistant__search_chats" in names
     a.office_on = True
     names = [t["function"]["name"] for t in a.tool_schemas()]
-    assert "mcp__meshpool_office__make_deck" in names and "mcp__meshpool-assistant__search_chats" not in names
+    assert "mcp__meshpool_office__make_deck" in names and "mcp__meshpool-assistant__search_chats" in names
 
 
 @pytest.fixture

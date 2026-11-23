@@ -132,7 +132,7 @@ def account() -> dict:
     p = SV.profile()
     name = (p["address"] or p["name"]).strip()
     first = (name.split() or [""])[0]
-    key = bool(C.read().get("MESHPOOL_API_KEY") or __import__("os").environ.get("MESHPOOL_API_KEY"))
+    key = bool(__import__("meshpool_harness.providers", fromlist=["x"]).key())
     rows = A.listing()
     code = [r for r in rows if is_code_session(r) and not r.get("archived")]
     return {"name": name, "first_name": first, "initial": (first or "M")[:1].upper(), "full_name": p["name"],

@@ -52,7 +52,8 @@ def _clean_env(home: str, base: str) -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("MH_", "MESHPOOL_"))}
     env.update(MESHPOOL_HOME=home, MESHPOOL_BASE_URL=base, MESHPOOL_API_KEY="sk-offline-" + "x" * 24,
                MH_MODEL="deepseek-v4.1-flash", MH_FAILURES_LOG="off", MH_LEARN="0", MH_RECOVER_MIN="0",
-               MH_ROUTING_LOG="0", MH_FETCH_LOGOS="0", MH_SLOTS_DIR=os.path.join(home, "slots"),
+               MH_ROUTING_LOG="0", MH_FETCH_LOGOS="0", MH_GRADER="0", MH_FINISH_CHECK="0", MH_SCOPE_CHECK="0",   # pinned: no extra review/nudge calls
+                MH_SLOTS_DIR=os.path.join(home, "slots"),
                MH_CLASSIFY_TIMEOUT="1", NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
     for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
         env.pop(k, None)

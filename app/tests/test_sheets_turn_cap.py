@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from meshpool_harness.core.client import MockClient, tool_call  # noqa: E402
 from engines.sheets import engine as E  # noqa: E402
+from meshpool_harness.core.tools import CORE  # noqa: E402
 
 SAVE = ("python -c \"import os; os.makedirs('conv', exist_ok=True); "
         "open('Model.xlsx','wb').write(b'x'); open('conv/Model.xlsx','wb').write(b'x')\"")
@@ -102,12 +103,15 @@ def test_turn_budget_hook_thresholds(tmp_path):
     assert E.turn_budget(39, 50, ws) is None
     assert "still no .xlsx" in E.turn_budget(40, 50, ws)
     assert E.turn_budget(41, 50, ws) is None            # wrap-up once
-    assert "FINISH NOW: 48 of 50 turns used; 2 turns left" in E.turn_budget(48, 50, ws)
-    assert "1 turn left" in E.turn_budget(49, 50, ws)
+    assert "SAVE NOW: 48 of 50 turns used, 2 left" in E.turn_budget(48, 50, ws)      # no workbook: save, not finish
+    assert "1 left" in E.turn_budget(49, 50, ws)
     assert E.turn_budget(50, 50, ws) is None
     ws2 = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
     ws2.nudged = True
     (tmp_path / "m.xlsx").write_bytes(b"x")
+    assert "FINISH NOW: 48 of 50 turns used; 2 turns left" in E.turn_budget(48, 50, ws2)
+    assert "1 turn left" in E.turn_budget(49, 50, ws2)
+    ws2.wrapped = False
     assert "Stop adding features" in E.turn_budget(40, 50, ws2)
 
 
@@ -179,3 +183,170 @@ def test_a_refused_command_says_what_to_run_and_firms_up_on_repeat(tmp_path):
     with pytest.raises(ToolError) as e2:
         ws._run(cmd, 30, "bash")
     assert "REFUSED again (2 times)" in str(e2.value) and "python build_workbook.py" in str(e2.value)
+
+
+# ---- runs that end without an accepted finish for a reason other than a cap (M30-01)
+
+def _passing(monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda answer, artifacts, ws, report=None: None)
+
+
+def _saved_then(*rest):
+    return MockClient([tool_call("write_file", {"path": "build_workbook.py", "content": "x = 1\n"}),
+                       tool_call("bash", {"command": SAVE}), *rest])
+
+
+def test_three_toolless_replies_after_a_saved_workbook_still_deliver_it(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    c = _saved_then(*[{"role": "assistant", "content": "done"}] * 3)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["reason"].startswith("model stopped calling tools")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert r["answer"] and "stopped calling tools" in r["answer"] and "checked version" in r["answer"]
+
+
+FAIL = "python -c \"import sys; print('Error: boom'); sys.exit(1)\""
+
+
+def test_guard_abort_after_a_saved_workbook_still_delivers_it(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    c = _saved_then(*[tool_call("bash", {"command": FAIL})] * 8)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=30, client=c, model="mock")
+    assert r["reason"].startswith("aborted")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert "repeated-failure guard" in r["answer"] and "checked version" in r["answer"]
+
+
+def test_need_context_after_a_saved_workbook_still_delivers_it_and_keeps_the_question(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    real = E.run                       # the sheets engine does not offer need_context by default; offer it here
+    monkeypatch.setattr(E, "run", lambda *a, **k: real(*a, tool_names=[*CORE, "need_context"], **k))
+    c = _saved_then(tool_call("need_context", {"reason": "Which fiscal year end do you want?", "paths": ["fy.csv"]}))
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["reason"].startswith("need_context")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert "Which fiscal year end do you want?" in r["answer"] and "fy.csv" in r["answer"]
+
+
+def test_toolless_end_with_a_failing_workbook_returns_file_and_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda answer, artifacts, ws, report=None:
+                        "ENGINE CHECK: workbook QA failed:\n- X4 DCF!C9: hardcoded number in a formula")
+    c = _saved_then(*[{"role": "assistant", "content": "done"}] * 3)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["ok"] is False and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert r["checks"] == ["X4 DCF!C9: hardcoded number in a formula"]
+    assert "does NOT pass" in r["answer"] and "hardcoded number" in r["answer"] and "stopped calling tools" in r["answer"]
+
+
+# ---- an input workbook copied into the job folder is not the run's own work (M30-02)
+
+def _input_copy(tmp_path):
+    src = tmp_path / "inputs"
+    src.mkdir()
+    orig = src / "input.xlsx"
+    orig.write_bytes(b"the user's own workbook")
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(orig, work / "input.xlsx")                  # what cli.run_request does: a new mtime, same content
+    return orig, work
+
+
+def _all_notes(client):
+    return "\n".join(m["content"] for m in client.requests[-1]["messages"] if m["role"] == "user")
+
+
+def test_a_copied_input_workbook_is_not_a_saved_workbook(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    c = MockClient([tool_call("bash", {"command": f"echo explore {i}"}) for i in range(6)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is False and r["artifacts"] == []
+    assert r["reason"] == "turn cap 6 reached; no workbook saved"
+    assert "BUILD NOW" in _all_notes(c)
+
+
+def test_editing_the_copied_input_in_place_counts_as_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    edit = "python -c \"open('input.xlsx','wb').write(b'changed by the run')\""
+    c = MockClient([tool_call("bash", {"command": edit})] + [tool_call("bash", {"command": f"echo r {i}"})
+                                                              for i in range(5)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is True and r["artifacts"] == [str(work / "input.xlsx")]
+    assert orig.read_bytes() == b"the user's own workbook"
+
+
+def test_an_unchanged_copy_of_the_input_under_a_new_name_is_not_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    c = MockClient([tool_call("bash", {"command": "cp input.xlsx Copy.xlsx"})]
+                   + [tool_call("bash", {"command": f"echo r {i}"}) for i in range(5)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is False and r["artifacts"] == [] and r["reason"].endswith("no workbook saved")
+    assert "BUILD NOW" in _all_notes(c)
+
+
+# ---- delivering an earlier reviewed round keeps the newer, unreviewed workbook (M30-03)
+
+def _review_with_one_round(tmp_path):
+    import hashlib
+
+    class WS:
+        root = tmp_path
+        run_dir = tmp_path / ".run"
+        turn = 20
+    WS.run_dir.mkdir()
+    copy = WS.run_dir / "review" / "round1" / "model.xlsx"
+    copy.parent.mkdir(parents=True)
+    copy.write_bytes(b"round1")
+    rv = E.WorkbookReview(object(), WS(), 30, model="m")
+    rv.rounds.append({"round": 1, "turn": 10, "final": False, "workbook": "model.xlsx", "copy": str(copy),
+                      "sha256": hashlib.sha256(b"round1").hexdigest(), "model": "m", "digest_chars": 1,
+                      "signed_off": False, "scores": {"md": 6.0}, "not_run": [], "errors": [],
+                      "reviews": [{"persona": "md", "status": "ok", "overall": 6.0, "verdict": "revise"}],
+                      "issues": [], "research_requests": [], "samples": [], "score": 6.0, "passed_checks": True})
+    return rv
+
+
+def test_delivering_an_earlier_round_keeps_the_newer_version(tmp_path):
+    rv = _review_with_one_round(tmp_path)
+    model = tmp_path / "model.xlsx"
+    model.write_bytes(b"newer")                                    # saved after round 1, fails the engine checks
+    out = rv.finalize({"ok": False, "artifacts": [str(model)], "checks": ["X1 D5: typed numbers"],
+                       "answer": "stopped"}, at_cap=True)
+    assert out["ok"] is True and out["artifacts"] == [str(model)]
+    assert model.read_bytes() == b"round1"
+    kept = tmp_path / ".run" / "review" / "latest" / "model.xlsx"
+    assert kept.read_bytes() == b"newer"
+    assert ".run/review/latest/model.xlsx" in out["answer"]
+
+
+def test_a_destination_that_is_a_reviewed_round_is_not_copied_to_latest(tmp_path):
+    rv = _review_with_one_round(tmp_path)
+    model = tmp_path / "model.xlsx"
+    model.write_bytes(b"round1")                                   # the file on disk is already a reviewed round
+    rv.finalize({"ok": False, "artifacts": [str(model)], "answer": "stopped"}, at_cap=True)
+    assert not (tmp_path / ".run" / "review" / "latest").exists()
+
+
+# ---- the last-turns note without a saved workbook says save, not finish (M30-04)
+
+def test_last_turns_without_a_workbook_send_one_save_now_note(tmp_path):
+    ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    note = E.turn_budget(8, 10, ws)                         # fresh workspace: BUILD NOW would also be due at turn 6+
+    assert "SAVE NOW: 8 of 10 turns used, 2 left, and no .xlsx has been saved" in note
+    assert "FINISH NOW" not in note and "Do not change the workbook" not in note and "BUILD NOW" not in note
+    assert "last saved workbook is checked and delivered" in note
+    assert ws.nudged is True
+    assert "SAVE NOW: 9 of 10 turns used, 1 left" in E.turn_budget(9, 10, ws)
+
+
+def test_last_turns_with_a_workbook_still_send_finish_now(tmp_path):
+    ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
+    (tmp_path / "m.xlsx").write_bytes(b"x")
+    note = E.turn_budget(8, 10, ws)
+    assert "FINISH NOW: 8 of 10 turns used; 2 turns left" in note and "Do not change the workbook" in note
+    assert "SAVE NOW" not in note and "BUILD NOW" not in note

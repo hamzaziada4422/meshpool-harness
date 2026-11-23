@@ -54,7 +54,10 @@ def test_install_replaces_code_and_keeps_vendor(monkeypatch, tmp_path):
     monkeypatch.setattr(U, "check", lambda force=False: {"ok": True, "newer": True, "kind": "cli", "current": "1.0.0",
                                                          "latest": "2.0.0", "tag": "v2.0.0", "assets": [], "url": ""})
     monkeypatch.setattr(U, "_download", lambda url, dst: __import__("shutil").copy(tgz, dst) and dst)
-    r = U.install()
+    staged = U.install()
+    assert staged["ok"] and staged["action"] == "staged", staged
+    assert '1.0.0' in (app / "meshpool_harness" / "__init__.py").read_text()      # not swapped yet
+    r = U.apply_staged(staged)
     assert r["ok"] and r["action"] == "restart", r
     assert '2.0.0' in (app / "meshpool_harness" / "__init__.py").read_text()
     assert (app / "meshpool_harness" / "new.py").exists()
@@ -68,6 +71,14 @@ def test_old_2x_releases_are_not_updates_for_the_beta(monkeypatch):
     U._CACHE.clear()
     v = U.check(force=True)
     assert v["ok"] and not v["newer"], v
+
+
+def _install_now(auto=False):
+    """What the server does: prepare the update (install() only stages it), then swap it in."""
+    r = U.install(auto)
+    if not (r.get("ok") and r.get("action") == "staged"):
+        return r
+    return U.apply_staged(r)
 
 
 def _release(tmp_path, ver, files):
@@ -216,9 +227,9 @@ def test_cli_update_installs_the_command_line_package_list(monkeypatch, tmp_path
     ran = []
     monkeypatch.setattr(U.subprocess, "run", lambda cmd, **k: ran.append(cmd) or
                         __import__("subprocess").CompletedProcess(cmd, 0, "", ""))
-    r = U.install()
+    r = _install_now()
     assert r["ok"], r
-    assert ran and ran[0][-1].endswith("requirements-cli.txt") and "packaging" in ran[0][-1]
+    assert ran and ran[0][-1].endswith("requirements-cli.txt") and ".update-" in ran[0][-1]   # the staged copy of the release list
     assert (app / "requirements-cli.txt").read_text() == "pandas\nnewdep\n"
 
 
@@ -229,7 +240,7 @@ def test_cli_update_skips_pip_when_the_package_list_is_unchanged(monkeypatch, tm
                                        "app/requirements.txt": "something else\n"})
     _update_to(monkeypatch, app, tgz, "0.2.0")
     monkeypatch.setattr(U.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("pip ran")))
-    assert U.install()["ok"]
+    assert _install_now()["ok"]
 
 
 def test_failed_swap_puts_every_old_folder_back(monkeypatch, tmp_path):
@@ -239,11 +250,11 @@ def test_failed_swap_puts_every_old_folder_back(monkeypatch, tmp_path):
     real = U.Path.rename
 
     def rename(self, target):
-        if self.name == ".engines.new":
+        if self.name == "engines" and self.parent.name.startswith(".update-"):
             raise PermissionError("in use")
         return real(self, target)
     monkeypatch.setattr(U.Path, "rename", rename)
-    r = U.install()
+    r = _install_now()
     assert not r["ok"] and "Nothing was changed" in r["error"]
     assert '"0.1.0"' in (app / "meshpool_harness" / "__init__.py").read_text()     # swapped first, then put back
     assert (app / "engines" / "old.py").exists() and not (app / "engines" / "new.py").exists()
@@ -266,7 +277,7 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
                                                          "assets": [], "url": "u"})
     from meshpool_harness import autoupdate as AU
     seen = []                                   # the full installer is now fetched by the background updater
-    monkeypatch.setattr(AU, "pipeline", lambda v, download=True: seen.append(v["tag"]))
+    monkeypatch.setattr(AU, "pipeline", lambda v, download=True, manual=False: seen.append((v["tag"], download, manual)))
     r = U.install()
     assert r["action"] == "downloading"
     import time
@@ -274,7 +285,7 @@ def test_windows_app_with_the_old_layout_gets_the_installer(monkeypatch, tmp_pat
         if seen:
             break
         time.sleep(0.05)
-    assert seen == ["v0.2.0"]
+    assert seen == [("v0.2.0", True, True)]                      # the user's click is always a manual download
 
 
 def test_a_release_still_uploading_is_not_offered():

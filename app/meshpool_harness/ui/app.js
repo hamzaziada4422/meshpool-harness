@@ -1250,7 +1250,13 @@ function applyEv(ev) {
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
-      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto; add(`<span>${esc(ev.text)}</span>`, "note using"); sessionSoon(); break; }   // one neutral line; the reason is in the Session panel
+      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
+        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
+        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
+          try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
+          catch (e) { toast(e.message); } });
+        sessionSoon(); break; }   // one short line; the reason also stays in the Session panel
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
@@ -2031,7 +2037,7 @@ async function renderSection(sec) {
           let q; try { q = await post("/api/connectors", {action: "github_poll", id: "github"}); } catch (e) { return; }
           if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
           if (q.status === "failed") { RES("cnRes").className = "res bad"; RES("cnRes").textContent = q.error; return; }
-          setTimeout(tick, (r.interval || 5) * 1000);
+          setTimeout(tick, (q.interval || r.interval || 5) * 1000);
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
@@ -2245,9 +2251,8 @@ function showOnboarding() {
     }
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
-      const r = await post("/api/test", {values: prov === "custom" ? values : {MESHPOOL_API_KEY: key, MESHPOOL_BASE_URL: "https://llm.meshpool.ai/v1"}});   // check first; save only a key that works
+      const r = await post("/api/onboard", {provider: prov, key, base_url: values.MESHPOOL_BASE_URL, model: values.MH_MODEL || ""});   // one request: checks the key, and only a key that works is saved, with the provider
       if (!r.ok) { res.className = "res bad"; res.textContent = connMsg(r.detail); $("#oGo").disabled = false; return; }
-      await post("/api/settings", {values}); await post("/api/provider", {provider: prov});
       store("harness_code", null); store("harness_cowork", null);
       await finish();
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }
@@ -2430,7 +2435,7 @@ function permStep(host) {
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
-      <button class="scopeopt" data-scope="later" role="radio"><b>Start in Meshpool Projects</b><small>A folder Meshpool made for you. Add your own folders any time.</small></button>
+      <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
@@ -2452,7 +2457,7 @@ function permStep(host) {
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
-      else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -2461,7 +2466,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
   draw();
 }
 
@@ -2490,69 +2495,120 @@ async function checkUpdate(force) {
   await updStatus();
   return S.upd;
 }
-/* The background updater's state: downloading, ready ("Restart to update"), or an error. Polled quickly while it works. */
+/* The background updater's state: downloading, ready ("Restart to update"), installing, or an error. Polled quickly while it works. */
 async function updStatus() {
   try { S.ust = await post("/api/update/status", {}); } catch (e) { S.ust = null; }
-  renderUpdBar(); if ($("#updMore")) updatePanel(S.upd);
+  const c = S.ust?.check;       // a release only the background check found shows without a reload
+  if (c && (!S.upd || !S.upd.ok || (c.checked_at || 0) > (S.upd.checked_at || 0))) S.upd = Object.assign({}, c, {ok: true});
+  renderUpdBar(); if ($("#updMore") && !S.updBusy) updatePanel(curUpd());
   const r = S.ust?.last_result;
   if (r) toast(r.message || (r.ok ? "Meshpool was updated." : "The update did not finish."), r.ok ? 5000 : 12000);
   clearTimeout(S.ustT);
-  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking"].includes(S.ust?.state) ? 3000 : 60000);
+  S.ustT = setTimeout(updStatus, ["downloading", "verifying", "staging", "checking", "installing"].includes(S.ust?.state) ? 3000 : 60000);
   return S.ust;
 }
 function updPct(s) { return s && s.total ? Math.min(99, Math.floor(100 * s.done / s.total)) : 0; }
+/* The release to talk about: the last check, or the one the updater's own state names. */
+function curUpd() {
+  const u = S.upd, s = S.ust;
+  if (s?.state === "available" && !(u?.ok && u.newer)) return {ok: true, newer: true, latest: s.latest || s.tag, current: s.current, url: s.url, kind: s.kind, pending_restart: false};
+  return u;
+}
+const updKind = () => curUpd()?.kind || S.ust?.kind || S.ust?.check?.kind || "";
+const updWhen = t => { if (!t) return ""; const d = new Date(t > 1e12 ? t : t * 1000); return isNaN(d) ? "" : d.toLocaleString([], {dateStyle: "medium", timeStyle: "short"}); };
 function renderUpdBar() {
   const bar = $("#updBar"); if (!bar) return;
-  const s = S.ust, u = S.upd;
-  if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
+  const s = S.ust, u = curUpd();
+  if (updKind() === "dev") bar.hidden = true;           // a git checkout updates with git pull, not from here
+  else if (s?.state === "installing") { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Installing update...`; }
+  else if (s?.state === "ready") { bar.hidden = false; bar.dataset.act = "apply"; bar.innerHTML = `<span class="dot"></span>Update ready<span class="go">Restart</span>`; }
   else if (["downloading", "verifying", "staging"].includes(s?.state)) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Downloading update${s.state === "downloading" && s.total ? " " + updPct(s) + "%" : "..."}`; }
   else if (u?.ok && u.newer) { bar.hidden = false; bar.dataset.act = "about"; bar.innerHTML = `<span class="dot"></span>Meshpool ${esc(u.latest || "")} is available<span class="go">Update</span>`; }
   else bar.hidden = true;
 }
+async function bootId() {
+  try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) return (await r.json()).boot || null; } catch (e) {}
+  return null;
+}
+/* Wait for a new server process (a different boot id on /healthz), then reload. Never reloads on the old server. */
+function waitForNewServer(oldBoot, out) {
+  const t0 = Date.now(); let down = false;
+  const say = t => { if (out) out.textContent = t; else toast(t, 12000); };
+  return new Promise(resolve => {
+    const tick = async () => {
+      let b = null;
+      try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok) b = (await r.json()).boot || null; else down = true; } catch (e) { down = true; }
+      if (b && (oldBoot ? b !== oldBoot : down)) { location.reload(); resolve(true); return; }
+      if (Date.now() - t0 < 90000) setTimeout(tick, 1000);
+      else { say("Meshpool closed. Open it again to use the new version."); resolve(false); }
+    };
+    setTimeout(tick, 1000);
+  });
+}
 async function applyUpdate() {
+  const before = await bootId();
   let r; try { r = await post("/api/update/apply", {}); } catch (e) { r = {ok: false, error: e.message}; }
   if (!r.ok) { toast(r.error || "Could not restart to update.", 8000); return; }
-  if (r.mode === "code") { restartApp(); return; }
+  if (r.mode === "code") { toast("Restarting Meshpool...", 60000); waitForNewServer(r.boot || before); return; }
   toast("Updating Meshpool. It reopens in a moment.", 60000);
 }
 function updatePanel(u) {
   const res = RES("updRes"), more = $("#updMore"); if (!res || !more) return;
   const s = S.ust || {}, st = s.settings || {};
-  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>`;
+  const cerr = s.check_error ? `<div><small style="color:var(--ink-3)">The last check for updates did not work: ${esc(s.check_error)}</small></div>` : "";
+  const opts = `<div style="margin-top:12px"><label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="updAuto" ${st.auto_download === false ? "" : "checked"}> Download updates automatically</label><small style="color:var(--ink-3)">An update that is ready installs when you quit Meshpool, or when you press Restart.</small></div>${cerr}`;
   const bindOpts = () => { const c = $("#updAuto"); if (c) c.onchange = () => post("/api/update/settings", {auto_download: c.checked}).catch(() => {}); };
-  if (s.state === "ready") { res.className = "res ok"; res.textContent = `Meshpool ${s.latest} is ready to install.`;
-    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button><a class="btn" href="${esc(s.url || "")}" target="_blank" rel="noopener">What's new</a></div>${opts}`;
+  const ver = s.latest || s.tag || u?.latest || "";
+  const link = url => url ? `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">What's new</a>` : "";
+  if (s.state === "installing") { res.className = "res"; res.textContent = `Installing Meshpool ${ver}. Meshpool restarts when it is done.`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "ready") {
+    const err = s.error || s.fail?.error || "";
+    if ((s.install_failures || 0) > 0) { res.className = "res bad"; res.textContent = `${err || "The last install did not finish."} It will not install automatically when you quit. Press Restart to try again.`; }
+    else { res.className = "res ok"; res.textContent = s.manual ? `Meshpool ${ver} is ready. It installs when you press Restart.` : `Meshpool ${ver} is ready to install.`; }
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo">Restart to update</button>${link(s.url)}</div>${opts}`;
     $("#updGo").onclick = applyUpdate; bindOpts(); return; }
-  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${s.latest}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${s.latest}...`; more.innerHTML = opts; bindOpts(); return; }
-  if (s.state === "error" && s.error && u?.newer !== false) { res.className = "res bad"; res.textContent = s.error;
-    more.innerHTML = `<div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}</div>${opts}`;
+  if (["downloading", "verifying", "staging"].includes(s.state)) { res.className = "res"; res.textContent = s.state === "downloading" ? `Downloading Meshpool ${ver}${s.total ? " (" + updPct(s) + "%)" : ""}. You can keep working.` : `Checking Meshpool ${ver}...`; more.innerHTML = opts; bindOpts(); return; }
+  if (s.state === "failed" || (s.state === "error" && s.error && u?.newer !== false)) {
+    const nt = updWhen(s.fail?.next_try || s.next_try);
+    res.className = "res bad"; res.textContent = s.error || s.fail?.error || "The update did not finish.";
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updGo">Try again</button>${s.url ? `<a class="btn" href="${esc(s.url)}" target="_blank" rel="noopener">Release page</a>` : ""}${nt ? `<small id="updNext" style="color:var(--ink-3)">Meshpool tries again at ${esc(nt)}.</small>` : ""}</div>${opts}`;
     $("#updGo").onclick = async () => { await post("/api/update/download", {}).catch(() => {}); setTimeout(updStatus, 800); }; bindOpts(); return; }
-  if (!u) { res.textContent = ""; more.innerHTML = ""; return; }
-  if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = ""; return; }
+  if (s.state === "withdrawn") { res.className = "res bad"; res.textContent = s.error || `Meshpool ${ver} was withdrawn. Stay on your current version.`; more.innerHTML = opts; bindOpts(); return; }
+  if (!u) { res.textContent = ""; more.innerHTML = cerr; return; }
+  if (!u.ok) { res.className = "res bad"; res.textContent = u.error; more.innerHTML = cerr; return; }
   if (!u.newer) { res.className = "res ok"; res.textContent = `You have the latest version (${u.current}).`; more.innerHTML = opts; bindOpts(); return; }
+  const kind = u.kind || s.kind;
+  if (kind === "dev") {
+    res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. This copy runs from a git checkout: run git pull in it to update.`;
+    more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn" id="updCopy">Copy</button>${link(u.url)}</div>${cerr}`;
+    $("#updCopy").onclick = () => { try { navigator.clipboard.writeText("git pull").then(() => toast("Copied: git pull"), () => toast("Could not copy.")); } catch (e) { toast("Could not copy."); } };
+    return; }
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
-  const how = ["mac-app", "win-app"].includes(u.kind) ? "Downloads in the background; installs when you restart." : u.kind === "dev" ? "This is a git checkout: run git pull." : "Installs in place in under a minute, then restarts.";
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px">${u.kind === "dev" ? "" : `<button class="btn primary" id="updGo">${["mac-app", "win-app"].includes(u.kind) ? "Download update" : "Update now"}</button>`}<a class="btn" href="${esc(u.url)}" target="_blank" rel="noopener">What's new</a><small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(u.kind) ? opts : ""}`;
+  const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
+  const busy = !!S.updBusy;
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? "disabled" : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
   bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
-    const out = RES("updOut"); btn.disabled = true; btn.textContent = "Updating...";
+    const out = RES("updOut"); S.updBusy = true; btn.disabled = true; btn.textContent = "Installing...";
     out.className = "res"; out.textContent = "Starting the update.";
+    const before = await bootId();
     let r; try { r = await post("/api/update/install", {}); } catch (err) { r = {ok: false, error: err.message}; }
-    btn.disabled = false; btn.textContent = "Update now";
-    if (!r.ok) { out.className = "res bad"; out.textContent = r.error; return; }
-    out.className = "res ok"; out.textContent = r.message;
-    if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
-    else if (r.action === "restart") { btn.textContent = "Restart now"; btn.onclick = restartApp; }
+    S.updBusy = false;
+    if (!r.ok) { btn.disabled = false; btn.textContent = ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"; out.className = "res bad"; out.textContent = r.error; return; }
+    out.className = "res ok"; out.textContent = r.message || "Restarting Meshpool...";
+    if (r.action === "restarting") { btn.disabled = true; waitForNewServer(r.boot || before, out); }
+    else if (r.action === "downloading" || r.action === "ready") { btn.remove(); updStatus(); }
+    else if (r.action === "restart") { btn.disabled = false; btn.textContent = "Restart now"; btn.onclick = () => restartApp(); }
     else if (r.action !== "installer") btn.remove();
+    else { btn.disabled = false; btn.textContent = "Update now"; }
   };
 }
-async function restartApp() {
+async function restartApp(bootBefore) {
   const out = RES("updOut"); if (out) { out.className = "res"; out.textContent = "Restarting Meshpool..."; }
-  try { await post("/api/update/restart", {}); } catch (e) {}
-  const t0 = Date.now();
-  const wait = async () => { try { const r = await fetch("/healthz", {cache: "no-store"}); if (r.ok && Date.now() - t0 > 2500) { location.reload(); return; } } catch (e) {} if (Date.now() - t0 < 90000) setTimeout(wait, 1000); else if (out) out.textContent = "Meshpool closed. Open it again to use the new version."; };
-  setTimeout(wait, 1500);
+  const before = (typeof bootBefore === "string" && bootBefore) || await bootId();
+  let r = {}; try { r = await post("/api/update/restart", {}); } catch (e) {}
+  waitForNewServer(before || r.boot, out && out.id ? out : null);
 }
 
 /* ================================== boot ================================== */

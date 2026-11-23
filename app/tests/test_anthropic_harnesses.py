@@ -35,14 +35,12 @@ def test_hermes_api_mode_follows_the_key_endpoint(tmp_path, monkeypatch):
     import yaml
     from meshpool_harness import harnesses as HR
     _key(tmp_path, monkeypatch, "https://api.anthropic.com/v1", "anthropic")
-    HR.prepare_hermes("key:claude-sonnet-5-5")
-    m = yaml.safe_load((HR.hermes_home() / "config.yaml").read_text())["model"]
+    m = HR.hermes_model(HR.prepare_hermes("key:claude-sonnet-5-5"))
     assert m["api_mode"] == "anthropic_messages" and m["base_url"] == "https://api.anthropic.com/v1"
     assert m["provider"] == "custom" and m["api_key"] == "sk-test"
     _key(tmp_path, monkeypatch, "https://llm.meshpool.ai/v1", "openai")
-    HR.prepare_hermes("key:deepseek-v4.1-flash")
-    m = yaml.safe_load((HR.hermes_home() / "config.yaml").read_text())["model"]
-    assert "api_mode" not in m and m["base_url"] == "https://llm.meshpool.ai/v1"
+    m = HR.hermes_model(HR.prepare_hermes("key:deepseek-v4.1-flash"))
+    assert m["api_mode"] == "chat_completions" and m["base_url"] == "https://llm.meshpool.ai/v1"
 
 
 def test_bundled_hermes_gets_the_anthropic_sdk(tmp_path):
