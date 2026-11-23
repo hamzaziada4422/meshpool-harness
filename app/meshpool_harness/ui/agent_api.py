@@ -929,7 +929,9 @@ class Session:
                     self.agent.send(body)
                 try:
                     from meshpool_harness.hrouter import outcomes as OUT
-                    OUT.log_turn(self, getattr(self, "_turn_route", None), u0)
+                    OUT.log_turn(self, getattr(self, "_turn_route", None), u0, ev0=ev0,
+                                 turn=self._turn_n if self._turn_n is not None
+                                 else sum(1 for e in self.events if e.get("type") == "user" and not e.get("steer")))
                 except Exception:  # noqa: BLE001
                     pass
                 self._after_turn(text, ev0, self.t_turn)
@@ -1194,6 +1196,13 @@ class Session:
                     self.agent.save()
         self.epoch += 1
         self._persist(running=False)
+        try:                                     # Undo counts against every logged turn it removed; never breaks Undo
+            from meshpool_harness.hrouter import outcomes as OUT
+            logged = {x.get("turn") for x in OUT.rows(self.id) if isinstance(x.get("turn"), int)}
+            for n in sorted(t for t in logged if t >= int(turn)):
+                OUT.mark(self.id, "undo", n)
+        except Exception:
+            pass
         def _n(k, word):
             n = len(r.get(k) or [])
             return f"{n} file{'' if n == 1 else 's'} {word}"
