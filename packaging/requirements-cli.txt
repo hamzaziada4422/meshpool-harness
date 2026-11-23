@@ -17,3 +17,4 @@ psutil>=5.9
 duckdb>=1.1
 ddgs>=9.0                 # free web search (metasearch); without it web search fell back to rate-limited engines
 ruff>=0.8
+tomli>=2.0; python_version < "3.11"

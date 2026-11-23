@@ -613,6 +613,15 @@ class Terminal:
                         j = len(buf[:cur].rstrip(" "))
                         j = buf.rfind(" ", 0, j) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
+                    elif k == "word_left":
+                        j = len(buf[:cur].rstrip(" "))
+                        s["cur"] = buf.rfind(" ", 0, j) + 1
+                    elif k == "word_right":
+                        j = buf.find(" ", cur)
+                        j = len(buf) if j < 0 else j
+                        while j < len(buf) and buf[j] == " ":
+                            j += 1
+                        s["cur"] = j
                     elif k in ("up", "ctrl_p"):
                         if menu:
                             s["sel"] = (s["sel"] - 1) % len(menu)

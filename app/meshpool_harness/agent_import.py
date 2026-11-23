@@ -185,8 +185,8 @@ def _servers(agent: dict, base: Path, root: Path) -> list[tuple[str, dict]]:
                     found += [(f"{n} ({Path(proj).name})", s) for n, s in conf["mcpServers"].items()]
     for fname in agent.get("mcp_toml", []):
         try:
-            import tomllib
-            found += list((tomllib.loads(_read(base / fname) or "").get("mcp_servers") or {}).items())
+            from meshpool_harness.importer import toml_loads
+            found += list((toml_loads(_read(base / fname) or "").get("mcp_servers") or {}).items())
         except Exception:  # noqa: BLE001 - a broken file is skipped
             pass
     for fname in agent.get("mcp_yaml", []):

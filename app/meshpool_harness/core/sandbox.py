@@ -28,7 +28,7 @@ def _writable(root: Path) -> list[str]:
     return [c for c in dict.fromkeys(cands) if os.path.isdir(c)]
 
 
-def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which) -> list[str]:
+def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which, cwd=None) -> list[str]:
     """argv, wrapped so it can only write where it should. Unchanged when the sandbox is off or unavailable."""
     if not enabled():
         return argv
@@ -38,7 +38,7 @@ def wrap(argv: list[str], root, platform: str | None = None, which=shutil.which)
         out = ["bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--die-with-parent", "--unshare-pid"]
         for w in _writable(root):
             out += ["--bind", w, w]
-        return out + ["--chdir", str(root), "--"] + argv
+        return out + ["--chdir", str(Path(cwd).resolve() if cwd else root), "--"] + argv
     if plat == "darwin" and which("sandbox-exec"):
         allow = "".join(f'(subpath "{p}")' for p in _writable(root) + ["/private/tmp", "/private/var/folders"])
         profile = ('(version 1)(allow default)(deny file-write*)'

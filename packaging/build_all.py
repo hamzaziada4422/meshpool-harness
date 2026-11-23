@@ -362,7 +362,8 @@ if __name__ == "__main__":
     if "--check-pins" in sys.argv[1:]:
         check_pins()
         sys.exit(0)
-    check_winres()
+    if any(a in ("--only=win", "--only=windows") for a in sys.argv[1:]):   # only the Windows job repairs winres.json
+        check_winres()
     if OUT.exists():
         shutil.rmtree(OUT)
     OUT.mkdir()

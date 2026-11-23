@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import warnings
+import zipfile
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -20,8 +21,15 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 def _sidecar(path: Path, name: str):
     p = path.with_name(f"{path.stem}.{name}.json")
     if not p.exists():
+        # a job folder (built by forge) keeps its sidecars under the plain name; a user's own deck never borrows
+        # an unrelated job's file from the same folder
+        if not (path.parent / "storyline.json").exists():
+            return None
         p = path.parent / f"{name}.json"
-    return json.loads(p.read_text()) if p.exists() else None
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except (OSError, ValueError):
+        return None
 
 
 def check_deck(path: str, slide_count: int | None = None, render: bool = True) -> tuple[str, bool]:
@@ -81,7 +89,10 @@ def measure_office_file(path: str, pages: str | None = None) -> tuple[str, bool]
     ext = p.suffix.lower()
     if ext in (".pptx", ".potx"):
         from .measure_pptx import measure, public
-        summary = public(measure(str(p)))["summary"]
+        try:
+            summary = public(measure(str(p)))["summary"]
+        except zipfile.BadZipFile:
+            return f"{p.name} is not a valid PowerPoint file (the zip container is unreadable).", True
     elif ext in (".xlsx", ".xlsm"):
         from .validate_xlsx import validate
         summary = validate(str(p))["stats"]

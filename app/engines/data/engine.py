@@ -68,14 +68,20 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     sources = {}
     for f in files or []:
-        if f.lower().endswith((".txt", ".md", ".vtt", ".srt")) and os.path.exists(f):
-            sources[os.path.basename(f)] = Path(f).read_text(errors="replace")
-        elif f.lower().endswith(".docx") and os.path.exists(f):
-            try:
-                import docx
-                sources[os.path.basename(f)] = "\n".join(p.text for p in docx.Document(f).paragraphs)
-            except Exception:
-                pass
+        if not os.path.isfile(f):
+            continue
+        name = os.path.basename(f)
+        try:
+            if f.lower().endswith((".txt", ".md", ".vtt", ".srt")):
+                sources[name] = Path(f).read_text(encoding="utf-8-sig", errors="replace")
+            else:                                  # pdf, docx, html, csv, ...: whatever the model could read and quote
+                from meshpool_harness.docread import extract, is_document
+                if is_document(Path(f)):
+                    text = extract(f, ocr="never")
+                    if not text.startswith(("Could not read", "Meshpool cannot read")):
+                        sources[name] = text
+        except Exception as e:  # noqa: BLE001 - an unreadable attachment must not stop the run, but is not silent
+            print(f"data engine: could not load {name} as a quote source ({type(e).__name__}: {e})", file=sys.stderr)
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     system = SYSTEM + (LEAN if os.environ.get("MH_DATA_VARIANT", "v2") == "v2" else "")

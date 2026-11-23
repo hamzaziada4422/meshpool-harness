@@ -369,7 +369,10 @@ async function prCard(ic) {
 }
 
 /* ================================== pages ================================== */
+/* The Memory and Project pages bind handlers on the persistent #col; drop them whenever the column is reused. */
+function clearColHandlers() { const c = $("#col"); if (c) for (const k of ["onclick", "onkeydown", "ondrop", "ondragover", "ondragleave", "ondragstart"]) c[k] = null; c?.classList.remove("drag"); }
 function goPage(name) {
+  clearColHandlers();
   leaveChat(S.cur); S.cur = null; setWorking(null);
   S.view = "page"; S.page = name; S.pjId = "";
   S.attachments = []; renderAttach?.();
@@ -562,7 +565,7 @@ function exportMenu(e) {
   if (!S.cur) return;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
     {label: "Copy as Markdown", icon: ICON.copy, fn: () => navigator.clipboard.writeText(chatMarkdown()).then(() => toast("Chat copied"), () => toast("Could not copy. Save it as a file instead."))},
-    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: (S.cur.view.title || "chat").replace(/[^\w -]+/g, "").trim().slice(0, 60) + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
+    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: ((S.cur.view.title || "chat").replace(/[\\/:*?"<>|\x00-\x1f]+/g, "").trim().slice(0, 60) || "chat") + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
   ]);
 }
 async function renderBranch() {

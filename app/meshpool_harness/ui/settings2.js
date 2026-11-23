@@ -37,6 +37,7 @@ function closeSettings() { $(".scrim:not(.dlg-scrim):not(.srch-scrim)")?.remove(
 function openSettings(sec = "profile") {
   closePop(); closeCtx(); closeSearch?.();
   $(".scrim:not(.dlg-scrim)")?.remove();
+  if (!SECTIONS.some(x => x[0] === sec)) sec = groupOfSection(sec)[2].find(k => SECTIONS.some(x => x[0] === k)) || "profile";     // a group id (#settings/privacy) opens its first page
   const g0 = groupOfSection(sec);
   const sc = document.createElement("div"); sc.className = "scrim";
   const item = ([k, lb, ic, subs]) => `<button data-g="${k}" data-first="${subs[0]}" data-l="${esc((lb + " " + subs.map(setName).join(" ")).toLowerCase())}" aria-selected="${k === g0[0]}">${ICON[ic] || ""}<span>${lb}</span></button>`;

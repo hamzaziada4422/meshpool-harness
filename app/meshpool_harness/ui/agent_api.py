@@ -131,18 +131,22 @@ def read_meta(sid: str) -> dict:
         return {}
 
 
+_META_LOCK = threading.RLock()      # read-modify-write of meta.json: turn, post-turn and request threads all write it
+
+
 def write_meta(sid: str, **kw) -> dict:
     s = LIVE.get(sid)
     if s is None and not (SESSIONS / sid).is_dir():
         return {}                                     # deleted thread: do not recreate its folder
-    m = read_meta(sid)
-    m.update({k: v for k, v in kw.items() if v is not None})
-    _meta_path(sid).parent.mkdir(parents=True, exist_ok=True)
-    tmp = _meta_path(sid).with_suffix(f".{threading.get_ident()}.tmp")
-    tmp.write_text(json.dumps(m), encoding="utf-8")
-    C.replace_file(tmp, _meta_path(sid))
-    _METAS.pop(sid, None)
-    return m
+    with _META_LOCK:
+        m = read_meta(sid)
+        m.update({k: v for k, v in kw.items() if v is not None})
+        _meta_path(sid).parent.mkdir(parents=True, exist_ok=True)
+        tmp = _meta_path(sid).with_suffix(f".{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(m), encoding="utf-8")
+        C.replace_file(tmp, _meta_path(sid))
+        _METAS.pop(sid, None)
+        return m
 
 
 def _image_text(images: list) -> str:
@@ -783,11 +787,17 @@ class Session:
                 if bad:
                     self.emit({"type": "user", "text": text, "images": []})
                     self.emit({"type": "error", "text": bad})
+                    self.emit({"type": "turn_end"})
                     return
         except Exception:  # noqa: BLE001
             pass
-        caps = self._capability_turn(text)
-        self.state = "working"
+        with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
+            self.state = "working"
+        try:
+            caps = self._capability_turn(text)
+        except BaseException:
+            self.state = "idle"
+            raise
         self._stop_req = False
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
@@ -904,6 +914,7 @@ class Session:
                     self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
                                                               "above; send it again to run it."})
+                    self.emit({"type": "turn_end"})
                     return
                 self._turn_begin()
                 if images:
@@ -1280,8 +1291,13 @@ def create(body: dict) -> dict:
             plan = SV2.profile()["plan_first"]
         except Exception:  # noqa: BLE001
             plan = False
-    s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                kind=kind, model=model, plan=bool(plan))
+    try:
+        s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
+                    kind=kind, model=model, plan=bool(plan))
+    except BaseException:
+        if scratch:                                 # the private folder made above must not be left behind
+            PS.remove_scratch(wd)
+        raise
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -1399,7 +1415,7 @@ def view(sid: str, since: int) -> dict:
         return get(sid).view(since)
     except ProjectMissing as e:
         tr = _transcript(sid) or {}
-        evs = tr.get("events") or events_from_messages(((_saved(sid) or {}).get("messages") or [])[1:])
+        evs = tr.get("events") or events_from_messages(saved_messages(sid))
         evs = [dict(x, i=i) for i, x in enumerate(evs)]
         evs.append({"type": "error", "i": len(evs), "text": f"This chat's project folder ({e}) was moved or deleted, "
                     "so it can't continue here. Its history is below; start a new chat to keep working."})
@@ -1441,6 +1457,8 @@ def listing() -> list:
                     continue
                 d = json.loads(p.read_text(encoding="utf-8"))
             except (OSError, ValueError):
+                continue
+            if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
                 continue
             row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
                    "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
@@ -1484,7 +1502,7 @@ def listing() -> list:
 def thread_action(sid: str, body: dict) -> dict:
     act = body.get("action")
     if act == "rename":
-        write_meta(sid, title=(body.get("title") or "").strip()[:120] or None)
+        write_meta(sid, title=(body.get("title") or "").strip()[:120])
     elif act in ("pin", "unpin"):
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
@@ -1545,6 +1563,8 @@ def search(q: str) -> list:
         try:
             d = json.loads(raw)
         except ValueError:
+            continue
+        if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
             continue
         if read_meta(d["id"]).get("deleted") or any(h["id"] == d["id"] for h in hits):
             continue
@@ -1623,6 +1643,11 @@ def close_all():
     with LOCK:
         for s in LIVE.values():
             s.close()
+    try:
+        from meshpool_harness.ui import workbench as W
+        W.term_stop_all()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _notify(title: str, body: str):
@@ -1637,8 +1662,8 @@ def run_scheduled(t: dict) -> str:
     """Start a new thread for a scheduled task and send its prompt. Returns the thread id."""
     from meshpool_harness import assistant as AS
     folder = t.get("folder") or ""
-    if not folder or not Path(folder).expanduser().is_dir():
-        folder = ""
+    if folder and not Path(folder).expanduser().is_dir():
+        raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
     v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
                 "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
     s = get(v["id"])
@@ -1680,6 +1705,15 @@ def _saved(sid: str) -> dict | None:
         return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
+
+
+def saved_messages(sid: str) -> list:
+    """Messages of a saved chat. session.json is written without the system prompt, so skip index 0 only when it is one."""
+    msgs = (_saved(sid) or {}).get("messages")
+    msgs = msgs if isinstance(msgs, list) else []
+    if msgs and isinstance(msgs[0], dict) and msgs[0].get("role") == "system":
+        return msgs[1:]
+    return msgs
 
 
 def harness_info() -> dict:

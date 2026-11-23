@@ -38,6 +38,21 @@ class LoopResult:
     usage: dict = field(default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0})
 
 
+
+def _budget_prices(model: str) -> tuple[float, float, float]:
+    """USD per million tokens (uncached input, cached input, output) for the MH_BUDGET_USD cap. DeepSeek's list prices
+    for DeepSeek models; a conservative frontier-model price for any other model; MH_BUDGET_PRICES="in,cached,out"
+    overrides both."""
+    raw = os.environ.get("MH_BUDGET_PRICES", "")
+    try:
+        a, b, c = (float(x) for x in raw.split(","))
+        return a, b, c
+    except ValueError:
+        pass
+    if "deepseek" in (model or "").lower():
+        return 0.15, 0.003, 0.6
+    return 3.0, 0.3, 15.0
+
 def build_prefix(system_text: str, tool_names: list[str], skill_index: dict[str, str]) -> tuple[str, list, str]:
     """Byte-stable: no timestamps, ids, or file listings. Same engine+profile -> same bytes -> cache hits."""
     idx = "\n".join(f"- {k}: {v.splitlines()[0][:120]}" for k, v in sorted(skill_index.items()))
@@ -209,8 +224,9 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
         if _budget:
             _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio
-            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * 0.15
-                           + res.usage["cached_tokens"] * 0.003 + res.usage["completion_tokens"] * 0.6) / 1e6
+            _pi, _pc, _po = _budget_prices(model)
+            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * _pi
+                           + res.usage["cached_tokens"] * _pc + res.usage["completion_tokens"] * _po) / 1e6
             if _spent > _budget:
                 res.reason = f"task budget ${_budget:.2f} reached"
                 log_failure(ctx, "budget_cap", False, res.reason)

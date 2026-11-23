@@ -161,6 +161,24 @@ def _clean(text: str | None) -> str:
     return dashless(_CTRL.sub("", (text or "").replace("\x0c", "\n\n")))
 
 
+def _clean_md(text: str | None) -> str:
+    """_clean for markdown: the dash rule applies to prose lines only. Fenced code stays as written and a table row
+    keeps its cells (a lone dash cell, the "n/a" placeholder, becomes a hyphen)."""
+    out, fenced = [], False
+    for ln in _CTRL.sub("", (text or "").replace("\x0c", "\n\n")).split("\n"):
+        st = ln.strip()
+        if st.startswith("```"):
+            fenced = not fenced
+            out.append(ln)
+        elif fenced:
+            out.append(ln)
+        elif st.startswith("|"):
+            out.append("|".join("-" if c.strip() in ("\u2014", "\u2013") else c for c in ln.split("|")))
+        else:
+            out.append(_clean(ln))
+    return "\n".join(out)
+
+
 def _safe_name(filename: str, default: str, ext: str) -> str:
     """A file name that every file system takes: unsafe characters replaced, at most 150 bytes (non-Latin names were
     over the 255-byte limit and the save failed), with its extension."""
@@ -216,11 +234,37 @@ def _free(p: Path) -> Path:
     return p
 
 
+def _new_number_list(doc) -> int:
+    """A new numbering instance (starting at 1) of the "List Number" style, so a second numbered list restarts."""
+    from docx.oxml import parse_xml
+    from docx.oxml.ns import nsdecls, qn
+    numbering = doc.part.numbering_part.element
+    ppr = doc.styles["List Number"].element.pPr
+    base = ppr.numPr.numId.val if ppr is not None and ppr.numPr is not None and ppr.numPr.numId is not None else None
+    if base is None:
+        return 0
+    abstract = next(n for n in numbering.findall(qn("w:num")) if int(n.get(qn("w:numId"))) == int(base)
+                    ).find(qn("w:abstractNumId")).get(qn("w:val"))
+    new = max(int(n.get(qn("w:numId"))) for n in numbering.findall(qn("w:num"))) + 1
+    numbering.append(parse_xml(
+        f'<w:num {nsdecls("w")} w:numId="{new}"><w:abstractNumId w:val="{abstract}"/>'
+        '<w:lvlOverride w:ilvl="0"><w:startOverride w:val="1"/></w:lvlOverride></w:num>'))
+    return new
+
+
+def _set_num(par, num_id: int):
+    if not num_id:
+        return
+    ppr = par._p.get_or_add_pPr()
+    ppr.get_or_add_numPr().get_or_add_numId().val = num_id
+    ppr.numPr.get_or_add_ilvl().val = 0
+
+
 def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
     from docx import Document
     from docx.shared import Pt
     name = _safe_name(filename, "document.docx", ".docx")
-    markdown, title = _clean(markdown), _clean(title) or None
+    markdown, title = _clean_md(markdown), _clean(title) or None
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     doc = Document()
@@ -244,9 +288,12 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
             pass
     lines = markdown.replace("\r\n", "\n").split("\n")
     i = 0
+    num_id = None                                          # numbering instance of the numbered list being written
     while i < len(lines):
         ln = lines[i]
         s = ln.strip()
+        if s and not re.match(r"^\d+[.)]\s+", s):
+            num_id = None                                  # the next "1." starts a new list
         if s.startswith("```"):
             block = []
             i += 1
@@ -290,7 +337,11 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif m := re.match(r"^[-*+]\s+(.*)", s):
             _runs(doc.add_paragraph(style="List Bullet"), m.group(1))
         elif m := re.match(r"^\d+[.)]\s+(.*)", s):
-            _runs(doc.add_paragraph(style="List Number"), m.group(1))
+            if num_id is None:
+                num_id = _new_number_list(doc)
+            par = doc.add_paragraph(style="List Number")
+            _set_num(par, num_id)
+            _runs(par, m.group(1))
         elif s.startswith(">"):
             _runs(doc.add_paragraph(style="Quote"), s.lstrip("> "))
         elif s in ("---", "***"):
@@ -327,7 +378,7 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
         return "This edits .docx, .xlsx and .pptx files.", True
     if not isinstance(operations, list) or not operations:
         return "Give `operations`: a list of {op, ...} steps.", True
-    out = p if in_place else (_resolve(output) if output else p.with_name(f"{p.stem} (edited){ext}"))
+    out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
     if out != p:
         shutil.copyfile(p, out)
     done, errors = [], []
@@ -480,8 +531,12 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
         return 0
     n = 0
     for pp in paragraphs:
-        while find in pp.text:
-            runs, pos, start = pp.runs, 0, pp.text.index(find)
+        search = 0                                           # continue after the last replacement: a replacement
+        while True:                                          # that contains `find` must not be matched again
+            start = pp.text.find(find, search)
+            if start < 0:
+                break
+            runs, pos = pp.runs, 0
             first = None
             for r in runs:
                 a, b = pos, pos + len(r.text)
@@ -499,6 +554,7 @@ def _replace_in_paragraphs(paragraphs, find: str, replace: str) -> int:
             if first is None:
                 break
             n += 1
+            search = start + len(replace)
     return n
 
 
@@ -518,7 +574,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     from reportlab.lib.units import cm
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
-    markdown, title = _clean(markdown), _clean(title) or None
+    markdown, title = _clean_md(markdown), _clean(title) or None
     out = _project() / "Meshpool outputs"
     out.mkdir(parents=True, exist_ok=True)
     st = getSampleStyleSheet()
@@ -740,8 +796,10 @@ TOOLS = {
 
 
 def _forge_tool(name):
-    def call(path: str, **kw):
+    def call(path: str | None = None, **kw):
         from engines.forge import tools as FT
+        if path is None:                        # tools that take no file (slide_layouts: message, kind)
+            return getattr(FT, name)(**kw)
         p = _resolve(path)
         if not _readable(p):                    # they run without asking too: the same fence as read_document
             return (f"{path} is outside the project. Ask the user to attach it (or open the folder it is in as "

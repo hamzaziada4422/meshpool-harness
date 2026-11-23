@@ -203,10 +203,15 @@ def finish_check(answer, artifacts, ws, report=None):
         if not os.path.exists(p):
             return f"ENGINE CHECK: artifact not found: {a}"
         r = check(p)
-        from engines.sheets.qa import value
         if "Checks" in r["stats"]["sheets"]:
-            try:
-                status = value(p, "Checks!F3")
+            try:                               # the copy check() already recalculated: no second LibreOffice run
+                rc = r["stats"].get("recalculated_copy")
+                if rc:
+                    from openpyxl import load_workbook as _lw
+                    from engines.sheets.qa import read_ref
+                    status = read_ref(_lw(rc, data_only=True), "Checks!F3")
+                else:
+                    status = None
             except Exception:
                 status = None
             if status not in (None, "OK"):
@@ -578,7 +583,7 @@ class WorkbookReview:
         except Exception as e:  # noqa: BLE001 - a digest failure is reported as a review that could not run
             text = ""
             err = f"digest failed: {type(e).__name__}: {e}"
-        (box / "digest.txt").write_text(text)
+        (box / "digest.txt").write_text(text, encoding="utf-8")
         res, used, errors = None, None, []
         if text:
             material = (f"Workbook to review: {rel}. The digest below was built by the engine from the recalculated "
@@ -937,4 +942,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
         out["artifacts"] = tidy(ws, out["artifacts"])
     except Exception:                          # noqa: BLE001 - tidying never costs the result
         pass
+    note = getattr(ws, "pipeline_note", None)
+    if note:
+        out["answer"] = ((out.get("answer") or "") + "\n\n" + note).strip()
     return out

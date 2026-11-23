@@ -21,9 +21,9 @@ function routeMenu(anchor) {
   anchor.appendChild(m);
   const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
   setTimeout(() => document.addEventListener("mousedown", close), 0);
-  m.addEventListener("keydown", e => { if (e.key === "Escape") m.remove(); });
+  m.addEventListener("keydown", e => { if (e.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close); } });
   m.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    m.remove();
+    m.remove(); document.removeEventListener("mousedown", close);
     const c = S.cur; if (!c) return;
     try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
     catch (e) { toast(e.message); }
@@ -177,14 +177,14 @@ function toast(text, ms = 5000, action) {
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
-function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false}) {
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
     sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
-    const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
+    const val = () => input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
     const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
@@ -799,6 +799,7 @@ function restoreDraft() {
 // folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
 function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
+  clearColHandlers();
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : "";
@@ -848,6 +849,7 @@ function commitStage(cur) {
   if (cur.live) easeStart(cur.live);
 }
 function openThread(id, fresh) {
+  clearColHandlers();
   const seen = S.threads.find(t => t.id === id);
   if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
   store("last_chat", id);
@@ -1037,7 +1039,7 @@ function mdRender(node, text) {
 function inline(s) {
   return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 function md(src) {
   const parts = String(src || "").split(/```/);
@@ -1048,7 +1050,7 @@ function md(src) {
       return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
     }
     const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
-    p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
+    p = p.replace(/(^|\n)([ \t]*)\$\$([\s\S]+?)\$\$/g, (_, pre, sp, t) => `${pre}${sp}\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
       .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
@@ -1123,7 +1125,7 @@ function applyEv(ev) {
       { const txt = stripGoal(ev.text);
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
-      cur.lastText = ev.text || cur.lastText;
+      cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
       const g = workGroup();
@@ -1166,7 +1168,7 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
@@ -2423,7 +2425,9 @@ function permStep(host) {
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
   $("#oAll", card).onclick = async () => { $("#oAll", card).disabled = true; await draw({id: "all"}); $("#oAll", card).disabled = false; $("#oAll", card).textContent = "Ask again"; };
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#onbPerm")) draw(); });
+  if (window._permVis) document.removeEventListener("visibilitychange", window._permVis);
+  window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
+  document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
   if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
   draw();
@@ -2677,7 +2681,7 @@ async function prDetail() {
   $("#prvRev").onclick = () => { closePRView(); sendCmd(`Review pull request #${p.number} (${p.url}): ${p.head} into ${p.base}. Read its diff (git fetch, then git diff origin/${p.base}...origin/${p.head}, or the GitHub tools) and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.`); };
   $("#prvAll").onclick = () => $$(".prv-file", M).forEach(d => d.open = true);
   $("#prvMerge")?.addEventListener("click", async () => {
-    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. Its checks passed.`, ok: "Merge"})) return;
+    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. ${p.verdict === "none" ? "No checks have run." : "Its checks passed."}`, ok: "Merge"})) return;
     try { await post("/api/git/pr", {root: PRV.root, action: "merge", pr: p.number}); toast("Pull request merged"); prLoad(true); } catch (e) { toast(e.message, 6000); }
   });
   $("#prvCmGo")?.addEventListener("click", async () => {

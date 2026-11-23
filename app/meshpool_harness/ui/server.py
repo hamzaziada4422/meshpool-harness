@@ -154,8 +154,8 @@ def test_connection(values: dict | None = None) -> dict:
     from meshpool_harness.cli import ping
     v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
     if v.get("MESHPOOL_API_KEY"):
-        v["MESHPOOL_API_KEY"] = re.sub(r"^(?:bearer\s+)", "", re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "",
-                                                                     v["MESHPOOL_API_KEY"]), flags=re.I)
+        v["MESHPOOL_API_KEY"] = re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "", re.sub(
+            r"^(?:bearer\s+)", "", v["MESHPOOL_API_KEY"].strip("'\" "), flags=re.I))
     try:
         _key_follows_host(v)
     except ValueError as e:

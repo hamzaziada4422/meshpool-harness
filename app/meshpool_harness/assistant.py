@@ -145,8 +145,16 @@ def _tasks_lock():
 QUIET_DEFAULT = {"on": False, "start": "22:00", "end": "07:00"}
 
 
+def _settings_raw() -> dict:
+    try:
+        d = json.loads(_read(_dir() / "settings.json") or "{}")
+    except ValueError:
+        return {}
+    return d if isinstance(d, dict) else {}
+
+
 def settings() -> dict:
-    d = json.loads(_read(_dir() / "settings.json") or "{}")
+    d = _settings_raw()
     q = d.get("quiet_hours") if isinstance(d.get("quiet_hours"), dict) else {}
     return {"memory_on": d.get("memory_on", True), "instructions_on": d.get("instructions_on", True),
             "learn_from_edits": d.get("learn_from_edits", True), "insights_on": d.get("insights_on", True),
@@ -154,7 +162,7 @@ def settings() -> dict:
 
 
 def save_settings(**kw) -> dict:
-    d = json.loads(_read(_dir() / "settings.json") or "{}")
+    d = _settings_raw()
     for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on"):
         if k in kw:
             d[k] = bool(kw[k])
@@ -453,6 +461,29 @@ def tasks() -> list[dict]:
         return []
 
 
+def _tasks_rw() -> list[dict]:
+    """The task list for a read-modify-write. A missing file is an empty list; an unreadable file raises (so a
+    transient lock never wipes the list); a corrupt file is kept as schedules.json.bak before starting fresh."""
+    p = _sfile()
+    try:
+        raw = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        raise RuntimeError(f"could not read {p.name}: {e}") from e
+    try:
+        d = json.loads(raw or "[]")
+        if isinstance(d, list):
+            return d
+    except ValueError:
+        pass
+    try:
+        os.replace(p, p.with_name(p.name + ".bak"))
+    except OSError:
+        pass
+    return []
+
+
 def _save_tasks(rows: list[dict]):
     _write(_sfile(), json.dumps(rows, indent=1))
 
@@ -537,7 +568,7 @@ def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str =
                      "only_on_change": bool(only_on_change), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     with _tasks_lock():
-        rows = tasks()
+        rows = _tasks_rw()
         rows.append(t)
         _save_tasks(rows)
     return t
@@ -545,7 +576,7 @@ def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str =
 
 def update_task(tid: str, **kw) -> dict:
     with _tasks_lock():
-        rows = tasks()
+        rows = _tasks_rw()
         for n, t in enumerate(rows):
             if t["id"] == tid:
                 new = dict(t)
@@ -565,7 +596,7 @@ def update_task(tid: str, **kw) -> dict:
 
 def delete_task(tid: str) -> bool:
     with _tasks_lock():
-        rows = tasks()
+        rows = _tasks_rw()
         keep = [t for t in rows if t["id"] != tid and t.get("name", "").lower() != tid.lower()]
         _save_tasks(keep)
     return len(keep) != len(rows)
@@ -577,7 +608,10 @@ def due() -> list[dict]:
     now = time.time()
     out = []
     with _tasks_lock():
-        rows = tasks()
+        try:
+            rows = _tasks_rw()
+        except RuntimeError:
+            return []                                           # unreadable right now: run nothing, lose nothing
         changed = False
         for t in rows:
             if t.get("enabled") and t.get("next_run") and t["next_run"] <= now:
@@ -612,7 +646,7 @@ def describe(t: dict) -> str:
 
 def set_thread(tid: str, sid: str):
     with _tasks_lock():
-        rows = tasks()
+        rows = _tasks_rw()
         for t in rows:
             if t["id"] == tid:
                 t["last_thread"] = sid

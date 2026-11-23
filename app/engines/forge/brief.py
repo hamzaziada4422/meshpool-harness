@@ -60,9 +60,12 @@ def slide_count(text: str) -> int | None:
     apply() writes wins over the request's own wording. None when it says none. The engine parses with this too."""
     brief = re.search(r"\n\nBrief: ([^\n]*)\s*$", text or "")
     for part in ([brief.group(1)] if brief else []) + [text or ""]:
-        m = _SLIDES.search(part)
-        if m:
-            return int(m.group(1) or m.group(2))
+        found = [m for m in _SLIDES.finditer(part)]
+        # a figure tied to "slides" is the deck; "80-page report" is only the source's size, so "pages" count
+        # only when no "slides" figure is present
+        found.sort(key=lambda m: bool(m.group(1)) and m.group(0).rstrip().lower().endswith(("page", "pages")))
+        if found:
+            return min(int(found[0].group(1) or found[0].group(2)), 60)
     return None
 
 

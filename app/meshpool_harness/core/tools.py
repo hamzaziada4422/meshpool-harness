@@ -274,6 +274,8 @@ class ToolError(Exception):
 def validate(name: str, raw_args, allowed: list[str]) -> dict:
     if name not in allowed:
         raise ToolError(f"unknown tool '{name}'. Available: {', '.join(allowed)}")
+    if isinstance(raw_args, str) and raw_args.strip() in ("", "null"):
+        raw_args = "{}"                          # some models/gateways send "" for a no-argument call
     try:
         args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args or {})
     except json.JSONDecodeError as e:
@@ -430,7 +432,7 @@ class Workspace:
         f = self.run_dir / f"out_{n:03d}_{label}.txt"
         try:                                     # the task may delete .run (e.g. git clean): recreate it
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(text)
+            f.write_text(text, encoding="utf-8", errors="replace")
         except OSError:
             return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
         return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
@@ -483,6 +485,8 @@ class Workspace:
         lines = shown(text).splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
+        if s > len(lines) and lines:
+            return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
@@ -520,6 +524,8 @@ class Workspace:
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
+        if not base.exists():
+            raise ToolError(f"path not found: {path}")
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
         out, matched, truncated = [], 0, False
         for f in files:
@@ -576,9 +582,14 @@ class Workspace:
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
-        res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts
-                     and (not inside_only or self._inside(p)))
+        if os.path.isabs(pattern) or re.match(r"^[A-Za-z]:", pattern) or ".." in Path(pattern).parts:
+            raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
+        try:
+            res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
+                         if ".git" not in p.parts and "node_modules" not in p.parts
+                         and (not inside_only or self._inside(p)))
+        except (NotImplementedError, ValueError) as e:
+            raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
 
     @staticmethod
@@ -1004,7 +1015,7 @@ class Workspace:
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
                     from meshpool_harness.core import sandbox as _SB
-                    r = self._proc(_SB.wrap([bash, "-c", command], self.root), env, timeout_s, cwd=cwd)
+                    r = self._proc(_SB.wrap([bash, "-c", command], self.root, cwd=cwd), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
@@ -1021,7 +1032,7 @@ class Workspace:
                               "secs": round(time.time() - t0, 1), "tail": out[-600:]})
         try:                                     # full outputs: evidence for number tracing; the task may have
             self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
-            with (self.run_dir / "commands.log").open("a") as f:
+            with (self.run_dir / "commands.log").open("a", encoding="utf-8", errors="replace") as f:
                 f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
         except OSError:
             pass
@@ -1061,6 +1072,9 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         if bash:
             args, shell = [bash, "-c", command], False
+            if os.name != "nt":
+                from meshpool_harness.core import sandbox as _SB
+                args = _SB.wrap(args, self.root)
         elif os.name == "nt":
             args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
         else:

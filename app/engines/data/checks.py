@@ -28,6 +28,11 @@ def numbers_in(text: str) -> list[tuple[str, float, bool]]:
     return out
 
 
+_SCALE = re.compile(r"\s*(thousand|million|billion|trillion|bn|mn|k|m|b)\b", re.I)
+_SCALES = {"thousand": 1e3, "k": 1e3, "million": 1e6, "mn": 1e6, "m": 1e6, "billion": 1e9, "bn": 1e9, "b": 1e9,
+           "trillion": 1e12}
+
+
 def _year(tok: str) -> bool:
     """A plain year such as 2024; '$2,045', '2045%' or '2045.0' are amounts, not years."""
     return re.fullmatch(r"(19|20)\d\d|2100", tok) is not None
@@ -43,12 +48,22 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
     (allowing rounding, and percent <-> fraction). Returns untraced numbers."""
     logged = [v for _, v, _ in numbers_in(code_output)]
     missing = []
-    for tok, v, pct in numbers_in(answer):
+    for m in NUM.finditer(answer):
+        tok = m.group()
+        v, pct = _num(tok)
+        if v is None:
+            continue
+        if tok[0] in "-−" and m.start() > 0 and answer[m.start() - 1].isalnum():
+            continue                                   # "COVID-19", "Top-20": a hyphen, not a minus sign
         if v in TRIVIAL or _year(tok):
             continue
         d = _decimals(tok)
         # (candidate, decimals it is written to): percent <-> fraction moves the decimal point two places
         cands = [(v, d), (v / 100, d + 2)] if pct else [(v, d), (v * 100, d - 2)]
+        sc = _SCALE.match(answer, m.end()) if not pct else None
+        if sc:                                         # "1.2 million" against a printed 1200000
+            cands.append((v * _SCALES[sc.group(1).lower()], 0))
+        cands += [(-c, nd) for c, nd in cands]   # "fell 5.2%" against a printed -5.2 (and back)
         ok = False
         for c, nd in cands:
             for l in logged:

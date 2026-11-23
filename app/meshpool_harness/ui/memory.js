@@ -104,7 +104,7 @@ async function memHistoryHTML() {
   const h = (await api("/api/memory/history")).history;
   if (!h.length) return `<div class="mem-empty"><b>No changes yet.</b><span>Edits show up here.</span></div>`;
   const verb = {added: "Added", edited: "Edited", archived: "Archived", deleted: "Deleted", restored: "Restored", migrated: "Moved from earlier memory", changed: "Changed", reviewed: "Confirmed"};
-  return `<ol class="mem-hist">${h.map(r => `<li><span class="when">${esc(memDate(r.ts))}</span><span class="what"><b>${verb[r.action] || r.action}</b> ${esc(r.text || "")}<small>${r.by === "you" ? "You" : "Meshpool"}: ${esc(r.reason || "")}${r.before_text && r.action === "edited" ? ` · was “${esc(r.before_text)}”` : ""}</small></span>${["archived", "deleted", "edited"].includes(r.action) ? `<button class="btn" data-restore="${r.action}|${esc(r.id)}|${esc(r.before_text || "")}">Restore</button>` : ""}</li>`).join("")}</ol>`;
+  return `<ol class="mem-hist">${h.map(r => `<li><span class="when">${esc(memDate(r.ts))}</span><span class="what"><b>${verb[r.action] || r.action}</b> ${esc(r.text || "")}<small>${r.by === "you" ? "You" : "Meshpool"}: ${esc(r.reason || "")}${r.before_text && r.action === "edited" ? ` · was “${esc(r.before_text)}”` : ""}</small></span>${["archived", "deleted", "edited"].includes(r.action) ? `<button class="btn" data-restore="${r.action}|${esc(r.id)}" data-before="${esc(r.before_text || "")}">Restore</button>` : ""}</li>`).join("")}</ol>`;
 }
 function memReviewHTML(d) {
   if (!d.review.length) return `<div class="mem-empty"><b>Nothing to review.</b><span>Facts no chat has used for 60 days, and facts that expired, wait here for a yes or no.</span></div>`;
@@ -152,7 +152,7 @@ function memScopeMenu(e, id) {
     ...d.projects.map(p => ({label: p.name, checked: f.scope === "project:" + p.id ? true : undefined, fn: () => memAct({action: "scope", id, scope: "project:" + p.id}, {text: `Moved to ${p.name}.`, body: () => ({action: "scope", id, scope: f.scope})})}))]);
 }
 async function memExpiry(id) {
-  const v = await ask({title: "Forget on", text: "Date as YYYY-MM-DD. Empty removes it.", value: "", ok: "Set"});
+  const v = await ask({title: "Forget on", text: "Date as YYYY-MM-DD. Empty removes it.", value: "", ok: "Set", allowEmpty: true});
   if (v === null) return;
   if (v && isNaN(Date.parse(v))) return toast("Use a date like 2026-12-31.");
   memAct({action: "expiry", id, until: v || null});
@@ -195,7 +195,7 @@ function bindMemory(d) {
     if (D.scope) return memScopeMenu({type: "click", currentTarget: t}, D.scope);
     if (D.chat) return openThread?.(D.chat);
     if (D.still) return memAct({action: "still_true", id: D.still});
-    if (D.restore) { const [act, id, text] = D.restore.split("|"); return memAct(act === "edited" ? {action: "restore_text", id, text} : {action: "unarchive", id}).then(() => act === "deleted" && post("/api/memory", {action: "undelete", id}).then(() => memLoad(true))); }
+    if (D.restore) { const [act, id] = D.restore.split("|"), text = D.before || ""; return memAct(act === "edited" ? {action: "restore_text", id, text} : {action: "unarchive", id}).then(() => act === "deleted" && post("/api/memory", {action: "undelete", id}).then(() => memLoad(true))); }
   };
   col.onkeydown = e => {
     if (e.target.classList.contains("mem-edit")) {

@@ -71,7 +71,18 @@ for f in sys.argv[1:]:
     try:
         text = open(f, encoding="utf-8").read()
         if f.endswith(".json"):
-            json.loads(text)
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:
+                # JSONC (tsconfig, .vscode/*, devcontainer): comments and trailing commas are legal there
+                import re
+                t = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
+                           lambda m: m.group(0) if m.group(0).startswith('"') else " ", text, flags=re.S)
+                t = re.sub(r',(\s*[}\]])', r'\1', t)
+                try:
+                    json.loads(t)
+                except json.JSONDecodeError:
+                    raise
         elif f.endswith(".toml"):
             try:
                 import tomllib
@@ -148,7 +159,7 @@ PACKS = {
     ], "go test ./..."),
     "java": Pack("java", "Java: run diagnostics after edits; use the project's build tool (Maven or Gradle) for "
                  "tests.", [
-        Check("javac", (".java",), "javac", "javac -d \"${TMPDIR:-/tmp}/mh-javac\" -Xlint:none {files} 2>&1"),
+        Check("javac", (".java",), "javac", "javac -d \"${{TMPDIR:-/tmp}}/mh-javac\" -Xlint:none {files} 2>&1"),
     ], "mvn -q test"),
     "c": Pack("c", "C: run diagnostics (compiler syntax check) after edits.", [
         Check("cc -fsyntax-only", (".c", ".h"), "cc", "cc -fsyntax-only {files} 2>&1"),
@@ -448,6 +459,11 @@ _RUNNER = re.compile(r"`([^`\n]{2,160})`|(?<![\w/.-])((?:python3?|node|deno|ruby
 _TESTFILE = re.compile(r"(?<![\w/.-])((?:[\w./-]*/)?test_[\w-]+\.py|(?:[\w./-]*/)?[\w-]+_test\.py|(?:[\w./-]*/)?[\w-]+\.test\.[jt]s)\b")
 _STARTS = ("python", "python3", "node", "deno", "ruby", "bash", "sh", "pytest", "npm", "yarn", "pnpm", "cargo", "go",
            "make", "./")
+# only these are re-run automatically before the first turn: they test or run a named file, never publish/deploy/install
+_SAFE_RUN = re.compile(r"^(?:(?:python3?|node|deno|ruby)\s+[\w./-]+\.(?:py|js|mjs|cjs|ts|rb)(?:\s+.*)?"
+                       r"|pytest(?:\s+.*)?|python3?\s+-m\s+pytest(?:\s+.*)?|npm (?:run )?test|yarn test|pnpm test"
+                       r"|cargo test(?:\s+.*)?|go test(?:\s+.*)?)$")
+_UNSAFE_ARGS = re.compile(r"--(?:wipe|delete|force|publish|deploy)\b|\brm\b|\bsudo\b")
 
 
 def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
@@ -456,7 +472,9 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
     py = "python3" if shutil.which("python3") else "python"
     for m in _RUNNER.finditer(text or ""):
         c = (m.group(1) or m.group(2) or "").strip()
-        if not c or not c.split()[0].startswith(_STARTS) or any(ch in c for ch in ";&|><$"):
+        if not c or c.split()[0] not in _STARTS or any(ch in c for ch in ";&|><$"):
+            continue
+        if not _SAFE_RUN.match(c) or _UNSAFE_ARGS.search(c):
             continue
         files = [t for t in c.split()[1:] if re.search(r"\.\w{1,4}$", t)]
         if files and not all((root / f).exists() for f in files):
@@ -469,7 +487,7 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
         if not (root / f).is_file():
             continue
         if f.endswith(".py"):
-            body = (root / f).read_text(errors="replace")
+            body = (root / f).read_text(encoding="utf-8", errors="replace")
             c = f"{py} -m pytest -x -q {f}" if re.search(r"^\s*def test_", body, re.M) and shutil.which("pytest") \
                 else f"{py} {f}"
         else:

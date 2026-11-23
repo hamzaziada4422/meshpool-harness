@@ -35,7 +35,7 @@ renderTop = function () {
 
 /* ---------- X-ray ---------- */
 function popAt(anchor, html, cls = "") {
-  $(".mem-pop")?.remove();
+  { const old = $(".mem-pop"); if (old) { if (old.close) old.close(); else old.remove(); } }
   const p = document.createElement("div"); p.className = "mem-pop " + cls; p.setAttribute("role", "dialog"); p.innerHTML = html; document.body.appendChild(p);
   const r = anchor.getBoundingClientRect();
   p.style.left = Math.max(8, Math.min(innerWidth - p.offsetWidth - 8, r.left)) + "px";
@@ -48,7 +48,7 @@ function popAt(anchor, html, cls = "") {
   p.close = close; return p;
 }
 async function xray010(anchor) {
-  const q = new URLSearchParams({chat: S.cur?.id || "", text: $("#input").value || "", project: S.cur?.view?.project_id || S.draft.pid || "", workdir: S.cur ? "" : (S.draft.project || ""), incognito: inc010() ? "1" : ""});
+  const q = new URLSearchParams({chat: S.cur?.id || "", text: ($("#input").value || "").slice(0, 4000), project: S.cur?.view?.project_id || S.draft.pid || "", workdir: S.cur ? "" : (S.draft.project || ""), incognito: inc010() ? "1" : ""});
   let x; try { x = await api("/api/xray?" + q); } catch (e) { return toast(e.message); }
   const exclude = new Set([...(x.excluded || []).map(f => f.id), ...(S.cur ? [] : (S.draft.exclude || []))]);
   const draw = () => `<h4>What the agent sees</h4><p class="note">${esc(x.note)} ${x.incognito ? "Incognito: no memory." : x.memory_on ? "" : "Memory is off."}</p>
@@ -153,7 +153,7 @@ window.runInsightAction = async function (a, ctx) {
   const p = a.payload || {};
   const kind = {draft_skill: "skill", make_project: "project", new_chat: "rerun", set_default: "route", teach_accept: "teach"}[a.kind] || a.kind;
   if (kind === "schedule") {                     // the form opens prefilled; nothing is saved until Create task
-    const v = await taskDialog({name: p.name || "", prompt: p.prompt || "", when: p.when || "daily", time: p.time || "09:00", day: p.day || "mon", minutes: p.minutes || 60, only_on_change: p.only_on_change !== false});
+    const v = await taskDialog({name: p.name || "", prompt: p.prompt || "", when: p.when || "daily", time: p.time || "09:00", day: p.day || "mon", minutes: p.minutes || 60, only_on_change: p.only_on_change !== false, kind: p.kind, folder: p.folder});
     if (v && await taskSave(v)) { toast("Task created.", 8000, {label: "Open", fn: () => goPage("scheduled")}); }
     return;
   }

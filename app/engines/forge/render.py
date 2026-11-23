@@ -700,7 +700,7 @@ def _header(ctx, s, sl, n, title_w=None):
     tf.text = ""
     if not band:                                       # the title starts on the body's left edge, not inset from it
         tf.margin_left = 0                             # (the right inset stays: a wide face sets past it)
-    title = re.sub(r"\*\*", "", s["title"])
+    title = re.sub(r"\*\*", "", str(s.get("title") or ""))
     tsize = _title_size(title, title_w or (RIGHT - LEFT))
     if tsize is None:
         ctx.miss(n, "the title", max(3, len(title.split()) // 4))
@@ -3892,7 +3892,7 @@ def _summary_panel(ctx, s, sl, n) -> bool:
     tree.insert(2, panel._element)
     t = sl.shapes.title
     tw = colx24(8) - 0.32 - LEFT - 0.35
-    title = re.sub(r"\*\*", "", s["title"])
+    title = re.sub(r"\*\*", "", str(s.get("title") or ""))
     tz = next((z for z in (30, 28, 26, 24, 22, 20) if _need([{"text": title, "size": z, "bold": True,
                                                               "heading": True}], tw) <= 2.7), 20)
     t.left, t.top, t.width = Inches(LEFT), Inches(0.75), Inches(tw)

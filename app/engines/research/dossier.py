@@ -185,8 +185,8 @@ def build_dossier(brief: str, facts: list[dict], *, client, models: list[str], o
     open_ = [q["question"] for q in log if not q.get("facts")]
     d = {"identity": ident, "questions": log, "facts": new, "changes": changes, "open": open_,
          "seconds": round(time.time() - t0, 1), "failures": res.get("failures") or []}
-    (out / "dossier.json").write_text(json.dumps(d, indent=1, default=str))
-    (out / "dossier.md").write_text(to_markdown(d))
+    (out / "dossier.json").write_text(json.dumps(d, indent=1, default=str), encoding="utf-8")
+    (out / "dossier.md").write_text(to_markdown(d), encoding="utf-8")
     return d
 
 

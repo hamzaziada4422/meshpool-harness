@@ -245,9 +245,11 @@ def clear_chats() -> int:
     """Delete every chat (and the private folders of chats that had no folder). Memory, projects and settings stay."""
     from meshpool_harness.ui import agent_api as A
     n = 0
-    for r in A.listing():
+    ids = [d.name for d in sorted(A.SESSIONS.iterdir()) if d.is_dir() and not d.name.startswith("sub-")
+           and (d / "session.json").is_file()] if A.SESSIONS.is_dir() else []
+    for sid in ids:
         try:
-            A.thread_action(r["id"], {"action": "delete"})
+            A.thread_action(sid, {"action": "delete"})
             n += 1
         except Exception:  # noqa: BLE001
             pass

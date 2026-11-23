@@ -367,8 +367,12 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
         env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
-    r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    try:
+        r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
+                         "connection and try again.") from None
     if check and r.returncode != 0:
         raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
     return r.stdout
@@ -383,8 +387,17 @@ def git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", check=False)
-    files = [{"status": line[:2].strip(), "path": line[3:]} for line in porcelain.splitlines() if line.strip()]
+    porcelain = _git(r, "status", "--porcelain", "-z", check=False)
+    files, parts = [], porcelain.split("\0")
+    i = 0
+    while i < len(parts):
+        ent = parts[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        if ent[0] in "RC" or ent[1] in "RC":          # a rename or copy: the old path follows as its own entry
+            i += 1
+        files.append({"status": ent[:2].strip(), "path": ent[3:]})
     ahead = behind = 0
     try:
         ab = _git(r, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
@@ -466,8 +479,15 @@ def _open_pr(r: Path, body: dict) -> dict:
     if token:
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}", headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "Meshpool"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            base = json.loads(resp.read())["default_branch"]
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                base = json.loads(resp.read())["default_branch"]
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"GitHub did not let Meshpool read {slug} (HTTP {e.code}). Check the GitHub "
+                             "connection in Settings.") from None
+        except (urllib.error.URLError, OSError, ValueError, KeyError):
+            raise ValueError("Could not reach GitHub to look up the default branch. Check your network "
+                             "connection and try again.") from None
         data = json.dumps({"title": title, "head": st["branch"], "base": body.get("base") or base,
                            "body": desc, "draft": bool(body.get("draft"))}).encode()
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}/pulls", data=data, method="POST", headers={
@@ -532,6 +552,9 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
          "p": None, "lock": threading.Lock()}
+    done = [k for k, v in TERMS.items() if v["rc"] is not None]
+    for k in done[:-20]:                         # finished commands keep their output, but only the last few
+        TERMS.pop(k, None)
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -565,19 +588,41 @@ def term_view(tid: str, since: int) -> dict:
             "running": rc is None}
 
 
+def _term_kill(t: dict, wait: float = 3.0) -> None:
+    """Stop a terminal command and everything it started: SIGTERM, then SIGKILL if it is still there."""
+    p = t.get("p")
+    if not p or p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
+        else:
+            import signal
+            pg = os.getpgid(p.pid)
+            os.killpg(pg, signal.SIGTERM)
+            try:
+                p.wait(wait)
+            except subprocess.TimeoutExpired:
+                os.killpg(pg, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def term_stop(tid: str) -> dict:
     t = TERMS.get(tid)
     if t and t["p"] and t["rc"] is None:
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(t["p"].pid)], capture_output=True,
-                               creationflags=NO_WINDOW)
-            else:
-                import signal
-                os.killpg(os.getpgid(t["p"].pid), signal.SIGTERM)
-        except Exception:  # noqa: BLE001
-            t["p"].kill()
+        _term_kill(t)
     return term_view(tid, 0) if t else {}
+
+
+def term_stop_all() -> None:
+    """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
+    for t in list(TERMS.values()):
+        if t.get("rc") is None:
+            _term_kill(t, 1.0)
 
 
 # ======================================== usage ===================================================================
@@ -978,7 +1023,8 @@ def pr_action(root: str, body: dict) -> dict:
     if act == "merge":
         d = pr_detail(root, n)
         if not d["can_merge"]:
-            why = ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
+            why = "it is not open" if d.get("state") != "open" else \
+                ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
                 "it is a draft" if d["draft"] else "GitHub says it cannot merge yet" if d["mergeable"] is not True \
                 else "it is not open"
             raise ValueError(f"Not merged: {why}.")

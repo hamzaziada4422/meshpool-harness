@@ -21,8 +21,11 @@ import re
 import time
 from pathlib import Path
 
-CAPITAL_ALLOCATION = re.compile(r"(?i)capital allocation|return (?:more )?cash|buy ?backs?|special dividend|"
-                                r"uses of cash|cash return")
+CAPITAL_ALLOCATION = re.compile(r"(?i)capital allocation|return (?:more )?cash|uses of cash|cash return")
+# a buyback / special dividend only selects the recipe when the request is not mainly about another model
+_WEAK_CA = re.compile(r"(?i)buy ?backs?|special dividend")
+_OTHER_MODEL = re.compile(r"(?i)three[- ]statement|\bdcf\b|\blbo\b|\bcomps\b|comparable|valuation|\beps\b|"
+                          r"merger|accretion|credit|3[- ]statement|income statement|balance sheet")
 
 # name, label, number format, what the model must give (units)
 CA_INPUTS = [
@@ -55,7 +58,10 @@ def applies(task: str) -> str | None:
     """The recipe for this request, or None (the agent builds it)."""
     if os.environ.get("MH_SHEETS_PIPELINE", "1") == "0":
         return None
-    return "capital_allocation" if CAPITAL_ALLOCATION.search(task or "") else None
+    t = task or ""
+    if CAPITAL_ALLOCATION.search(t):
+        return "capital_allocation"
+    return "capital_allocation" if _WEAK_CA.search(t) and not _OTHER_MODEL.search(t) else None
 
 
 PROMPT = """You fill the inputs of a capital-allocation model for a finance professional. Use ONLY the facts and

@@ -198,12 +198,12 @@ function repoSelector(anchor) {
     try { repos = (await api("/api/github/repos?q=" + encodeURIComponent(q || ""))).repos; } catch (e) { repos = []; p.note = e.message; $(".lp-n", p) && ($(".lp-n", p).innerHTML = `${esc(e.message)} ${/Connect GitHub/.test(e.message) ? `<button class="linkbtn" id="lpConn">Connect GitHub</button>` : ""}`); $("#lpConn", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); }); }
     p.redraw();
   };
-  p = listPop({anchor, placeholder: "Search repositories", width: 340, empty: "Loading repositories…",
+  p = listPop({anchor, placeholder: "Search repositories", width: 340, empty: "No repositories found.",
     note: `Don’t see yours? <button class="linkbtn" id="lpGh">Connect GitHub</button>`,
     tools: `<button class="iconbtn" id="lpRef" data-tip="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="iconbtn" id="lpSet" data-tip="Connector settings" aria-label="Connector settings">${ICON.gear}</button>`,
-    groups: () => [{label: "", items: [{label: "No repository", icon: ICON.x, check: !isMgd(S.draft.project), fn: () => { if (isMgd(S.draft.project)) S.draft.project = ""; renderBar(); renderTop(); renderHero(); }}]}, {label: "Repositories", items: (repos || []).map(r => ({label: r.full_name, desc: r.description || "", note: r.private ? "private" : "", fn: async () => {
+    groups: () => [{label: "", items: [{label: "No repository", icon: ICON.x, check: !isMgd(S.draft.project), fn: () => { if (isMgd(S.draft.project)) S.draft.project = ""; renderBar(); renderTop(); renderHero(); }}]}, {label: "Repositories", items: (repos === null ? [{label: "Loading repositories…", disabled: true}] : repos.length ? [] : [{label: "No repositories found", disabled: true}]).concat((repos || []).map(r => ({label: r.full_name, desc: r.description || "", note: r.private ? "private" : "", fn: async () => {
       try { toast(`Getting ${r.full_name} ready…`); const b = await api("/api/github/branches?repo=" + encodeURIComponent(r.full_name)); const w = await post("/api/github/workspace", {repo: r.full_name, branch: b.default, create: false, base: b.default}); await loadProjects(); S.draft.project = w.path; renderBar(); renderTop(); renderHero(); toast(`${w.name} on ${w.branch} is ready`); } catch (e) { toast(e.message, 5000); }
-    }}))}]});
+    }})))}]});
   $("#lpRef", p)?.addEventListener("click", () => load($(".lp-q", p).value));
   $("#lpSet", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); });
   $("#lpGh", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); });

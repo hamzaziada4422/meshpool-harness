@@ -5,6 +5,8 @@ links to other sheets in green; Inputs / Calc / Outputs sheets; named ranges for
 """
 from __future__ import annotations
 
+import re
+
 from openpyxl.worksheet.properties import PageSetupProperties
 from openpyxl import Workbook
 from openpyxl.chart import BarChart, LineChart, PieChart, Reference
@@ -77,8 +79,15 @@ def input_cell(ws, ref, value, fmt=None, name=None):
     return c
 
 
+_VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*$")
+_CELLREF_NAME = re.compile(r"^(?:[A-Za-z]{1,3}\d+|[Rr]\d*[Cc]\d*|[Rr]|[Cc])$")
+
+
 def define_name(wb, name: str, attr_text: str):
     """Workbook-level named range (replaces an existing one with the same name)."""
+    if not _VALID_NAME.match(name or "") or _CELLREF_NAME.match(name):
+        raise ValueError(f"invalid defined name {name!r}: use letters, digits, underscores and dots, starting with "
+                         "a letter or underscore, and not looking like a cell reference (Q1, TAX2, R1C1)")
     dn = DefinedName(name, attr_text=attr_text)
     try:
         wb.defined_names[name] = dn
@@ -201,7 +210,13 @@ def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
     r = max(4, max((c.row for c in ch["A"] if c.value is not None), default=3) + 1)
     ch.cell(row=r, column=1, value=label)
     formula(ch, f"B{r}", diff_formula if diff_formula.startswith("=") else "=" + diff_formula, "num", link=True)
-    formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
+    stored = ch["I3"].value
+    if isinstance(stored, (int, float)) and abs(float(stored) - tol) > 1e-12:
+        # a check with its own tolerance: kept in a labelled input beside the row, not silently dropped
+        input_cell(ch, f"D{r}", tol, "num")
+        formula(ch, f"C{r}", f'=IF(ABS(B{r})<=D{r},"OK","ERROR")')
+    else:
+        formula(ch, f"C{r}", f'=IF(ABS(B{r})<=check_tolerance,"OK","ERROR")')
     ch["E3"] = "All checks"
     ch["E3"].font = Font(name=FONT, bold=True)
     # ISERROR too: COUNTIF does not count error values, so a #DIV/0! check read "All checks OK"

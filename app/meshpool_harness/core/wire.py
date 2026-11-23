@@ -95,17 +95,27 @@ def sse_to_chat(lines) -> dict:
     """Assemble a streamed chat-completions reply (SSE lines) into the non-streamed response shape: content,
     tool calls (deltas merged by index), reasoning text and the final usage chunk."""
     content, reasoning, calls, usage, finish, rid = [], [], {}, {}, None, None
+    done = False
     for raw in lines:
         line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else str(raw).strip()
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
         if data == "[DONE]":
+            done = True
             break
         try:
             ev = json.loads(data)
         except ValueError:
             continue
+        if not isinstance(ev, dict):
+            continue
+        if ev.get("error"):                              # an error event after HTTP 200 (overload, rejected request)
+            err = ev["error"]
+            msg = err.get("message") or json.dumps(err)[:300] if isinstance(err, dict) else str(err)[:300]
+            code = err.get("code") or err.get("status") if isinstance(err, dict) else None
+            code = int(code) if str(code).isdigit() and 400 <= int(code) < 600 else 502
+            raise RuntimeError(f"meshpool HTTP {code}: {msg}")
         rid = ev.get("id") or rid
         if ev.get("usage"):
             usage = ev["usage"]
@@ -129,6 +139,8 @@ def sse_to_chat(lines) -> dict:
                 slot["function"]["name"] += f.get("name") or ""
                 slot["function"]["arguments"] += f.get("arguments") or ""
             finish = ch.get("finish_reason") or finish
+    if finish is None and not done:                      # closed cleanly mid-reply: do not pass a cut-off reply on
+        raise RuntimeError("HTTP 0: the stream ended before the reply was complete")
     msg = {"role": "assistant", "content": "".join(content) or None}
     if reasoning:
         msg["reasoning_content"] = "".join(reasoning)
@@ -150,6 +162,8 @@ class SimpleLedger:
         if temperature is not None:
             body["temperature"] = temperature
         body.update(extra or {})
+        if body.get("max_completion_tokens"):            # the profile asked for the newer parameter name
+            body.pop("max_tokens", None)
         if os.environ.get("MH_CACHE_KEY") == "1" and task_id:
             root = task_id.split("-esc")[0]
             body["prompt_cache_key"] = root
@@ -193,7 +207,7 @@ class SimpleLedger:
                            else r.read())
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
-            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException) as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
                 raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429) or attempt == retries:
                 break

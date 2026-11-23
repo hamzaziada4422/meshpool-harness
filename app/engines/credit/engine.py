@@ -167,7 +167,7 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
             com = {}
     md = str(wd / f"credit_memo_{stem}.md")
     memo.write(res, fin, md, com)
-    (wd / f"credit_{stem}.json").write_text(json.dumps(res, indent=1, default=str))
+    (wd / f"credit_{stem}.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
     rec, why = memo.recommendation(res)
     pf, cap = res["pro_forma"], res["capacity"]
     answer = (f"{rec}: {why} Pro forma DSCR {memo._x(pf['dscr'])} (minimum {pol.min_dscr:.2f}x), funded debt / "

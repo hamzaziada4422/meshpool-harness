@@ -123,10 +123,18 @@ class LiveClient:
         from meshpool_harness.profiles import apply, for_model
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         if prof["family"] != "deepseek":
-            messages, b = apply(prof, messages, {"temperature": temperature}, role if role in ("planner", "verifier") else "worker")
+            _b = {"max_tokens": max_tokens} if max_tokens else {}
+            if temperature is not None:
+                _b["temperature"] = temperature
+            messages, b = apply(prof, messages, _b, role if role in ("planner", "verifier") else "worker")
             temperature = b.get("temperature")
             profile = prof["family"]
+            _mct = b.get("max_completion_tokens")             # profile limits.param: models that reject max_tokens
+        else:
+            _mct = None
         ex = dict(extra or {})
+        if _mct:
+            ex["max_completion_tokens"] = _mct
         if tools:
             ex["tools"] = tools
             ex.setdefault("tool_choice", "auto")

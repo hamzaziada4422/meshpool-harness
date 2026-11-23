@@ -8,15 +8,15 @@
 <p align="center"><strong>One desktop agent for code, documents, spreadsheets, decks and research, on any model.</strong></p>
 
 <p align="center">
-  <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Version 0.0.1 beta" src="https://img.shields.io/badge/version-0.0.1%20beta-1670E8"></a>
-  <img alt="Mac and Windows app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows-16181D">
+  <a href="https://github.com/hamzaziada4422/meshpool-harness/releases"><img alt="Latest version (beta)" src="https://img.shields.io/github/v/release/hamzaziada4422/meshpool-harness?include_prereleases&label=version%20(beta)&color=1670E8"></a>
+  <img alt="Mac, Windows and Linux app" src="https://img.shields.io/badge/app-Mac%20%7C%20Windows%20%7C%20Linux-16181D">
   <img alt="Command line on macOS, Linux and Windows" src="https://img.shields.io/badge/CLI-macOS%20%7C%20Linux%20%7C%20Windows-16181D">
 </p>
 
 Meshpool runs on your own computer. It does research, writing, analysis, spreadsheets, decks and code with any model on the Meshpool endpoint, your own OpenAI-compatible key, or the ChatGPT plan you already pay for.
 
 > [!NOTE]
-> **Meshpool 0.0.1 is a beta.** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
+> **Meshpool is a beta (currently 0.0.10).** Some things will break. When one does, Meshpool shows what went wrong in the chat, and **Report this** (or the **Beta** badge) opens a GitHub issue with your version and system filled in. Your chats and files are never included.
 
 ## Why Meshpool
 
@@ -55,6 +55,7 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 | Mac with Apple silicon | [Meshpool.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool.dmg) |
 | Mac with Intel | [Meshpool-Intel.dmg](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Intel.dmg) |
 | Windows 10 or 11 | [Meshpool-Setup.exe](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Setup.exe) |
+| Linux, 64-bit Intel or AMD | [Meshpool-Linux-x64.tar.gz](https://github.com/hamzaziada4422/meshpool-harness/releases/latest/download/Meshpool-Linux-x64.tar.gz) (see [SETUP.md](docs/SETUP.md)) |
 
 **Setup guide** ([full guide](https://github.com/hamzaziada4422/meshpool-harness/blob/main/docs/SETUP.md))
 

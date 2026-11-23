@@ -168,7 +168,7 @@
       catch (err) { toast(err.message); }
     };
     $("#coDel", b).onclick = async () => {
-      if (!confirm(`Delete ${p.name || "this company"}? Its learned colours, logo and master are removed.`)) return;
+      if (!await ask({title: `Delete ${p.name || "this company"}?`, text: "Its learned colours, logo and master are removed.", ok: "Delete", danger: true})) return;
       try { CO.data = await post("/api/company/delete", {id: p.id}); CO.sel = null; redraw(); } catch (e) { toast(e.message); }
     };
     $$("[data-role]", b).forEach(i => i.oninput = () => { $(`[data-hex="${i.dataset.role}"]`, b).textContent = i.value.toUpperCase(); preview(b); });

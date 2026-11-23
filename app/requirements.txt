@@ -9,6 +9,12 @@ Pillow>=10.0
 cairosvg>=2.7
 reportlab>=4.0
 playwright>=1.40     # browser use: Chromium is fetched on first use if the computer has none
+psutil>=5.9
+pypdf>=4.0
+pypdfium2>=4.0
+pdfminer.six>=20231228
+xlrd>=2.0
+tomli>=2.0; python_version < "3.11"
 # tests
 pytest>=8.0
 ddgs>=9.0

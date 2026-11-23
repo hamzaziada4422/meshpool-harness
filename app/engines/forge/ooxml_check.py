@@ -27,6 +27,7 @@ What it checks:
 """
 from __future__ import annotations
 
+import io
 import os
 import posixpath
 import re
@@ -164,7 +165,13 @@ def _tables(root, part, problems):
 
 
 def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
-    z = zipfile.ZipFile(path)
+    try:
+        with open(path, "rb") as fh:                       # read once: no handle stays open (Windows locks it)
+            z = zipfile.ZipFile(io.BytesIO(fh.read()))
+    except zipfile.BadZipFile:
+        return {"ok": False, "schema_validation": "skipped", "parts_validated": 0,
+                "problems": [{"part": str(_name or Path(path).name), "check": "zip",
+                              "detail": "not a valid Office file (the zip container is unreadable)"}]}
     names = set(z.namelist())
     problems: list[dict] = []
     folder = _schema_dir(schemas)
@@ -232,7 +239,6 @@ def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
     # chart data workbooks
     for n in sorted(names):
         if n.endswith(".xlsx") and "/embeddings/" in n:
-            import io
             sub = check(io.BytesIO(z.read(n)), schemas, _name=n)
             validated += sub["parts_validated"]
             problems += [{**p, "part": f"{n}!{p['part']}"} for p in sub["problems"]]
