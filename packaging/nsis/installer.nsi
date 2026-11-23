@@ -7,7 +7,8 @@ InstallDir "$LOCALAPPDATA\Programs\Meshpool"
 InstallDirRegKey HKCU "Software\Meshpool" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-SetCompressorDictSize 64
+SetCompressorDictSize 16
+; 16 MB, not 64: makensis is a 32-bit program, and a 64 MB dictionary plus the larger payload (ffmpeg, pandoc, speech model) ran it out of memory ("error mmapping datablock").
 
 ; The version placeholders are filled in by packaging/build_all.py from app/meshpool_harness/__init__.py.
 BrandingText "Meshpool @VERSION@@BETA@"
