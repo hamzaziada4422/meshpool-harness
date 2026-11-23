@@ -1134,7 +1134,7 @@ function applyEv(ev) {
       const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name; if (ev.mcp) d.dataset.mcp = "1";
       d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn">${esc(label)}</span><span class="ts">${esc(stepSummary(name, ev))}</span><span class="st run"></span></summary>${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
-      if (ev.mcp && name === "browser_open" && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
+      if (/(^|__|[.:])browser_open$/.test(raw) && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
       { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_end": {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
@@ -1932,7 +1932,7 @@ async function renderSection(sec) {
     };
     const signIn = (r, id) => {                       // poll until the browser sign-in finished
       if (r.needs_client) { S.cnNeedClient = r.needs_client; draw(r.connectors); say(r.message); return; }
-      RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in your browser. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
+      RES("cnRes").className = "res"; RES("cnRes").innerHTML = `Finish signing in in the ${r.inapp ? "Browser panel" : "browser window"}. <a href="${esc(r.url)}" target="_blank" rel="noopener">Open the sign-in page again</a>`;
       const t0 = Date.now();
       const tick = async () => {
         if (!$("#cnl")) return;
@@ -2342,7 +2342,7 @@ async function drawMcpLibrary(b) {
     $$("[data-ma]", box).forEach(x => x.onclick = async () => {
       try {
         const r = await post("/api/mcp-library", {action: "add", id: x.dataset.ma});
-        if (r.result.connector) { await post("/api/connectors", {action: "connect", id: r.result.connector}); S.connCache = null; d = r; draw(); say("Finish signing in in your browser. New chats can then use it."); return; }
+        if (r.result.connector) { await post("/api/connectors", {action: "connect", id: r.result.connector}); S.connCache = null; d = r; draw(); say(`Finish signing in in the ${r.inapp === false ? "browser window" : "Browser panel"}. New chats can then use it.`); return; }
         renderSection("mcp");
       } catch (e) { say(e.message, true); }
     });

@@ -93,7 +93,9 @@ def handle(method: str, u, body: bytes = b""):
                 hdr = {"X-Frame-Info": h.get("X-Frame-Info", "{}")}
             if code == 200:
                 return 200, data, "image/jpeg", hdr
-            return code, (b"" if code == 204 else {"open": False}), "application/json", hdr
+            # nothing to show is not an error (the panel asks every second): 204 and a header that says why
+            hdr["X-Frame-State"] = "busy" if code == 503 else "none" if code == 404 else "same"
+            return 204, b"", "application/json", hdr
     elif method == "POST":
         b = json.loads(body.decode("utf-8")) if body else {}
         if path == "/api/browser/open":

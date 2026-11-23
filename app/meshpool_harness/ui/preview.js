@@ -278,10 +278,15 @@ window.addEventListener("keydown", e => {            // Esc closes the pane firs
    faster for a moment after you act, and not at all while the window is hidden), and passes your clicks, scrolls and typing
    on, so you can sign in or solve a captcha without any other window. Server side: ui/browser_api.py.
    src "chat": the browser of the open chat. src "signin": the app's own browser for sign-in pages. */
-const BRW = {src: "chat", tok: 0, timer: 0, known: "", info: null, fast: 0, opened: {}, img: "", buf: "", bufT: 0, wheel: 0, wheelT: 0, wp: null};
+const BRW = {back: "", src: "chat", tok: 0, timer: 0, known: "", info: null, fast: 0, opened: {}, img: "", buf: "", bufT: 0, wheel: 0, wheelT: 0, wp: null};
 function brwQuery() { return `src=${BRW.src}&chat=${encodeURIComponent(S.cur?.id || "")}`; }
 function brwStop() { BRW.tok++; clearTimeout(BRW.timer); BRW.timer = 0; if (BRW.img) { try { URL.revokeObjectURL(BRW.img); } catch (e) {} BRW.img = ""; } }
-function showSignIn() { BRW.src = "signin"; BRW.known = ""; togglePanel("browser", true); }
+// A sign-in page opened inside Meshpool. Settings covers the panel, so it steps aside and comes back on Done.
+function showSignIn() {
+  const settings = $(".scrim:not(.dlg-scrim):not(.srch-scrim)");
+  if (settings) { BRW.back = $("#cnl") ? "connectors" : ""; closeSettings(); }
+  BRW.src = "signin"; BRW.known = ""; togglePanel("browser", true);
+}
 // The agent opened its first page in this chat: show the panel, once, without a toast or taking the keyboard.
 function browserAutoOpen(chat) {
   if (!chat || BRW.opened[chat.id]) return;
@@ -303,7 +308,9 @@ async function brwTick(id) {
   try {
     const r = await fetch(`/api/browser/frame?${brwQuery()}&known=${encodeURIComponent(BRW.known)}`, {headers: {"X-Meshpool-Token": MP.token}});
     if (id !== BRW.tok) return;
-    if (r.status === 200 || r.status === 204) {
+    const why = r.headers.get("X-Frame-State") || "";
+    if (why === "busy") return again(700);                // busy with the agent's own step
+    if (r.status === 200 || (r.status === 204 && why === "same")) {
       let info = {}; try { info = JSON.parse(r.headers.get("X-Frame-Info") || "{}"); } catch (e) {}
       if (r.status === 200) {
         const url = URL.createObjectURL(await r.blob()); if (id !== BRW.tok) { URL.revokeObjectURL(url); return; }
@@ -314,7 +321,6 @@ async function brwTick(id) {
       const t = $("#bTitle"); if (t) t.textContent = info.title || "";
       return again(BRW.fast > Date.now() ? 250 : S.cur?.state === "working" ? 600 : 1000);
     }
-    if (r.status === 503) return again(700);              // busy with the agent's own step
     img.hidden = true; note.hidden = false; BRW.known = "";
     let msg = BRW.src === "signin" ? "Loading the page..." : "Nothing is open yet. When the agent opens a web page, it shows here. You can click and type in it.";
     try { const st = await api(`/api/browser/state?${brwQuery()}`); if (st.error) msg = st.error; } catch (e) {}
@@ -340,7 +346,7 @@ function panelBrowser(body) {
   $("#bReload").onclick = () => brwSend({type: "reload"});
   const go = () => { const v = $("#bUrl").value.trim(); if (v) brwSend({type: "goto", url: v}); };
   $("#bGo").onclick = go; $("#bUrl").onkeydown = e => { if (e.key === "Enter") go(); };
-  if ($("#bDone")) $("#bDone").onclick = () => { post("/api/browser/close", {src: "signin"}).catch(() => {}); BRW.src = "chat"; brwStop(); S.connCache = null; togglePanel("browser"); toast("Done. If you signed in to an app, check it under Settings."); };
+  if ($("#bDone")) $("#bDone").onclick = () => { post("/api/browser/close", {src: "signin"}).catch(() => {}); BRW.src = "chat"; brwStop(); S.connCache = null; togglePanel("browser"); if (BRW.back) { const s = BRW.back; BRW.back = ""; openSettings(s); } else toast("Done. If you signed in to an app, check it under Settings."); };
   $("#bAgent")?.addEventListener("click", () => { BRW.src = "chat"; BRW.known = ""; renderPanel(); });
   img.addEventListener("click", e => { stage.focus({preventScroll: true}); brwSend({type: "click", count: Math.min(3, e.detail || 1), ...brwPoint(e)}); });
   img.addEventListener("contextmenu", e => { e.preventDefault(); brwSend({type: "click", button: "right", ...brwPoint(e)}); });

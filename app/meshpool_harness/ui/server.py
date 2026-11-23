@@ -1066,18 +1066,17 @@ RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat"
 
 def _open_web(url: str) -> bool:
     """Open a sign-in page. The address comes from the app's server metadata: only ever a web page.
-    In the app it opens inside Meshpool, in the Browser panel (True: the page shows it). A terminal or browser
-    session of the UI has no panel of its own, so it uses the system browser (False), as does the app on a computer
-    where its own browser cannot start."""
+    It opens inside Meshpool, in the Browser panel (True: the page shows it). Only on a computer where Meshpool's
+    own browser cannot start does it use the system browser (False). The terminal sign-in (agent/connect_cli.py) has
+    no panel and keeps printing the link and trying the system browser."""
     if not re.match(r"https?://", url or "", re.I):
         raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
-    if DESKTOP:
-        try:
-            from meshpool_harness.ui import browser_api as BA
-            BA.open_signin(url)
-            return True
-        except Exception as e:  # noqa: BLE001 - no browser engine here: the last resort is the system browser
-            print(f"  The in-app browser could not start ({e}); opening the sign-in page in the system browser.")
+    try:
+        from meshpool_harness.ui import browser_api as BA
+        BA.open_signin(url)
+        return True
+    except Exception as e:  # noqa: BLE001 - no browser engine here: the last resort is the system browser
+        print(f"  The in-app browser could not start ({e}); opening the sign-in page in the system browser.")
     webbrowser.open(url)
     return False
 

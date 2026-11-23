@@ -172,7 +172,7 @@ async function providerPage(b, close) {
   const useLogin = async kind => { try { const r = await post("/api/provider/use", {kind}); await loadSettings(); await loadModels(true); await loadHarnesses(); renderBar(); toast(r.message || "Switched."); providerPage(b, close); } catch (err) { toast(err.message, 6000); } };
   $("#lgChatgpt", b)?.addEventListener("click", () => useLogin("chatgpt"));
   $("#lgCode", b)?.addEventListener("click", () => useLogin("claude_code"));
-  $("#lgChatgptIn", b)?.addEventListener("click", async () => { try { const r = await post("/api/harness-login", {id: "codex"}); toast(r.message || "Finish signing in in your browser.", 6000); setTimeout(() => { if ($("#pvBase", b)) providerPage(b, close); }, 6000); } catch (err) { toast(err.message, 6000); } });
+  $("#lgChatgptIn", b)?.addEventListener("click", async () => { try { const r = await post("/api/harness-login", {id: "codex"}); toast(r.message || "Finish signing in in the Browser panel.", 6000); setTimeout(() => { if ($("#pvBase", b)) providerPage(b, close); }, 6000); } catch (err) { toast(err.message, 6000); } });
   for (const l of logins.filter(x => x.kind === "env_key" && x.found)) $("#lgEnv-" + l.env, b)?.addEventListener("click", () => {
     st.env = l.env; st.base = l.base_url || st.base; st.wire = l.wire || "auto"; $("#pvBase", b).value = st.base;
     $("#pvKeyRow", b).innerHTML = `<input id="pvMask" value="${esc(l.env)}: ${esc(l.key_hint || "••••")}" readonly aria-label="Key from your environment"><span class="pvnote">from your environment</span>`;
