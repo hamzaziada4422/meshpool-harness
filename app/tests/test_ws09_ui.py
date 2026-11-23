@@ -95,6 +95,8 @@ def page(app):
         pg = b.new_page(viewport={"width": 1280, "height": 860})
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.console_errors = []
+        pg.on("console", lambda m: pg.console_errors.append(m.text) if m.type == "error" else None)
         pg.add_init_script("try { localStorage.setItem('mp_onbDone', '1'); } catch (e) {}")
         pg.goto(app["base"] + "/")
         pg.wait_for_selector("#newThread", timeout=30000)
@@ -171,8 +173,9 @@ def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
         running: document.querySelectorAll('.st.run').length,
         liveQ: document.querySelectorAll('.qcard:not(.done)').length,
         state: S.cur.view.state, open: JSON.stringify(S.cur.view.open), tail: S.cur.log.slice(-6).map(e => e.type + ':' + (e.id||'') + (e.closed?'c':'')).join(' '), q: S.cur.q.length, total: S.cur.total})""")
-    assert got["approvals"] == 36 and got["state"] == "idle", got
-    assert got["liveBtns"] == 0 and got["running"] == 0 and got["liveQ"] == 0, got
+    diag = lambda: f"{got}\npage errors: {page.errors}\nconsole errors: {page.console_errors}\napp log tail:\n" + "\n".join(app["log"].read_text(errors="replace").splitlines()[-40:])  # noqa: E731
+    assert got["approvals"] == 36 and got["state"] == "idle", diag()
+    assert got["liveBtns"] == 0 and got["running"] == 0 and got["liveQ"] == 0, diag()
     # Nothing in the conversation may still animate (the dots of an open work group, the spinners of steps that never ended).
     # Animations outside the chat column (the page's own chrome) are not what this checks.
     anims = page.evaluate("""() => document.getAnimations().filter(a => a.playState === 'running').map(a => {
@@ -188,6 +191,20 @@ def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
     busy = task() - t0
     print(f"idle CPU (TaskDuration over 3 s): {busy:.3f} s")
     assert busy < 0.3, busy
+    assert page.errors == [], page.errors
+
+
+def test_old_poll_does_not_close_a_newer_card(page, app):
+    cid = _make_chat(app, "Say ok")
+    _open(page, cid)
+    page.evaluate("""() => applyEv({type: "approval", id: "ap-x1", i: 100, kind: "bash", title: "Run?", detail: "ls"})""")
+    live = "() => [...document.querySelectorAll('#appr-ap-x1 button')].filter(b => !b.disabled).length"
+    assert page.evaluate(live) > 0
+    page.evaluate("""() => reconcileOpen(S.cur, {open: {approvals: [], question: null}, total: 50, state: "working"})""")
+    assert page.evaluate(live) > 0                      # an older view did not include the card: it stays
+    page.evaluate("""() => reconcileOpen(S.cur, {open: {approvals: [], question: null}, total: 101, state: "idle"})""")
+    assert page.evaluate(live) == 0                     # a view that includes it and no longer lists it closes it
+    assert page.evaluate("() => document.querySelector('#appr-ap-x1').classList.contains('done')")
     assert page.errors == [], page.errors
 
 

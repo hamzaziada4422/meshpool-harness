@@ -242,6 +242,21 @@ def test_resume_closes_open_approval_question_and_steps(A):
     assert json.loads((A.SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))["running"] is False
 
 
+def test_resume_does_not_relabel_steps_of_finished_turns(A):
+    s = mk(A)
+    sid = s.id
+    s.close()
+    evs = [{"type": "user", "text": "one"},
+           {"type": "tool_start", "id": "t1", "name": "bash", "summary": "ls"},
+           {"type": "turn_end"},
+           {"type": "user", "text": "two"},
+           {"type": "tool_start", "id": "t2", "name": "bash", "summary": "pwd"}]
+    (A.SESSIONS / sid / "transcript.json").write_text(json.dumps({"events": evs, "running": False}), encoding="utf-8")
+    s1 = A.Session(resume_id=sid)
+    ends = [e for e in s1.events if e["type"] == "tool_end"]
+    assert [e["id"] for e in ends] == ["t2"] and ends[0].get("stopped")
+
+
 # ---- M02-05 -----------------------------------------------------------------------------------------------------
 def test_allow_in_this_chat_survives_reap_restart_and_handoff(A):
     s = mk(A)
@@ -269,6 +284,25 @@ def test_allow_in_this_chat_survives_reap_restart_and_handoff(A):
     th.start()                                                       # never for a destructive command
     wait_for(lambda: s3.pendings, what="a card for the destructive command")
     s3.stop()
+    th.join(5)
+
+
+def test_acp_allow_always_for_one_tool_does_not_allow_another(A):
+    s = mk(A)
+    opts = [{"id": "o1", "label": "Allow", "kind": "allow_once"}, {"id": "o2", "label": "Always", "kind": "allow_always"},
+            {"id": "o3", "label": "No", "kind": "reject_once"}]
+    out = []
+    th = threading.Thread(target=lambda: out.append(s.approve("mcp", "Use tool A?", "", opts)))
+    th.start()
+    wait_for(lambda: s.pendings, what="the card")
+    s.answer(next(iter(s.pendings)), "o2")
+    th.join(5)
+    assert out == [("o2", "")]
+    assert s.approve("mcp", "Use tool A?", "", opts) == ("o1", "") and not s.pendings   # the same tool: no card
+    th = threading.Thread(target=lambda: s.approve("mcp", "Use tool B?", "", opts), daemon=True)
+    th.start()                                                       # another tool: a card
+    wait_for(lambda: s.pendings, what="a card for tool B")
+    s.stop()
     th.join(5)
 
 

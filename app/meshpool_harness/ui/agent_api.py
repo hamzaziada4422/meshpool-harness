@@ -430,7 +430,8 @@ class Session:
             elif t == "tool_end":
                 done["tool"].add(str(e.get("id")))
         out, seen = [], set()
-        for e in evs:
+        last_end = max((n for n, e in enumerate(evs) if e.get("type") == "turn_end"), default=-1)
+        for n, e in enumerate(evs):
             t, i = e.get("type"), str(e.get("id"))
             if e.get("id") is None or (t, i) in seen:
                 continue
@@ -439,7 +440,7 @@ class Session:
             elif t == "question" and e.get("timeout_s") and i not in done["question"]:
                 out.append({"type": "question_done", "id": e["id"], "source": "stopped", "answers": [],
                             "text": "Meshpool closed before you answered.", "closed": True})
-            elif t == "tool_start" and i not in done["tool"]:
+            elif t == "tool_start" and i not in done["tool"] and n > last_end:   # steps of finished turns stay as they were
                 out.append({"type": "tool_end", "id": e["id"], "name": e.get("name", ""), "ok": False,
                             "stopped": True, "output": "Not run: Meshpool closed before this step finished."})
             else:
@@ -576,13 +577,20 @@ class Session:
         except OSError:
             pass
 
-    def _acp_always_pick(self, kind, detail, options):
+    @staticmethod
+    def _acp_key(kind, title=""):
+        """edit and bash are remembered per kind; any other tool only for that one tool (its title)."""
+        if kind in ("edit", "bash"):
+            return "acp:" + str(kind)
+        return "acp:" + str(kind) + ":" + str(title or "").strip()[:200]
+
+    def _acp_always_pick(self, kind, detail, options, title=""):
         """"Allow always" chosen once on an ACP harness's card for this kind of request (saved in meta.json): the
         next ask of that kind is answered with its allow option, without a card. Never for a destructive command."""
         if not options or not getattr(self, "id", None):
             return None
         try:
-            if "acp:" + str(kind) not in (read_meta(self.id).get("always") or []):
+            if self._acp_key(kind, title) not in (read_meta(self.id).get("always") or []):
                 return None
             if kind == "bash":
                 from meshpool_harness.agent.core import _destructive
@@ -611,7 +619,7 @@ class Session:
         if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
             return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
                           "and say in your summary what needed the user.")
-        auto = self._acp_always_pick(kind, detail, options)
+        auto = self._acp_always_pick(kind, detail, options, title)
         if auto:
             return auto, ""
         with self.lock:
@@ -640,7 +648,7 @@ class Session:
             try:                                      # "allow always" on an ACP card: remembered for this chat
                 if next((o.get("kind") for o in options if o.get("id") == p["decision"]), "") == "allow_always":
                     cur = set(read_meta(self.id).get("always") or [])
-                    write_meta(self.id, always=sorted(cur | {"acp:" + str(kind)}))
+                    write_meta(self.id, always=sorted(cur | {self._acp_key(kind, title)}))
             except Exception:  # noqa: BLE001
                 pass
         self.emit({"type": "approval_done", "id": aid, "decision": shown})

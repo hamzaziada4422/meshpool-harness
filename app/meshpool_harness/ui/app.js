@@ -954,18 +954,22 @@ function ingest(cur, v) {
 }
 // What the server says it still waits on is the truth: a card, step or spinner it no longer waits on is closed here (a reopened chat, an old transcript).
 function reconcileOpen(cur, v) {
-  const op = v.open;
-  if (op) {
-    const ids = new Set((op.approvals || []).map(i => "appr-" + i));
-    for (const d of $$(".appr:not(.done)", colEl())) if (!ids.has(d.id)) applyEv({type: "approval_done", id: d.id.slice(5), decision: "stopped", closed: true});
-    const qid = op.question == null ? null : qId({id: op.question});
-    for (const d of $$(".qcard:not(.done)", colEl())) if (d.id !== qid) questionDone({id: d.id.slice(2), source: "stopped", answers: [], text: ""});
-  }
-  if (!["starting", "working", "waiting"].includes(v.state)) {
-    settleSteps("");
-    for (const g of $$(".work:not([data-done])", colEl())) bumpGroup(g, true);
-    cur.group = null;
-  }
+  try {
+    const total = v.total || 0, fresh = total >= (cur.next || 0);      // an older poll must not close what a newer event showed
+    const seen = d => { const n = d.dataset.i === undefined ? NaN : Number(d.dataset.i); return !isNaN(n) && n >= total; };
+    const op = v.open;
+    if (op) {
+      const ids = new Set((op.approvals || []).map(i => "appr-" + i));
+      for (const d of $$(".appr:not(.done)", colEl())) if (!ids.has(d.id) && !seen(d)) applyEv({type: "approval_done", id: d.id.slice(5), decision: "stopped", closed: true});
+      const qid = op.question == null ? null : qId({id: op.question});
+      for (const d of $$(".qcard:not(.done)", colEl())) if (d.id !== qid && !seen(d)) questionDone({id: d.id.slice(2), source: "stopped", answers: [], text: ""});
+    }
+    if (fresh && !["starting", "working", "waiting"].includes(v.state)) {
+      settleSteps("");
+      for (const g of $$(".work:not([data-done])", colEl())) bumpGroup(g, true);
+      cur.group = null;
+    }
+  } catch (e) { console.error(e); }
 }
 // ---- Server-Sent Events: the open chat's events pushed as they happen
 function startStream(cur) {
@@ -1213,7 +1217,7 @@ function applyEv(ev) {
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
-      d.id = "appr-" + ev.id;
+      d.id = "appr-" + ev.id; if (typeof ev.i === "number") d.dataset.i = ev.i;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
         $$("button", d).forEach(x => x.disabled = true);
@@ -1304,7 +1308,7 @@ function questionCard(ev, add) {
       </div></fieldset>`;
   }).join("");
   const d = add(`<div class="qin">${html}<div class="qfoot"><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span><button type="button" class="btn primary qsend">${many ? "Send answers" : "Continue"}</button></div></div>`, "qcard");
-  d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
+  d.id = cid; if (typeof ev.i === "number") d.dataset.i = ev.i; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
   const sync = () => {
     $$(".qq", d).forEach(fs => { const inp = $("input", fs), oth = $(".qother", fs); oth.setAttribute("aria-checked", inp.value.trim() ? "true" : "false"); });
     const ok = $$(".qq", d).every(fs => $$(".qopt[aria-checked=true]", fs).length);
