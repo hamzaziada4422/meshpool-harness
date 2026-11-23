@@ -1,0 +1,15 @@
+{
+ "note": "USD per 1M tokens. Sources: provider list prices as of 2026-11; Meshpool-gateway-only models without a published price are left out on purpose (they show as price unknown).",
+ "models": {
+  "claude-fable-5-2": {"in": 8, "cached": 0.20, "cache_write": 10, "out": 40},
+  "claude-fable-5.2": {"in": 8, "cached": 0.20, "cache_write": 10, "out": 40},
+  "claude-opus-5-5": {"in": 4, "cached": 0.20, "cache_write": 5, "out": 20},
+  "claude-opus-5.5": {"in": 4, "cached": 0.20, "cache_write": 5, "out": 20},
+  "claude-sonnet-5-5": {"in": 2, "cached": 0.10, "cache_write": 2.5, "out": 10},
+  "claude-sonnet-5.5": {"in": 2, "cached": 0.10, "cache_write": 2.5, "out": 10},
+  "claude-haiku-5-5": {"in": 0.10, "cached": 0.01, "cache_write": 0.125, "out": 0.50},
+  "claude-haiku-5.5": {"in": 0.10, "cached": 0.01, "cache_write": 0.125, "out": 0.50},
+  "deepseek-v4.1-flash": {"in": 0.15, "cached": 0.003, "cache_write": 0.15, "out": 0.60, "note": "DeepSeek list price. The Meshpool gateway bills about 2.19 times this (measured); the factor is not applied here."},
+  "deepseek-v4-flash": {"in": 0.15, "cached": 0.003, "cache_write": 0.15, "out": 0.60, "note": "DeepSeek list price. The Meshpool gateway bills about 2.19 times this (measured); the factor is not applied here."}
+ }
+}
