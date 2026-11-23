@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 from dataclasses import dataclass, field
 
+from . import usage
 from .guards import Abort, Guards, enabled, log_failure
 from .metrics import CacheMeter
 from .tools import CORE, ToolError, Workspace, schemas, validate
@@ -37,21 +38,6 @@ class LoopResult:
     prefix_sha: str = ""
     usage: dict = field(default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0})
 
-
-
-def _budget_prices(model: str) -> tuple[float, float, float]:
-    """USD per million tokens (uncached input, cached input, output) for the MH_BUDGET_USD cap. DeepSeek's list prices
-    for DeepSeek models; a conservative frontier-model price for any other model; MH_BUDGET_PRICES="in,cached,out"
-    overrides both."""
-    raw = os.environ.get("MH_BUDGET_PRICES", "")
-    try:
-        a, b, c = (float(x) for x in raw.split(","))
-        return a, b, c
-    except ValueError:
-        pass
-    if "deepseek" in (model or "").lower():
-        return 0.15, 0.003, 0.6
-    return 3.0, 0.3, 15.0
 
 def build_prefix(system_text: str, tool_names: list[str], skill_index: dict[str, str]) -> tuple[str, list, str]:
     """Byte-stable: no timestamps, ids, or file listings. Same engine+profile -> same bytes -> cache hits."""
@@ -117,7 +103,8 @@ class _KeepWarm:
         self.prefix = [dict(m) for m in messages[:-1]]
         self.usage = {"keepwarm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
         self.stop = threading.Event()
-        self.th = threading.Thread(target=self._loop, daemon=True)
+        import contextvars
+        self.th = threading.Thread(target=contextvars.copy_context().run, args=(self._loop,), daemon=True)   # same usage task
         self.th.start()
 
     def _loop(self):
@@ -178,7 +165,15 @@ def run(*a, **kw):
     return res
 
 
-def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dict, system_text: str,
+def _run(*a, **kw) -> LoopResult:
+    """Run the loop inside a usage task: the caller's, else a new one that carries the MH_BUDGET_USD limit."""
+    if usage.current()[0] is not None:
+        return _run_loop(*a, **kw)
+    with usage.bind(usage.start_task(label="loop"), os.environ.get("MH_USAGE_SOURCE") or "engine"):
+        return _run_loop(*a, **kw)
+
+
+def _run_loop(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dict, system_text: str,
         tool_names: list[str] | None = None, caps: Caps | None = None, allow_test_edits=False,
         require_check=True, temperature=None, extra=None, finish_check=None, turn_hook=None,
         _box=None) -> LoopResult:
@@ -230,10 +225,15 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()
-        resp = client.chat(model=model, messages=messages, tools=tools, task_id=ctx.get("task_id", ""),
-                           job_id=ctx.get("job_id", ""), role=ctx.get("role", "worker"),
-                           profile=ctx.get("profile", "deepseek"), max_tokens=caps.max_output_tokens,
-                           temperature=temperature, extra=extra)
+        try:                                     # the reserve inside chat refuses a call once the limit is reached
+            resp = client.chat(model=model, messages=messages, tools=tools, task_id=ctx.get("task_id", ""),
+                               job_id=ctx.get("job_id", ""), role=ctx.get("role", "worker"),
+                               profile=ctx.get("profile", "deepseek"), max_tokens=caps.max_output_tokens,
+                               temperature=temperature, extra=extra)
+        except usage.BudgetExceeded as e:
+            res.reason = str(e)
+            log_failure(ctx, "budget_cap", False, res.reason)
+            return res
         res.usage["model_s"] = res.usage.get("model_s", 0.0) + time.time() - _tc
         res.usage["model_calls"] = res.usage.get("model_calls", 0) + 1
         u = resp.get("usage") or {}
@@ -242,16 +242,6 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         _cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
         res.usage["cached_tokens"] = res.usage.get("cached_tokens", 0) + _cached
         meter.observe(u, res.usage)                         # full cache misses (core/metrics.py)
-        _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
-        if _budget:
-            _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio
-            _pi, _pc, _po = _budget_prices(model)
-            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * _pi
-                           + res.usage["cached_tokens"] * _pc + res.usage["completion_tokens"] * _po) / 1e6
-            if _spent > _budget:
-                res.reason = f"task budget ${_budget:.2f} reached"
-                log_failure(ctx, "budget_cap", False, res.reason)
-                return res
         msg = resp["choices"][0]["message"]
         calls = msg.get("tool_calls") or []
         keep = {"role": "assistant", "content": msg.get("content") or ""}

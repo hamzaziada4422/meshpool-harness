@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from meshpool_harness.core import usage
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -114,6 +116,23 @@ CONNECT_BUDGET_S = 120.0                     # a main turn gives up on a dead co
 SIDE_BUDGET_S = 15.0                         # compaction, classify, memory, summaries: two tries, then fail fast
 
 
+def _reply_chars(r) -> int:
+    """Characters in a reply's text, reasoning and tool-call arguments (the estimate when no usage came back)."""
+    try:
+        m = r["choices"][0]["message"]
+        n = len(m.get("content") or "") + len(m.get("reasoning_content") or "")
+        return n + sum(len((c.get("function") or {}).get("arguments") or "") for c in m.get("tool_calls") or [])
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return 0
+
+
+def _request_chars(messages) -> int:
+    try:
+        return len(json.dumps(messages))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _tell_retry(text: str) -> None:
     import sys
     print(f"[Meshpool] {text}", file=sys.stderr, flush=True)
@@ -167,9 +186,20 @@ class LiveClient:
             try:
                 send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
                 ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
-                r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
-                                     role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
-                                     extra=ex2, retries=0)
+                req_chars = _request_chars(send)
+                ubase = getattr(self.ledger, "base_url", "") or ""
+                res = usage.reserve(model, request_chars=req_chars, max_tokens=out_tok, base=ubase)   # may raise
+                try:
+                    r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
+                                         role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
+                                         extra=ex2, retries=0)
+                except BaseException:
+                    res.close()
+                    raise
+                usage.record(model, r.get("usage"), base=ubase, reservation=res, request_chars=req_chars,
+                             reply_chars=_reply_chars(r),
+                             source=os.environ.get("MH_USAGE_SOURCE")
+                             or ("engine" if self.phase in MAIN_PHASES else "helper:" + self.phase))
                 self._n429 = 0                                    # a success resets the 429 backoff
                 self._check_silent_cut(model, send, sent_tools, r, win)
                 _log_event(task_id, role, model, r)
@@ -273,19 +303,29 @@ def _log_event(task_id: str, role: str, model: str, resp: dict) -> None:
 class MockClient:
     """Replays a list of assistant messages (OpenAI format). Records every request for assertions."""
 
-    def __init__(self, script: list[dict] | str):
+    def __init__(self, script: list[dict] | str, usage: dict | list | None = None):
+        """usage: the usage dict of every reply, or a list with one per reply (the last one repeats)."""
         if isinstance(script, str):
             script = [json.loads(l) for l in Path(script).read_text().splitlines() if l.strip()]
         self.script = list(script)
         self.requests: list[dict] = []
+        self._usage = usage if usage is not None else {"prompt_tokens": 100, "completion_tokens": 20}
+        self._n = 0
 
     def chat(self, *, model, messages, tools=None, **kw):
         self.requests.append({"model": model, "messages": json.loads(json.dumps(messages)), "tools": tools, **kw})
         if not self.script:
             raise RuntimeError("MockClient script exhausted")
+        req_chars = _request_chars(messages)
+        res = usage.reserve(model, request_chars=req_chars, max_tokens=kw.get("max_tokens") or 0)
         msg = self.script.pop(0)
-        return {"choices": [{"message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
+        u = self._usage[min(self._n, len(self._usage) - 1)] if isinstance(self._usage, list) else self._usage
+        self._n += 1
+        out = {"choices": [{"message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
+               "usage": u}
+        usage.record(model, u, reservation=res, request_chars=req_chars, reply_chars=_reply_chars(out),
+                     source=os.environ.get("MH_USAGE_SOURCE") or "engine")
+        return out
 
     def spent(self) -> float:
         return 0.0

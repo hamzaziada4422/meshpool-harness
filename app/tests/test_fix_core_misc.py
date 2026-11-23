@@ -92,9 +92,9 @@ def test_chatgpt_error_event_codes():
 
 
 def test_budget_prices():
-    from meshpool_harness.core.loop import _budget_prices
-    assert _budget_prices("deepseek-v4")[0] == 0.15
-    assert _budget_prices("claude-sonnet")[2] > 1
+    from meshpool_harness.core import usage
+    one = {"in": 1_000_000, "cached": 0, "cache_write": 0, "out": 1_000_000}
+    assert usage.budget_cost("deepseek-v4.1-flash", one) < usage.budget_cost("claude-sonnet-5-5", one)
 
 
 def test_connector_url_routing():
