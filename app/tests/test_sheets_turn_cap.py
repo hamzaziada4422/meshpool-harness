@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT))
 
 from meshpool_harness.core.client import MockClient, tool_call  # noqa: E402
 from engines.sheets import engine as E  # noqa: E402
+from meshpool_harness.core.tools import CORE  # noqa: E402
 
 SAVE = ("python -c \"import os; os.makedirs('conv', exist_ok=True); "
         "open('Model.xlsx','wb').write(b'x'); open('conv/Model.xlsx','wb').write(b'x')\"")
@@ -179,3 +180,56 @@ def test_a_refused_command_says_what_to_run_and_firms_up_on_repeat(tmp_path):
     with pytest.raises(ToolError) as e2:
         ws._run(cmd, 30, "bash")
     assert "REFUSED again (2 times)" in str(e2.value) and "python build_workbook.py" in str(e2.value)
+
+
+# ---- runs that end without an accepted finish for a reason other than a cap (M30-01)
+
+def _passing(monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda answer, artifacts, ws, report=None: None)
+
+
+def _saved_then(*rest):
+    return MockClient([tool_call("write_file", {"path": "build_workbook.py", "content": "x = 1\n"}),
+                       tool_call("bash", {"command": SAVE}), *rest])
+
+
+def test_three_toolless_replies_after_a_saved_workbook_still_deliver_it(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    c = _saved_then(*[{"role": "assistant", "content": "done"}] * 3)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["reason"].startswith("model stopped calling tools")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert r["answer"] and "stopped calling tools" in r["answer"] and "checked version" in r["answer"]
+
+
+FAIL = "python -c \"import sys; print('Error: boom'); sys.exit(1)\""
+
+
+def test_guard_abort_after_a_saved_workbook_still_delivers_it(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    c = _saved_then(*[tool_call("bash", {"command": FAIL})] * 8)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=30, client=c, model="mock")
+    assert r["reason"].startswith("aborted")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert "repeated-failure guard" in r["answer"] and "checked version" in r["answer"]
+
+
+def test_need_context_after_a_saved_workbook_still_delivers_it_and_keeps_the_question(tmp_path, monkeypatch):
+    _passing(monkeypatch)
+    real = E.run                       # the sheets engine does not offer need_context by default; offer it here
+    monkeypatch.setattr(E, "run", lambda *a, **k: real(*a, tool_names=[*CORE, "need_context"], **k))
+    c = _saved_then(tool_call("need_context", {"reason": "Which fiscal year end do you want?", "paths": ["fy.csv"]}))
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["reason"].startswith("need_context")
+    assert r["ok"] is True and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert "Which fiscal year end do you want?" in r["answer"] and "fy.csv" in r["answer"]
+
+
+def test_toolless_end_with_a_failing_workbook_returns_file_and_failures(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda answer, artifacts, ws, report=None:
+                        "ENGINE CHECK: workbook QA failed:\n- X4 DCF!C9: hardcoded number in a formula")
+    c = _saved_then(*[{"role": "assistant", "content": "done"}] * 3)
+    r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", max_turns=20, client=c, model="mock")
+    assert r["ok"] is False and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
+    assert r["checks"] == ["X4 DCF!C9: hardcoded number in a formula"]
+    assert "does NOT pass" in r["answer"] and "hardcoded number" in r["answer"] and "stopped calling tools" in r["answer"]

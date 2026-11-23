@@ -394,6 +394,26 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
 CAPS = ("turn cap", "wall-clock cap", "task budget")
 
 
+def _end_head(r, max_turns: int) -> str:
+    """The first line of a salvaged answer: why the run ended without an accepted finish."""
+    reason = r.reason or ""
+    if reason.startswith("turn cap"):
+        return f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
+    if reason.startswith(CAPS):
+        return f"Stopped at the {reason} before the model called finish."
+    if reason.startswith("model stopped calling tools"):
+        return "The model stopped calling tools before it called finish."
+    if reason.startswith("aborted"):
+        return f"The run was stopped by the repeated-failure guard before the model called finish ({reason})."
+    if reason == "need_context":
+        nc = getattr(r, "need_context", None) or {}
+        asked = "; ".join(str(x) for x in (nc.get("reason"), ", ".join(map(str, nc.get("paths") or []))) if x) \
+            if isinstance(nc, dict) else str(nc)
+        return ("The model stopped to ask for more context before it called finish"
+                + (f": {asked}" if asked else "."))
+    return f"The run stopped on an error before the model called finish ({reason})."
+
+
 def salvage(r, ws, max_turns: int) -> dict:
     """The run hit a cap without an accepted finish. Do not throw the work away: check the last saved workbook with
     the same gate finish uses. Passing -> ok with the file; failing -> not ok, but with the file and the failures, so
@@ -401,8 +421,10 @@ def salvage(r, ws, max_turns: int) -> dict:
     books = ws.saved_workbooks()
     if not books:
         return {"ok": False, "artifacts": [], "evidence": [], "checks": [],
-                "answer": (f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
-                           "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request."),
+                "answer": ((f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
+                            "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request.")
+                           if r.reason.startswith(CAPS) else
+                           _end_head(r, max_turns).rstrip(".") + ", and no workbook was saved; nothing to deliver."),
                 "reason": f"{r.reason}; no workbook saved"}
     book = books[0]
     rel = str(book.relative_to(ws.root))
@@ -423,9 +445,7 @@ def salvage(r, ws, max_turns: int) -> dict:
         wb.close()
     except Exception:                          # noqa: BLE001
         pass
-    head = (f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
-            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish."
-            if r.reason.startswith(CAPS) else f"The run stopped on an error before the model called finish ({r.reason}).")
+    head = _end_head(r, max_turns)
     what = f"{rel}" + (f" ({len(tabs)} tabs: {', '.join(tabs)})" if tabs else "")
     lines = [head]
     if not msg:
@@ -934,7 +954,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
                             reason=f"{type(e).__name__}: {e}")
     out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
            "reason": r.reason, "usage": r.usage}
-    at_cap = not r.ok and (crashed or r.reason.startswith(CAPS))
+    at_cap = not r.ok                          # no accepted finish, whatever the end reason: salvage and deliver
     if at_cap:
         out.update(salvage(r, ws, n))
     if rv and (r.ok or at_cap):
