@@ -125,20 +125,25 @@ def test_anthropic_cache_markers_can_be_turned_off(monkeypatch):
 
 def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_path):
     a = _agent(tmp_path)
-    a.ws.root  # noqa: B018
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "same output"
     g = {}
     call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     outs = [a._repeat_guard(call, g) for _ in range(6)]
     assert len(runs) == 3 and all("Not run" in o for o in outs[3:])
-    # a different call in between resets the chain, so a rerun after an edit is never refused
+    # alternating with a failing patch is the same loop
+    runs.clear()
     g = {}
-    other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
-    for _ in range(5):
+    seq = [a._repeat_guard(x, g) for _ in range(6) for x in (call, other)]
+    assert len(runs) == 6 and sum("Not run" in o for o in seq) == 6
+    # a file changing in between is progress: the same test run is never refused
+    runs.clear()
+    g = {}
+    for _ in range(8):
         a._repeat_guard(call, g)
-        a._repeat_guard(other, g)
-    assert len(runs) == 3 + 10
+        a.ws.edits += 1
+    assert len(runs) == 8
 
 
 def test_a_long_run_without_progress_ends_with_a_best_effort_answer(tmp_path):

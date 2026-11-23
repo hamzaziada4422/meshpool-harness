@@ -1511,21 +1511,24 @@ class Agent:
         return self._repeat_guard(c, g, cut)
 
     def _repeat_guard(self, c: dict, g: dict, cut: bool = False) -> str:
-        """Run a tool call, unless the same call (same name and arguments) has just run three times in a row with
-        the same result: a fourth time cannot tell the model anything new. One such loop (a command run 50 times)
-        cost more than ten ordinary tasks."""
+        """Run a tool call, unless the same call (same name and arguments) has already run three times in the last
+        twelve calls with the same result and no file changed in between: a fourth time cannot tell the model anything
+        new. Counting over a window, not only in a row, also stops the alternation of a failing patch with a read of
+        the same lines. One such loop (a command run 60 times, 1M tokens) cost more than a hundred ordinary tasks."""
         f = c.get("function", {})
         key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
         runs = g.setdefault("same", [])
-        if len(runs) >= 3 and all(r[0] == key for r in runs[-3:]) and len({r[1] for r in runs[-3:]}) == 1:
+        edits = self.ws.edits
+        if sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3 and \
+                len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1:
             g["refused"] = g.get("refused", 0) + 1
-            return ("[Meshpool] Not run: this exact call has run three times in a row with the same result. Running it "
-                    "again changes nothing. Change the command or the files first, or finish and tell the user what "
-                    "is blocking you.")
+            return ("[Meshpool] Not run: this exact call has already run three times with the same result and no file "
+                    "changed since. Running it again changes nothing. Change the command or the files first, or "
+                    "finish and tell the user what is blocking you.")
         out = self._run_tool(c, cut=cut)
         import hashlib
-        runs.append((key, hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()))
-        del runs[:-6]
+        runs.append((key, hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest(), edits, True))
+        del runs[:-12]
         return out
 
     @staticmethod
