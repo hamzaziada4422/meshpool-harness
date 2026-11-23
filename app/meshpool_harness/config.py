@@ -52,8 +52,10 @@ FIELDS = [
      "report what they have. 0: no limit."),
     ("MH_SUBAGENT_DEPTH", "Sub-agent levels", "1", "1: sub-agents do their part themselves. 2 or 3: they may hand "
      "parts on to sub-agents of their own."),
-    ("MH_MAX_INFLIGHT", "Model calls at the same time", "4", "Per key, across all chats and sub-agents. While the "
-     "endpoint is recovering from an outage, calls go one at a time."),
+    ("MH_MAX_INFLIGHT", "Model calls at the same time", "", "Per endpoint and key, across all chats and sub-agents. "
+     "Blank: automatic. Meshpool sizes it to the provider (16 on the Meshpool gateway, 32 on the major cloud APIs, 2 "
+     "on a local server, 8 on others) and lowers it when the provider answers too many requests. A number sets a "
+     "fixed cap. While the endpoint is recovering from an outage, calls go one at a time."),
     ("MH_BROWSER_USE", "Browser use: which browser", "meshpool",
      "meshpool: Meshpool's own browser window (default). installed: the Chrome, Edge or Brave on this computer, with a "
      "profile folder that belongs to Meshpool (Chrome does not allow automation of your everyday profile). attach: "

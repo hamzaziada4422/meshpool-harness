@@ -73,6 +73,30 @@ def _run_agent(task: str, workdir: str, profile: str, max_steps: int = 60, model
             shutil.rmtree(sessions, ignore_errors=True)
 
 
+def usage_dict(a) -> dict:
+    """What one agent run used, for the result of run_task and for `meshpool -p --json`: tokens, calls, cost in USD
+    (None when no call had a known price) and the calls that were not priced or not reported by the provider. Nested
+    calls (engines, reviewers, helpers, sub-agents) are counted, per model in by_model."""
+    u = getattr(a, "usage", None) or {}
+    calls, unpriced = int(u.get("calls", 0) or 0), int(u.get("unpriced_calls", 0) or 0)
+    out = {"prompt_tokens": u.get("in", 0), "cached_tokens": u.get("cached", 0),
+           "completion_tokens": u.get("out", 0), "model_calls": calls,
+           "cost_usd": round(float(u.get("cost") or 0), 6) if "cost" in u and calls > unpriced else None,
+           "unpriced_calls": unpriced, "unreported_calls": int(u.get("unreported_calls", 0) or 0),
+           "cache_write_tokens": u.get("cache_write", 0), "reasoning_tokens": u.get("reasoning", 0),
+           **{k: v for k, v in u.items() if k.startswith("full_miss")}}
+    try:
+        t = getattr(a, "_task", None)
+        if t is not None:
+            out["by_model"] = {m: {"calls": b["calls"], "in": b["in"], "cached": b["cached"], "out": b["out"],
+                                   "cost_usd": round(b["cost"], 6) if b["calls"] > b["unpriced_calls"] else None,
+                                   "unpriced_calls": b["unpriced_calls"]}
+                               for m, b in t.totals()["by_model"].items()}
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
 def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: str | None, sessions: str) -> dict:
     t_start = time.time()
     from meshpool_harness.agent.core import Agent
@@ -95,9 +119,7 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
     steps = sum(1 for e in events if e.get("type") == "assistant")
     capped = any("Stopped after" in x for x in errors)
     reason = "turn cap" if capped else ("error" if errors else "finished")
-    usage = {"prompt_tokens": a.usage.get("in", 0), "cached_tokens": a.usage.get("cached", 0),
-             "completion_tokens": a.usage.get("out", 0), "model_calls": a.usage.get("calls", 0),
-             **{k: v for k, v in a.usage.items() if k.startswith("full_miss")}}
+    usage = usage_dict(a)
     out = {"ok": bool(answer.strip()) and not errors, "answer": answer, "reason": reason, "turns": steps,
            "usage": usage, "route": route.spec if route else None,
            "route_keys": _keys(route) if route else [], "profile": route.profile if route else None, "model": a.current_model(),
