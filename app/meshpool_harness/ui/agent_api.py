@@ -1356,7 +1356,7 @@ def create(body: dict) -> dict:
         using_ev = {"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
               "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}}
         try:                                        # S-04: Auto picked something other than the mode's own agent: one click back
-            back = HR.default_for(kind)
+            back = HR.own_for(kind)
             if back and back != routed["harness"]:
                 using_ev["back"] = {"harness": back, "name": HR.get(back)["name"]}
         except Exception:  # noqa: BLE001
