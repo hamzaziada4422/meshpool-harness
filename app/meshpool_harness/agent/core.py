@@ -1566,10 +1566,11 @@ class Agent:
         runs = g.setdefault("same", [])
         edits = self.ws.edits
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
-            stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits) >= 3
+            stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
         else:
-            stuck = len(runs) >= 3 and all(r[0] == key for r in runs[-3:]) and len({r[1] for r in runs[-3:]}) == 1
+            stuck = (len(runs) >= 3 and all(r[0] == key and r[3] for r in runs[-3:])
+                 and len({r[1] for r in runs[-3:]}) == 1)
         if stuck:
             g["refused"] = g.get("refused", 0) + 1
             return ("[Meshpool] Not run: this exact call has run three times with the same result. Running it again "
@@ -1578,12 +1579,12 @@ class Agent:
         out = self._run_tool(c, cut=cut)
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
-        if os.environ.get("MH_FAILURE_HINT") == "1" and \
-                any(r[0] == key and r[1] == h and r[2] == edits for r in runs) and \
-                re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error", str(out)):
+        failed = bool(re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error|failed|not found", str(out)))
+        if os.environ.get("MH_FAILURE_HINT") == "1" and failed and \
+                any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
             out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
                               "case, a shorter timeout), print what it is waiting on, or change the code first.")
-        runs.append((key, h, edits, True))
+        runs.append((key, h, edits, failed))     # only a call that failed counts: a poll that says "pending" may repeat
         del runs[:-12]
         return out
 

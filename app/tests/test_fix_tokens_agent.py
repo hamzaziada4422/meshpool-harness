@@ -126,7 +126,7 @@ def test_anthropic_cache_markers_can_be_turned_off(monkeypatch):
 def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_path):
     a = _agent(tmp_path)
     runs = []
-    a._run_tool = lambda c, cut=False: runs.append(1) or "same output"
+    a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
     g = {}
     call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
@@ -143,7 +143,7 @@ def test_repeat_window_switch_catches_alternation_and_spares_progress(tmp_path, 
     monkeypatch.setenv("MH_REPEAT_WINDOW", "1")
     a = _agent(tmp_path)
     runs = []
-    a._run_tool = lambda c, cut=False: runs.append(1) or "same output"
+    a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
     call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     g = {}
@@ -460,3 +460,11 @@ def test_hosted_endpoints_are_not_probed_with_local_server_urls(monkeypatch):
     urls.clear()
     CX.probe("http://localhost:11434/v1", "llama3", "k")
     assert any(u.endswith("/api/show") for u in urls)
+
+
+def test_a_repeated_poll_that_succeeds_is_never_refused(tmp_path):
+    a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 0]\nstatus: pending"
+    g = {}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "gh run view 1"]}'}}
+    assert not any("Not run" in a._repeat_guard(call, g) for _ in range(8))
