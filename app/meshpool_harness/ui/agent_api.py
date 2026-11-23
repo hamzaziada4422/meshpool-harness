@@ -338,7 +338,11 @@ class Session:
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints")
+        outside = self.harness["type"] in ("acp", "pi")
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints", mode="scan" if outside else "journal",
+                              seq_floor=int(read_meta(self.id).get("turn_seq") or 0))
+        if not outside:
+            self.agent.checkpoint = self.cp          # the agent books what its own tools wrote (core._run_tool)
         if self.harness["type"] in ("acp", "pi"):
             self.state = "idle"
             name = self.harness["name"]
@@ -689,6 +693,10 @@ class Session:
             except Exception:  # noqa: BLE001
                 pass
         self.agent, self.harness = a, new
+        if self.cp:                                   # Meshpool's agent books by its tools, an outside agent by scan
+            a_out = new["type"] in ("acp", "pi")
+            self.cp.mode = "scan" if a_out else "journal"
+            a.checkpoint = None if a_out else self.cp
         try:
             if hasattr(old, "close") and old is not a:
                 old.close()
@@ -857,7 +865,8 @@ class Session:
             try:
                 if self.cp:
                     try:
-                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx)
+                        t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
+                                               event_index=ev0)
                         self._turn_n = (t or {}).get("n")
                         if t is None and self.cp.disabled and not getattr(self, "_cp_noted", False):
                             self._cp_noted = True          # say it once per thread, not on every turn
@@ -980,19 +989,11 @@ class Session:
                 self._turn_finish()
                 with _ACTIVE_LOCK:
                     _ACTIVE.get(root, set()).discard(self)
-                if self._turn_shared and self._turn_n is not None:
-                    write_meta(self.id, shared_turns=sorted(set(read_meta(self.id).get("shared_turns") or [])
-                                                            | {self._turn_n}))
-                if self.cp:
-                    try:
-                        self.cp.end_turn()
-                        self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
-                    except Exception:  # noqa: BLE001
-                        pass
+                self._end_cp_turn()
                 while (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
                        and self.agent.has_steers()):  # added with Enter just as the turn ended: answer it now
                     try:
-                        self.agent.resume_steers()
+                        self._resume_steers()
                     except Exception as e:  # noqa: BLE001
                         self.emit({"type": "error", "text": str(e)})
                         break
@@ -1020,7 +1021,7 @@ class Session:
                                 self.state = "idle"
                                 break
                         try:
-                            self.agent.resume_steers()
+                            self._resume_steers()
                         except Exception as e:  # noqa: BLE001
                             self.emit({"type": "error", "text": str(e)})
                             with self.lock:
@@ -1035,6 +1036,44 @@ class Session:
                         _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
                                 + (self.agent.title or "task")[:60], last.strip()[:200])
         threading.Thread(target=go, daemon=True).start()
+
+    def _end_cp_turn(self):
+        """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
+        if not self.cp:
+            return
+        try:
+            self.cp.end_turn()
+            write_meta(self.id, turn_seq=self.cp.seq)
+            self.emit({"type": "checkpoint", "turns": self.cp.turns()[-1:]})
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _resume_steers(self):
+        """Answer what the user added just as the turn ended, as a turn of its own: its file changes get their own
+        checkpoint (so Undo and the rewound chat agree), titled by the added message."""
+        title, ev_i = "Added message", None
+        with self.lock:
+            for e in reversed(self.events):
+                if e.get("type") == "user" and e.get("steer"):
+                    ev_i = e.get("i")
+                    t = str(e.get("text") or "").strip()
+                    if t:
+                        title = t.splitlines()[0]
+                    break
+            if ev_i is None:
+                ev_i = len(self.events)
+        began = False
+        if self.cp:
+            try:
+                msgs = None if self.harness["type"] in ("acp", "pi") else len(self.agent.messages)
+                began = self.cp.begin_turn(title, msgs, event_index=ev_i) is not None
+            except Exception:  # noqa: BLE001
+                began = False
+        try:
+            return self.agent.resume_steers()
+        finally:
+            if began:
+                self._end_cp_turn()
 
     def grade(self) -> dict:
         """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
@@ -1199,28 +1238,48 @@ class Session:
             self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
+    def _turn_cut(self, turn: int):
+        """Position in the transcript of the user event that started this checkpoint turn, or None (old turns)."""
+        t = next((x for x in (self.cp.turns() if self.cp else []) if x.get("n") == int(turn)), None)
+        if not t:
+            return None
+        first = str(t.get("title") or "").strip()
+        with self.lock:
+            evs = self.events
+            mi, ei = t.get("message_index"), t.get("event_index")
+            if mi is not None:                       # Meshpool's agent stamps each user event with its message number
+                for p, e in enumerate(evs):
+                    if e.get("type") == "user" and e.get("mi") == mi:
+                        return p
+            if isinstance(ei, int) and 0 <= ei < len(evs) and evs[ei].get("type") == "user":
+                shown = str(evs[ei].get("text") or "").strip().splitlines()
+                if (shown[0] if shown else "Images").strip()[:120] == first:
+                    return ei                        # the event the turn began at: its title must match its text
+        return None
+
     def revert(self, turn: int) -> dict:
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
-        shared = [n for n in read_meta(self.id).get("shared_turns") or [] if n >= int(turn)]
-        if shared:
-            raise ValueError("Another chat, or an edit you saved, changed files in this folder while this chat was "
-                             "working, so Undo cannot tell the changes apart and would remove theirs. Undo by hand "
-                             "or with Git (the Git panel shows what changed).")
+        cut = self._turn_cut(turn)
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
-        if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
+        built_in = self.harness["type"] not in ("acp", "pi")
+        if built_in and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
             self.agent.messages = self.agent.messages[:idx]
             self.agent.save()
             with self.lock:
-                self.events = events_from_messages(self.agent.messages[1:])
+                if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
+                    self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
+                else:
+                    self.events = events_from_messages(self.agent.messages[1:])
         else:
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
-                users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
-                cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
+                if cut is None:
+                    users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
+                    cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
@@ -1239,8 +1298,33 @@ class Session:
         elif r.get("kept"):
             names = ", ".join(r["kept"][:5]) + (" ..." if len(r["kept"]) > 5 else "")
             msg += f". Kept as they are, because you changed them afterwards: {names}"
-        self.emit({"type": "status", "text": msg + "."})
+        msg += "."
+        if r.get("backup"):
+            msg += f" Copies of the files Undo replaced are in {r['backup']}."
+        self.emit({"type": "status", "text": msg})
         return r
+
+    def rewind(self, event_index: int, files: bool = True) -> dict:
+        """Go back to just before one of the user's messages (the event at `event_index`): the conversation, the
+        transcript and, with `files`, the file changes made from there on. Returns {text, undo[, forked]}."""
+        from meshpool_harness import chat_rewind as CR
+        if self.state in ("working", "waiting"):
+            raise ValueError("Stop the agent before rewinding.")
+        r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self)
+        if r.get("undo"):
+            msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
+                                                                         r["undo"].get("deleted")) else "")
+            if r["undo"].get("notes"):
+                msg += " " + " ".join(r["undo"]["notes"][:5])
+            if r["undo"].get("backup"):
+                msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
+            self.emit({"type": "status", "text": msg.strip()})
+        return r
+
+    def fork(self, event_index: int) -> str:
+        """A new chat with the conversation up to the end of the exchange that starts at this message."""
+        from meshpool_harness import chat_rewind as CR
+        return CR.fork(self.id, CR.message_for_event(self, int(event_index)), session=self)
 
     def stop(self):
         self._stop_req = True                        # checked before the agent starts: its own flag resets then

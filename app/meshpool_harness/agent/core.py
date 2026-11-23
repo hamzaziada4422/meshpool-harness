@@ -1242,7 +1242,7 @@ class Agent:
             self.messages.append({"role": "user", "content": body})
         self.save()                                  # the thread and its message survive a restart mid-turn
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0], "images": [im.get("name", "image") for im in images or []],
-                   "plan": self.plan})
+                   "plan": self.plan, "mi": len(self.messages) - 1})
         return self._turn()
 
     def has_steers(self) -> bool:
@@ -2869,6 +2869,11 @@ class Agent:
                                      args.get("timeout_ms"), (int, float)) else None) if isinstance(args, dict) else None,
                    "diff": self._diff(name, args) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
+        cp = getattr(self, "checkpoint", None)          # the chat's checkpoints (journal mode); sub-agents have none
+        cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY or self._inspection(
+            name, raw if isinstance(raw, str) else json.dumps(raw))) if cp else None
+        if cp_ctx:
+            cp_ctx.__enter__()
         try:
             if bad:
                 raise bad
@@ -2978,6 +2983,11 @@ class Agent:
             raise
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
+        finally:
+            if cp_ctx:
+                cp_ctx.__exit__(None, None, None)
+                if name == "bash_start" and ok and not denied:
+                    cp.window_open()                    # the background process may still change files
         out = clean(str(out))
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
