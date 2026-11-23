@@ -74,7 +74,12 @@ def _codex_prompt() -> str:
     except OSError:
         return "You are a coding agent. Use the shell and apply_patch tools to complete the user's task."
     text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
-    return text if os.environ.get("MH_CODEX_PROMPT") == "full" else _trim_codex(text)
+    if os.environ.get("MH_CODEX_PROMPT") == "full":
+        return text
+    text = _trim_codex(text)
+    if os.environ.get("MH_FINISH_CHECK", "1") == "0":
+        text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
+    return text
 
 
 _TRIM = (
@@ -1552,6 +1557,8 @@ class Agent:
         the same lines. One such loop (a command run 60 times, 1M tokens) cost more than a hundred ordinary tasks."""
         f = c.get("function", {})
         key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
+        if f.get("name") in ("shell", "bash", "bash_many"):
+            key = re.sub(r"\d+", "#", key)         # fetch_all(1), fetch_all(2), ...: the same call with other numbers
         runs = g.setdefault("same", [])
         edits = self.ws.edits
         if sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3 and \

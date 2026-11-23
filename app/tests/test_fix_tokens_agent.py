@@ -323,3 +323,12 @@ def test_a_second_identical_failure_gets_a_change_of_approach_note(tmp_path):
     first = a._repeat_guard(call, g)
     second = a._repeat_guard(call, g)
     assert "Do not repeat it" not in first and "Do not repeat it" in second
+
+
+def test_same_command_with_only_numbers_changed_counts_as_a_repeat(tmp_path):
+    a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
+    g = {}
+    outs = [a._repeat_guard({"id": str(n), "function": {"name": "shell", "arguments": json.dumps(
+        {"command": ["bash", "-lc", f"timeout 10 python -c 'import sync; sync.fetch_all({n})'"]})}}, g) for n in range(1, 9)]
+    assert sum("Not run" in o for o in outs) >= 4
