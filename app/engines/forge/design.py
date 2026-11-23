@@ -111,12 +111,8 @@ def settings(rules: dict | None) -> dict:
 
 
 def vision_models(cfg: dict) -> list[str]:
-    from .review import chain
-    out: list[str] = []
-    for m in [os.environ.get("MH_DESIGN_VISION_MODEL")] + list(cfg.get("vision_models") or []) + chain(None):
-        if m and m not in out:
-            out.append(m)
-    return out
+    from meshpool_harness.core.models import vision_reviewer_models
+    return vision_reviewer_models(os.environ.get("MH_DESIGN_VISION_MODEL"), *cfg.get("vision_models") or [])
 
 
 def mode_from(task: str = "", options: dict | None = None) -> str | None:

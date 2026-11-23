@@ -382,8 +382,8 @@ review:
     batch: 6                    # pages per reviewer message (vision models limit images per call)
     image_width: 1100           # page image width in pixels
     timeout_s: 300              # wall clock per reviewer call
-    deck_models: []             # vision models first; then MH_REVIEW_MODEL, claude-sonnet-5.5, gpt-6.1-terra, kimi-k3
-    text_models: []             # storyboard review and research picks: MH_STORY_REVIEW_MODEL, these, then the chain
+    deck_models: []             # vision models first; then MH_REVIEW_MODEL, then the configured model (never a built-in name)
+    text_models: []             # storyboard review and research picks: MH_STORY_REVIEW_MODEL, these, then the configured model
   references:                   # reference-guided review (review.py reference_images): golden library slides of the
     enabled: false              # same kind sent beside each rendered slide. Off: no A/B has shown a gain yet (no model
     per_slide: 2                # budget on 2026-11-20). Needs MESHPOOL_KB; MH_REVIEW_REFERENCES=1 turns it on

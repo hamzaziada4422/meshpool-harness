@@ -494,7 +494,6 @@ def tidy(ws, artifacts: list) -> list:
     return [str(moved.get(Path(a if os.path.isabs(a) else ws.root / a).resolve(), a)) for a in artifacts]
 
 
-REVIEW_CHAIN = ("claude-sonnet-5.5", "gpt-6.1-terra")       # strong text models for the partner / MD panel
 NAMES = {"md": "MD (bulge-bracket bank)", "partner": "senior partner (strategy firm)"}
 
 
@@ -561,8 +560,8 @@ class WorkbookReview:
                  min_turns: int | None = None, budget: int | None = None, task_id: str = "sheets"):
         self.client, self.ws, self.max_turns, self.task_id = client, ws, max_turns, task_id
         env = os.environ
-        self.models = [m for m in dict.fromkeys([model, env.get("MH_SHEETS_REVIEW_MODEL"), env.get("MH_REVIEW_MODEL"),
-                                                 *REVIEW_CHAIN]) if m]
+        from meshpool_harness.core.models import reviewer_models      # explicit models, then the configured one
+        self.models = reviewer_models(model, env.get("MH_SHEETS_REVIEW_MODEL"), env.get("MH_REVIEW_MODEL"))
         self.max_rounds = max(1, int(max_rounds or env.get("MH_REVIEW_ROUNDS") or 3))
         self.min_turns = int(min_turns if min_turns is not None else env.get("MH_REVIEW_MIN_TURNS") or 4)
         self.budget = int(budget or env.get("MH_REVIEW_DIGEST_CHARS") or 25000)
