@@ -17,7 +17,7 @@ KNOWN = ("temperature", "top_p", "tool_choice", "parallel_tool_calls", "stream_o
 _NEVER_DROP = {"model", "messages", "tools", "stream", "max_tokens", "max_completion_tokens"}
 
 _TLS = re.compile(r"CERTIFICATE_VERIFY_FAILED|certificate verify failed|self[- ]signed certificate|hostname mismatch|"
-                  r"WRONG_VERSION_NUMBER|SSLError|\[SSL", re.I)
+                  r"WRONG_VERSION_NUMBER|SSLError|\[SSL|HTTPS certificate of .* could not be verified", re.I)   # last: core/http.explain
 _HTTP4 = re.compile(r"HTTP 4\d\d")
 
 _NO_TOOLS = re.compile(

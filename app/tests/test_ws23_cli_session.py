@@ -349,7 +349,7 @@ def test_terminal_chat_shows_in_the_app(tmp_path):
     try:
         time.sleep(1.0)
         r = subprocess.run([sys.executable, "-m", "meshpool_harness", "--dir", str(proj), "-p", "hello", "--json",
-                            "--no-mcp"], cwd=str(repo / "app"), env=env, capture_output=True, text=True, timeout=180)
+                            "--no-mcp", "--auto"], cwd=str(repo / "app"), env=env, capture_output=True, text=True, timeout=180)
         assert r.returncode == 0, r.stderr[-800:]
         res = json.loads(r.stdout.strip().splitlines()[-1])
         ui = subprocess.Popen([sys.executable, "-m", "meshpool_harness", "ui", "--no-browser", "--port", str(uport)],

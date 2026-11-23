@@ -317,6 +317,7 @@ class LiveClient:
                             ex.pop("tool_choice", None)
                         elif fix.get("action") == "drop_field":
                             for f in fix["fields"]:
+                                MC.learn_refused(base_url, model, f)   # persisted per endpoint: the next client never sends it
                                 if f == "temperature":
                                     temperature = None
                                 else:
