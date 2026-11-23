@@ -390,8 +390,11 @@ class SimpleLedger:
             body.pop("max_tokens", None)
         if os.environ.get("MH_CACHE_KEY") == "1" and task_id:
             root = task_id.split("-esc")[0]
-            body["prompt_cache_key"] = root
-            body["user"] = root
+            from meshpool_harness.core import modelcaps as _MC   # fields this endpoint refused for this model before
+            gone = _MC.refused(self.base_url, model)
+            for k in ("prompt_cache_key", "user"):
+                if k not in gone:
+                    body[k] = root
         wire = os.environ.get("MH_WIRE", "chat")
         from meshpool_harness import providers as PV
         prov, body["model"] = PV.split(body["model"])    # the model's provider decides where the call goes

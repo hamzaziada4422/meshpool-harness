@@ -183,9 +183,8 @@ def _ttl() -> float:
 
 
 def _mem_path():
-    from pathlib import Path
-    h = os.environ.get("MESHPOOL_HOME")
-    return Path(os.path.expanduser(h) if h else os.path.expanduser("~/.meshpool")) / "cache" / "endpoint_models.json"
+    from meshpool_harness import config as C            # the data folder (MESHPOOL_HOME, else the install's own)
+    return C.home() / "cache" / "endpoint_models.json"
 
 
 def endpoint_key(base: str, model: str) -> tuple[str, str]:

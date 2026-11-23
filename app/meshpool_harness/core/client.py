@@ -209,7 +209,8 @@ class LiveClient:
                     MC.learn_no_vision(base_url, model)            # text-only here: image reviews skip it from now on
                     raise
                 if "HTTP 400" in msg:                              # a refused field: drop it and resend at once
-                    sent = set(ex) | {"max_tokens"} | ({"temperature"} if temperature is not None else set())
+                    sent = set(ex) | {"max_tokens"} | ({"temperature"} if temperature is not None else set()) | (
+                        {"prompt_cache_key", "user"} if os.environ.get("MH_CACHE_KEY") == "1" and task_id else set())
                     f = MD.unsupported_param(msg, sent)
                     if f and f not in tried:
                         tried.add(f)

@@ -22,7 +22,7 @@ REPLY = {"edits": []}
 
 class _Endpoint:
     def __init__(self):
-        self.requests, self.lock = [], threading.Lock()
+        self.requests, self.lock, self.strict_cache = [], threading.Lock(), False
         outer = self
 
         class H(BaseHTTPRequestHandler):
@@ -49,6 +49,10 @@ class _Endpoint:
                 if body.get("model") != "m-main":
                     return self._send(404, {"error": {"code": "DeploymentNotFound",
                                                       "message": "The API deployment for this resource does not exist."}})
+                if "prompt_cache_key" in body and outer.strict_cache:
+                    return self._send(400, {"error": {"message": "Unrecognized request argument supplied: "
+                                                      "prompt_cache_key", "param": "prompt_cache_key",
+                                                      "code": "unsupported_parameter"}})
                 if "temperature" in body:
                     return self._send(400, {"error": {"message": "Unsupported parameter: 'temperature' is not supported "
                                                       "with this model.", "type": "invalid_request_error",
@@ -221,3 +225,20 @@ def test_memory_expires_and_survives_damage(ep, monkeypatch):
     MC.learn_missing(ep.url, "new-model")                                 # ... and is overwritten by the next mark
     MC.reset()
     assert MC.is_missing(ep.url, "new-model") and json.loads(path.read_text())
+
+
+def test_refused_cache_key_is_learned_and_never_sent_again(ep, monkeypatch):
+    """prompt_cache_key and user are added by the transport (MH_CACHE_KEY=1, the default config), after the client
+    drops refused fields: the transport must honour the memory too, or every call on such an endpoint fails."""
+    ep.strict_cache = True
+    monkeypatch.setenv("MH_CACHE_KEY", "1")
+    CL.LiveClient("forge_review").chat(model="m-main", messages=[{"role": "user", "content": "hi"}], task_id="t-1")
+    assert [r for r in ep.calls() if "prompt_cache_key" in r["keys"]].__len__() == 1
+    n = len(ep.requests)
+    CL.LiveClient("forge_review").chat(model="m-main", messages=[{"role": "user", "content": "hi"}], task_id="t-2")
+    assert len(ep.requests) == n + 1 and "prompt_cache_key" not in ep.requests[-1]["keys"]
+
+
+def test_memory_lives_in_the_data_folder(ep):
+    from meshpool_harness import config as C
+    assert MC._mem_path() == C.home() / "cache" / "endpoint_models.json"
