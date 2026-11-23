@@ -172,7 +172,7 @@ def _with_scheme(u: str) -> str:
     return u
 
 
-def parse_pasted(url: str, kind: str = "") -> Parsed:
+def parse_pasted(url: str, kind: str = "", api_version: str = "") -> Parsed:
     """Understand whatever was pasted into the address box. A full Azure call address such as
     https://x.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21 is split into the
     base address, the deployment (the model name) and the api-version; any other address loses a pasted endpoint
@@ -184,7 +184,7 @@ def parse_pasted(url: str, kind: str = "") -> Parsed:
         raise EndpointError("That does not look like a web address. Use the form https://api.example.com/v1.")
     host = (p.hostname or "").lower()
     q = parse_qs(p.query)
-    version = (q.get("api-version") or q.get("api_version") or [""])[0].strip()
+    version = (q.get("api-version") or q.get("api_version") or [""])[0].strip() or (api_version or "").strip()
     path = re.sub(r"/+$", "", p.path)
     origin = f"{p.scheme}://{p.netloc}"
     fam = _azure_family(host)
@@ -194,14 +194,15 @@ def parse_pasted(url: str, kind: str = "") -> Parsed:
             k = "azure-anthropic"
         elif re.search(r"/openai/v1(/|$)", path) or (kind == "azure-v1" and not m_dep):
             k = "azure-v1"
-        elif m_dep or path.startswith("/openai") or kind == "azure-classic":
-            k = "azure-classic"
+        elif m_dep or (kind == "azure-classic" and version):
+            k = "azure-classic"                  # the older route: a pasted deployment address, or a chosen api-version
         elif re.match(r"^/models(/|$)", path) or kind == "azure-foundry":
             k = "azure-foundry"
-        elif fam == "foundry":
-            k = "azure-v1"                       # a bare Foundry address: its OpenAI route serves every model
         else:
-            k = "azure-classic"
+            # A bare Azure OpenAI or Foundry address: the /openai/v1 route serves every deployment (OpenAI and
+            # DeepSeek, Llama, Grok ...), takes no api-version and is what Microsoft's current docs use. Pinning an
+            # old api-version on the older route made newer models fail with "unsupported api version".
+            k = "azure-v1"
         if k == "azure-v1":
             m = re.match(r"^(.*?/openai/v1)(?:/|$)", path)
             base = origin + (m.group(1) if m else "/openai/v1")
@@ -522,7 +523,8 @@ def env_sources(environ) -> list[dict]:
                "deployment": ""}
         try:
             if raw:
-                p = parse_pasted(raw, kind if kind != "openai" else "")
+                p = parse_pasted(raw, kind if kind != "openai" else "",
+                                 str(environ.get("AZURE_OPENAI_API_VERSION") or "") if kind == "azure-classic" else "")
                 row.update(base=p.base, api_version=p.api_version, deployment=p.deployment)
                 if kind == "azure-classic":
                     row["kind"] = p.kind if is_azure(p.kind) else "azure-classic"

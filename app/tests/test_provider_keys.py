@@ -227,7 +227,8 @@ def use(p, model=None, version="", key=KEY, kind=None):
     ("https://api.sambanova.ai/v1", "sambanova"), ("http://localhost:11434/v1", "ollama"),
     ("http://127.0.0.1:1234/v1", "lmstudio"), ("http://localhost:8000/v1", "generic"),
     ("https://litellm.corp.example.com", "generic"),
-    ("https://x.openai.azure.com", "azure-classic"), ("https://x.cognitiveservices.azure.com", "azure-classic"),
+    ("https://x.openai.azure.com", "azure-v1"), ("https://x.cognitiveservices.azure.com", "azure-v1"),
+    ("https://x.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2024-10-21", "azure-classic"),
     ("https://x.openai.azure.com/openai/v1/", "azure-v1"), ("https://x.services.ai.azure.com", "azure-v1"),
     ("https://x.services.ai.azure.com/models", "azure-foundry"),
     ("https://x.services.ai.azure.com/anthropic", "azure-anthropic"),
@@ -375,11 +376,27 @@ def test_azure_connection_is_a_one_token_chat_call_never_models(home, mk, kind):
     r = PS.test(p.base, KEY, kind=kind)                                   # no deployment typed yet
     assert not r["ok"] and r["needs_model"] and "deployment name" in r["error"]
     assert "rejected" not in r["error"] and p.log == []                    # nothing was sent: the key is not called bad
-    r = PS.test(p.base, KEY, kind=kind, model="my-gpt4o")
+    ver = EP.AZURE_DEFAULT_VERSION if kind == "azure-classic" else ""      # the form carries the version box's value
+    r = PS.test(p.base, KEY, kind=kind, model="my-gpt4o", api_version=ver)
     assert r["ok"] and r["models"] == [{"id": "my-gpt4o"}] and r["kind"] == kind, r
     assert all(m == "POST" for m, path, h, b in p.log) and not any(path.endswith("/models") for m, path, h, b in p.log)
-    bad = PS.test(p.base, "sk-wrong-key-7654321", kind=kind, model="my-gpt4o")
+    bad = PS.test(p.base, "sk-wrong-key-7654321", kind=kind, model="my-gpt4o", api_version=ver)
     assert not bad["ok"] and "rejected (401)" in bad["error"] and "{" not in bad["error"]
+
+
+def test_a_bare_azure_address_uses_the_v1_route_and_falls_back_to_the_deployment_route(home, mk, monkeypatch):
+    """Microsoft's current route needs no api-version and serves every model. A resource that has no such route
+    answers 404 there: the same address is then tried on the deployment route, and Save keeps the one that worked."""
+    assert EP.parse_pasted("https://res.openai.azure.com").kind == "azure-v1"
+    assert EP.parse_pasted("https://res.openai.azure.com").base == "https://res.openai.azure.com/openai/v1"
+    assert EP.parse_pasted("https://res.openai.azure.com", "azure-classic", "2025-04-01-preview").kind == "azure-classic"
+    p = mk("azure-classic")                                              # a resource that only has the deployment route
+    monkeypatch.setattr(EP, "_azure_family", lambda host: "classic")     # the mock listens on 127.0.0.1, not *.azure.com
+    r = PS.test(p.base, KEY, model="my-gpt4o")
+    assert r["ok"] and r["kind"] == "azure-classic" and r["api_version"] == EP.AZURE_DEFAULT_VERSION, r
+    cur = PS.save(p.base, KEY, "auto", "my-gpt4o")
+    assert C.read()["MH_API_KIND"] == "azure-classic" and C.read()["MH_API_VERSION"] == EP.AZURE_DEFAULT_VERSION
+    assert cur["base_url"] == p.origin
 
 
 def test_azure_wrong_deployment_and_version_are_explained(home, mk):
@@ -668,7 +685,7 @@ def test_a_saved_kind_is_ignored_when_the_address_comes_from_the_environment(hom
     C.write({"MH_API_KIND": "openrouter", "MH_API_VERSION": "1999-01-01"})
     monkeypatch.setenv("AZURE_OPENAI_API_KEY", "az-key-123456789")
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://res1.openai.azure.com")
-    assert PV.key_kind() == "azure-classic" and PV.key_api_version() == ""
+    assert PV.key_kind() == "azure-v1" and PV.key_api_version() == ""      # no api-version named: the v1 route
 
 
 @pytest.mark.parametrize("var,kind,host", [
@@ -782,3 +799,45 @@ def test_catalog_lists_every_provider_with_what_to_paste():
     assert all(c["label"] and c["key_hint"] and c["base"] for c in PS.catalog())
     az = next(c for c in PS.catalog() if c["id"] == "azure-classic")
     assert az["deployment"] and az["version"] == "2024-10-21" and "Keys and Endpoint" in az["key_hint"]
+
+
+def test_the_agent_loop_never_follows_a_redirect_with_the_key(home):
+    """core._urlopen (the agent's own call) used to follow a redirect and send the key header to the new host."""
+    import http.server
+    import threading
+    from meshpool_harness.agent import core as CORE
+    seen = []
+
+    class Target(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):                       # urllib follows a 302 on a POST as a GET, header included
+            seen.append(self.headers.get("api-key") or self.headers.get("authorization"))
+            self.send_response(200); self.end_headers(); self.wfile.write(b"{}")
+
+        def log_message(self, *a):
+            pass
+
+    tgt = http.server.HTTPServer(("127.0.0.1", 0), Target)
+
+    class Hop(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(302)
+            self.send_header("Location", f"http://127.0.0.1:{tgt.server_port}/steal")
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    hop = http.server.HTTPServer(("127.0.0.1", 0), Hop)
+    for s in (tgt, hop):
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    try:
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(f"http://127.0.0.1:{hop.server_port}/x", data=b"{}", method="POST",
+                                     headers={"api-key": "secret-key-123456"})
+        with pytest.raises(urllib.error.HTTPError) as e:
+            CORE._urlopen(req, 5, lambda c: None)
+        assert e.value.code == 302 and seen == [], seen
+    finally:
+        for s in (tgt, hop):
+            s.shutdown()

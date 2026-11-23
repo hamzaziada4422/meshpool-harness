@@ -324,7 +324,9 @@ class _EndpointDown(RuntimeError):
 
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
-    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
+    from meshpool_harness.core import endpoint as _EP
+    # _NoRedirect: a redirect would carry the key header to another host; it surfaces as an HTTP error instead
+    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink), _EP._NoRedirect).open(req, timeout=timeout)
 
 
 def _probe_once(base: str, key: str, model: str, sink=None) -> str:
@@ -332,16 +334,16 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     from meshpool_harness import providers as _PV
+    from meshpool_harness.core import endpoint as _EP            # URL, key header and body fields: core/endpoint.py
     if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
         from meshpool_harness.core import anthropic_wire as AW
         url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
     else:
-        from meshpool_harness.core import endpoint as _EP        # URL, key header and body fields: core/endpoint.py
         url, body, hdrs = _EP.chat_request(base, key, body)
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
-        with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
+        with (_urlopen(req, t, sink) if sink else _EP.urlopen(req, t)) as r:
             r.read()
         return "ok"
     except urllib.error.HTTPError as e:
