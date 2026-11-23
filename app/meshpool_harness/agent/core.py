@@ -758,6 +758,10 @@ def _destructive(args: dict) -> bool:
                                     + " " + " ".join(map(str, args.get("commands") or []))))
 
 
+_CHAT_TOOLS = frozenset({"read_file", "grep", "glob", "edit", "write_file", "bash", "web_search", "web_research",
+                         "fetch_url", "office_task"})
+
+
 def _cache_hints_ok(base: str) -> bool:
     """prompt_cache_key and user are optional routing hints that OpenAI, Azure OpenAI and the Meshpool gateway read;
     other OpenAI-compatible servers (Ollama, LM Studio, Mistral, vLLM...) may reject fields they do not know."""
@@ -935,8 +939,16 @@ class Agent:
             return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
         names = self._tool_names()
-        if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
-            names = names + ["delegate_task"]
+        if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
+                and os.environ.get("MH_LITE_CHAT_TOOLS", "1") != "0":
+            # A quick question carries the tools it can need (look, change, run, search), not the 19 of a long job:
+            # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
+            # prompt prefix does not flip back and forth.
+            names = [n for n in names if n in _CHAT_TOOLS]
+        else:
+            self._tools_full = True
+            if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
+                names = names + ["delegate_task"]
         drop = self._dropped()
         if drop:
             names = [n for n in names if n not in drop]

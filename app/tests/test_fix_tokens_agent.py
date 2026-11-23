@@ -151,3 +151,17 @@ def test_a_long_run_without_progress_ends_with_a_best_effort_answer(tmp_path):
             break
     assert g.get("hard_wrap") and "Do not call another tool" in note
     assert step == 36                                 # not before 36 steps without a changed file
+
+
+def test_chat_lane_carries_fewer_tools_and_keeps_the_full_set_once_a_task_comes(tmp_path):
+    full = _prefix_tokens(_agent(tmp_path, "work"))
+    a = _agent(tmp_path, "work")
+    a.lane = "chat"
+    names = {t["function"]["name"] for t in a.tool_schemas()}
+    assert "delegate_task" not in names and "todo_write" not in names and {"read_file", "bash", "web_search"} <= names
+    lite = _prefix_tokens(a)
+    assert lite < full - 1500                         # at least 1.5k tokens less than the full set
+    a.lane = "task"
+    assert len(a.tool_schemas()) > len(names)
+    a.lane = "chat"
+    assert len(a.tool_schemas()) > len(names)         # no flipping back: the prefix stays stable for the chat
