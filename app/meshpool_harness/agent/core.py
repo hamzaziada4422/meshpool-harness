@@ -3100,7 +3100,7 @@ class Agent:
             return f"ERROR: office_task refused, nothing was built: {why}", False
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
-        jid = OJ.new_job(engine, args["request"], paths, self.root)
+        jid = OJ.new_job(engine, args["request"], paths, self.root, model=self.model or None)   # the user's pick; else the engine resolves MH_MODEL / settings (never the fast tier)
         self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
         OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
         if OJ.JOBS[jid].get("stopped"):

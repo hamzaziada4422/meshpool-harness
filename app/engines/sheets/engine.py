@@ -24,7 +24,9 @@ How you work:
 1. Read any attached input files first (inspect with a short pandas script: sheets, columns, row counts).
 2. Write ONE Python build script (build_workbook.py) using the helper library below, then run it with python.
    Save a first complete version early; improve it afterwards.
-3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix every issue it reports and rerun until it prints PASS.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. It runs exactly the checks finish applies (workbook
+   QA, Checks tab, Cover tab, formula rules, sources), so PASS means finish will accept it. Fix every issue it reports
+   and rerun until it prints PASS.
 4. Finish with a short answer (what the workbook contains, key outputs with their cell references) and cite the
    checker command as evidence. List the .xlsx in artifacts.
 5. You have a fixed turn budget, stated in the task. A checked workbook delivered on time beats a richer one that is
@@ -32,6 +34,8 @@ How you work:
    build scripts are moved out of the output folder when the run ends; only the .xlsx stays there.
 
 Workbook rules:
+- Raw data copied from an input file goes in as typed values in input style, never as formulas like =34; literal
+  dates, years and rates go in labelled input cells that formulas reference.
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
   Outputs -> Checks with colored tabs and a linked tab map. Put middle tabs in that order; add tabs only when needed
   (e.g. Historicals/Model/DCF/Valuation inputs, or Comps/Precedents), passing middle=(...). Use B.section(ws, row, "Revenue build")
@@ -271,6 +275,22 @@ class SheetsWorkspace(Workspace):
         self.wrapped = False                  # the ~80% "wrap up and finish" note was sent
         self.turn = 0                         # last turn whose tools ran (set by turn_budget)
         self.before = set(_files(self.root))  # files already in the folder: never moved or deleted by the tidy-up
+        # "written in this run" is judged by content, not mtime or path: the CLI copies inputs into the folder (new
+        # mtime), so fingerprint every workbook already there and every input at the start
+        self._file_shas: dict = {}            # (path, mtime_ns, size) -> sha256, so per-turn checks stay cheap
+        self.start_hashes = {p.resolve(): h for p in self.before if p.suffix.lower() in (".xlsx", ".xlsm")
+                             and (h := self._file_sha(p))}
+        self.input_hashes = {h for p in self.inputs if p.is_file() and (h := self._file_sha(p))}
+
+    def _file_sha(self, p: Path) -> str | None:
+        try:
+            st = p.stat()
+            key = (str(p), st.st_mtime_ns, st.st_size)
+            if key not in self._file_shas:
+                self._file_shas[key] = _sha(p)
+            return self._file_shas[key]
+        except OSError:
+            return None
 
     def _allowed(self, q: Path) -> bool:
         return q == self.root or self.root in q.parents or q in self.inputs
@@ -316,8 +336,9 @@ class SheetsWorkspace(Workspace):
         return msg
 
     def saved_workbooks(self) -> list[Path]:
-        """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
-        then the most recently saved."""
+        """.xlsx files written in this run: top-level files first, then the most recently saved. A file counts only
+        when its content differs from what the folder held at the start and from every input workbook, so an input
+        copied into the folder (new mtime, same bytes) is not the run's work."""
         out = []
         for p in self.root.rglob("*.xlsx"):
             rel = p.relative_to(self.root).parts
@@ -325,7 +346,10 @@ class SheetsWorkspace(Workspace):
                 continue
             try:
                 m = p.stat().st_mtime
-                if m >= self.started - 1 and p.resolve() not in self.inputs:
+                if m < self.started - 1 or p.resolve() in self.inputs:
+                    continue
+                h = self._file_sha(p)              # content must differ from the start-of-run file and every input
+                if h is not None and h != self.start_hashes.get(p.resolve()) and h not in self.input_hashes:
                     out.append((len(rel) > 1, -m, p))
             except OSError:
                 continue
@@ -365,12 +389,18 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
     17-tab model, kept refining it and hit the turn cap without calling finish; these make it land the work:
     - at ~60% with no workbook: BUILD NOW (build_first);
     - at ~80%: stop adding features, run the checks, fix only failures, finish;
-    - on the last two turns: finish now."""
+    - on the last two turns: finish now (or, with no workbook saved yet, save one now)."""
     ws.turn = turn                                    # last completed turn (reported if the loop raises)
     left = max_turns - turn                           # turns still to come after this note
     notes = [n for n in [build_first(turn, max_turns, ws)] if n]
     if left <= 0:
         return "\n".join(notes) or None
+    if left <= 2 and not ws.saved_workbook():
+        ws.wrapped = ws.nudged = True                 # one instruction only: no BUILD NOW beside it, no "do not change"
+        return (f"SAVE NOW: {turn} of {max_turns} turns used, {left} left, and no .xlsx has been saved. Run your "
+                "build script now so the workbook exists (write build_workbook.py first if you have none), run the "
+                "checker, and call finish with it. If the run ends first, the last saved workbook is checked and "
+                "delivered.")
     if left <= 2:
         ws.wrapped = True
         notes.append(f"FINISH NOW: {turn} of {max_turns} turns used; {left} turn{'s' if left != 1 else ''} left. "
@@ -394,6 +424,26 @@ def turn_budget(turn: int, max_turns: int, ws) -> str | None:
 CAPS = ("turn cap", "wall-clock cap", "task budget")
 
 
+def _end_head(r, max_turns: int) -> str:
+    """The first line of a salvaged answer: why the run ended without an accepted finish."""
+    reason = r.reason or ""
+    if reason.startswith("turn cap"):
+        return f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
+    if reason.startswith(CAPS):
+        return f"Stopped at the {reason} before the model called finish."
+    if reason.startswith("model stopped calling tools"):
+        return "The model stopped calling tools before it called finish."
+    if reason.startswith("aborted"):
+        return f"The run was stopped by the repeated-failure guard before the model called finish ({reason})."
+    if reason == "need_context":
+        nc = getattr(r, "need_context", None) or {}
+        asked = "; ".join(str(x) for x in (nc.get("reason"), ", ".join(map(str, nc.get("paths") or []))) if x) \
+            if isinstance(nc, dict) else str(nc)
+        return ("The model stopped to ask for more context before it called finish"
+                + (f": {asked}" if asked else "."))
+    return f"The run stopped on an error before the model called finish ({reason})."
+
+
 def salvage(r, ws, max_turns: int) -> dict:
     """The run hit a cap without an accepted finish. Do not throw the work away: check the last saved workbook with
     the same gate finish uses. Passing -> ok with the file; failing -> not ok, but with the file and the failures, so
@@ -401,8 +451,10 @@ def salvage(r, ws, max_turns: int) -> dict:
     books = ws.saved_workbooks()
     if not books:
         return {"ok": False, "artifacts": [], "evidence": [], "checks": [],
-                "answer": (f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
-                           "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request."),
+                "answer": ((f"Stopped at the {r.reason} before any workbook was saved; nothing to deliver. Run again "
+                            "with a larger turn budget (MH_SHEETS_MAX_TURNS) or a narrower request.")
+                           if r.reason.startswith(CAPS) else
+                           _end_head(r, max_turns).rstrip(".") + ", and no workbook was saved; nothing to deliver."),
                 "reason": f"{r.reason}; no workbook saved"}
     book = books[0]
     rel = str(book.relative_to(ws.root))
@@ -423,9 +475,7 @@ def salvage(r, ws, max_turns: int) -> dict:
         wb.close()
     except Exception:                          # noqa: BLE001
         pass
-    head = (f"Stopped at the turn limit ({max_turns} turns) before the model called finish."
-            if r.reason.startswith("turn cap") else f"Stopped at the {r.reason} before the model called finish."
-            if r.reason.startswith(CAPS) else f"The run stopped on an error before the model called finish ({r.reason}).")
+    head = _end_head(r, max_turns)
     what = f"{rel}" + (f" ({len(tabs)} tabs: {', '.join(tabs)})" if tabs else "")
     lines = [head]
     if not msg:
@@ -730,12 +780,17 @@ class WorkbookReview:
             if not (cur and cur.exists() and out.get("ok") and _sha(cur) == best["sha256"]):
                 dst = self.ws.root / best["workbook"]
                 dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.is_file() and _sha(dst) not in {r["sha256"] for r in self.rounds}:
+                    keep = self.ws.run_dir / "review" / "latest" / dst.name    # a newer version nobody reviewed
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dst, keep)
+                    self.notes.append(f"The newer, unreviewed version is kept at .run/review/latest/{dst.name}.")
                 shutil.copy2(best["copy"], dst)
                 rest = [a for a in out.get("artifacts") or [] if not str(a).endswith((".xlsx", ".xlsm"))]
                 out["artifacts"] = [str(dst)] + rest
                 if out.get("ok"):
                     self.notes.append(f"Delivered the round {best['round']} version: it scored higher than the later "
-                                      "version, which is kept in .run/review/.")
+                                      "version, which is kept in .run/review/ (as a reviewed round copy, or in latest/).")
                 out["ok"] = True
                 out["reason"] = f"{out.get('reason', '')}; delivered the best reviewed workbook (round {best['round']})"
             delivered = best["round"]
@@ -799,13 +854,19 @@ class WorkbookReview:
             pass
 
 
-def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> str:
+_COMPANY_WORDS = re.compile(r"valuation|\bDCF\b|\bLBO\b|\bcomps?\b|precedent|\bIPO\b|M&A|merger|acquisition|fairness|credit|"
+                            r"three[- ]statement|company|ticker", re.I)
+
+
+def dossier_brief(task: str, workdir: str, client, model: str, task_id: str, files=None) -> str:
     """Research the company before the first cell is written (engines/research/dossier.py): a model built from the
     statements alone misses what changed since them (an asset-light shift, a disposal, new guidance). Returns the text
     added to the task: the structural changes, the sourced findings and the open questions; '' when research is off
     (MH_DOSSIER=0, MH_RESEARCH=0, an offline client, no network) or found nothing."""
     if os.environ.get("MH_DOSSIER", "1") == "0":
         return ""
+    if any(str(f).lower().endswith((".xlsx", ".xlsm", ".csv")) for f in files or []) and not _COMPANY_WORDS.search(task):
+        return ""                              # a report or edit of the user's own data: no company to research
     try:
         from engines.forge import research as RS
         from engines.research.dossier import build_dossier, brief_block
@@ -813,7 +874,7 @@ def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> 
         if not ok:
             return ""
         d = build_dossier(task, [], client=client, models=[os.environ.get("MH_STORY_REVIEW_MODEL") or model],
-                          out_dir=workdir, task_id=f"{task_id}-dossier")
+                          out_dir=workdir, task_id=f"{task_id}-dossier", require_company=True)
     except Exception:  # noqa: BLE001 - research never costs the model
         return ""
     if not d.get("facts"):
@@ -899,9 +960,11 @@ def _pipeline(task: str, ws, client, model: str, task_id: str, rv) -> dict | Non
     return out
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None, model: str | None = None,
           client=None, phase: str = "phase_2_build", files=None, review: bool | None = None,
           review_model: str | None = None, review_rounds: int | None = None) -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = SheetsWorkspace(workdir, os.path.join(workdir, ".run"), inputs=files)
     os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
@@ -911,7 +974,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    task += dossier_brief(task, workdir, client, model, task_id)
+    task += dossier_brief(task, workdir, client, model, task_id, files)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
         if review_enabled(client, review) else None
     if rv:
@@ -934,7 +997,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
                             reason=f"{type(e).__name__}: {e}")
     out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
            "reason": r.reason, "usage": r.usage}
-    at_cap = not r.ok and (crashed or r.reason.startswith(CAPS))
+    at_cap = not r.ok                          # no accepted finish, whatever the end reason: salvage and deliver
     if at_cap:
         out.update(salvage(r, ws, n))
     if rv and (r.ok or at_cap):

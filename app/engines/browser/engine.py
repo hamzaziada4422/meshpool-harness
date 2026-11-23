@@ -69,7 +69,8 @@ def solve(task: str, *, workdir: str, task_id: str, client=None, max_turns: int 
         msg = buf.getvalue().strip() or "ERROR: browser did not start. Run: meshpool install-browser"
         return {"ok": False, "answer": "", "artifacts": [], "evidence": [], "turns": 0, "usage": {}, "reason": msg}
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
-    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     if os.environ.get("MH_BROWSER_PREFETCH", "1") == "1":     # saves the first "look at the page" model call
         try:
             snap = ctl.call("snapshot")

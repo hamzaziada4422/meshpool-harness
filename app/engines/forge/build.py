@@ -25,7 +25,8 @@ from engines.forge.render import _PERIOD, ARCHETYPES, render  # noqa: E402
 from engines.forge.common import SCALE as _SCALE, numbers as _numbers  # noqa: E402
 from engines.forge.validate_pptx import validate  # noqa: E402
 
-MODEL = os.environ.get("FORGE_MODEL") or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+from meshpool_harness.providers import configured_model  # noqa: E402
+MODEL = os.environ.get("FORGE_MODEL") or configured_model()
 STORY_MODEL = os.environ.get("FORGE_STORY_MODEL", MODEL)
 
 _ARCH = """Archetypes (pick the one that best PROVES the title; never more than 3 of the same in a row). The

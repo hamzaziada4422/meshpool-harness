@@ -64,7 +64,9 @@ def make_check(sources: dict[str, str]):
 
 
 def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = None, max_turns: int = 30,
-          model: str = "deepseek-v4.1-flash", client=None, phase: str = "phase_2_build") -> dict:
+          model: str | None = None, client=None, phase: str = "phase_2_build") -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     sources = {}
     for f in files or []:
