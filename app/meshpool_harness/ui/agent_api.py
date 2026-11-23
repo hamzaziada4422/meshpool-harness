@@ -1963,6 +1963,49 @@ def get(sid: str, no_mcp: bool = False) -> Session:
         return live
 
 
+def session_action(sid: str, act: str, b: dict) -> dict:
+    """What the app's /api/agent/<id>/(send|stop|answer|mode|compact|grade|model|plan|goal|revert|route|harness|style|
+    effort) routes do; the terminal's slash commands and `meshpool chats` call it too. Returns the chat's view."""
+    s = get(sid)
+    since = int(b.get("since", 10 ** 9))
+    if act == "send":
+        r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")),
+                   files=b.get("files") or None)
+        return dict(s.view(since), sent=r)
+    if act == "stop":
+        s.stop()
+    elif act == "grade":
+        s.grade()
+    elif act == "answer":
+        s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
+    elif act == "compact":
+        if s.state in ("working", "waiting"):
+            raise ValueError("Wait for the task to finish or stop it, then compact.")
+        r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
+        return dict(s.view(since), compacted=r)
+    elif act == "mode":
+        s.set_mode(b.get("mode", "ask"))
+    elif act == "model":
+        s.set_model(b.get("model", ""))
+    elif act == "harness":
+        s.switch_harness(b.get("harness", ""))
+    elif act == "route":
+        s.set_route(b.get("spec", ""))
+    elif act == "plan":
+        s.set_plan(bool(b.get("on")))
+    elif act == "goal":
+        s.set_goal(b.get("text", ""))
+    elif act == "style":
+        s.set_style(b.get("style", ""))
+    elif act == "effort":
+        s.set_effort(b.get("effort", ""))
+    elif act == "revert":
+        s.revert(int(b.get("turn", 0)))
+    else:
+        raise ValueError("Unknown chat action.")
+    return s.view(since)
+
+
 def view(sid: str, since: int) -> dict:
     """A chat for the page. A chat whose project folder is gone still shows its history, read-only."""
     try:
@@ -2262,6 +2305,10 @@ def thread_action(sid: str, body: dict) -> dict:
             if t:
                 t.cancel()
         list_dirty()
+    elif act == "fork":                               # a new chat from this one, up to a message (default: all of it)
+        from meshpool_harness import chat_rewind as CR
+        mi = body.get("message_index")
+        return {"ok": True, "id": CR.fork(sid, None if mi is None else int(mi))}
     elif act == "discard":                            # a brand-new chat whose first message failed
         if _has_user_message(sid):
             raise ValueError("This chat already has messages.")

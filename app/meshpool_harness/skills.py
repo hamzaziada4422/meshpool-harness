@@ -433,3 +433,22 @@ def sync_to(dst: Path):
         shutil.rmtree(t, ignore_errors=True)
         shutil.copytree(src, t, copy_function=shutil.copyfile)
         (t / ".from-meshpool").write_text("1", encoding="utf-8")
+
+
+def api_action(body: dict) -> dict:
+    """The /api/skills POST body (app and `meshpool skills`): create, update, toggle, remove, upload, open."""
+    act = body.get("action")
+    if act == "create":
+        create(body.get("name", ""), body.get("description", ""), body.get("body", ""))
+    elif act == "update":
+        update(body.get("id", ""), body.get("text", ""))
+    elif act == "toggle":
+        toggle(body.get("id", ""), bool(body.get("on")))
+    elif act == "remove":
+        remove(body.get("id", ""))
+    elif act == "upload":
+        import base64
+        add_files([(f["name"], base64.b64decode(f["data"])) for f in body.get("files") or []])
+    elif act == "open":                       # the page shows the folder in its own file tree
+        folder().mkdir(parents=True, exist_ok=True)
+    return {"skills": load_all(), "folder": str(folder())}
