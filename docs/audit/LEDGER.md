@@ -75,9 +75,9 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | F-37 | ws18-browser | on Linux, Capabilities offers Computer use as if it worked | fixed | tests/test_ws18_caps.py::test_linux_does_not_offer_computer_use, ::test_supported_computer_use_stays_available, ::test_ui_shows_the_reason_and_disables_the_switch |
 | F-38 | ws01-keys-setup | a key pasted as "Bearer sk-..." is always rejected, although the code means to accept it | already fixed | OK::test_bearer_prefixed_key_accepted |
 | F-39 | ws19-ui | controls that are offered but do nothing here, or are disabled with no reason | open | |
-| G-01 | ws22-tools | No OS sandbox for agent commands (Codex uses Seatbelt/Landlock; Claude Code and Gemini CLI sandbox). Commands run as the user with full disk… | open | |
-| G-02 | ws22-tools | No network restriction for agent commands (Codex blocks network in its sandbox by default). Add a network-off option tied to the sandbox. | open | |
-| G-03 | ws22-tools | No secret filtering for the shell: the bash tool inherits the whole environment (env = dict(os.environ, ...) core/tools.py ~855); root of S-… | open | |
+| G-01 | ws22-tools | No OS sandbox for agent commands (Codex uses Seatbelt/Landlock; Claude Code and Gemini CLI sandbox). Commands run as the user with full disk… | fixed | tests/test_ws22_tools.py::test_g01_sandbox_is_on_by_default_except_in_full_access |
+| G-02 | ws22-tools | No network restriction for agent commands (Codex blocks network in its sandbox by default). Add a network-off option tied to the sandbox. | fixed | tests/test_ws22_tools.py::test_g02_network_off_option |
+| G-03 | ws22-tools | No secret filtering for the shell: the bash tool inherits the whole environment (env = dict(os.environ, ...) core/tools.py ~855); root of S-… | fixed | tests/test_ws22_tools.py::test_s06_scrub_env_keeps_ordinary_names |
 | G-04 | ws05-turnloop | Per-turn step limit: now 2000 by default (agent/core.py ~771). Verify a sane default that bounds spend (S-08: 1,854 requests in 120 s), add … | fixed | tests/test_turnloop_caps.py::test_cap_setting_applies_next_turn, tests/test_turnloop_caps.py::test_cli_max_steps_flag, tests/test_turnloop_caps.py::test_max_steps_is_a_setting |
 | G-05 | ws05-turnloop | Granular permission rules: 'Allow in this chat' allows EVERY command; Supervised asks even for ls. 0.0.12 added saved allow/deny rules — ver… | fixed | remove]`; same scoping in the Pi bridge |
 | G-06 | ws23-cli | User hooks around tool calls: 0.0.12 added hooks — verify Pre/PostToolUse work in app and CLI; hooks in imported plugins are skipped (plugin… | open | |
@@ -89,19 +89,19 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | G-12 | ws10-persist | Atomic chat saves (M09-01, critical). | fixed | tests/test_session_store.py::test_disk_full_keeps_the_previous_session |
 | G-13 | ws16-mcp | Cancel a running tool on Stop for MCP and office tools (M22-01, M27-01). | fixed | tests/test_ws16_mcp.py::test_stop_sends_cancelled_to_stdio_server |
 | G-14 | ws03-compat | Compaction sized to the model's real context window (8K models fail; 32K chats die at exchange 16). | already fixed | test_g14_small_windows_run_40_exchanges |
-| G-15 | ws22-tools | Lint/test loop after edits (Aider --auto-lint/--auto-test): only mutation checks in auto mode. Add an optional post-edit lint/test step for … | open | |
+| G-15 | ws22-tools | Lint/test loop after edits (Aider --auto-lint/--auto-test): only mutation checks in auto mode. Add an optional post-edit lint/test step for … | fixed | both |
 | G-16 | ws23-cli | Telemetry export (OpenTelemetry) like Codex and Claude Code: opt-in OTLP export of spans/metrics (turns, model calls, tokens, cost, tool cal… | open | |
-| H-01 | ws22-tools | Harness bug class: Background child keeps the bash tool's pipes open: the tool call hangs until the timeout (every code user who starts a se… | open | |
+| H-01 | ws22-tools | Harness bug class: Background child keeps the bash tool's pipes open: the tool call hangs until the timeout (every code user who starts a se… | fixed | tests/test_ws22_tools.py::test_h01_a_background_child_does_not_hold_the_call |
 | H-02 | ws03-compat | Harness bug class: Local model servers: the default context window silently cuts the prompt (Ollama num_ctx), so tools 'do nothing' | fixed | test_h02_ollama_cut_prompt_is_resent_fitted, test_h02_a_still_cut_prompt_keeps_the_second_reply |
 | H-03 | ws02-stream | Harness bug class: Tool calls returned as text in content (no tool_calls): the turn ends and the raw JSON/XML is the 'answer' | fixed | test_textcalls.py::test_unknown_name_stays_text, ::test_json_answer_that_is_not_a_call_stays_text; test_agent_stream.py::test_text_tool_call_runs_the_tool |
 | H-04 | ws01-keys-setup | Harness bug class: Python urllib with no CA bundle (macOS python.org Python) or a corporate TLS proxy: every HTTPS call fails (Partly handle… | fixed | HT::test_tls_fallback_when_default_has_no_cas, HT::test_macos_keychain_export, HT::test_ca_bundle_env_wins, HT::test_certificate_error_message_is_actionable, HT::test_https_with_company_ca_end_to_end |
 | H-05 | ws03-compat | Harness bug class: Strict chat templates: two user messages in a row (or a non-leading system message) give HTTP 400/500 (Mistral/Devstral/G… | fixed | test_h05_two_user_messages_are_merged_for_strict_templates, test_compat_wire.py |
 | H-06 | ws03-compat | Harness bug class: Timeouts sized for cloud APIs: slow local models (CPU, big prefill) time out before the first byte | fixed | test_h06_local_slow_first_byte_is_waited_for, test_h06_probe_timeout_and_learned_first_byte |
 | H-07 | ws05-turnloop | Harness bug class: Runaway loops: no step cap per turn, loop guards only add a note, greedy sampling for unknown models | fixed | tests/test_turnloop_caps.py::test_tools_off_step_calls_are_not_run, tests/test_turnloop_caps.py::test_unknown_model_is_not_greedy |
-| H-08 | ws22-tools | Harness bug class: Command output is buffered whole in memory (no cap while reading): cat of a huge log or a chatty build eats RAM | open | |
+| H-08 | ws22-tools | Harness bug class: Command output is buffered whole in memory (no cap while reading): cat of a huge log or a chatty build eats RAM | already fixed | tests/test_ws22_tools.py::test_h08_both_pipes_drained_and_output_capped |
 | H-09 | ws03-compat | Harness bug class: Context overflow that compaction cannot fix: the chat stays broken ('prompt is too long' on every message) (Partly) | already fixed | test_h09_overflow_that_compaction_cannot_fix_recovers |
 | H-10 | ws20-cost-bench | Harness bug class: Too many or too large tool definitions (many MCP servers): provider limits (128 tools) and small windows | open | |
-| H-11 | ws22-tools | Harness bug class: In-process grep/glob walk everything (node_modules, .venv, build dirs) and read whole files; Stop cannot cut them | open | |
+| H-11 | ws22-tools | Harness bug class: In-process grep/glob walk everything (node_modules, .venv, build dirs) and read whole files; Stop cannot cut them | fixed | tests/test_ws22_tools.py::test_h11_stop_cuts_the_walk |
 | H-12 | ws06-forge | Harness bug class: 'Supports Python 3.10+' broken by newer syntax: deck engine validator does not compile on 3.10/3.11 (same as B12) | fixed | app/tests/test_py310_compat.py::test_every_file_compiles_on_python_310, ::test_every_file_compiles_on_python_311, ::test_no_newer_stdlib_without_a_guard, ::test_times_ending_in_z_parse_on_every_suppor |
 | H-13 | ws10-persist | Harness bug class: Undo/checkpoint stores grow without bound (full copies per chat), and every turn walks the whole folder | fixed | tests/test_checkpoints_journal.py::test_store_is_shared_and_pruned |
 | H-14 | ws21-server-perf | Harness bug class: Opening a chat parses every saved chat; big transcripts make start-up and chat switching slow | open | |
@@ -112,13 +112,13 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | H-19 | ws03-compat | Harness bug class: Tool-call ids that one provider accepts and another refuses (format or uniqueness), after a model/provider switch | fixed | test_h19_tool_ids_from_another_provider_are_repaired, test_compat_wire.py |
 | H-20 | ws16-mcp | Harness bug class: Every chat starts its own copies of the MCP servers: memory grows with open chats and scheduled runs (Partly) | fixed | tests/test_ws16_mcp.py::test_raise_file_limit, ::test_thirty_chats_share_bounded_helpers; tests/test_ws16_office_env.py::test_chat_that_cannot_start_says_why |
 | H-21 | ws03-compat | Harness bug class: MCP tool schemas passed through unchanged to providers with a schema subset (Gemini, some strict servers) | fixed | test_h21_mcp_schema_is_sanitized_for_gemini, test_compat_wire.py |
-| H-22 | ws22-tools | Harness bug class: Windows + Git Bash: models write 2>nul, which creates an undeletable file named nul in the project (Partly) | open | |
+| H-22 | ws22-tools | Harness bug class: Windows + Git Bash: models write 2>nul, which creates an undeletable file named nul in the project (Partly) | fixed | tests/test_ws22_tools.py::test_h22_nul_redirect_rewritten_and_reserved_names_refused |
 | H-23 | ws21-server-perf | Harness bug class: Logs that only grow: per-server MCP logs and the app log are never rotated while the app runs (Partly) | open | |
 | H-24 | ws19-ui | Harness bug class: IME composition: Enter that confirms a Japanese/Chinese conversion sends the message (WKWebView on macOS) (Unclear) | open | |
 | H-25 | ws05-turnloop | Harness bug class: Interrupted turn leaves tool_use without tool_result: every later request 400s (audit says NOT present — prove with a reg… | fixed | tests/test_stop_and_cancel.py::test_resume_after_crash_mid_tool_sends_valid_request, tests/test_stop_and_cancel.py::test_body_pairs_orphans (guards that also pass on old code: test_stop_mid_tool_leave |
 | H-26 | ws02-stream | Harness bug class: Lone surrogates / invalid UTF-8 in request bodies (audit: residual risk — guard and test) | fixed | test_stream_wire.py::test_lone_surrogates_never_reach_the_wire, ::test_encode_body_cleans_keys_and_nested_values |
-| H-27 | ws22-tools | Harness bug class: CRLF / line-ending mismatches break edits or rewrite whole files (audit: not present — prove with test) | open | |
-| H-28 | ws22-tools | Harness bug class: Windows desktop app: console windows flash for helper commands (audit: not present — prove with test of CREATE_NO_WINDOW … | open | |
+| H-27 | ws22-tools | Harness bug class: CRLF / line-ending mismatches break edits or rewrite whole files (audit: not present — prove with test) | already fixed | tests/test_ws22_tools.py::test_h27_crlf_and_bom_survive_a_round_trip |
+| H-28 | ws22-tools | Harness bug class: Windows desktop app: console windows flash for helper commands (audit: not present — prove with test of CREATE_NO_WINDOW … | fixed | tests/test_ws22_tools.py::test_h28_every_spawn_gets_no_window_on_windows |
 | H-29 | ws21-server-perf | Harness bug class: Windows: second server binds a port already in use (SO_REUSEADDR) (audit: not present — prove with test) | open | |
 | K-01 | ws20-cost-bench | COST: on 7 office tasks (same model) Meshpool Work cost 3.7x Codex in total (Work cheaper only on the two Word tasks; 2.3-8.6x on xlsx edit,… | open | |
 | K-02 | ws20-cost-bench | COST (code): Meshpool Code dearer than Codex on rs-macros; CLI default 2.5x Codex on Forth. TARGET: Meshpool <= Codex and Pi on every coding… | open | |
@@ -299,7 +299,7 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | S-03 | ws06-forge | Slide engine reviewers call undeployed fixed models and send temperature; 66% of deck requests failed | fixed | app/tests/test_reviewer_models.py::test_clarity_calls_only_the_deployed_model_and_learns_temperature, ::test_missing_model_is_called_once_then_never, ::test_unsupported_parameter_is_remembered_across_ |
 | S-04 | ws08-routing | Code-mode office prompts are routed to the Work agent without telling the user | fixed | app/tests/test_ws08_routing.py::test_office_prompt_in_a_code_chat_never_goes_to_a_cowork_agent, ::test_create_with_auto_in_code_mode_runs_an_office_task_on_meshpool_code, ::test_a_non_default_pick_car |
 | S-05 | ws08-routing | Design: files attached in Work chats are saved and edited under attachments/ in the chat folder, so the "in place" result is not at the fold… | fixed | app/tests/test_ws08_attach.py::test_attach_saves_at_the_root_of_a_scratch_chat |
-| S-06 | ws22-tools | Provider zoo + fault injection | open | |
+| S-06 | ws22-tools | Provider zoo + fault injection | fixed | tests/test_ws22_tools.py::test_s06_secret_named_variables_are_not_in_the_agents_shell |
 | S-07 | ws01-keys-setup | 301/302/303 redirects to another host carry the Authorization header (confirms W-01); 307 is not followed | fixed | HT::test_cross_host_redirect_never_carries_key, HT::test_same_host_307_and_308_resend_post_body |
 | S-08 | ws05-turnloop | No per-turn step cap: 1,854 requests in 120 s on a repeating tool call | fixed | tests/test_turnloop_caps.py::test_repeating_mock_model_is_stopped, tests/test_turnloop_caps.py::test_default_step_cap_bounds_requests |
 | S-09 | ws02-stream | A malformed SSE stream ends with exit 0 and a truncated answer (confirms W-19) | already fixed | test_agent_stream.py::test_cli_exits_non_zero_on_cut_streams |
@@ -341,23 +341,23 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | X-09 | ws20-cost-bench | Old grader grade_uc.py: restored tests in place, counted Codex command/file items as calls, and for Rust read only the doc-test line (0 or 2… | open | |
 | X-10 | ws04-usage | Engine nested-usage estimate (transcript chars/4) undercounts input 14-25% and output 4-46% vs the provider. Use provider-reported usage eve… | open | |
 | OSS-01 | oss-guards | Settings/config file clobbered by concurrent sessions: unlocked read-modify-write, torn write, stale in-memory snapshot rewrites whole file … | not reproducible | T::test_oss01_concurrent_settings_writes_lose_nothing, T::test_oss01_concurrent_writes_across_processes |
-| OSS-02 | ws17-acp | Codex sandbox cannot write on Windows (ACL churn, WindowsApps path) or Linux (nested bwrap, loopback RTM_NEWADDR); apply_patch fails while s… | open | |
+| OSS-02 | ws17-acp | Codex sandbox cannot write on Windows (ACL churn, WindowsApps path) or Linux (nested bwrap, loopback RTM_NEWADDR); apply_patch fails while s… | fixed | tests/test_ws17_acp.py::test_oss02_codex_sandbox_failure_is_explained |
 | OSS-03 | oss-guards | Windows .bat/.cmd wrapper forwarding `%*` corrupts multi-line args | not reproducible | T::test_oss03_prompt_goes_over_stdio_not_argv |
 | OSS-04 | oss-guards | `codex exec "prompt"` hangs forever when stdin is a non-TTY pipe that never closes | not reproducible | T::test_oss04_bash_tool_never_inherits_stdin, T::test_oss04_every_spawn_sets_stdin_explicitly |
 | OSS-05 | ws10-persist | Session/rollout JSONL grows to GBs (repeated compaction records, base64 images, raw tool output); resume/list OOMs or SIGKILLs | fixed | tests/test_session_oss.py::test_images_out_of_line |
 | OSS-06 | oss-guards | Compaction drops AGENTS.md/CLAUDE.md rules, todo list, subagent system prompt | not reproducible | T::test_oss06_compaction_keeps_system_task_todo_and_files |
 | OSS-07 | oss-guards | Compaction call interrupted by network drop "succeeds" with tiny summary, history lost | not reproducible | T::test_oss07_failed_or_interrupted_summary_call_still_keeps_facts_and_history |
 | OSS-08 | oss-guards | Store migration fails with FK error after crash, sessions orphaned | not reproducible | T::test_oss08_crash_mid_save_or_migration_leaves_sessions_loadable |
-| OSS-09 | ws17-acp | Tool or stream promise never resolves, agent loop wedges forever | open | |
+| OSS-09 | ws17-acp | Tool or stream promise never resolves, agent loop wedges forever | fixed | tests/test_ws17_acp.py::test_oss09_a_hung_harness_ends_the_turn_and_restarts_next_time |
 | OSS-10 | oss-guards | Truncated stream ends with stopReason toolUse but zero tool calls; agent idles silently | not reproducible | T::test_oss10_toolUse_stop_with_zero_tool_calls_is_not_silent, T::test_oss10_app_agent_reports_an_empty_toolUse_reply_as_an_error |
 | OSS-11 | ws10-persist | Orphaned tool_result (no matching tool_use) after kill/compaction/import: Anthropic "unexpected tool_use_id", session unrecoverable | fixed | tests/test_session_oss.py::test_load_import_and_request_repaired |
 | OSS-12 | ws19-ui | A throwing UI/tool renderer exits the app; the saved session then crashes on every resume | open | |
 | OSS-13 | oss-guards | Edit tool exact-match failures (whitespace, indent, CRLF, wrong SEARCH marker), retry loops, costly full-file rewrite fallback | not reproducible | T::test_oss13_whitespace_and_crlf_edits_apply, T::test_oss13_failed_match_points_at_the_closest_text |
-| OSS-14 | ws22-tools | Edit tool reports success but file unchanged | open | |
-| OSS-15 | ws22-tools | Non-atomic file write: crash/kill mid-write truncates user's source file; fallback full-write corrupts | open | |
+| OSS-14 | ws22-tools | Edit tool reports success but file unchanged | fixed | tests/test_ws22_tools.py::test_oss14_edit_fails_when_the_file_is_not_changed |
+| OSS-15 | ws22-tools | Non-atomic file write: crash/kill mid-write truncates user's source file; fallback full-write corrupts | fixed | tests/test_ws22_tools.py::test_oss15_write_is_atomic_and_keeps_the_mode |
 | OSS-16 | oss-guards | In-workspace symlink bypasses external_directory/read-deny boundary for write/edit/read | not reproducible | T::test_oss16_write_and_edit_through_symlink_are_refused, T::test_oss16_search_skips_symlinks_that_leave_the_project |
-| OSS-17 | ws22-tools | Shell redirection / bash bypasses the path-permission boundary that file tools enforce | open | |
-| OSS-18 | ws22-tools | Agent runs destructive git (reset --hard, checkout ., clean -f, restore .) and destroys uncommitted work, even against memory rules | open | |
+| OSS-17 | ws22-tools | Shell redirection / bash bypasses the path-permission boundary that file tools enforce | fixed | tests/test_ws22_tools.py::test_g01_cli_flags |
+| OSS-18 | ws22-tools | Agent runs destructive git (reset --hard, checkout ., clean -f, restore .) and destroys uncommitted work, even against memory rules | fixed | tests/test_ws22_tools.py::test_oss18_destructive_git_commands |
 | OSS-19 | oss-guards | Agent overwrites user's concurrent edits (stale snapshot, IDE edits) | not reproducible | T::test_oss19_edit_after_the_user_changed_the_file_is_refused, T::test_oss19_line_ending_only_difference_is_not_a_conflict |
 | OSS-20 | oss-guards | OS keyring/credential store size limit (Windows 2560 B) breaks MCP OAuth/API-key storage | not reproducible | T::test_oss20_no_os_keyring_and_large_secrets_round_trip_in_a_private_file |
 | OSS-21 | ws16-mcp | Hung MCP server at startup blocks session creation/load for minutes | fixed | tests/test_ws16_mcp.py::test_first_response_budget, ::test_cold_start_reports_still_starting_and_connects_later |
@@ -367,15 +367,15 @@ Per-workstream detail (fix, files, test) is in `docs/audit/ledger/<workstream>.m
 | OSS-25 | oss-guards | Parallel tool calls: some results lost, "tool_call_id missing response" on next request | not reproducible | T::test_oss25_every_parallel_tool_call_gets_a_result_after_a_stop |
 | OSS-26 | ws04-usage | Cost/usage double counting (reasoning tokens inside completion tokens, cache tokens inside input) | open | |
 | OSS-27 | oss-guards | Windows `bash` on PATH resolves to WSL stub; updater/shell calls mangle backslash paths | not reproducible | T::test_oss27_windows_bash_prefers_bundled_or_git_and_rejects_the_wsl_stub |
-| OSS-28 | ws22-tools | Windows drive-letter/backslash paths in model tool args corrupted (`/X:\...`) by JSON repair/escape processing | open | |
-| OSS-29 | ws22-tools | Secrets echoed into context/session history/logs (env dump, .env reads, MCP config inline tokens) | open | |
+| OSS-28 | ws22-tools | Windows drive-letter/backslash paths in model tool args corrupted (`/X:\...`) by JSON repair/escape processing | fixed | tests/test_ws22_tools.py::test_oss28_drive_letter_paths_are_normalised |
+| OSS-29 | ws22-tools | Secrets echoed into context/session history/logs (env dump, .env reads, MCP config inline tokens) | fixed | tests/test_ws22_tools.py::test_oss29_secrets_are_redacted_from_tool_output_and_session_files |
 | OSS-30 | ws23-cli | Windows legacy console / redirected stdout is cp1252: UnicodeEncodeError on spinner/box/arrow glyphs crashes CLI | open | |
 | OSS-31 | oss-guards | Model tool-call args invalid JSON (truncated string, merged calls) -> hard error, retries loop | not reproducible | T::test_oss31_invalid_and_truncated_tool_args_are_reported_not_fatal, T::test_oss31_loop_keeps_going_after_merged_or_truncated_calls |
 | OSS-32 | oss-guards | Self-update cannot replace running .exe on Windows / installer script path mangled | not reproducible | T::test_oss32_update_is_staged_beside_the_app_and_the_running_files_are_untouched |
 | OSS-33 | ws05-turnloop | No identical-tool-call loop detection: same call repeated for ~50 min burning tokens (distinct from step cap) | fixed | tests/test_unanswerable_prompts.py::test_repeat_calls_default_on, tests/test_turnloop_caps.py::test_repeating_mock_model_is_stopped |
 | OSS-34 | ws24-worktrees | Orchestrator emits duplicate parallel subagent dispatches; unsafe concurrent writers on same files | fixed | app/tests/test_worktrees_followups.py |
 | OSS-35 | ws10-persist | Session save failure swallowed; no Windows replace-retry; torn/lost chat (cf. torn settings and "session gone missing") | fixed | tests/test_session_oss.py::test_save_error_surfaced_once |
-| OSS-36 | ws17-acp | Per-chat CODEX_HOME/session dirs accumulate unbounded (rollouts, sqlite logs) | open | |
+| OSS-36 | ws17-acp | Per-chat CODEX_HOME/session dirs accumulate unbounded (rollouts, sqlite logs) | fixed | tests/test_ws17_acp.py::test_oss36_old_codex_homes_are_pruned |
 
 ## Workstreams
 
