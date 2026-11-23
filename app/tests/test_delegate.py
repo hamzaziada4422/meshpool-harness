@@ -300,7 +300,8 @@ def test_progress_steps_are_live_only_and_do_not_crowd_the_saved_transcript(tmp_
         {"type": "subagent", "kind": "tool", "text": "step", "i": n} for n in range(1, 4000)] + [
         {"type": "subagent", "kind": "done", "text": "completed", "i": 4000}]
     s._persist()
-    saved = json.loads((tmp_path / "keep-test" / "transcript.json").read_text())["events"]
+    from meshpool_harness import session_store as SS
+    saved = SS.TranscriptLog(tmp_path / "keep-test").read()["events"]
     assert saved[0]["text"] == "hi" and len(saved) == 2 and saved[-1]["kind"] == "done"
 
 

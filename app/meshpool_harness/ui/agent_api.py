@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
@@ -42,8 +43,8 @@ _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "a
 
 def _transcript(sid: str) -> dict | None:
     try:
-        return json.loads((SESSIONS / sid / "transcript.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.TranscriptLog(SESSIONS / sid).read()
+    except OSError:
         return None
 DELETED: set[str] = set()                            # deleted this run: never reopened, even by a late page poll
 
@@ -425,14 +426,26 @@ class Session:
         try:
             d = SESSIONS / sid
             d.mkdir(parents=True, exist_ok=True)
-            with self.lock:
-                evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP
-                       and not (e.get("type") == "subagent" and e.get("kind") == "tool")][-3000:]   # live only
-            run = bool(getattr(self, "_turn_open", False)) if running is None else running
-            tmp = d / "transcript.json.tmp"
-            tmp.write_text(json.dumps({"events": evs, "running": run}, ensure_ascii=False, default=str),
-                           encoding="utf-8")
-            C.replace_file(tmp, d / "transcript.json")
+            plock = self.__dict__.get("_plock") or self.__dict__.setdefault("_plock", threading.RLock())
+            with plock:                              # the emit thread and the 1 s timer thread must not interleave
+                log = self.__dict__.get("_tlog")
+                if log is None or log.dir != d:
+                    log = self._tlog = SS.TranscriptLog(d)
+                    self._tlog_n = None
+                run = bool(getattr(self, "_turn_open", False)) if running is None else running
+                with self.lock:
+                    total, epoch = len(self.events), getattr(self, "epoch", 0)
+                    n = getattr(self, "_tlog_n", None)
+                    replace = n is None or epoch != getattr(self, "_tlog_epoch", None) or total < n
+                    src = self.events if replace else self.events[n:]
+                    evs = [{k: v for k, v in e.items() if k != "i"} for e in src if e.get("type") not in _SKIP
+                           and not (e.get("type") == "subagent" and e.get("kind") == "tool")]   # live only
+                if replace:
+                    log.rewrite(evs[-3000:], run)
+                else:
+                    log.append(evs)
+                    log.set_running(run)
+                self._tlog_n, self._tlog_epoch = total, epoch
         except OSError:
             pass
 
@@ -1574,13 +1587,13 @@ def _disk_rows() -> tuple:
                 if p.parent.name.startswith("sub-"):
                     continue
                 try:
-                    st = p.stat()
+                    key = SS.stamp(p.parent)
                     hit_row = _ROWS.get(str(p))
-                    if hit_row and hit_row[0] == st.st_mtime_ns and hit_row[1] == st.st_size:
+                    if hit_row and hit_row[0] == key:
                         rows[hit_row[2]["id"]] = dict(hit_row[2])
                         continue
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                    d = SS.read(p.parent)
+                except OSError:
                     continue
                 if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
                     continue
@@ -1589,7 +1602,7 @@ def _disk_rows() -> tuple:
                        "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
                        "model": d.get("model"),
                        "imported": (d.get("imported") or {}).get("source", "")}
-                _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
+                _ROWS[str(p)] = (key, None, row)
                 rows[d["id"]] = dict(row)
         legacy, live_pids = _project_info()
         base = {}
@@ -1797,13 +1810,15 @@ def search(q: str) -> list:
         if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
             continue
         try:
-            st = p.stat()
-            key = (st.st_mtime_ns, st.st_size)
+            key = SS.stamp(p.parent)
             hit = _RAW.get(str(p))
             if hit and hit[0] == key:
                 raw, low = hit[1], hit[2]
             else:
-                raw = p.read_text(encoding="utf-8")
+                sd = SS.read(p.parent)
+                if not isinstance(sd, dict):
+                    continue
+                raw = json.dumps(sd, ensure_ascii=False, default=str)
                 low = raw.lower()
                 if _RAW_BYTES[0] + 2 * len(raw) <= _RAW_CAP:      # keep the text of recent searches in memory, up to a cap
                     old_hit = _RAW.get(str(p))
@@ -1954,10 +1969,9 @@ def scheduler_loop():
 
 
 def _saved(sid: str) -> dict | None:
-    p = SESSIONS / sid / "session.json"
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        return SS.read(SESSIONS / sid)
+    except OSError:
         return None
 
 
