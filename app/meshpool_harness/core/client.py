@@ -57,7 +57,7 @@ def classify_error(msg: str) -> str:
     import re
     if _CONTEXT_RX is None:
         _CONTEXT_RX = (re.compile(r"context[ _-]?(?:length|window)|maximum context|too many tokens|prompt is too long|"
-                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum)|"
+                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum (?:context|input|prompt|number of (?:input )?tokens|length))|"
                                   r"token limit", re.I),
                        re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
     m = msg or ""
@@ -73,9 +73,11 @@ def classify_error(msg: str) -> str:
         return "context"                            # any status: llama.cpp and Ollama servers use 400, 500 or 200
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
-    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
+    # A thinking/reasoning/token "budget" is a request setting, not money: a 400 about it is a plain bad request.
+    money = re.sub(r"(?:thinking|reasoning|token|output)[ _.-]*budget\w*|budget[_ ]tokens", " ", m, flags=re.I)
+    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceededbudget|exceeded your (current )?quota|"
                  r"insufficient[_ ](credits?|balance|funds|quota)|quota[_ ]exhausted|out of credits|"
-                 r"credit balance is too low|max budget", m, re.I):
+                 r"credit balance is too low|max budget (?:for|of|has|reached)", money, re.I):
         return "quota"                              # spent: waiting or retrying cannot help (UHP: quota_exhausted)
     if "HTTP 429" in m:
         return "rate_limit"
