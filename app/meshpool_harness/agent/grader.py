@@ -56,9 +56,12 @@ Method:
 2b. For anything the agent BUILT as code (a web page or app, a game, a dashboard, a script, a CLI, an API), judge it as the user who will run it. Decide what a person expects such a thing to do (the features every version of it has, not only the words of the request), then confirm each one actually works, from the click-through and test evidence below and your own checks: no button or link that does nothing; each feature usable end to end; empty, loading and error states; bad input rejected with a message that says what is wrong; data kept where the user would expect it (a reload must not lose it); keyboard use and a phone-width layout for anything with a screen; no placeholder text or invented facts; tests exist for logic that can break and pass when run; a way to run it is stated (README or the reply). A "MUST FIX" line in the automatic click-through is a real defect: list it under blockers unless you can show it is wrong.
 3. Flag: invented facts, unsupported numbers, claims without a source, instructions that were ignored, the wrong language, the wrong file type or name, anything the user asked for that is missing, plan items marked completed that are not.
 4. Missing evidence counts as NOT met. If you cannot see it or prove it, it is not_met. Use "unverified" only when your tools truly cannot check it (say why in evidence).
+4b. SCOPE (0.0.13): hold the agent to what was asked, no more. A result that fits in the reply (a short plan, a table, post copy, a reply email, a summary) does not need a file unless the user asked for one: do not mark a missing file, plan document, tracker or extra format as not_met. Never ask for extra deliverables, deeper research or more versions than the request called for. Do not ask the agent to fill a gap with an invented fact; a fact that is not known is left out or flagged in the reply.
 5. Judge overall: would this person accept it as it is, or send it back?
 
 E2E-AUTONOMY: an effect in a connected app or live system (a booking, a sent message, a status change, a record) that the log shows the tool accepted, and that no read-only tool can read back, is "unverified", not "not_met". Never ask the agent to create, send, book, update or delete anything just to prove something; ask only for read-only evidence.
+
+READ-BACK RULE (0.0.13): when you cannot read an effect back (no read tool covers it, the tool only answers "ok", the app is not reachable from your tools), the item is "unverified", with the reason in its evidence. It is never "not_met", never a blocker, and never a reason to send the agent back. Do not write a requirement such as "confirm by reading it back" if you have no way to do that yourself. The section "Actions the agent made in connected apps" lists writes that the tool accepted: they happened once and are done. Your "fix" and "blockers" must never tell the agent to run, call, send, book, create or submit anything again, to repeat or retry a write, or to redo it as a test. A fix is only for something the agent can correct by editing its own files or by saying plainly in its reply what could not be checked.
 
 Rules: you may only read and run checks. You must not create, change or delete any file, install anything, or send anything anywhere. Do not run commands that write. Be efficient: a few targeted looks are better than reading everything. You have a small step budget.
 
@@ -76,7 +79,7 @@ CHECK = ("The agent says it is finished. Do not take its word for it: grade it n
          "with the JSON object only.")
 REPAIR = "Reply again with only the JSON object described in your instructions. No other text, no code fence."
 INJECT = ("[Independent review] A reviewer who did not do this work checked it against what you were asked. These are "
-          "not done:\n{items}\n\nFix them, check your fixes yourself by looking only (read files, run tests, call read-only tools; never create, send, book, update or delete anything in a live system just to test it), then finish with your answer. Do not say anything "
+          "not done:\n{items}\n\nFix them, check your fixes yourself by looking only (read files, run tests, call read-only tools; never create, send, book, update or delete anything in a live system just to test it, and never run again a connected-app call that already succeeded this turn: it is done once), then finish with your answer. Do not say anything "
           "is done unless you checked it. If one of them cannot be done, say plainly why.")
 
 
@@ -277,6 +280,10 @@ def evidence(info: dict, commands: list, maxchars: int = 14000) -> str:
                 x[:200] for x in tail) if tail else ""))
     else:
         parts.append("(none)")
+    acts = info.get("actions") or []
+    if acts:
+        parts.append("\n## Actions the agent made in connected apps (the tool accepted each; done once, never to be repeated)")
+        parts += [f"- {a}" for a in acts[:20]]
     facts = info.get("facts") or ""
     if facts:
         parts.append("\n## Automatic checks of the result (run by Meshpool, not by the agent)\n" + facts)
@@ -360,6 +367,41 @@ def _strs(v, n: int = 12, cap: int = 400) -> list[str]:
     return [str(x).strip()[:cap] for x in (v or []) if str(x).strip()][:n] if isinstance(v, list) else []
 
 
+# 0.0.13: an effect in a LIVE system (a booking, a sent message, a ticket, a connected-app call) that the reviewer could
+# not read back is "unverified", and a rework request never asks for a second write. Both rules apply only to text that
+# names a live effect, so a defect in a file ("the totals row is missing from report.docx") is never downgraded or
+# dropped.
+_LIVE = re.compile(
+    r"mcp__|\b(?:booking|booked|meeting|calendar|appointment|reservation|ticket|invoice|payment|crm|slack|webhook|"
+    r"connected app|connector|live system|status update|sent (?:e-?mail|message)|e-?mail (?:was )?sent|message (?:was )?sent)\b"
+    r"|\b(?:create|send|book|update|delete|post|submit|add|set|schedule|close|cancel|issue|insert)_[a-z_]+\b", re.I)
+_NO_READBACK = re.compile(
+    r"read[- ]?back|can(?:no|')t be (?:read|verified|confirmed|checked|observed)|cannot (?:be )?(?:read|verif|confirm|check|observ)\w*"
+    r"|(?:unable|not able|no way|not possible|impossible) to (?:read|verify|confirm|check|observe)"
+    r"|(?:could not|couldn't|can't|can not|did not|didn't) (?:read|verify|confirm|observe) (?:it|that|the|this)\b"
+    r"|no (?:read|get|list|lookup|query)(?:[- ]only)? tool|not (?:readable|verifiable|observable)|no read access", re.I)
+_REPEAT_WRITE = re.compile(
+    r"\bre-?(?:send|book|submit|post|invoke|issue)\b"
+    r"|\b(?:call|send|book|create|post|update|submit|write|issue|invoke|trigger|make|run)\b[^.;]{0,50}\b(?:create|send|book|post|update|submit|write|issue|schedule|delete|insert|add)\w*[^.;]{0,30}\bagain\b"
+    r"|\b(?:create|send|book|post|submit|issue|schedule)\w*\b[^.;]{0,50}\bagain\b"
+    r"|\b(?:repeat|retry)\b[^.;]{0,40}\b(?:write|booking|send|call|request|action|update|creation)\b"
+    r"|\bsecond (?:call|write|booking|send|request)\b|\bprobe\b"
+    r"|\btest (?:booking|meeting|message|record|ticket|call|email|event|invoice)\b", re.I)
+
+
+def _unreadable_live(text: str) -> bool:
+    return bool(_NO_READBACK.search(text) and _LIVE.search(text))
+
+
+def _unreadable(it: dict) -> bool:
+    return _unreadable_live(f"{it.get('requirement', '')} {it.get('evidence', '')}")
+
+
+def _no_second_write(lines: list[str]) -> list[str]:
+    """Drop instructions to run a live write again; instructions about the agent's own files stay."""
+    return [x for x in lines if not (_REPEAT_WRITE.search(x) and _LIVE.search(x))]
+
+
 def normalise(raw: dict | None) -> dict | None:
     """A clean result with the safe reading of whatever the grader said: missing evidence is not met, a pass with an open
     item is partial. None when it has no usable items at all."""
@@ -373,6 +415,8 @@ def normalise(raw: dict | None) -> dict | None:
         st = st if st in ("met", "not_met", "unverified") else ("not_met" if st in ("unmet", "no", "failed", "missing")
                                                                 else "unverified")
         ev = str(it.get("evidence") or "").strip()
+        if st == "not_met" and _unreadable({"requirement": str(it["requirement"]), "evidence": ev}):
+            st = "unverified"                                    # could not read it back: unverified, not a defect
         if st == "met" and not ev:
             st = "unverified"                                    # a claim of "met" with nothing seen is not met
         items.append({"requirement": str(it["requirement"]).strip()[:300], "status": st, "evidence": ev[:500]})
@@ -380,7 +424,8 @@ def normalise(raw: dict | None) -> dict | None:
         return None
     bad = sum(1 for i in items if i["status"] == "not_met")
     unv = sum(1 for i in items if i["status"] == "unverified")
-    blockers, fix = _strs(raw.get("blockers")), _strs(raw.get("fix"))
+    blockers, fix = _no_second_write(_strs(raw.get("blockers"))), _no_second_write(_strs(raw.get("fix")))
+    blockers = [b for b in blockers if not _unreadable_live(b)]
     verdict = str(raw.get("verdict") or "").strip().lower()
     verdict = verdict if verdict in ("pass", "partial", "fail") else ("pass" if not bad and not unv else "partial")
     acc = str(raw.get("acceptance") or "").strip().lower().replace(" ", "_")

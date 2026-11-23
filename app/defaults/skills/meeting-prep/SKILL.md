@@ -5,7 +5,9 @@ description: One-page brief before a meeting: who is coming, what they care abou
 
 # Meeting prep
 
-1. Find the meeting in the calendar connector (Google Calendar or Outlook): time, attendees, agenda. Without a calendar, ask once for who and when.
+Do the asked thing first: a one-page brief, one deliverable, no extra files. Look things up only as far as the brief needs (one web_search per external attendee at most, one for the company).
+
+1. Find the meeting in the calendar connector (Google Calendar or Outlook): time, attendees, agenda. Without a calendar, use what the user told you and note the gaps.
 2. For each external attendee: role and company from the web (web_search), and any earlier email threads or notes with them (mail, Notion, Drive, meeting-notes connectors).
 3. For the company: what it does, recent news (last 90 days), and anything in the CRM if one is connected.
 4. Write the brief: purpose of the meeting in one line, attendees (one line each), history so far, three things they likely want, five questions to ask, and a proposed outcome.
