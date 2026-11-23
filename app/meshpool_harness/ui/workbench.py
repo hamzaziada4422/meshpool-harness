@@ -293,6 +293,11 @@ def write_file(root: str, rel: str, text: str) -> dict:
     except OSError:
         pass
     p.write_bytes(text.encode("utf-8"))
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(root, str(p), "workbench")
+    except Exception:
+        pass
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
@@ -331,6 +336,11 @@ def attach_to(r: Path, name: str, data: bytes) -> dict:
         raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
     except OSError as e:
         raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(r), str(p), "attach")
+    except Exception:
+        pass
     return {"path": (sub + "/" if sub else "") + p.name}
 
 

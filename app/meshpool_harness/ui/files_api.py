@@ -258,6 +258,11 @@ def save(body: dict) -> dict:
                 tmp.unlink()
             except OSError:
                 pass
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(root), str(p), "editor")
+    except Exception:
+        pass
     st = p.stat()
     return {"ok": True, "path": _rel(root, p), "size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha": _sha(new),
             "backup": Path(backup).name if backup else ""}
