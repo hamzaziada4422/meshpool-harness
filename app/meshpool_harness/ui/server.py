@@ -451,6 +451,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
                 from meshpool_harness import provider_setup as PS
                 return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                return self._send(200, {**PR.list_rules(PR.user_path()), "path": str(PR.user_path())})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
             if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
@@ -802,6 +805,16 @@ class Handler(BaseHTTPRequestHandler):
                                             "first": rows[0]["title"] if rows else ""})
                 except WEB.WebError as e:
                     return self._send(200, {"ok": False, "error": str(e)})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                b = self._json() or {}
+                kind, rule = b.get("kind"), str(b.get("rule") or "")
+                if kind not in ("allow", "deny") or b.get("action") not in ("add", "remove"):
+                    return self._send(400, {"error": "action is add or remove, kind is allow or deny"})
+                if b["action"] == "add" and PR.check_rule(rule):
+                    return self._send(400, {"error": PR.check_rule(rule)})
+                fn = PR.add_rule if b["action"] == "add" else PR.remove_rule
+                return self._send(200, {**fn(PR.user_path(), kind, rule), "path": str(PR.user_path())})
             if u.path == "/api/permissions":
                 from meshpool_harness.ui.desktop import permissions, request_permission
                 b = self._json()

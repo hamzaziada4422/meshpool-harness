@@ -94,7 +94,7 @@ def test_what_would_need_a_yes_is_refused_unless_self_approval_is_on(monkeypatch
     def child(b):
         if b["messages"][-1]["role"] == "tool":
             return _msg("result: " + b["messages"][-1]["content"][:80])
-        return _msg("", [("bash", {"command": "echo hi"})])
+        return _msg("", [("bash", {"command": "touch hi"})])
     fake(monkeypatch, child)
     out, _ = D.run_tool(_agent(_env, mode="ask"), {"tasks": [{"goal": "Run the echo command"}]})
     assert "sub-agents cannot ask for approval" in out
@@ -453,7 +453,7 @@ def test_stopped_reports_are_a_result_and_chat_grants_cover_sub_agents(monkeypat
         return _msg("", [("bash", {"command": "echo granted"})])
     fake(monkeypatch, child)
     a = _agent(_env, mode="ask")
-    a.always.add("bash")                                             # "Allow all commands in this chat"
+    a.always.add("bash:echo")                                             # "Allow all commands in this chat"
     out, ok = D.run_tool(a, {"tasks": [{"goal": "Run the command"}]})
     assert ok and "granted" in out and "cannot ask" not in out
     seen = []

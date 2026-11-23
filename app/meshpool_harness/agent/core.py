@@ -29,6 +29,7 @@ from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
+from meshpool_harness.core import permrules as PR
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -799,14 +800,16 @@ def _bash_segments_match(cmd: str, pattern: str) -> bool:
 
 def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     import fnmatch
-    cmds = [str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])) if x]
+    from meshpool_harness.core import permrules as PR
+    cmds = PR.commands_of(name, args)
     for r in rules:
         if r.startswith("bash:"):
             if deny:                                  # a deny rule hits when any part of a chained command matches
                 if any(_bash_segments_match(x, r[5:].strip()) for c in cmds for x in _CHAIN.split(c) + [c]):
                     return r
-            elif cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
-                return r
+            elif cmds and not any(PR.writes(c) for c in cmds) and \
+                    all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
+                return r                              # an allow rule never covers a command that redirects output
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
     return ""
@@ -2722,8 +2725,16 @@ class Agent:
                  else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
-        if group in self.always and not (group == "bash" and _destructive(args)):
-            return True, ""                    # "always" never covers a command that destroys or sends things away
+        cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
+        if cmds and self.mode in ("ask", "edits") and not _destructive(args) and \
+                all(PR.safe_read(c, self.root) for c in cmds):
+            return True, ""                    # H-15: a plain read-only command inside the project needs no question
+        if group == "bash":
+            pats = [x[5:] for x in self.always if x.startswith("bash:")]
+            if cmds and not _destructive(args) and all(PR.granted(c, pats) for c in cmds):
+                return True, ""                # the chat grant covers only the command patterns the user allowed
+        elif group in self.always:
+            return True, ""
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky:
@@ -2757,9 +2768,16 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
-        decision, note = self.approve(kind, title, detail)
+        pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args) else []
+        pats = list(dict.fromkeys(pats))
+        scope = ("all file edits" if group == "edit" else "this tool" if group != "bash" else
+                 " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "")
+        decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
         if decision == "always":
-            self.always.add(group)
+            if group == "bash":
+                self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only
+            else:
+                self.always.add(group)
         return decision in ("yes", "always"), note or ""
 
     def _same_bytes(self, name: str, args: dict) -> bool:

@@ -792,7 +792,7 @@ class Terminal:
         finally:
             self.set_live(prev)
 
-    def approve(self, kind: str, title: str, detail: str, options=None):
+    def approve(self, kind: str, title: str, detail: str, options=None, scope: str = ""):
         if not (sys.stdin.isatty() or self.keys_factory):
             return "no", "No terminal to ask in. Run with --auto."
         if self.stopping:
@@ -804,7 +804,8 @@ class Terminal:
                 return "no", ""
             self.idle.clear()
             try:
-                choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
+                extra = (scope,) if scope else ()
+                choice, note = self._approve_raw(kind, title, detail, *extra) if self.raw_ok() else self._approve(kind, title, detail, *extra)
             finally:
                 self.idle.set()
         if self.stopping:                 # Ctrl+C while the question was open: the turn is over
@@ -814,7 +815,7 @@ class Terminal:
             return next((o["id"] for o in options if o.get("kind") == "allow_always"), "yes"), note
         return choice, note
 
-    def _approve_raw(self, kind: str, title: str, detail: str):
+    def _approve_raw(self, kind: str, title: str, detail: str, scope: str = ""):
         st = self.st
         rows = detail.splitlines()
 
@@ -834,13 +835,13 @@ class Terminal:
             shown = [st.dim(f"The full text ({len(rows)} lines) is above.")]
         else:
             shown = [style(ln) for ln in rows]
-        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         i = self.choose(title, shown, ["Yes", f"Yes, and don't ask again for {what} in this session", "No"],
                         hotkeys={"y": 0, "a": 1, "n": 2},
                         hint="↑↓ or 1-3 · enter to confirm · esc: no")
         return {0: "yes", 1: "always"}.get(i, "no"), ""
 
-    def _approve(self, kind: str, title: str, detail: str):
+    def _approve(self, kind: str, title: str, detail: str, scope: str = ""):
         """The same question with plain input(): no raw keys (a pipe, a test)."""
         st = self.st
         self.p("")
@@ -852,7 +853,7 @@ class Terminal:
                 self.p("  " + st.red(line))
             else:
                 self.p("  " + (line if kind == "bash" else st.dim(line)))
-        what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         while True:
             try:
                 a = input(B.prompt(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
