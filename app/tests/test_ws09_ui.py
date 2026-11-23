@@ -170,7 +170,7 @@ def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
         liveBtns: [...document.querySelectorAll('.appr button')].filter(b => !b.disabled).length,
         running: document.querySelectorAll('.st.run').length,
         liveQ: document.querySelectorAll('.qcard:not(.done)').length,
-        state: S.cur.view.state})""")
+        state: S.cur.view.state, open: JSON.stringify(S.cur.view.open), tail: S.cur.log.slice(-6).map(e => e.type + ':' + (e.id||'') + (e.closed?'c':'')).join(' '), q: S.cur.q.length, total: S.cur.total})""")
     assert got["approvals"] == 36 and got["state"] == "idle", got
     assert got["liveBtns"] == 0 and got["running"] == 0 and got["liveQ"] == 0, got
     # Nothing in the conversation may still animate (the dots of an open work group, the spinners of steps that never ended).
