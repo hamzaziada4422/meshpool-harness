@@ -1224,7 +1224,13 @@ function applyEv(ev) {
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
-      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto; add(`<span>${esc(ev.text)}</span>`, "note using"); sessionSoon(); break; }   // one neutral line; the reason is in the Session panel
+      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
+        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
+        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
+          try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
+          catch (e) { toast(e.message); } });
+        sessionSoon(); break; }   // one short line; the reason also stays in the Session panel
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
@@ -2004,7 +2010,7 @@ async function renderSection(sec) {
           let q; try { q = await post("/api/connectors", {action: "github_poll", id: "github"}); } catch (e) { return; }
           if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
           if (q.status === "failed") { RES("cnRes").className = "res bad"; RES("cnRes").textContent = q.error; return; }
-          setTimeout(tick, (r.interval || 5) * 1000);
+          setTimeout(tick, (q.interval || r.interval || 5) * 1000);
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });
@@ -2403,7 +2409,7 @@ function permStep(host) {
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
-      <button class="scopeopt" data-scope="later" role="radio"><b>Start in Meshpool Projects</b><small>A folder Meshpool made for you. Add your own folders any time.</small></button>
+      <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
@@ -2425,7 +2431,7 @@ function permStep(host) {
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
-      else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -2434,7 +2440,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
   draw();
 }
 

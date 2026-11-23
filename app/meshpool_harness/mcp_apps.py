@@ -15,6 +15,7 @@ the user creates in that app's developer settings, so that part also stays on th
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import re
@@ -29,6 +30,7 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 # Every entry was checked against the live server: it answers, publishes how to sign in, and (for "oauth") lets other
 # apps register themselves, or (with "needs_client") takes the user's own client ID. testkit/connectors_live.py
@@ -177,6 +179,7 @@ CATALOG = [
 ]
 _LOCK = threading.Lock()
 _FLOWS: dict[str, dict] = {}            # state -> pending sign-in
+_CANCELLED: dict[str, str] = {}         # state -> connector, for sign-ins dropped by a disconnect (for a clear message)
 LAST_FINISHED = [""]                    # the connector whose sign-in finished last
 UA = {"User-Agent": f"Meshpool/{_VERSION}", "Accept": "application/json"}
 
@@ -195,6 +198,17 @@ def _read(p: Path) -> dict:
         return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def _read_rw(p: Path) -> dict:
+    """_read for a read-modify-write: a damaged file raises instead of reading as empty, so saving the change never
+    wipes every connector's sign-in. A missing file is empty."""
+    try:
+        d = fsio.read_json(p, {})
+    except fsio.CorruptFile as e:
+        raise ValueError(f"Meshpool's connector file {p.name} is damaged, so it was not changed. Move it aside and "
+                         "connect your apps again.") from e
+    return d if isinstance(d, dict) else {}
 
 
 def _write(p: Path, d: dict):
@@ -219,6 +233,30 @@ def _write(p: Path, d: dict):
         except OSError:
             pass
         raise
+
+
+@contextlib.contextmanager
+def _locked(*paths: Path):
+    """Exclusive access to these store files for a read-modify-write: this process's lock, then a lock file per path
+    (so the CLI in another process cannot lose an update). Always taken in this order, and held only for the edit."""
+    with _LOCK:
+        with contextlib.ExitStack() as stack:
+            for p in paths:
+                stack.enter_context(fsio.file_lock(p))
+            yield
+
+
+def _edit(p: Path, fn):
+    """Read the file under its locks, let fn change the dict (its return value is passed through), write it back."""
+    with _locked(p):
+        d = _read_rw(p)
+        r = fn(d)
+        _write(p, d)
+        return r
+
+
+def _safe(cid: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_-]", "_", cid)
 
 
 def _custom() -> list[dict]:
@@ -311,13 +349,13 @@ def add_custom(name: str, url: str, token: str = "", client_id: str = "", client
             row["auth"] = "oauth"
         else:
             raise ValueError(f"Could not connect to {host}: {_plain(r['error'])}")
-    with _LOCK:
-        st = _read(_state_file())
+    with _locked(_state_file(), _auth_file()):
+        st = _read_rw(_state_file())
         st.setdefault("custom", []).append(row)
         if row["auth"] == "none":
             st.setdefault("enabled", {})[cid] = True
         _write(_state_file(), st)
-        store = _read(_auth_file())
+        store = _read_rw(_auth_file())
         if token:
             store[cid] = {"access_token": _header(token)[1], "static": True}
         elif client_id.strip():
@@ -338,23 +376,33 @@ def set_client(cid: str, client_id: str, client_secret: str = "") -> None:
     get(cid)
     if not client_id.strip():
         raise ValueError("Paste the client ID from the app's developer settings.")
-    with _LOCK:
-        store = _read(_auth_file())
+    def go(store):
         e = store.get(cid) or {}
         e["client"] = _own_client(client_id, client_secret)
         for k in ("access_token", "refresh_token", "expired"):
             e.pop(k, None)
         store[cid] = e
-        _write(_auth_file(), store)
+    _edit(_auth_file(), go)
+
+
+def _cancel_flows(cid: str) -> None:
+    """Drop the connector's pending sign-ins (call with _LOCK held), keeping their state for a clear message."""
+    for k in [k for k, v in _FLOWS.items() if v.get("cid") == cid]:
+        _FLOWS.pop(k, None)
+        _CANCELLED[k] = cid
+    while len(_CANCELLED) > 50:
+        _CANCELLED.pop(next(iter(_CANCELLED)))
 
 
 def remove_custom(cid: str):
-    with _LOCK:
-        st = _read(_state_file())
+    with _locked(_state_file(), _auth_file()):
+        _cancel_flows(cid)
+        st = _read_rw(_state_file())
         st["custom"] = [r for r in st.get("custom") or [] if r.get("id") != cid]
         st.get("enabled", {}).pop(cid, None)
+        st.setdefault("disconnected", {})[cid] = time.time()
         _write(_state_file(), st)
-        store = _read(_auth_file())
+        store = _read_rw(_auth_file())
         store.pop(cid, None)
         _write(_auth_file(), store)
 
@@ -525,24 +573,46 @@ def begin(cid: str, redirect: str) -> str:
     return meta["authorization_endpoint"] + sep + urllib.parse.urlencode(q)
 
 
+def _was_disconnected(cid: str, since: float) -> bool:
+    """True when the connector was disconnected (or removed) after a sign-in started at `since`, by this process or
+    another one (the CLI): the time is kept in connectors.json."""
+    return float((_read(_state_file()).get("disconnected") or {}).get(cid) or 0) > since
+
+
 def finish(state: str, code: str | None, error: str | None = None) -> str:
-    """Handle the browser's redirect back to Meshpool; returns the connector's name."""
+    """Handle the browser's redirect back to Meshpool; returns the connector's name. A sign-in the user cancelled by
+    disconnecting meanwhile is refused (checked again right before saving: the code exchange takes a moment)."""
     with _LOCK:
         f = _FLOWS.pop(state, None)
+        gone = _CANCELLED.pop(state, None)
+    if not f and gone:
+        try:
+            name = get(gone)["name"]
+        except KeyError:
+            name = "That app"
+        raise ValueError(f"{name} was disconnected while it was signing in. Connect it again if you want it.")
     if not f:
         raise ValueError("This sign-in link expired. Start again from Meshpool.")
     LAST_FINISHED[0] = f["cid"]
-    name = get(f["cid"])["name"]
+    try:
+        name = get(f["cid"])["name"]
+    except KeyError:
+        raise ValueError("That app was removed while it was signing in. Add it again if you want it.") from None
+    refused = ValueError(f"{name} was disconnected while it was signing in. Connect it again if you want it.")
     if error or not code:
         raise ValueError(f"{name} did not finish signing in ({error or 'no code'}).")
+    if _was_disconnected(f["cid"], f["t"]):
+        raise refused
     form, hdr = _client_auth(f["client"], {"grant_type": "authorization_code", "code": code,
                                            "redirect_uri": f["redirect"], "code_verifier": f["verifier"],
                                            "resource": f["resource"]})
     s, _, tok = _http(f["meta"]["token_endpoint"], form=form, headers=hdr)
     if s != 200 or not tok.get("access_token"):
         raise ValueError(f"{name} refused the sign-in: {tok.get('error_description') or tok.get('error') or s}")
-    with _LOCK:
-        store = _read(_auth_file())
+    with _locked(_auth_file(), _state_file()):
+        if _was_disconnected(f["cid"], f["t"]):
+            raise refused
+        store = _read_rw(_auth_file())
         store[f["cid"]] = {"client": f["client"], "redirect": f.get("app_redirect") or f["redirect"],
                            "issuer": f["meta"].get("issuer"),
                            "token_endpoint": f["meta"]["token_endpoint"], "resource": f["resource"],
@@ -550,46 +620,103 @@ def finish(state: str, code: str | None, error: str | None = None) -> str:
                            "expires_at": time.time() + float(tok.get("expires_in") or 3600) - 60,
                            "connected": time.time()}
         _write(_auth_file(), store)
-        st = _read(_state_file())
+        st = _read_rw(_state_file())
         st.setdefault("enabled", {})[f["cid"]] = True
         _write(_state_file(), st)
     return name
 
 
-def _fresh_token(cid: str, force: bool = False) -> str | None:
+REFUSED = (400, 401, 403)     # the server really turned the refresh token down; anything else may pass by itself
+
+
+def _fresh_token(cid: str, force: bool = False, failed: str | None = None) -> str | None:
     """The connector's access token, refreshed when it has expired (or, with force, because the server just refused
-    it). None when there is none or the refresh failed: the user signs in again."""
-    with _LOCK:
-        store = _read(_auth_file())
-        e = store.get(cid)
-        if not e or not e.get("access_token"):
-            return None
+    it; `failed` is the token it refused). None when there is none, or the refresh was refused so the user signs in
+    again. A network error or a busy server changes nothing: the current token is returned (None when forced).
+    The refresh runs outside the app-wide lock; one process at a time refreshes a given connector."""
+    def entry():
+        with _LOCK:
+            return _read(_auth_file()).get(cid)
+
+    def usable(e):
+        """The token to hand out without refreshing, or None when a refresh is needed."""
+        if failed and e["access_token"] != failed:
+            return e["access_token"]                           # already replaced since the server refused it
         if not force and time.time() < float(e.get("expires_at") or 0):
             return e["access_token"]
-        if not e.get("refresh_token") or not e.get("token_endpoint") or not e.get("client"):
-            return None if force else e["access_token"]   # let the server decide; it may still accept it
-        form, hdr = _client_auth(e["client"], {"grant_type": "refresh_token", "refresh_token": e["refresh_token"],
+        return None
+
+    e = entry()
+    if not e or not e.get("access_token"):
+        return None
+    cur = e["access_token"]
+    if usable(e):
+        return usable(e)
+    if not e.get("refresh_token") or not e.get("token_endpoint") or not e.get("client"):
+        return None if force else cur                          # let the server decide; it may still accept it
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(fsio.file_lock(C.home() / f"mcp-auth-refresh-{_safe(cid)}", timeout=45))
+        except TimeoutError:
+            return None if force else cur
+        e = entry()                                            # someone may have refreshed while we waited
+        if not e or not e.get("access_token"):
+            return None
+        if e["access_token"] != cur:
+            return e["access_token"]
+        if usable(e):
+            return usable(e)
+        used = e.get("refresh_token")
+        form, hdr = _client_auth(e["client"], {"grant_type": "refresh_token", "refresh_token": used,
                                                "resource": e.get("resource", "")})
         s, _, tok = _http(e["token_endpoint"], form=form, headers=hdr)
-        if s != 200 or not tok.get("access_token"):
-            e["expired"] = True
-            _write(_auth_file(), store)
-            return None
-        e.update({"access_token": tok["access_token"], "refresh_token": tok.get("refresh_token") or e["refresh_token"],
-                  "expires_at": time.time() + float(tok.get("expires_in") or 3600) - 60, "expired": False})
-        _write(_auth_file(), store)
-        return e["access_token"]
+        ok = s == 200 and bool(tok.get("access_token"))
+        if not ok and s not in REFUSED:
+            return None if force else cur
+        out = []
+
+        def swap(store):
+            """Compare and swap: write only if the entry is still the one we refreshed."""
+            now = store.get(cid)
+            if not now or now.get("refresh_token") != used:
+                out.append(now.get("access_token") if now else None)
+                return
+            if ok:
+                now.update({"access_token": tok["access_token"], "refresh_token": tok.get("refresh_token") or used,
+                            "expires_at": time.time() + float(tok.get("expires_in") or 3600) - 60, "expired": False})
+                out.append(now["access_token"])
+            else:
+                now["expired"] = True
+                out.append(None)
+        try:
+            _edit(_auth_file(), swap)
+        except ValueError:                                     # damaged store: change nothing, keep the chat going
+            return (tok["access_token"] if ok else None) if force else cur
+        return out[0] if out else None
 
 
-def refresh_headers(cid: str) -> dict | None:
+def _bearer(headers: dict | None, name: str = "Authorization") -> str | None:
+    """The token in a request's headers (without a leading "Bearer ")."""
+    for k, v in (headers or {}).items():
+        if str(k).lower() == name.lower():
+            v = str(v).strip()
+            return v[7:].strip() if v.lower().startswith("bearer ") else v
+    return None
+
+
+def refresh_headers(cid: str, failed_headers: dict | None = None) -> dict | None:
     """Fresh request headers for a connector whose server refused the ones it was started with (an OAuth access
-    token lasts about an hour). None when there is nothing better to send: the user signs in again."""
+    token lasts about an hour). `failed_headers` are the ones refused: when the saved token is already newer, the
+    newer headers are returned without another refresh (refresh tokens rotate, so N chats must not refresh N times).
+    None when there is nothing better to send: the user signs in again."""
     try:
         c = get(cid)
     except KeyError:
         return None
-    if c["auth"] == "oauth" and not _fresh_token(cid, force=True):
-        return None
+    if c["auth"] == "oauth":
+        failed = _bearer(failed_headers, c.get("header") or "Authorization") if failed_headers else None
+        if not _fresh_token(cid, force=True, failed=failed):
+            return None
     spec = spec_for(cid)
     return (spec or {}).get("headers") or None
 
@@ -632,10 +759,21 @@ def listing() -> list[dict]:
 
 def set_enabled(cid: str, on: bool):
     get(cid)
-    with _LOCK:
-        st = _read(_state_file())
-        st.setdefault("enabled", {})[cid] = bool(on)
+    _edit(_state_file(), lambda st: st.setdefault("enabled", {}).__setitem__(cid, bool(on)))
+
+
+def _forget(cid: str, *, signed_in: bool) -> None:
+    """Record that the connector was disconnected (so a sign-in still open in a browser tab cannot bring it back),
+    drop its pending sign-ins, and with `signed_in` its saved tokens."""
+    with _locked(_state_file(), _auth_file()):
+        _cancel_flows(cid)
+        st = _read_rw(_state_file())
+        st.setdefault("disconnected", {})[cid] = time.time()
         _write(_state_file(), st)
+        if signed_in:
+            store = _read_rw(_auth_file())
+            store.pop(cid, None)
+            _write(_auth_file(), store)
 
 
 def disconnect(cid: str):
@@ -644,16 +782,15 @@ def disconnect(cid: str):
         remove_custom(cid)
         return
     if c["auth"] == "none":
+        _forget(cid, signed_in=False)
         set_enabled(cid, False)
         return
     if c["auth"] == "token":
+        _forget(cid, signed_in=False)
         C.write({c["token_key"]: ""})
         os.environ.pop(c["token_key"], None)
         return
-    with _LOCK:
-        store = _read(_auth_file())
-        store.pop(cid, None)
-        _write(_auth_file(), store)
+    _forget(cid, signed_in=True)
 
 
 def set_token(cid: str, token: str):
@@ -767,47 +904,64 @@ def github_client_id() -> str:
     return v.strip()
 
 
-def github_device_start() -> dict:
+_DEVICE_LOCK = threading.Lock()
+
+
+def _device_view() -> dict:
+    return {"user_code": _DEVICE["user_code"],
+            "url": _DEVICE.get("verification_uri") or "https://github.com/login/device",
+            "interval": int(_DEVICE.get("interval") or 5)}
+
+
+def github_device_start(restart: bool = False) -> dict:
+    """Start the GitHub device sign-in. A code that is still valid is returned again (a second click or tab must not
+    replace the code the user is typing); `restart` asks GitHub for a new one."""
     cid = github_client_id()
     if not cid:
         raise ValueError("GitHub sign-in is not set up in this build. Use the login on this computer or paste a token.")
-    s, _, j = _http("https://github.com/login/device/code", form={"client_id": cid, "scope": GITHUB_SCOPES})
-    if s != 200 or not j.get("device_code"):
-        raise ValueError(f"GitHub did not start the sign-in: {j.get('error_description') or j.get('error') or s}")
-    _DEVICE.clear()
-    _DEVICE.update(j, started=time.time())
-    return {"user_code": j["user_code"], "url": j.get("verification_uri") or "https://github.com/login/device",
-            "interval": int(j.get("interval") or 5)}
+    with _DEVICE_LOCK:
+        if (not restart and _DEVICE.get("device_code")
+                and time.time() < _DEVICE["started"] + int(_DEVICE.get("expires_in") or 900)):
+            return _device_view()
+        s, _, j = _http("https://github.com/login/device/code", form={"client_id": cid, "scope": GITHUB_SCOPES})
+        if s != 200 or not j.get("device_code"):
+            raise ValueError(f"GitHub did not start the sign-in: {j.get('error_description') or j.get('error') or s}")
+        _DEVICE.clear()
+        _DEVICE.update(j, started=time.time(), last_poll=time.time(), interval=int(j.get("interval") or 5))
+        return _device_view()
 
 
 def github_device_poll() -> dict:
-    if not _DEVICE:
-        return {"status": "none"}
-    s, _, j = _http("https://github.com/login/oauth/access_token", form={
-        "client_id": github_client_id(), "device_code": _DEVICE["device_code"],
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
-    if j.get("access_token"):
-        set_token("github", j["access_token"])
+    """Ask GitHub whether the code was entered, no faster than GitHub's interval (slow_down raises it)."""
+    with _DEVICE_LOCK:
+        if not _DEVICE:
+            return {"status": "none"}
+        now = time.time()
+        iv = int(_DEVICE.get("interval") or 5)
+        if now >= _DEVICE["started"] + int(_DEVICE.get("expires_in") or 900):
+            _DEVICE.clear()
+            return {"status": "failed", "error": "The GitHub code expired. Start the sign-in again."}
+        if now - _DEVICE.get("last_poll", 0) < iv:
+            return {"status": "waiting", "interval": iv}
+        _DEVICE["last_poll"] = now
+        s, _, j = _http("https://github.com/login/oauth/access_token", form={
+            "client_id": github_client_id(), "device_code": _DEVICE["device_code"],
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+        if j.get("access_token"):
+            _DEVICE.clear()
+            set_token("github", j["access_token"])
+            return {"status": "done", "login": _github_check(j["access_token"]) or ""}
+        err = j.get("error") or ""
+        if err == "slow_down":
+            _DEVICE["interval"] = iv = int(j.get("interval") or iv + 5)
+            return {"status": "waiting", "interval": iv}
+        if err == "authorization_pending" or s == 0 or s >= 500 or (s in (408, 429) and not err):
+            return {"status": "waiting", "interval": iv}
         _DEVICE.clear()
-        return {"status": "done", "login": _github_check(j["access_token"]) or ""}
-    err = j.get("error") or ""
-    if err in ("authorization_pending", "slow_down"):
-        return {"status": "waiting"}
-    _DEVICE.clear()
-    return {"status": "failed", "error": j.get("error_description") or err or str(s)}
+        return {"status": "failed", "error": j.get("error_description") or err or str(s)}
 
 
 def github_token() -> str:
-    """The token Meshpool uses for GitHub: the saved one, else a login found on this computer."""
-    t = os.environ.get("GITHUB_TOKEN") or C.read().get("GITHUB_TOKEN", "")
-    if t:
-        return t
-    hit = _FOUND_TOKEN
-    if hit and time.time() - hit[0] < 600:             # the lookup runs two subprocesses: not on every screen
-        return hit[1]
-    tok = github_found().get("token", "")
-    hit[:] = [time.time(), tok]
-    return tok
-
-
-_FOUND_TOKEN: list = []
+    """The token saved in Meshpool for GitHub. Never the login found on this computer (the GitHub CLI or Git's
+    credentials): that is used only when the user chooses "Use the login on this computer" (github_use_found)."""
+    return os.environ.get("GITHUB_TOKEN") or C.read().get("GITHUB_TOKEN", "")

@@ -185,8 +185,9 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
                 env.setdefault("MESHPOOL_CONFIG", str(C.config_path()))
                 env.setdefault("MESHPOOL_PROJECT", os.environ["MESHPOOL_PROJECT"])
                 env.setdefault("PYTHONUTF8", "1")
-                if chat and any("browser_mcp_server" in str(x) for x in spec.get("args", [])):
-                    env["MH_CHAT_ID"] = chat                  # the app finds this chat's browser for its live view
+                if chat and any(k in str(x) for x in spec.get("args", [])
+                                for k in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
+                    env["MH_CHAT_ID"] = chat                  # browser view; scheduled tasks keep the mode; office builds per chat
                 if os.environ.get("PYTHONPYCACHEPREFIX"):        # never write caches inside the signed app
                     env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
                 else:
@@ -615,6 +616,29 @@ class ACPAgent:
     def _before_turn(self) -> list:
         return before_turn(self)
 
+    def _ensure_session_tracked(self):
+        """_ensure_session, recording whether the agent could start (hrouter/health.py: Auto skips one that cannot)."""
+        hid = self.manifest.get("id")
+        try:
+            self._ensure_session()
+        except ACPStopped:
+            raise                                    # the user pressed Stop: says nothing about the install
+        except Exception as e:  # noqa: BLE001 - ACPError, or the process could not even be spawned (OSError)
+            self.start_error = str(e)
+            if hid:
+                try:
+                    from meshpool_harness.hrouter import health
+                    health.start_failed(hid, str(e))
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
+        if hid:
+            try:
+                from meshpool_harness.hrouter import health
+                health.start_ok(hid)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _ensure_session(self):
         if self._start() and self.acp_session:
             # The process exited and a new one started: its session is not in the new process. Load it (or start
@@ -737,6 +761,7 @@ class ACPAgent:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
             self._kill_timer = None
         self._stop = False
+        self.start_error = None                          # set when this turn's agent could not start (Session hands off)
         self._before = None                              # taken once the process and its MCP servers run (below)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
@@ -756,7 +781,7 @@ class ACPAgent:
         try:
             self._emit({"type": "model_start"})
             self._turn_tools = 0
-            self._ensure_session()
+            self._ensure_session_tracked()
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False

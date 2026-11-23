@@ -30,9 +30,10 @@ from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import tools as T
-from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
+from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait, stated_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
+from meshpool_harness.core import stream as ST
 from meshpool_harness.core.wire import sse_to_chat
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 from meshpool_harness.agent import mcp_assist as MA
@@ -373,11 +374,11 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
         body = _PV.adapt_body(base, body)
         url, hdrs = _PV.chat_target(base, key, model)         # Azure: deployment path, api-version, api-key header
     hdrs = {**hdrs, "Content-Type": "application/json"}
-    req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
+    req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
         with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
-            r.read()
+            ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
@@ -1039,6 +1040,8 @@ class Agent:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):
                     return bool(getattr(self, "office_on", False))
+                if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
+                    return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
@@ -1058,9 +1061,11 @@ class Agent:
             names = [n for n in names if n not in drop]
         ms = ([x for x in self.mcp.schemas()
                if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
-               and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
-              if self.mcp else [])
-        return T.schemas(names) + self._lazy_apply(ms)
+               and not x["function"]["name"].endswith("run_subtasks")   # delegate_task instead
+               and not (self.profile == "code" and not getattr(self, "office_on", False)   # about 3k tokens per call:
+                        and x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_office__"))]
+              if self.mcp else [])             # a Code chat gets the office tools once a message asks for a file
+        return (T.schemas(names) + self._lazy_apply(ms))[:128]    # no endpoint takes more than 128 tools
 
     def _lazy_apply(self, ms: list) -> list:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
@@ -1350,10 +1355,20 @@ class Agent:
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
+                tools_off = bool(getattr(self, "_no_tools", False))
                 try:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                if not tools_off and not msg.get("tool_calls"):
+                    from meshpool_harness.core import textcalls as _TC
+                    try:
+                        offered = [t["function"]["name"] for t in self.tool_schemas()]
+                    except Exception:  # noqa: BLE001
+                        offered = []
+                    if _TC.recover(msg, offered) and streamed:
+                        self.emit({"type": "stream_reset"})   # the raw call text was shown as it streamed: drop it
+                        streamed = False
                 cut_off = self._finish == "length"     # the reply hit the output limit (max_tokens)
                 cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
@@ -1368,6 +1383,13 @@ class Agent:
                 if "<memory-context>" in content:
                     from meshpool_harness.assistant import scrub
                     content = scrub(content)
+                if (not calls and not content.strip() and not said and cut_off and msg.get("reasoning_content")
+                        and not g.get("think_cont")):
+                    g["think_cont"] = True              # the output budget went on thinking: ask for the answer once
+                    self.messages.append({"role": "user", "content": (
+                        "[Meshpool] Your reply ran out of output space while you were thinking, before any answer. "
+                        "Give your answer now, briefly, without more deliberation.")})
+                    continue
                 if not calls and not content.strip() and not said:
                     # nothing said and nothing asked for: not a reply to keep in the history
                     self.emit({"type": "assistant", "text": "", "streamed": streamed, "has_tools": False})
@@ -1377,6 +1399,8 @@ class Agent:
                 keep = {"role": "assistant", "content": content or ""}
                 if calls:
                     keep["tool_calls"] = calls
+                    if msg.get("reasoning_content") and self._keeps_reasoning():
+                        keep["reasoning_content"] = msg["reasoning_content"]   # thinking models want it back in the turn
                 self.messages.append(keep)
                 self.emit({"type": "assistant", "text": content, "streamed": streamed, "has_tools": bool(calls)})
                 if not calls:
@@ -2043,7 +2067,7 @@ class Agent:
             _drop_images(msgs, keep=keep)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
-        body["messages"] = msgs
+        body["messages"] = ST.prepare_messages(msgs)       # reasoning_content only inside the tool loop in progress
         caps = self._caps(model, prof)
         eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
         if eff and "reasoning_effort" not in body:
@@ -2059,13 +2083,26 @@ class Agent:
             from meshpool_harness import providers as PV
             bare = PV.split(body.get("model"))[1]
             for f in _REFUSED.get(bare, ()):           # what this model refused before: right the first time
-                if f == "max_tokens" and "max_tokens" in body:
+                if f == "reasoning_content":
+                    body["messages"] = [{k: v for k, v in m.items() if k != "reasoning_content"} for m in body["messages"]]
+                elif f == "max_tokens" and "max_tokens" in body:
                     body["max_completion_tokens"] = body.pop("max_tokens")
                 else:
                     body.pop(f, None)
         except Exception:  # noqa: BLE001
             pass
         return body
+
+    def _keeps_reasoning(self) -> bool:
+        """Whether this model passes reasoning_content back inside a tool-call turn (caps.keep_reasoning) and has not
+        refused the field on this endpoint."""
+        try:
+            from meshpool_harness import providers as PV
+            if "reasoning_content" in _REFUSED.get(PV.split(self.current_model())[1], ()):
+                return False
+            return bool(self._caps(self.current_model()).keep_reasoning)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _caps(self, model: str, prof: dict | None = None):
         """What this model on its endpoint can do (core/modelcaps.py): every provider-specific choice reads this."""
@@ -2091,7 +2128,7 @@ class Agent:
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
-        ctx_shrinks = 0
+        ctx_shrinks, rc_tried = 0, False
         self._ctx_tighten = 1.0
         attempt, recoveries, swapped, auth_tries = -1, 0, False, 0
         # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
@@ -2219,6 +2256,21 @@ class Agent:
                     continue
                 if kind == "quota":                        # spent: a retry or a wait cannot help
                     raise RuntimeError("QUOTA: " + msg)
+                if kind == "bad_request" and "reasoning_content" in msg and not rc_tried:
+                    rc_tried = True                        # the thinking field: send it back, or stop sending it
+                    bare = PV.split(body["model"])[1]
+                    if re.search(r"unknown|unsupported|unrecognized|extra|not (?:allowed|permitted|supported)", msg, re.I):
+                        _REFUSED.setdefault(bare, set()).add("reasoning_content")
+                        body["messages"] = [{k: v for k, v in m.items() if k != "reasoning_content"}
+                                            for m in body["messages"]]
+                        continue
+                    if re.search(r"pass|missing|required|must", msg, re.I):
+                        from meshpool_harness.core import modelcaps as _MC
+                        _MC.learn(base, bare, keep_reasoning=True)
+                        if any(m.get("reasoning_content") for m in self.messages if m.get("role") == "assistant"):
+                            body = self._body()
+                            body["model"] = bare
+                            continue
                 if kind in ("bad_request", "vision") and _adapt_params(body, msg):
                     self.emit({"type": "status", "text": "This model refused a request setting; Meshpool adjusted "
                                                          "it and tried again."})
@@ -2235,6 +2287,11 @@ class Agent:
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
                         raise RuntimeError(msg + f" [rate limited for {_dur(rl_waited)}]")
+                    stated = stated_wait(msg)
+                    if stated is not None and stated > left:   # the stated reset is past the wait budget: end now (resumable)
+                        raise RuntimeError(msg + f" [rate limited: the limit resets in {_dur(stated)}, which is past "
+                                                 f"the wait budget of {_dur(rl_budget)}; send a message to carry on "
+                                                 "then]")
                     self._n429 = getattr(self, "_n429", 0) + 1   # no reset time: back off 3, 6, 12 ... 60 s (v4)
                     wait = min(left, rate_limit_wait(msg, self._n429, cap=left))
                     rl_waited += wait
@@ -2543,13 +2600,14 @@ class Agent:
         b = dict(body)
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
-        # (core/anthropic_wire.py), not streamed; every other endpoint speaks chat completions
+        # (core/anthropic_wire.py) and streamed as Messages events; every other endpoint speaks chat completions
         anthropic = _PV.wire_for(base) == "anthropic"
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
-            stream = False
             from meshpool_harness.core import modelcaps as _MC
             b = AW.to_request(b, cache=_MC.resolve(base, b.get("model", "")).cache == "explicit")
+            if stream:
+                b["stream"] = True
             url, hdrs = _PV.chat_target(base, key, b.get("model", ""), "messages")
         else:
             if stream:
@@ -2561,8 +2619,8 @@ class Agent:
                 b.pop("prompt_cache_key", None)
                 b.pop("user", None)
             url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key
-        hdrs = {**hdrs, "Content-Type": "application/json"}
-        req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
+        hdrs = {**hdrs, "Content-Type": "application/json", **({"Accept": "text/event-stream"} if stream else {})}
+        req = urllib.request.Request(url, data=ST.encode_body(b), method="POST",
                                      headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
         # stream that goes quiet mid-reply is stuck. Waiting only 120 s for the first byte failed every retry of a
@@ -2586,56 +2644,55 @@ class Agent:
             c.connect = checked_connect
         try:
             with _urlopen(req, first, sink) as r:
-                if not stream:
-                    raw_body = r.read()
-                    try:
-                        data = json.loads(raw_body.decode("utf-8", "replace"))
-                        return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
-                    except ValueError:                   # a gateway that streams anyway, or sends an error page
-                        if raw_body.lstrip().startswith(b"data:"):
-                            return sse_to_chat(raw_body.splitlines(keepends=True)), False
-                        raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
+                thinking = []                            # one "Thinking…" status per call, before any text
 
-                def tee(lines):
+                def on_text(t):
                     nonlocal got_text
-                    started, t_data = False, time.time()
-                    for raw in lines:
+                    got_text = True
+                    self._delta(t)
+
+                def on_reasoning(_t):
+                    if not thinking and not got_text:
+                        thinking.append(1)
+                        self.emit({"type": "status", "text": "Thinking…"})
+
+                def check():
+                    if self._stop or getattr(self, "_gen", 0) != gen:
+                        raise Interrupted()
+
+                def lines():
+                    started = False
+                    for raw in r:
                         if not started:                  # bytes are flowing: from here on, a gap is the idle clock
                             started = True
                             _set_read_timeout(r, idle)
-                        if raw.startswith(b"data:"):
-                            t_data = time.time()
-                        elif time.time() - t_data > first:   # only keep-alives: they must not hold a slot forever
-                            raise RuntimeError(f"HTTP 0: connection problem (timed out: only keep-alives for "
-                                               f"{int(first)} s)")
-                        if self._stop or getattr(self, "_gen", 0) != gen:
-                            raise Interrupted()
-                        line = raw.decode("utf-8", "replace").strip()
-                        if line.startswith("data:") and line[5:].strip() not in ("", "[DONE]"):
-                            try:
-                                ev = json.loads(line[5:].strip())
-                                for ch in ev.get("choices") or []:
-                                    t = (ch.get("delta") or {}).get("content")
-                                    if t:
-                                        got_text = True
-                                        self._delta(t)
-                            except ValueError:
-                                pass
                         yield raw
-                resp = sse_to_chat(tee(r))
-                if not resp.get("choices") or resp["choices"][0].get("finish_reason") is None and \
-                        not resp["choices"][0]["message"].get("content") and \
-                        not resp["choices"][0]["message"].get("tool_calls"):
-                    raise RuntimeError("HTTP 0: the stream ended before the reply")
-                return resp, got_text
+                sse = stream and "event-stream" in ((r.headers.get("Content-Type") if r.headers else "") or "").lower() \
+                    if anthropic else stream
+                if anthropic and sse:
+                    asm = AW.StreamAssembler(on_text=on_text, on_reasoning=on_reasoning)
+                    for ev_name, ev_data in ST.iter_sse(lines(), data_idle=first, check=check):
+                        asm.feed(ev_name, ev_data)
+                    return asm.result(), got_text
+                if not anthropic and stream:
+                    return sse_to_chat(lines(), on_text=on_text, on_reasoning=on_reasoning, data_idle=first,
+                                       check=check), got_text
+                raw_body = ST.read_body(r, first)
+                try:
+                    data = json.loads(raw_body.decode("utf-8", "replace"))
+                    return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
+                except ValueError:                       # a gateway that streams anyway, or sends an error page
+                    if raw_body.lstrip().startswith(b"data:"):
+                        return sse_to_chat(raw_body.splitlines(keepends=True)), False
+                    raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
         except RuntimeError:
             if got_text:                             # a reply cut short after some text: the retry starts clean
                 self.emit({"type": "stream_reset"})
             raise
         except urllib.error.HTTPError as e:
-            ra = (e.headers or {}).get("Retry-After") if hasattr(e, "headers") else None
+            ra = ST.retry_after_seconds(getattr(e, "headers", None))
             raise RuntimeError(f"HTTP {e.code}: {e.read()[:400].decode('utf-8', 'replace')}"
-                               + (f" [retry-after: {ra}]" if ra else ""))
+                               + (f" [retry-after: {ra:g}]" if ra is not None else ""))
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
@@ -3098,12 +3155,21 @@ class Agent:
             return f"ERROR: office_task refused, nothing was built: {why}", False
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
-        jid = OJ.new_job(engine, args["request"], paths, self.root)
-        self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
-        OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
+        jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id,
+                                 model=self.model or None)   # the user's pick; else the engine resolves MH_MODEL / settings   # one request, one engine run
+        if reused == "refused":
+            return OJ.refusal_text(jid, rel_to=self.root), True
+        if reused != "done":
+            self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
+        if reused == "running":              # the same request is already building (a parallel call): wait for it
+            while not OJ.JOBS[jid]["event"].wait(0.5):
+                if self._stop:
+                    raise Interrupted()
+        elif not reused:
+            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
         if OJ.JOBS[jid].get("stopped"):
             raise Interrupted()
-        text, failed = OJ.report(jid, rel_to=self.root)
+        text, failed = OJ.report(jid, rel_to=self.root, reused=reused)
         return text, not failed
 
     def _search(self, query: str, n: int = 8, recency: str = "", site: str = "") -> str:

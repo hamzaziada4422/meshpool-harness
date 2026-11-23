@@ -45,7 +45,7 @@ def _engine(name):
 
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
-                client=None, output_format: str | None = None) -> dict:
+                client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -62,7 +62,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         raise SystemExit(f"error: no API key. Put MESHPOOL_API_KEY=... in {_config.config_path()}")
     client = client or LiveClient("phase_2_build")
     task_id = "req-" + uuid.uuid4().hex[:8]
-    r = route(request, files, output_format, workdir, client=client, engine=engine, task_id=task_id)
+    model = model or os.environ.get("MH_MODEL")      # the model the caller (or the app chat) picked
+    r = route(request, files, output_format, workdir, client=client, engine=engine, model=model, task_id=task_id)
     outdir = Path(out).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     inputs = [str(Path(f).resolve()) for f in files]
@@ -86,8 +87,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
         if name == "slides" and (researched or request.lstrip().startswith("[add to deck:")):
             kw = {"files": inputs}                   # research facts, or the user's own deck (by its real path)
-        if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
-            kw["model"] = os.environ["MH_MODEL"]
+        if model:                                # the model chosen in settings or in the chat, for every engine
+            kw["model"] = model
         saved = dict(os.environ)
         if name in ("code", "browser"):
             for k, v in ENGINE_FLAGS.items():     # explicit MH_* settings win
@@ -111,7 +112,10 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                 inputs.append(str(rep))
                 researched = True
     spent = client.spent() if hasattr(client, "spent") else None
-    return {"task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
+    arts = list(dict.fromkeys(a for x in results for a in (x.get("artifacts") or [])))
+    bad = next((x for x in results if not x.get("ok")), None)
+    return {"answer": (results[-1].get("answer") or "") if results else "", "artifacts": arts,
+            "reason": (bad.get("reason") or "") if bad else "", "task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
                                          "used_model_call": r.used_model_call},
             "ok": all(x.get("ok") for x in results) and len(results) == len(r.engines),
             "steps": [{k: v for k, v in x.items() if k in ("engine", "ok", "answer", "artifacts", "evidence", "turns",
@@ -352,12 +356,14 @@ def main(argv=None):
         p.add_argument("--format", dest="output_format")
         if c == "run":
             p.add_argument("--out", default="./mh_out")
+            p.add_argument("--model", help="model id for every engine (e.g. chatgpt:gpt-6.1-sol); default: MH_MODEL / settings")
     w = sub.add_parser("work", help="fetch a task from a connector (github:, jira:, http:, file:, custom), run it, report back")
     w.add_argument("source", help="e.g. github:owner/repo#12, jira:PROJ-7, http:https://..., file:task.md")
     w.add_argument("--workdir", default=".")
     w.add_argument("--engine", default=None)
     w.add_argument("--out", default="./mh_out")
     w.add_argument("--report", action="store_true", help="post the outcome back to the source")
+    w.add_argument("--json", action="store_true", help="print the result as JSON")
     u = sub.add_parser("ui", help="open the Meshpool web app")
     u.add_argument("--port", type=int, default=int(os.environ.get("MH_UI_PORT", "8765")))
     u.add_argument("--no-browser", action="store_true")
@@ -398,15 +404,27 @@ def main(argv=None):
         res = run_request(task.text(), [], a.out, a.engine, a.workdir)
         if a.report:
             conn.report(task, res)
-        print(json.dumps({"task": task.ref, "source": task.source, **{k: res.get(k) for k in ("ok", "answer")}},
-                         indent=1, default=str))
+        if a.json:
+            print(json.dumps({"task": task.ref, "source": task.source,
+                              **{k: res.get(k) for k in ("ok", "answer", "artifacts", "reason", "out_dir")}},
+                             indent=1, default=str))
+            return 0 if res.get("ok") else 1
+        print(res.get("answer") or "")
+        if res.get("artifacts"):
+            print("\nFiles:")
+            for f in res["artifacts"]:
+                print("  " + str(f))
+        print("\nOutput folder: " + str(res.get("out_dir", "")))
+        if not res.get("ok"):
+            print("Failed: " + str(res.get("reason") or "no reason given"))
         return 0 if res.get("ok") else 1
     if a.cmd == "route":
         from meshpool_harness.router.rules import decide
         eng, conf, why = decide(a.request, a.files, a.output_format, a.workdir)
         print(json.dumps({"engines": eng, "confidence": conf, "reason": why}, indent=1))
         return 0
-    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format)
+    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format,
+                      **({"model": a.model} if getattr(a, "model", None) else {}))
     print(json.dumps(res, indent=1))
     return 0 if res["ok"] else 1
 
