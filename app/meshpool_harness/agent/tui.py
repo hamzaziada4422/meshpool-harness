@@ -1245,7 +1245,7 @@ class Session:
                     ver = input(f"  API version [{d}] > ").strip() or d
         key = getpass.getpass("  API key (hidden) > ")
         t.p(st.dim("  Testing the endpoint..."))
-        res = PS.test(base, key, model=dep, api_version=ver, kind=kind)
+        res = PS.test(base, key, model=dep, api_version=ver, kind=kind) if kind else PS.test(base, key)
         if not res["ok"]:
             return t.p(st.red("  " + (res["error"] or "The endpoint did not answer.")))
         t.p(st.green(f"  Connected to {PV.host(res['base_url'])}") +
