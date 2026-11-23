@@ -78,6 +78,7 @@ def _run_agent_in(task: str, workdir: str, profile: str, max_steps: int, model: 
     from meshpool_harness.agent.core import Agent
     events: list = []
     a = Agent(workdir, mode="auto", max_steps=max_steps, profile=profile, emit=events.append, sessions_dir=sessions)
+    a.headless = True                              # no person to answer ask_user: it decides and says what it assumed
     if model:
         a.model = model
     route = None
