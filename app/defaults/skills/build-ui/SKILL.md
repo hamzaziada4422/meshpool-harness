@@ -12,7 +12,7 @@ Method adapted from the open Taste Skill (MIT, github.com/Leonxlnx/taste-skill).
 3. Start from `starter.html` in this skill's folder (copy it to the project, then change it). It already has the design system below, light and dark, and passes `ui_audit`. Keep one file with inline CSS unless the user wants a framework.
 4. One design system, declared once as CSS variables: colours (background, surface, text, muted text, one accent, border), a type scale, spacing steps of 4 or 8 px, one radius, one shadow. Use only those. One accent colour. Two font weights. System font stack unless the user gives a font.
 5. Build mobile first, then widen. Layout with grid and flex, text in `rem`, content width capped near 70 characters for reading and 1100px for pages. No fixed widths over 100%.
-6. Look at it. Run `ui_audit` on the file. It checks a wide screen, a tablet and a phone in light and dark, lists what is broken and saves screenshots. Then run `view_output` on the saved screenshots if you can see images, and read the layout outline if you cannot. Fix every MUST FIX item, then run it again. Repeat until it says "No problems found". Do not tell the user it is finished before that.
+6. Look at it. Run `ui_audit` on the file. It checks a wide screen, a tablet and a phone in light and dark, lists what is broken and saves screenshots. Then run `view_output` on the saved screenshots if you can see images, and read the layout outline if you cannot. Fix every MUST FIX item, then run it again. Repeat until it says "No problems found". Then run `ui_smoke`: it clicks every control, follows the links, submits each form empty and with nonsense, tabs through the page and reloads, and lists buttons that do nothing, forms that accept bad input and console errors. Fix them and run it again until it is clean. Do not tell the user it is finished before both are clean.
 7. Review it yourself against the house rules below, change what fails, run `ui_audit` once more.
 8. Reply with the file path, what you built in two sentences, and the screenshot paths.
 
@@ -22,6 +22,7 @@ House rules
 - Hierarchy: one h1, headings in order, one primary button per view. The most important thing is the biggest and highest.
 - Spacing: generous and even. Sections 64 to 96 px apart on desktop, 40 to 56 on a phone. Related things closer than unrelated things.
 - States: hover, focus (a visible ring, never removed), disabled, loading, empty and error states exist for anything interactive.
+- Working: no dead buttons or "#" links, forms reject empty and bad input next to the field, anything the user enters survives a reload, user text is inserted as text never as HTML, long words wrap on a phone.
 - Motion: only to explain a change, under 200 ms, and off when `prefers-reduced-motion` is set.
 - Dark mode follows `prefers-color-scheme` and is designed, not inverted: lower contrast surfaces, no pure black.
 - Copy: short, concrete, in plain words. Buttons say what happens ("Start free trial", not "Submit"). No exclamation marks, no em dashes.

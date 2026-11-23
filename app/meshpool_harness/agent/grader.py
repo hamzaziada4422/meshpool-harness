@@ -38,7 +38,7 @@ _IGNORE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".meshpo
                 ".ruff_cache", ".next", "dist", "build", ".tox", ".idea", ".vscode"}
 _SEARCH_TOOLS = ("web_search", "web_research", "fetch_url", "web_fetch")
 # what the grader may call besides read_file, grep and glob: tools that only look (the name after the server prefix)
-MCP_LOOK = {"read_document", "view_output", "ui_audit", "check_deck", "check_workbook", "check_document",
+MCP_LOOK = {"read_document", "view_output", "ui_audit", "ui_smoke", "check_deck", "check_workbook", "check_document",
             "measure_office_file", "web_fetch", "web_search", "slide_layouts", "office_job_status", "current_time",
             "calculate"}
 _TEST_CMD = re.compile(
@@ -53,6 +53,7 @@ You see only: the user's request, the agent's plan with statuses, the agent's fi
 Method:
 1. Write down what the user expects, from their own words and any files or context they gave: the explicit asks; the implied ones (audience, format, file type and name, length, tone, language, numbers that must be right); what they said not to do; what "done" looks like to them.
 2. Check each item against the real result. Open the files. Run the project's own checks or tests when there are any. For a web page or visual file, look at it (ui_audit, view_output). For Word, Excel, PowerPoint and PDF files use read_document, and check_deck, check_workbook, check_document or measure_office_file when you have them. For a research answer, open the sources it cites and check that each claim is supported. Recompute numbers that matter.
+2b. For anything the agent BUILT as code (a web page or app, a game, a dashboard, a script, a CLI, an API), judge it as the user who will run it. Decide what a person expects such a thing to do (the features every version of it has, not only the words of the request), then confirm each one actually works, from the click-through and test evidence below and your own checks: no button or link that does nothing; each feature usable end to end; empty, loading and error states; bad input rejected with a message that says what is wrong; data kept where the user would expect it (a reload must not lose it); keyboard use and a phone-width layout for anything with a screen; no placeholder text or invented facts; tests exist for logic that can break and pass when run; a way to run it is stated (README or the reply). A "MUST FIX" line in the automatic click-through is a real defect: list it under blockers unless you can show it is wrong.
 3. Flag: invented facts, unsupported numbers, claims without a source, instructions that were ignored, the wrong language, the wrong file type or name, anything the user asked for that is missing, plan items marked completed that are not.
 4. Missing evidence counts as NOT met. If you cannot see it or prove it, it is not_met. Use "unverified" only when your tools truly cannot check it (say why in evidence).
 5. Judge overall: would this person accept it as it is, or send it back?
@@ -200,6 +201,64 @@ def large(info: dict) -> str:
     return ""
 
 
+_WEB = (".html", ".htm")
+_TEST_FILE = re.compile(r"(^|/)(tests?/|__tests__/|test_[^/]+\.py$|[^/]+_test\.(py|go)$|[^/]+\.(test|spec)\.[jt]sx?$)")
+
+
+def _web_files(info: dict, limit: int = 2) -> list[str]:
+    root = Path(info.get("root") or ".")
+    out = []
+    for f in info.get("files") or []:
+        g = str(f).replace("\\", "/")
+        if g.lower().endswith(_WEB) and "/views/" not in g and "ui-audit" not in g and "node_modules" not in g:
+            out.append(str(root / f))
+    out.sort(key=lambda x: (0 if os.path.basename(x).lower().startswith("index") else 1, len(x)))
+    return out[:limit]
+
+
+def code_facts(info: dict) -> str:
+    """Plain facts about a code deliverable that no model needs to be trusted for: tests, README."""
+    files = [str(f).replace("\\", "/") for f in info.get("files") or []]
+    root = Path(info.get("root") or ".")
+    code = [f for f in files if f.lower().endswith((".py", ".js", ".ts", ".go", ".rs", ".html", ".sh", ".rb", ".java"))]
+    if not code:
+        return ""
+    tests = [f for f in files if _TEST_FILE.search(f)]
+    readme = [f for f in files if os.path.basename(f).lower().startswith("readme")]
+    if not readme:
+        try:
+            readme = [n for n in os.listdir(root) if n.lower().startswith("readme")]
+        except OSError:
+            pass
+    return ("Code facts (measured, not claimed): " + f"{len(code)} code files changed; "
+            + (f"{len(tests)} test files ({', '.join(tests[:4])})" if tests else "NO test files among the changed files") + "; "
+            + (f"README present ({readme[0]})" if readme else "NO README among the project files") + ".")
+
+
+def smoke_evidence(info: dict, seconds: float = 100.0) -> str:
+    """Click-through of the web pages the agent made (ui_smoke.py), run here so the grader always sees it."""
+    pages = _web_files(info)
+    if not pages or os.environ.get("MH_GRADER_SMOKE", "1") in ("0", "off"):
+        return ""
+    box: dict = {}
+
+    def work():
+        try:
+            from playwright.sync_api import sync_playwright
+            from meshpool_harness import ui_smoke as US
+            texts = []
+            with sync_playwright() as pw:
+                for pth in pages:
+                    texts.append(US.smoke(pw, pth)["text"])
+            box["t"] = "\n".join(texts)
+        except Exception as e:  # noqa: BLE001 - evidence is optional
+            box["t"] = f"(automatic click-through could not run: {str(e)[:100]})"
+    th = threading.Thread(target=work, daemon=True)
+    th.start()
+    th.join(seconds)
+    return box.get("t") or "(automatic click-through timed out)"
+
+
 def evidence(info: dict, commands: list, maxchars: int = 14000) -> str:
     """The text the grader is given: request, plan, final answer, files, commands. Nothing else of the agent's work."""
     parts = ["## The user's request" + ("s" if len(info.get("requests") or []) > 1 else "")]
@@ -218,6 +277,9 @@ def evidence(info: dict, commands: list, maxchars: int = 14000) -> str:
                 x[:200] for x in tail) if tail else ""))
     else:
         parts.append("(none)")
+    facts = info.get("facts") or ""
+    if facts:
+        parts.append("\n## Automatic checks of the result (run by Meshpool, not by the agent)\n" + facts)
     text = "\n".join(parts)
     return text if len(text) <= maxchars else text[:maxchars] + "\n[evidence cut]"
 
@@ -594,6 +656,11 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
         timer = threading.Timer(lim["seconds"], lambda: (flags.__setitem__("over", True), a.stop()))
         timer.daemon = True
         timer.start()
+        try:
+            info = dict(info)
+            info["facts"] = "\n".join(x for x in (code_facts(info), smoke_evidence(info)) if x)
+        except Exception:  # noqa: BLE001
+            pass
         a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
         reply = a._turn() or ""
         res = normalise(parse(reply))
