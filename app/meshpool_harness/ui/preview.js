@@ -283,3 +283,96 @@ window.addEventListener("keydown", e => {            // Esc closes the pane firs
   if (e.key !== "Escape" || !PVX.open || $("#pop, #ctx, .scrim, #srch, #onb") || e.target.closest?.("#edTa, #edFq, .fs-q")) return;
   e.preventDefault(); e.stopPropagation(); closePreview();
 }, true);
+
+/* ---------- The Browser panel: what the agent's browser shows, inside Meshpool ----------
+   The browser itself is hidden (agent/browser_mcp_server.py). This panel shows it as pictures (a JPEG about once a second,
+   faster for a moment after you act, and not at all while the window is hidden), and passes your clicks, scrolls and typing
+   on, so you can sign in or solve a captcha without any other window. Server side: ui/browser_api.py.
+   src "chat": the browser of the open chat. src "signin": the app's own browser for sign-in pages. */
+const BRW = {back: "", src: "chat", tok: 0, timer: 0, known: "", info: null, fast: 0, opened: {}, img: "", buf: "", bufT: 0, wheel: 0, wheelT: 0, wp: null};
+function brwQuery() { return `src=${BRW.src}&chat=${encodeURIComponent(S.cur?.id || "")}`; }
+function brwStop() { BRW.tok++; clearTimeout(BRW.timer); BRW.timer = 0; if (BRW.img) { try { URL.revokeObjectURL(BRW.img); } catch (e) {} BRW.img = ""; } }
+// A sign-in page opened inside Meshpool. Settings covers the panel, so it steps aside and comes back on Done.
+function showSignIn() {
+  const settings = $(".scrim:not(.dlg-scrim):not(.srch-scrim)");
+  if (settings) { BRW.back = $("#cnl") ? "connectors" : ""; closeSettings(); }
+  BRW.src = "signin"; BRW.known = ""; togglePanel("browser", true);
+}
+// The agent opened its first page in this chat: show the panel, once, without a toast or taking the keyboard.
+function browserAutoOpen(chat) {
+  if (!chat || BRW.opened[chat.id]) return;
+  BRW.opened[chat.id] = true;
+  if (S.cur !== chat || S.panel === "browser") return;
+  BRW.src = "chat"; BRW.known = ""; togglePanel("browser", true);
+}
+async function brwSend(body) {
+  BRW.fast = Date.now() + 4000;
+  try { await post("/api/browser/input", {src: BRW.src, chat: S.cur?.id || "", ...body}); }
+  catch (e) { toast(e.message, 3500); }
+  clearTimeout(BRW.timer); BRW.timer = setTimeout(() => brwTick(BRW.tok), 120);
+}
+async function brwTick(id) {
+  if (id !== BRW.tok || !$("#bImg")) return;
+  const again = ms => { if (id === BRW.tok) BRW.timer = setTimeout(() => brwTick(id), ms); };
+  if (document.hidden) return again(2000);
+  const note = $("#bNote"), img = $("#bImg");
+  try {
+    const r = await fetch(`/api/browser/frame?${brwQuery()}&known=${encodeURIComponent(BRW.known)}`, {headers: {"X-Meshpool-Token": MP.token}});
+    if (id !== BRW.tok) return;
+    const why = r.headers.get("X-Frame-State") || "";
+    if (why === "busy") return again(700);                // busy with the agent's own step
+    if (r.status === 200 || (r.status === 204 && why === "same")) {
+      let info = {}; try { info = JSON.parse(r.headers.get("X-Frame-Info") || "{}"); } catch (e) {}
+      if (r.status === 200) {
+        const url = URL.createObjectURL(await r.blob()); if (id !== BRW.tok) { URL.revokeObjectURL(url); return; }
+        const old = BRW.img; BRW.img = url; img.src = url; if (old) URL.revokeObjectURL(old);
+      }
+      BRW.known = info.id || BRW.known; BRW.info = info; img.hidden = false; note.hidden = true;
+      const u = $("#bUrl"); if (u && document.activeElement !== u && info.url !== undefined) u.value = info.url || "";
+      const t = $("#bTitle"); if (t) t.textContent = info.title || "";
+      return again(BRW.fast > Date.now() ? 250 : S.cur?.state === "working" ? 600 : 1000);
+    }
+    img.hidden = true; note.hidden = false; BRW.known = "";
+    let msg = BRW.src === "signin" ? "Loading the page..." : "Nothing is open yet. When the agent opens a web page, it shows here. You can click and type in it.";
+    try { const st = await api(`/api/browser/state?${brwQuery()}`); if (st.error) msg = st.error; } catch (e) {}
+    note.textContent = msg;
+  } catch (e) { /* the app is busy: try again */ }
+  again(1500);
+}
+function brwPoint(e) {
+  const img = $("#bImg"), r = img.getBoundingClientRect(), w = BRW.info?.width || 1280, h = BRW.info?.height || 720;
+  return {x: Math.round((e.clientX - r.left) / Math.max(1, r.width) * w), y: Math.round((e.clientY - r.top) / Math.max(1, r.height) * h)};
+}
+const BRW_KEYS = {Enter: 1, Tab: 1, Escape: 1, Backspace: 1, Delete: 1, ArrowUp: 1, ArrowDown: 1, ArrowLeft: 1, ArrowRight: 1, Home: 1, End: 1, PageUp: 1, PageDown: 1};
+function brwFlush() { clearTimeout(BRW.bufT); if (BRW.buf) { const t = BRW.buf; BRW.buf = ""; brwSend({type: "text", text: t}); } }
+function panelBrowser(body) {
+  brwStop(); const id = BRW.tok;
+  const signin = BRW.src === "signin";
+  body.innerHTML = `<div class="pbar brw-bar"><button class="btn" id="bBack" aria-label="Back">Back</button><button class="btn" id="bReload" aria-label="Reload">Reload</button><input id="bUrl" aria-label="Address" placeholder="Address" spellcheck="false" autocomplete="off"><button class="btn" id="bGo">Go</button>${signin ? `<button class="btn primary" id="bDone">Done</button>` : ""}</div>
+    <div class="brw-title" id="bTitle"></div>
+    <div class="brw-stage" id="bStage" tabindex="0" role="application" aria-label="Browser view. Click it, then type to enter text."><img id="bImg" alt="The page the browser shows" draggable="false" hidden><div class="pnote" id="bNote">Loading...</div></div>
+    <div class="brw-foot">${signin ? "Sign in here, then press Done." : "This is the browser the agent uses. Sign in here, or solve a check, and the agent carries on."}${signin && S.cur ? ` <button class="linkbtn" id="bAgent">Show the agent's browser</button>` : ""}</div>`;
+  const stage = $("#bStage"), img = $("#bImg");
+  $("#bBack").onclick = () => brwSend({type: "back"});
+  $("#bReload").onclick = () => brwSend({type: "reload"});
+  const go = () => { const v = $("#bUrl").value.trim(); if (v) brwSend({type: "goto", url: v}); };
+  $("#bGo").onclick = go; $("#bUrl").onkeydown = e => { if (e.key === "Enter") go(); };
+  if ($("#bDone")) $("#bDone").onclick = () => { post("/api/browser/close", {src: "signin"}).catch(() => {}); BRW.src = "chat"; brwStop(); S.connCache = null; togglePanel("browser"); if (BRW.back) { const s = BRW.back; BRW.back = ""; openSettings(s); } else toast("Done. If you signed in to an app, check it under Settings."); };
+  $("#bAgent")?.addEventListener("click", () => { BRW.src = "chat"; BRW.known = ""; renderPanel(); });
+  img.addEventListener("click", e => { stage.focus({preventScroll: true}); brwSend({type: "click", count: Math.min(3, e.detail || 1), ...brwPoint(e)}); });
+  img.addEventListener("contextmenu", e => { e.preventDefault(); brwSend({type: "click", button: "right", ...brwPoint(e)}); });
+  stage.addEventListener("wheel", e => {
+    if (e.target !== img) return; e.preventDefault();
+    BRW.wheel += e.deltaY * (e.deltaMode === 1 ? 16 : 1); BRW.wp = brwPoint(e);
+    if (!BRW.wheelT) BRW.wheelT = setTimeout(() => { const dy = Math.round(BRW.wheel); BRW.wheel = 0; BRW.wheelT = 0; if (dy) brwSend({type: "scroll", dx: 0, dy, ...BRW.wp}); }, 90);
+  }, {passive: false});
+  stage.addEventListener("keydown", e => {
+    if (e.isComposing) return;
+    const mod = (e.ctrlKey ? "Control+" : "") + (e.altKey ? "Alt+" : "") + (e.metaKey ? "Meta+" : "");
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); BRW.buf += e.key; clearTimeout(BRW.bufT); BRW.bufT = setTimeout(brwFlush, 60); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "v") return;           // the paste event carries the text
+    if (BRW_KEYS[e.key] || ((e.ctrlKey || e.metaKey) && /^[a-z]$/i.test(e.key))) { e.preventDefault(); brwFlush(); brwSend({type: "key", key: mod + (e.key.length === 1 ? e.key.toUpperCase() : e.key)}); }
+  });
+  stage.addEventListener("paste", e => { const t = e.clipboardData?.getData("text") || ""; if (t) { e.preventDefault(); brwFlush(); brwSend({type: "text", text: t}); } });
+  BRW.known = ""; BRW.info = null; BRW.timer = setTimeout(() => brwTick(id), 0);
+}

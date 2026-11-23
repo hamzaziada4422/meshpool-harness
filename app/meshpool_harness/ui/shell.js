@@ -588,7 +588,7 @@ async function ciChip(root, fresh) {
   el.insertAdjacentHTML("beforeend", `<button class="chip ci ${ci.summary}" id="ciChip" title="${esc(ci.pr ? "#" + ci.pr.number + " " + ci.pr.title : ci.branch)}"><span class="cidot"></span>${CI_TEXT[ci.summary]}</button>`);
   $("#ciChip").onclick = () => togglePanel("git", true);
 }
-const PANELS = {cowork: ["session", "progress", "outputs"], code: ["session", "diff", "files", "term", "git", "preview"]};
+const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["session", "diff", "files", "term", "git", "browser", "preview"]};
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.

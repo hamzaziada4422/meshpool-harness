@@ -38,11 +38,34 @@ def _hide_child_consoles():
     subprocess.Popen.__init__ = init
 
 
+def _bundled_chromium() -> list[list[str]]:
+    """The app's own Chromium (app/vendor/browsers) as an app window command, [] when it is not there or cannot run on
+    this computer (its Chromium needs macOS 13; the app itself opens on macOS 11)."""
+    try:
+        from meshpool_harness import bundled
+        root = bundled.browsers_dir()
+        if bundled.browser_needs_newer_macos() or not root.is_dir():
+            return []
+        flags = _APP_FLAGS
+        if sys.platform == "darwin":
+            apps = sorted(root.glob("chromium-*/chrome-mac*/Chromium.app"))
+            return [["open", "-na", str(apps[-1]), "--args", *flags]] if apps else []
+        pat = "chromium-*/chrome-win*/chrome.exe" if os.name == "nt" else "chromium-*/chrome-linux*/chrome"
+        own = sorted(root.glob(pat))
+        return [[str(own[-1]), *flags]] if own else []
+    except Exception:  # noqa: BLE001  the installed browsers below still work
+        return []
+
+
+_APP_FLAGS = ["--app={url}", "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
+              "--window-size=1380,900"]
+
+
 def _app_candidates() -> list[list[str]]:
-    """Commands that open a URL as a chromeless app window, best first. {url} and {profile} get filled in."""
-    flags = ["--app={url}", "--user-data-dir={profile}", "--no-first-run", "--no-default-browser-check",
-             "--window-size=1380,900"]
-    out = []
+    """Commands that open a URL as a chromeless app window, best first: the app's own Chromium on every platform, then,
+    only as a last resort, a Chrome, Edge or Brave the user already has. {url} and {profile} get filled in."""
+    flags = _APP_FLAGS
+    out = _bundled_chromium()
     if sys.platform == "darwin":
         for name in ("Google Chrome", "Microsoft Edge", "Brave Browser", "Chromium"):
             for base in (Path("/Applications"), Path.home() / "Applications"):
@@ -58,14 +81,6 @@ def _app_candidates() -> list[list[str]]:
                 if r and (Path(r) / rel).exists():
                     out.append([str(Path(r) / rel), *flags])
     else:
-        try:                                     # the Linux download: its own Chromium as the app window first, so
-            from meshpool_harness import bundled  # the app looks the same on every desktop (no GTK or Qt needed)
-            if bundled.packaged():
-                own = sorted(bundled.browsers_dir().glob("chromium-*/chrome-linux*/chrome"))
-                if own:
-                    out.append([str(own[-1]), *flags])
-        except Exception:  # noqa: BLE001  the browsers below still work
-            pass
         for b in ("google-chrome", "chromium", "chromium-browser", "microsoft-edge"):
             p = shutil.which(b)
             if p:

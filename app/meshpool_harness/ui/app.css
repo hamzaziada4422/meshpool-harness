@@ -1098,3 +1098,11 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .ed-json{padding:12px 16px;font:13px/1.7 var(--mono);color:var(--ink)}
 .ed-json .jn{padding-left:16px}.ed-json>.jn{padding-left:0}.ed-json summary{cursor:pointer}
 @media (max-width:560px){.ed-bar{flex-wrap:wrap}.ed-pre{padding-left:50px;font-size:12px}.ed-hl .ln::before{left:-44px;width:32px}}
+/* the Browser panel */
+.brw-bar .btn{flex:none}
+.brw-title{padding:4px 12px;font-size:var(--fs-s);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.brw-title:empty{display:none}
+.brw-stage{flex:1;min-height:0;overflow:auto;background:var(--surface);outline:none}
+.brw-stage:focus-visible{box-shadow:inset 0 0 0 2px var(--pool)}
+.brw-stage img{display:block;width:100%;height:auto;cursor:default;user-select:none}
+.brw-foot{flex:none;padding:6px 12px;font-size:var(--fs-s);color:var(--ink-3);border-top:1px solid var(--line-2)}

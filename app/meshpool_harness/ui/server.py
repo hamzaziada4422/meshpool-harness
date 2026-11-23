@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/")
 
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
@@ -786,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness.ui import settings_v2 as SV
                 b = self._json()
                 if u.path == "/api/browser-use":
-                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app")))
+                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app"), b.get("show_window")))
                 if u.path == "/api/profile":
                     return self._send(200, SV.save_profile(**{k: b.get(k) for k in SV.PROFILE_KEYS}))
                 if u.path == "/api/capabilities":
@@ -916,8 +916,7 @@ class Handler(BaseHTTPRequestHandler):
                     except CN.NeedsClient as e:
                         return self._send(200, {"needs_client": cid, "redirect": e.redirect, "message": str(e),
                                                 "connectors": CN.listing()})
-                    _open_web(url)
-                    return self._send(200, {"url": url, "connectors": CN.listing()})
+                    return self._send(200, {"url": url, "inapp": _open_web(url), "connectors": CN.listing()})
                 if act == "check":
                     r = CN.check(cid)
                     return self._send(200, dict(r, connectors=CN.listing()))
@@ -931,8 +930,7 @@ class Handler(BaseHTTPRequestHandler):
                         except CN.NeedsClient as e:
                             return self._send(200, {"id": c["id"], "needs_client": c["id"], "redirect": e.redirect,
                                                     "message": str(e), "connectors": CN.listing()})
-                        _open_web(url)
-                        return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
+                        return self._send(200, {"url": url, "id": c["id"], "inapp": _open_web(url), "connectors": CN.listing()})
                     return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
                                             "message": f"Connected: {n} tool{'s' * (n != 1)}. New chats can use it."})
                 if act == "github_found":
@@ -941,8 +939,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"connectors": CN.listing(), "message": f"Connected as {r['login']} ({r['source']})."})
                 if act == "github_device":
                     r = CN.github_device_start()
-                    webbrowser.open(r["url"])
-                    return self._send(200, r)
+                    return self._send(200, dict(r, inapp=_open_web(r["url"])))
                 if act == "github_poll":
                     r = CN.github_device_poll()
                     C.load_into_env(override=True)
@@ -962,8 +959,7 @@ class Handler(BaseHTTPRequestHandler):
                 url = str(self._json().get("url", "")).strip()
                 if not re.match(r"https?://", url, re.I):
                     raise ValueError("Only web addresses can be opened.")
-                _open_web(url)
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "inapp": _open_web(url)})
             if u.path == "/api/open-editor":
                 return self._send(200, W.open_editor(self._json().get("path", "")))
             if u.path == "/api/github/workspace":          # clone (or reuse) a repository for a new session
@@ -1039,11 +1035,21 @@ RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat"
             ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool"}
 
 
-def _open_web(url: str) -> None:
-    """Open a sign-in page. The address comes from the app's server metadata: only ever a web page."""
+def _open_web(url: str) -> bool:
+    """Open a sign-in page. The address comes from the app's server metadata: only ever a web page.
+    It opens inside Meshpool, in the Browser panel (True: the page shows it). Only on a computer where Meshpool's
+    own browser cannot start does it use the system browser (False). The terminal sign-in (agent/connect_cli.py) has
+    no panel and keeps printing the link and trying the system browser."""
     if not re.match(r"https?://", url or "", re.I):
         raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
+    try:
+        from meshpool_harness.ui import browser_api as BA
+        BA.open_signin(url)
+        return True
+    except Exception as e:  # noqa: BLE001 - no browser engine here: the last resort is the system browser
+        print(f"  The in-app browser could not start ({e}); opening the sign-in page in the system browser.")
     webbrowser.open(url)
+    return False
 
 
 class _Server(ThreadingHTTPServer):
@@ -1133,7 +1139,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("")
     if open_browser:
-        threading.Timer(0.8, lambda: _open_web(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()   # the app itself, in a browser tab (not the desktop app)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

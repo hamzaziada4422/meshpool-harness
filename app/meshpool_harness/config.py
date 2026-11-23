@@ -54,6 +54,9 @@ FIELDS = [
      "connect to a browser you started with --remote-debugging-port."),
     ("MH_BROWSER_CDP_URL", "Browser use: debugging address (attach)", "http://127.0.0.1:9222",
      "Where your browser listens when you started it with --remote-debugging-port=9222 and its own --user-data-dir."),
+    ("MH_BROWSER_HEADLESS", "Browser use: show a window", "",
+     "Empty (the default): Meshpool's browser stays hidden and shows inside the app, in the Browser panel. 0: it also "
+     "opens a window of its own."),
     ("MH_BROWSER_APP", "Browser use: which installed browser", "",
      "chrome, edge or brave. Empty: the first one found."),
     ("GITHUB_TOKEN", "GitHub token", "", "Optional. Connects GitHub (issues, pull requests, Actions runs) through "

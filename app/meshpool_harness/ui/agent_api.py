@@ -360,7 +360,7 @@ class Session:
             # office file (Agent.office_on), so coding chats do not pay for them.
             from meshpool_harness.harnesses.acp import office_extra
             extra = office_extra(self.workdir)
-            self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
+            self.mcp = M.Manager(roots=[self.workdir], extra=extra, chat=self.id).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
