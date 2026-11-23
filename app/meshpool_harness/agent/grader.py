@@ -663,6 +663,9 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
         except Exception:  # noqa: BLE001
             pass
         a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
+        if os.environ.get("MH_GRADER_LIGHT", "0") == "1":
+            # MH_GRADER_LIGHT=1: one call on the evidence (files, commands, facts), no tool loop of up to 15 steps
+            a.max_steps, a._no_tools = 1, True
         reply = a._turn() or ""
         res = normalise(parse(reply))
         stopped_hard = flags["over"]

@@ -565,3 +565,22 @@ def test_grader_skipped_when_the_local_check_passed_and_todos_alone_are_not_larg
     assert a._local_check_passed()
     a.trace.append({"tool": "edit_office_file", "ok": True, "arg": ""})
     assert not a._local_check_passed()                      # something was written after the check
+
+
+def test_light_grader_is_one_call_without_tools_when_switched_on(tmp_path, monkeypatch):
+    from meshpool_harness.agent import grader as GR
+    seen = []
+    real = GR.make_agent
+
+    def spy(parent, emit, stop):
+        a = real(parent, emit, stop)
+        a._post = lambda base, key, body, stream: (seen.append(body) or ({"choices": [{"message": {"content": json.dumps(
+            {"verdict": "pass", "acceptance": "accept", "items": [], "blockers": [], "fix": [], "expectations": []})},
+            "finish_reason": "stop"}], "usage": {}}, False))
+        return a
+    monkeypatch.setattr(GR, "make_agent", spy)
+    a = _agent(tmp_path)
+    info = {"files": [], "request": "x", "calls": 5, "todos": [], "research": 0, "final": "done", "root": str(tmp_path)}
+    monkeypatch.setenv("MH_GRADER_LIGHT", "1")
+    GR.run(a, info, [])
+    assert 1 <= len(seen) <= 2 and all(b.get("tool_choice") == "none" for b in seen)   # a verdict (plus one repair at most), no tool loop
