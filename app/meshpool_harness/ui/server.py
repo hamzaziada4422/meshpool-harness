@@ -1057,6 +1057,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(rewind|fork)", u.path)     # back to a message / a new chat from it
+            if m:
+                s_, act, b = A.get(m.group(1)), m.group(2), self._json()
+                if act == "fork":
+                    return self._send(200, {"id": s_.fork(int(b.get("event_index", -1)))})
+                r = s_.rewind(int(b.get("event_index", -1)), files=b.get("files") is not False)
+                return self._send(200, dict(s_.view(int(b.get("since", 10**9))), text=r.get("text", ""),
+                                            forked=r.get("forked"), undo=r.get("undo")))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:
                 s, b = A.get(m.group(1)), self._json()
