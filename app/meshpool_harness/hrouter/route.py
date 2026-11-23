@@ -77,6 +77,7 @@ class Route:
 
 
 def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Route:
+    text = S.cap_text(text)
     files = files or []
     err = S.pasted_error(text)
     langs = S.languages_in(text, files)

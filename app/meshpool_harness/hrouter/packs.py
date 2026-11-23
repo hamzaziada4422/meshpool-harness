@@ -458,6 +458,8 @@ def quick_check(ws, path: str) -> str:
     return "\n[check after this edit: fix before moving on]\n" + "\n".join(l for l in lines if " F401 " not in l)[:1200]
 
 
+from .signals import cap_text as _cap_text   # noqa: E402
+
 _RUNNER = re.compile(r"`([^`\n]{2,160})`|(?<![\w/.-])((?:python3?|node|deno|ruby|bash|sh)\s+[\w./-]+\.(?:py|js|mjs|cjs|ts|rb|sh)"
                      r"(?:\s+--?[\w-]+(?:[ =][\w./-]+)?)*|pytest(?:\s+[\w./:-]+)*|npm (?:run )?test|yarn test|pnpm test|"
                      r"cargo (?:test|run|build)|go (?:test|run|build)(?:\s+\./\.\.\.)?)")
@@ -473,6 +475,7 @@ _UNSAFE_ARGS = re.compile(r"--(?:wipe|delete|force|publish|deploy)\b|\brm\b|\bsu
 
 def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
     """Commands the user named for reproducing the problem, when the files they refer to exist."""
+    text = _cap_text(text)
     cmds: list[str] = []
     py = "python3" if shutil.which("python3") else "python"
     for m in _RUNNER.finditer(text or ""):
@@ -504,6 +507,7 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
 
 def reproduce(ws, text: str) -> str:
     """Run the commands the user named before the model's first turn; their output, ready to read."""
+    text = _cap_text(text)
     if getattr(ws, "container", None) or re.search(r"\bdocker (exec|run)\b", text or ""):
         return ""                                     # the code runs elsewhere: a host run would mislead
     blocks = []
@@ -523,13 +527,14 @@ DATA_EXTS = (".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".json", ".jsonl")
 def data_preview(ws, text: str = "", limit: int = 5) -> str:
     """Columns, types, row counts and three sample rows of the data files the task is about (named in the request,
     else the ones at the top of the folder), so the model starts analysing instead of exploring."""
+    text = _cap_text(text)
     if getattr(ws, "container", None):
         return ""
     try:
         import pandas as pd
     except ImportError:
         return ""
-    named = [m for m in re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|xlsx|xls|jsonl?)\b", text or "")
+    named = [m for m in re.findall(r"[\w./-]{1,200}\.(?:csv|tsv|parquet|xlsx|xls|jsonl?)\b", text or "")
              if (ws.root / m).is_file()]
     files = named or sorted(p.name for p in ws.root.iterdir() if p.is_file() and p.suffix.lower() in DATA_EXTS)
     blocks = []

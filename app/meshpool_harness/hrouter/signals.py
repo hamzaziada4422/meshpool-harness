@@ -103,6 +103,18 @@ FAMILY_WORDS = {
 }
 _FAM = {k: re.compile(v, re.I) for k, v in FAMILY_WORDS.items()}
 
+MAX_TEXT_CHARS = 8000
+
+
+def cap_text(text):
+    """User text bounded for the regex signals: the start and the end of a huge paste say what is asked, and no
+    pattern can then run for long (a 3 MB unbroken token froze the whole server)."""
+    if text and len(text) > MAX_TEXT_CHARS:
+        h = MAX_TEXT_CHARS // 2
+        return text[:h] + "\n" + text[-h:]
+    return text
+
+
 OFFICE_EXT = {".pptx": "docs", ".ppt": "docs", ".key": "docs", ".xlsx": "docs", ".xlsm": "docs", ".xls": "docs",
               ".docx": "docs", ".doc": "docs", ".pdf": "docs", ".csv": "data", ".tsv": "data", ".parquet": "data",
               ".json": "data", ".jsonl": "data", ".sav": "data", ".dta": "data"}
@@ -110,6 +122,7 @@ OFFICE_EXT = {".pptx": "docs", ".ppt": "docs", ".key": "docs", ".xlsx": "docs", 
 
 def languages_in(text: str, files: list[str] | None = None) -> dict[str, float]:
     """Language -> evidence weight from file extensions, pasted errors, code fences and words."""
+    text = cap_text(text)
     w: dict[str, float] = {}
     for f in files or []:
         lang = EXT_LANG.get(Path(f).suffix) or EXT_LANG.get(Path(f).suffix.lower())
@@ -124,7 +137,7 @@ def languages_in(text: str, files: list[str] | None = None) -> dict[str, float]:
                                                                                                 m.group(1).lower())
         if tag in set(EXT_LANG.values()):
             w[tag] = w.get(tag, 0) + 2
-    for m in re.finditer(r"\b[\w/.-]+(\.[A-Za-z]{1,5})\b", text or ""):
+    for m in re.finditer(r"\b[\w/.-]{1,200}(\.[A-Za-z]{1,5})\b", text or ""):
         lang = EXT_LANG.get(m.group(1))
         if lang:
             w[lang] = w.get(lang, 0) + 1.5
@@ -165,6 +178,7 @@ def is_repo(workdir: str | None) -> bool:
 
 def pasted_error(text: str) -> str | None:
     """The language of an error report pasted into the request, or None."""
+    text = cap_text(text)
     for lang, rx in _ERR:
         if rx.search(text or ""):
             return lang
@@ -195,6 +209,7 @@ _LEAD_FEATURE = re.compile(r"\s*(please\s+)?(add|implement|create|build|support|
 
 def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
     """The kind of code work: debug, test, refactor, review, terminal, explain or build."""
+    text = cap_text(text)
     if not has_error and _TEST_MAIN.search(text or "") and not re.search(
             r"\b(fix|debug)\b.{0,30}\b(failing|broken) tests?\b", text or "", re.I):
         return "test", ["test"]
@@ -232,12 +247,13 @@ def code_sub(text: str, has_error: bool = False) -> tuple[str, list[str]]:
 
 def families(text: str, files: list[str] | None = None) -> dict[str, float]:
     """Family -> evidence weight from words and attachments."""
+    text = cap_text(text)
     w: dict[str, float] = {}
     for fam, rx in _FAM.items():
         n = len(rx.findall(text or ""))
         if n:
             w[fam] = w.get(fam, 0) + n
-    named = re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
+    named = re.findall(r"[\w./-]{1,200}\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
     if named and not files:              # "orders.csv", "events.jsonl" named in the question: a data file, as attached
         w["data"] = w.get("data", 0) + 2
     for f in files or []:
@@ -257,6 +273,7 @@ _SNIPPET = re.compile(r"\b((only|just) (the|a|an) (query|regex|command|code|answ
 
 def snippet_request(text: str) -> bool:
     """A request for one short piece of code or a formula, answered in the reply (no project, no files)."""
+    text = cap_text(text)
     return bool(_SNIPPET.search(text or "")) and len((text or "").split()) <= 60
 
 
@@ -304,11 +321,13 @@ _ALG_WEAK = re.compile(r"\b(overlap\w*|touching|sorted|maximal|empty|inclusive|e
 
 
 def _algorithm(text: str) -> bool:
+    text = cap_text(text)
     return bool(_ALG_STRONG.search(text or "")) or len(set(m.lower() for m in _ALG_WEAK.findall(text or ""))) >= 3
 
 
 def variant(sub: str, text: str) -> str:
     """The most specific kind of job within a sub-task (first match wins; order is by how decisive the signal is)."""
+    text = cap_text(text)
     for name, rx in _VAR.get(sub, []):
         if name == "cli" and _algorithm(text):     # after "feature", before the surface-area variants
             return "algorithm"

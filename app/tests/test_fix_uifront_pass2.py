@@ -104,7 +104,7 @@ def test_composer_is_enabled_again_after_a_read_only_chat(page):
 
 def test_new_chat_clears_the_box_and_incognito(page):
     page.fill("#input", "half typed")
-    page.evaluate("S.draft.incognito = true; newThread()")
+    page.evaluate("S.draft.incognito = true; $('#input').value = 'half'; sessionStorage.removeItem('mp_draft_new'); newThread()")
     assert page.input_value("#input") == ""
     assert page.evaluate("S.draft.incognito") is False
 
@@ -121,6 +121,9 @@ def test_side_panel_collapses_the_sidebar_at_tablet_width(page):
 
 def test_memory_tabs_are_all_reachable_on_a_phone(page):
     page.set_viewport_size({"width": 390, "height": 800})
+    page.reload()
+    page.wait_for_selector("#newThread", state="attached", timeout=30000)
+    page.wait_for_function("() => typeof S === 'object' && S.settings", timeout=30000)
     page.evaluate("goPage('memory')")
     page.wait_for_selector("[data-mtab]", timeout=15000)
     boxes = page.evaluate("[...document.querySelectorAll('[data-mtab]')].map(b => { const r = b.getBoundingClientRect(); return [r.left, r.right]; })")

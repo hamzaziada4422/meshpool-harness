@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -91,6 +92,10 @@ def save_settings(body: dict) -> dict:
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
+    if vals.get("MESHPOOL_BASE_URL"):
+        u = urlparse(vals["MESHPOOL_BASE_URL"])
+        if u.scheme not in ("http", "https") or not u.netloc:
+            raise ValueError("The server address must start with http:// or https:// and name a host.")
     _key_follows_host(vals)
     from meshpool_harness import browser_use as BU
     BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
@@ -218,14 +223,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self) -> dict:
         raw = self._body()
-        return json.loads(raw.decode("utf-8")) if raw else {}
+        d = json.loads(raw.decode("utf-8")) if raw else {}
+        if not isinstance(d, dict):
+            raise ValueError("The request must be a JSON object.")
+        return d
 
     def _extra(self, u):
         from meshpool_harness.ui import routes_extra as RX
         try:
             return self._send(*RX.handle(self.command, u, self._body() if self.command == "POST" else b""))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e).strip("'\"")})
+        except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
+            return self._send(400, {"error": _client_error(e)})
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
@@ -235,8 +243,8 @@ class Handler(BaseHTTPRequestHandler):
         from meshpool_harness.ui import company_api as CO
         try:
             return self._send(*CO.handle(self.command, u, self._body() if self.command == "POST" else b""))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e).strip("'\"")})
+        except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
+            return self._send(400, {"error": _client_error(e)})
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
@@ -1071,10 +1079,18 @@ class Handler(BaseHTTPRequestHandler):
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
         except KeyError as e:
-            msg = str(e).strip("'")
-            return self._send(404, {"error": msg if msg and msg != "None" else "Not found."})
+            msg = str(e).strip("'\"")
+            if not msg or msg == "None":
+                msg = "Not found."
+            elif " " not in msg:                  # a bare id or field name: say what it was
+                msg = f"Not found: {msg}."
+            return self._send(404, {"error": msg})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
+        except zipfile.BadZipFile:
+            return self._send(400, {"error": "That file is not a valid zip file."})
+        except (TypeError, AttributeError) as e:      # a field of the wrong type in the request body
+            return self._send(400, {"error": f"The request has a missing or wrong value ({e})."})
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
@@ -1094,6 +1110,14 @@ def _open_web(url: str) -> None:
     if not re.match(r"https?://", url or "", re.I):
         raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
     webbrowser.open(url)
+
+
+def _client_error(e: Exception) -> str:
+    if isinstance(e, zipfile.BadZipFile):
+        return "That file is not a valid zip file."
+    if isinstance(e, (TypeError, AttributeError)):
+        return f"The request has a missing or wrong value ({e})."
+    return str(e).strip("'\"")
 
 
 class _Server(ThreadingHTTPServer):

@@ -366,6 +366,9 @@ class Session:
             extra = office_extra(self.workdir)
             self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
+            if getattr(self, "_closed", False):       # the chat was closed while its servers were starting
+                self.mcp.close()
+                return
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
@@ -927,6 +930,16 @@ class Session:
                 except Exception:  # noqa: BLE001
                     pass
                 self._after_turn(text, ev0, self.t_turn)
+            except Exception as e:  # noqa: BLE001 - a failure shows in the chat, with the message kept
+                try:
+                    with self.lock:
+                        shown = any(x.get("type") == "user" for x in self.events[ev0:])
+                    if not shown:
+                        self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
+                    self.emit({"type": "error", "text": f"This message could not be sent: {e}"})
+                    self.emit({"type": "turn_end"})
+                except Exception:  # noqa: BLE001
+                    pass
             finally:
                 self._turn_finish()
                 with _ACTIVE_LOCK:
@@ -1218,6 +1231,7 @@ class Session:
                 "mcp": self.mcp.status() if self.mcp else None}
 
     def close(self):
+        self._closed = True                           # an MCP start still running closes its servers when it finishes
         self.stop()
         if self.mcp:
             self.mcp.close()
@@ -1285,6 +1299,8 @@ def create(body: dict) -> dict:
     except (KeyError, ValueError):
         pass
     plan = body.get("plan")
+    if isinstance(plan, str):
+        plan = plan.strip().lower() in ("1", "true", "yes", "on")
     if plan is None:                                # no say in the request: Settings, "Plan first", decides
         try:
             from meshpool_harness.ui import settings_v2 as SV2
@@ -1394,6 +1410,9 @@ class ProjectMissing(ValueError):
     """The chat's project folder was moved or deleted: its history can be read but not continued."""
 
 
+_OPENING: dict = {}                 # chat id -> lock: only one request builds the Session of a saved chat
+
+
 def get(sid: str) -> Session:
     if sid in DELETED:
         raise KeyError(sid)
@@ -1401,12 +1420,19 @@ def get(sid: str) -> Session:
         s = LIVE.get(sid)
     if s:
         return s
-    s = Session(resume_id=sid)                   # reopen a saved session
     with LOCK:
-        live = LIVE.setdefault(sid, s)           # two polls may reopen the same chat at once: keep one
-    if live is not s:
-        s.close()
-    return live
+        gate = _OPENING.setdefault(sid, threading.Lock())
+    with gate:                                   # polls reopen the same chat at once: build one Session, not many
+        with LOCK:
+            s = LIVE.get(sid)
+        if s:
+            return s
+        s = Session(resume_id=sid)               # reopen a saved session
+        with LOCK:
+            live = LIVE.setdefault(sid, s)
+        if live is not s:
+            s.close()
+        return live
 
 
 def view(sid: str, since: int) -> dict:
@@ -1499,8 +1525,17 @@ def listing() -> list:
     return sorted(out, key=lambda r: -r["updated"])[:400]
 
 
+def exists(sid: str) -> bool:
+    with LOCK:
+        if sid in LIVE:
+            return True
+    return bool(re.fullmatch(r"[\w-]+", sid or "")) and (SESSIONS / sid).is_dir()
+
+
 def thread_action(sid: str, body: dict) -> dict:
     act = body.get("action")
+    if not exists(sid):
+        raise KeyError("That chat no longer exists. Refresh the list.")
     if act == "rename":
         write_meta(sid, title=(body.get("title") or "").strip()[:120])
     elif act in ("pin", "unpin"):
@@ -1536,6 +1571,12 @@ def thread_action(sid: str, body: dict) -> dict:
         d = SESSIONS / sid
         if d.is_dir() and d.parent == SESSIONS:
             shutil.rmtree(d, ignore_errors=True)
+        try:                                          # its checks records go with it
+            from meshpool_harness import checks as CK
+            for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
+                f.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
         if scratch_dir:                               # the chat's private folder goes with it
             from meshpool_harness import project_store as PS
             PS.remove_scratch(scratch_dir)

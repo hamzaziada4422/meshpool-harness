@@ -419,7 +419,10 @@ def reveal(path: Path) -> None:
     elif os.name == "nt":
         os.startfile(str(path))  # noqa: S606
     else:
-        subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            raise ValueError(f"No file manager is installed here. The folder is {path}") from None
 
 
 def _cli_path() -> str:
