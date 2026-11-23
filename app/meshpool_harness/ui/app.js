@@ -803,11 +803,12 @@ function restoreDraft() {
 // folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
 function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
-  clearColHandlers();
+  clearColHandlers(); window.navPush?.("new:");
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : "";
-  S.draft.pid = "";
+  S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
+  { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
   S.draft.harness = modeHarness();
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
@@ -829,7 +830,7 @@ const STARTERS = [
 const CACHE = new Map();                         // chat id -> {log, total, next, epoch, view}: reopening replays it, then fetches only what is new
 const colEl = () => S.cur?.stage || $("#col");
 function stashChat(cur) {
-  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 4000) return;
+  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 12000) return;
   try { flushQ(cur); } catch (e) { return; }
   const view = Object.assign({}, cur.view); delete view.events; delete view.prefill;
   CACHE.delete(cur.id); CACHE.set(cur.id, {log: cur.log.slice(), total: cur.total, next: cur.next || 0, epoch: cur.epoch, view, turn: cur.turn});
@@ -853,7 +854,7 @@ function commitStage(cur) {
   if (cur.live) easeStart(cur.live);
 }
 function openThread(id, fresh) {
-  clearColHandlers();
+  clearColHandlers(); window.navPush?.("chat:" + id);
   const seen = S.threads.find(t => t.id === id);
   if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
   store("last_chat", id);
@@ -889,7 +890,8 @@ async function poll() {
     if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
     let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
-    if (n) n.textContent = `${e.message} Retrying…`;
+    if (n) { n.textContent = `${e.message} Retrying… `; if (!$("button", n)) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = "Reload"; b.onclick = () => location.reload(); n.appendChild(b); } }
+    if (cur.fails > 1 && S.stopping) { S.stopping = false; renderBar(); }
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
     return;
   }
@@ -1107,7 +1109,7 @@ const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 function applyEv(ev) {
   const cur = S.cur, col = colEl();
-  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
+  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
@@ -1357,7 +1359,7 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
+  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
@@ -2564,7 +2566,7 @@ async function restartApp() {
   window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
   { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
-  setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
+  setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */

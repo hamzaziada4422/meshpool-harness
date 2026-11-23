@@ -52,7 +52,7 @@
   // Show a project's page in the main area. The message box at the bottom starts a chat in this project.
   window.openProject = async function (pid, {focus = false} = {}) {
     if (!pjOf(pid)) { await loadPj(); if (!pjOf(pid)) return toast("That project is gone."); }
-    clearColHandlers(); leaveChat(S.cur); S.cur = null; setWorking(null);
+    clearColHandlers(); window.navPush?.("project:" + pid); leaveChat(S.cur); S.cur = null; setWorking(null);
     S.view = "project"; S.pjId = pid; S.draft.pid = pid; S.draft.project = "";
     S.attachments = []; renderAttach();
     $("#app").classList.remove("sideopen");

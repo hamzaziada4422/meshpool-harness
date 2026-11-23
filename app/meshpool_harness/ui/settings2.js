@@ -53,6 +53,7 @@ function openSettings(sec = "profile") {
   $$(".mnav [data-g]", sc).forEach(b => b.onclick = () => renderSection(b.dataset.first));
   $("#apiKeys", sc).onclick = () => openExternal(S.acct?.keys_url || "https://meshpool.ai");
   $("#mnavq", sc).oninput = e => { const q = e.target.value.trim().toLowerCase(); $$(".mnav [data-g]", sc).forEach(b => b.hidden = !!q && !b.dataset.l.includes(q)); $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g)); };
+  $("#mnavq", sc).addEventListener("input", e => { const nav = $(".mnav", sc); let n = $("#mnavNone", nav); const none = !!e.target.value.trim() && !$(".mnav [data-g]:not([hidden])", sc); if (none && !n) { n = document.createElement("p"); n.id = "mnavNone"; n.className = "muted"; n.style.padding = "8px 12px"; n.textContent = "No settings match."; $(".mgrp", nav).before(n); } else if (!none) n?.remove(); });
   $("#mnavq", sc).onkeydown = e => { if (e.key === "Enter") { const first = $(".mnav [data-g]:not([hidden])", sc); if (first) first.click(); } };
   $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`));
   renderSection(sec);

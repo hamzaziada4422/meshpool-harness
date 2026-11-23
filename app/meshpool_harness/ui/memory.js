@@ -169,7 +169,7 @@ function bindMemory(d) {
   $("#memAdd")?.addEventListener("click", memAddFlow); $("#memAddEmpty")?.addEventListener("click", memAddFlow);
   $("#memOn")?.addEventListener("click", async () => { await post("/api/memory", {action: "settings", memory_on: true}); memLoad(true); });
   $("#memExp")?.addEventListener("click", e => ctxMenu(e, [{label: "Export all", fn: () => memExport("md")}, {label: "How I work (1 page)", fn: () => memExport("onepager")}]));
-  $("#memConsolidate")?.addEventListener("click", async () => { const r = await memAct({action: "consolidate"}); toast(`Tidied up: ${r?.archived || 0} archived. They stay in Archived.`); });
+  $("#memConsolidate")?.addEventListener("click", async () => { const r = await memAct({action: "consolidate"}); toast(`Tidied up: ${r?.archived || 0} archived. They stay in History, where you can restore them.`); });
   $$("[data-cat]").forEach(b => b.onclick = () => { MEM.cat = b.dataset.cat; memLoad(true); });
   $("#memScope")?.addEventListener("change", e => { MEM.scope = e.target.value; memLoad(true); });
   $("#memKind")?.addEventListener("change", e => { MEM.kind = e.target.value; memLoad(true); });

@@ -1056,3 +1056,7 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}
 .pvth{width:96px}
 
+
+/* long chats: off-screen messages skip layout and paint; mixed-direction text aligns per paragraph */
+#col > .msg-ai, #col > .msg-user, #col > details.work { content-visibility: auto; contain-intrinsic-size: auto 96px; }
+.msg-ai p, .msg-ai li, .msg-ai h3, .msg-ai blockquote, .msg-user .b, .sidelist .tt, .tt { unicode-bidi: plaintext; text-align: start; }
