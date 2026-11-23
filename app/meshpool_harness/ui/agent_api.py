@@ -1513,6 +1513,7 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
     if r["project_id"] and r["project_id"] not in live_pids:
         r["project_id"] = ""
+    r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
     r["kind"] = m.get("kind") or r.get("kind") or "code"
     return r
@@ -1568,8 +1569,16 @@ def _disk_rows() -> tuple:
 
 
 def listing() -> list:
-    base, legacy, live_pids = _disk_rows()
-    rows = {sid: dict(r) for sid, r in base.items() if sid not in DELETED}
+    base, _, _ = _disk_rows()
+    legacy, live_pids = _project_info()           # projects change by their own store, so never from the cache
+    rows = {}
+    for sid, r in base.items():
+        if sid not in DELETED:
+            r = dict(r)
+            m = r.pop("_m")
+            pid = _project_of(m, r.get("workdir") or "", legacy)
+            r["project_id"] = pid if pid in live_pids else ""
+            rows[sid] = r
     with LOCK:
         live = list(LIVE.items())
     for sid, s in live:
@@ -1582,6 +1591,7 @@ def listing() -> list:
              "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
              "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
         rows[sid] = _decorate(r, m, legacy, live_pids)
+        rows[sid].pop("_m", None)
     return sorted(rows.values(), key=lambda r: -r["updated"])[:400]
 
 
