@@ -1,5 +1,13 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.12**
+- **It finishes the job.** Give Meshpool a task that needs several tools and it carries on to the end: it fixes and retries when a tool fails, reads every page of a long list before it writes, and no longer stops to ask a question it can answer itself. It never tests with a real write on your live systems, and it does not repeat a write that already worked. The reviewer no longer demands extra writes to prove one.
+- **Connected tools that fail are called failures.** An error from a connector, or a result that says it did not work, is marked as a failure so the agent changes its approach. If the same result comes back again and again, it stops and says so.
+- **Hundreds of connector tools.** With a long tool list the agent sees a short index and loads each tool's details when it needs it, so every step costs far fewer tokens.
+- **Cowork from the terminal.** `meshpool -p "..." --profile work` runs the work agent, and headless runs never stop to ask.
+- **Better pages and apps.** The agent now uses what it builds before it says it is done: it clicks every control, submits forms empty and with nonsense, tabs through the page, reloads to see that your data stayed, and reads the console for errors. Build skills for apps, games, dashboards and sites now carry a checklist of what a person expects, and a new skill covers scripts, command line tools and APIs, with tests and a README.
+- **The reviewer checks the click-through too**, and flags leftover template text such as [Studio name].
+
 **New in 0.0.11**
 - **A second pair of eyes on big jobs.** Before Meshpool tells you a big task is done, a separate reviewer that did not do the work checks it against what you asked for, in code, documents, decks, spreadsheets and research. If something is missing it goes back to be fixed, and the reply ends with a short "Independent check" in plain words. It is on by default, only runs on big tasks, and you can turn it off in Settings or check any reply yourself with "Check this" (or `/grade` in the terminal).
 - **Nothing else opens on your computer.** Files and folders open in a built-in editor inside Meshpool, with a folder tree, search, line numbers, colouring, find, and Save with a warning when a file changed on disk. Markdown and JSON have a readable view. No text editor, Finder or Preview launches.
