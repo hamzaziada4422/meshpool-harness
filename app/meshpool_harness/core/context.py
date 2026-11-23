@@ -150,7 +150,18 @@ def probe(base: str, model: str, key: str = "") -> int | None:
     """The window a LOCAL endpoint reports for this model: Ollama /api/show (the num_ctx it will really use) or LM Studio
     /api/v0/models. Never asks a remote host; asks an endpoint that has no such route once, then remembers that (on disk
     too). None if unknown."""
-    if not base or not _is_local(base):
+    if not base:
+        return None
+    if not _is_local(base):                # a remote gateway: only its OpenAI-style /models list, never /api/*
+        try:
+            d = _http_json(base.rstrip("/") + "/models", None, key)
+        except Exception:  # noqa: BLE001
+            return None
+        for it in (d.get("data") if isinstance(d, dict) else d) or []:
+            if isinstance(it, dict) and str(it.get("id") or "") in (model, model.split("/")[-1]):
+                for k in ("max_input_tokens", "context_length", "context_window", "max_context_length"):
+                    if isinstance(it.get(k), int) and it[k] > 0:
+                        return it[k]
         return None
     root = re.sub(r"/v\d+/?$", "", base.rstrip("/"))
     if not _route_absent(base, "no_show"):

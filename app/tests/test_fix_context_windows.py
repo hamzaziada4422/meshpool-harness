@@ -357,3 +357,60 @@ def test_ollama_style_probes_only_for_local_endpoints(monkeypatch):
     CTX.window_info("some-model", "http://localhost:11434/v1")
     assert seen == ["http://localhost:11434/v1"]
     assert CTX.PROBE_TIMEOUT_S >= 8
+
+
+def test_local_detection_never_includes_remote_hosts():
+    for u in ["https://llm.meshpool.ai/v1", "https://api.example.com:8000/v1", "https://api.openai.com/v1",
+              "http://172.217.0.1/v1", "http://8.8.8.8:11434/v1"]:
+        assert not CTX._is_local(u), u
+    for u in ["http://localhost:8080/v1", "http://127.0.0.1:1234/v1", "http://192.168.1.5:11434/v1",
+              "http://gpu-box:11434/v1", "http://[::1]:11434/v1", "http://172.20.0.3/v1"]:
+        assert CTX._is_local(u), u
+
+
+def test_show_route_is_asked_once_per_endpoint_and_a_404_is_remembered(tmp_path, monkeypatch):
+    from meshpool_harness.core import modelcaps as MC
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    MC.reset()
+    hits = []
+
+    class H(BaseHTTPRequestHandler):                  # a localhost proxy that has no Ollama routes: plain 404 pages
+        def log_message(self, *a):
+            pass
+
+        def _nf(self):
+            hits.append(self.path)
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        do_GET = do_POST = _nf
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    for m in ["a", "b", "c", "d", "e"]:
+        assert CTX.probe(base, m) is None
+    assert sum(1 for p in hits if p == "/api/show") == 1 and sum(1 for p in hits if p.startswith("/api/v0/")) == 1
+    CTX.forget()                                      # a new process: the 404 is read back from the saved memory
+    CTX.probe(base, "z")
+    assert sum(1 for p in hits if p == "/api/show") == 1
+    srv.shutdown()
+    MC.reset()
+
+
+def test_refused_fields_have_one_source(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as A
+    from meshpool_harness.core import modelcaps as MC
+    from meshpool_harness import providers as PV
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    MC.reset()
+    A._REFUSED.clear()
+    body = {"model": "kimi-x", "temperature": 0.0, "max_tokens": 100, "messages": []}
+    assert A._adapt_params(body, "HTTP 400: Unsupported parameter: 'temperature'")
+    assert "temperature" not in body and A._REFUSED["kimi-x"] == {"temperature"}
+    assert "temperature" in MC.refused(PV.key_base(), "kimi-x")           # the same record ModelCaps/LiveClient read
+    MC.learn_refused(PV.key_base(), "other", "top_p")
+    b2 = A._apply_refused({"model": "other", "top_p": 1, "max_tokens": 5})
+    assert "top_p" not in b2
+    A._REFUSED.clear()
+    assert A._REFUSED.get("kimi-x", ()) == () and not MC.refused(PV.key_base(), "kimi-x")
+    MC.reset()
