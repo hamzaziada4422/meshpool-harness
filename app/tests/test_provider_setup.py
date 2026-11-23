@@ -142,7 +142,7 @@ def test_adds_v1_when_server_only_serves_it(home, servers):
 def test_plain_language_errors(home, servers):
     m = servers("openai")
     r = PS.test(m.url + "/v1", "sk-wrong-key-99999")
-    assert not r["ok"] and r["error"] == "The key was rejected (401). Check it and try again."
+    assert not r["ok"] and r["error"].startswith("The key was rejected (401).") and "127.0.0.1" in r["error"]
     r = PS.test("http://127.0.0.1:9", "sk-whatever-1234")                      # nothing listens there
     assert not r["ok"] and r["error"].startswith("No server at that address")
     nl = servers("nolist")
@@ -273,6 +273,9 @@ def test_env_keys_detected_and_copied_only_on_confirm(home, servers, monkeypatch
     assert a["found"] and a["wire"] == "anthropic" and a["base_url"] == "https://api.anthropic.com/v1"
     assert a["key_hint"] == "9876" and "envkey" not in json.dumps(PS.logins())
     m = servers("anthropic", key="sk-ant-envkey-9876")
+    with pytest.raises(PS.SetupError, match="not sent anywhere else"):           # the key belongs to its own host
+        PS.test(m.url + "/v1", env="ANTHROPIC_API_KEY")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", m.url + "/v1")                      # unless the user pointed it elsewhere
     r = PS.test(m.url + "/v1", env="ANTHROPIC_API_KEY")                          # the key is resolved server-side
     assert r["ok"] and r["wire"] == "anthropic"
     with pytest.raises(PS.SetupError, match="Confirm"):

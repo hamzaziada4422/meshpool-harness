@@ -124,11 +124,16 @@ def prepare_codex(model: str | None = None) -> None:
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     model = bare if prov == "key" and bare else "deepseek-v4.1-flash"
     q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    extra = ""
+    if PV.key_kind() == "azure-classic":       # Codex's documented Azure provider: base .../openai and an api-version
+        from meshpool_harness.core import endpoint as EP
+        base = base.rstrip("/") + "/openai"
+        extra = f"query_params = {{ api-version = {q(PV.key_api_version() or EP.AZURE_DEFAULT_VERSION)} }}\n"
     (home / "config.toml").write_text(
         f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
         "\n"
         f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
-        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
+        f"{extra}wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
 
 
 def write_private(p: Path, text: str) -> None:
@@ -158,7 +163,7 @@ def prepare_opencode(model: str | None = None) -> dict:
         env = chatgpt_relay.env()               # the relay holds the sign-in; OpenCode only sees its address and token
         base, key_env = env["MESHPOOL_CHATGPT_RELAY_URL"], "MESHPOOL_CHATGPT_RELAY_KEY"
     else:
-        base, key_env, bare = PV.key_base(), "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
+        base, key_env, bare = PV.agent_endpoint("key")[0], "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
     home = opencode_home()
     home.mkdir(parents=True, exist_ok=True)
     # "permission": OpenCode allows everything by default, so it never asked and Supervised and Plan meant nothing.
@@ -188,7 +193,7 @@ def prepare_hermes(model: str | None = None) -> None:
     cfg = cfg if isinstance(cfg, dict) else {}
     m = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
     prov = PV.for_harness("hermes", model or os.environ.get("MH_MODEL")) or "key"
-    base, key = PV.endpoint(prov)
+    base, key = PV.agent_endpoint(prov)         # the key endpoint, or the local relay when it needs more than Bearer
     p_, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     m.update({"provider": "custom", "base_url": base,
               "default": bare if p_ == prov and bare else "deepseek-v4.1-flash",
@@ -499,7 +504,7 @@ def _launch(hid: str, prov: str | None) -> dict:
         return {"prepare": "hermes"}
     if hid == "opencode":
         return {"prepare": "opencode", "env": {"OPENCODE_CONFIG": str(opencode_home() / "opencode.json"),
-                                               "MESHPOOL_API_KEY": PV.key()},
+                                               "MESHPOOL_API_KEY": PV.agent_endpoint("key")[1]},
                 "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
     return {}
 

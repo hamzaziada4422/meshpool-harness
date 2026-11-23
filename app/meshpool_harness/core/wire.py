@@ -143,6 +143,7 @@ class SimpleLedger:
     def __init__(self, phase: str = "run"):
         from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
         self.base_url, self.api_key = PV.key_base(), PV.key()
+        self.kind, self.api_version = "", ""            # "": read from the base address (or the saved setting)
 
     def chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
              temperature=None, extra=None, timeout=600, retries=2, **_):
@@ -172,22 +173,24 @@ class SimpleLedger:
             body["stream_options"] = {"include_usage": True}
             idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
+        from meshpool_harness.core import endpoint as EP
+        extra_h = {"X-Harness-Task-Id": task_id,
+                   **({"session_id": task_id.split("-esc")[0]}
+                      if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})}
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
+            url, hdrs = f"{base_url}/messages", AW.headers(api_key)
             body = AW.to_request(body)
-        elif wire == "responses":
-            body = to_responses(body)
-        url = f"{base_url}/{'messages' if anthropic else 'responses' if wire == 'responses' else 'chat/completions'}"
-        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                     headers={**(AW.headers(api_key) if anthropic else
-                                                 {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}),
-                                              "X-Harness-Task-Id": task_id,
-                                              **({"session_id": task_id.split("-esc")[0]}
-                                                 if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
+        else:                                              # every other provider: core/endpoint.py decides URL and key header
+            if wire == "responses":
+                body = to_responses(body)
+            url, body, hdrs = EP.chat_request(base_url, api_key, body, kind=self.kind, api_version=self.api_version,
+                                              path="responses" if wire == "responses" else "chat")
+        req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST", headers={**hdrs, **extra_h})
         status, raw = 0, b""
         for attempt in range(retries + 1):
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with EP.urlopen(req, timeout=timeout) as r:
                     status = r.status
                     raw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and status == 200
                            else r.read())
@@ -200,7 +203,9 @@ class SimpleLedger:
             time.sleep(1.5 * (attempt + 1))
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
-            raise RuntimeError(f"meshpool HTTP {status}: {payload}")
+            raise RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
+                status, payload, kind=self.kind or EP.resolve(base_url)[0], host=PV.host(base_url),
+                model=body.get("model", ""), key=api_key, api_version=self.api_version or EP.resolve(base_url)[1]))
         if anthropic:
             return AW.from_response(payload)
         return from_responses(payload) if wire == "responses" else payload

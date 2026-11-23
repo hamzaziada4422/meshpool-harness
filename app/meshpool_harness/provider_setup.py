@@ -27,6 +27,7 @@ from urllib.parse import urlparse, urlunparse
 from meshpool_harness import config as C
 from meshpool_harness import providers as PV
 from meshpool_harness.core import anthropic_wire as AW
+from meshpool_harness.core import endpoint as EP
 
 ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
@@ -59,21 +60,17 @@ def is_local(url: str) -> bool:
 
 def normalise_base(url: str) -> str:
     """https://host[/v1]: scheme added, trailing slash and a pasted endpoint path (/chat/completions, /models,
-    /messages) removed, /v1 added for the hosts that always need it."""
-    u = (url or "").strip().strip("'\"")
-    if not u:
-        raise SetupError("Enter the endpoint address, for example https://api.openai.com/v1.")
-    if "://" not in u:
-        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) else "https://") + u
-    p = urlparse(u)
-    if not p.hostname or p.scheme not in ("http", "https"):
-        raise SetupError("That does not look like a web address. Use the form https://api.example.com/v1.")
-    path = re.sub(r"/(?:chat/completions|completions|responses|models|messages)/?$", "", p.path.rstrip("/"))
-    path = path.rstrip("/")
-    h = p.hostname.lower()
-    if not path and (h in ("api.openai.com", "api.anthropic.com") or h.endswith(".anthropic.com")):
-        path = "/v1"
-    return urlunparse((p.scheme, p.netloc, path, "", "", ""))
+    /messages) removed, and the path each known provider needs added (/v1 for OpenAI, /openai/v1 for Groq,
+    /v1beta/openai for Gemini ...). A pasted Azure call address is cut back to the resource (core/endpoint.py)."""
+    return parse(url).base
+
+
+def parse(url: str, kind: str = "") -> EP.Parsed:
+    """The pasted address understood: base, provider kind, an Azure deployment and api-version found inside it."""
+    try:
+        return EP.parse_pasted(url, kind)
+    except EP.EndpointError as e:
+        raise SetupError(str(e)) from None
 
 
 def _candidates(base: str) -> list[str]:
@@ -82,12 +79,7 @@ def _candidates(base: str) -> list[str]:
     return [base] if p.path else [base, base + "/v1"]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):      # a redirect would carry the key to another host
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect)
+_OPENER = EP.OPENER                           # never follows a redirect: it would carry the key to another host
 
 
 def _get(url: str, headers: dict, timeout: float = 15.0):
@@ -157,13 +149,17 @@ def _looks_anthropic(data, items) -> bool:
 # ---------- test ---------------------------------------------------------------------------------------------------
 
 def resolve_key(base: str, api_key=None, env: str = "") -> str:
-    """The key to use: the one typed, the named environment variable, or (same endpoint) the saved one."""
+    """The key to use: the one typed, the named environment variable (only for the address it belongs to), or (same
+    endpoint) the saved one."""
     k = clean_key(api_key)
     if k:
         return k
     if env:
         if env not in ENV_KEYS:
             raise SetupError("Unknown environment variable.")
+        row = next((r for r in EP.env_sources(os.environ) if r["var"] == env), None)
+        if row and PV.host(row["base"]) != PV.host(base):
+            raise SetupError(f"{env} is the key for {PV.host(row['base'])} and is not sent anywhere else.")
         return clean_key(os.environ.get(env, ""))
     cur_base, cur_key = PV.key_base(), PV.key()
     if cur_key and _same_endpoint(base, cur_base):
@@ -178,13 +174,23 @@ def _same_endpoint(a: str, b: str) -> bool:
         return False
 
 
-def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict:
+def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: str = "", api_version: str = "",
+         kind: str = "") -> dict:
+    """Check an address and key. Where the endpoint has a model list (most do) the key is checked by reading it. Azure,
+    and any endpoint with no list, has none to read: there the check is a one-token chat call to `model` (for Azure
+    the deployment name), and without a model the answer says so (needs_model) rather than calling the key bad."""
     t0 = time.time()
-    base = normalise_base(base_url)
-    out = {"ok": False, "wire": "", "base_url": base, "models": [], "latency_ms": 0, "error": ""}
+    pp = parse(base_url, kind)
+    base, kind = pp.base, pp.kind
+    caps = EP.caps(kind)
+    ver = (api_version or pp.api_version or "").strip()
+    model = (model or pp.deployment or "").strip()
+    out = {"ok": False, "wire": "", "base_url": base, "models": [], "latency_ms": 0, "error": "", "kind": kind,
+           "label": caps["label"], "api_version": ver or caps["version"], "deployment": bool(caps["deployment"]),
+           "needs_model": False, "model": model}
     key = resolve_key(base, api_key, env)
     host = PV.host(base)
-    if not key and not is_local(base):
+    if not key and not is_local(base) and not caps["keyless"]:
         out["error"] = f"Enter the API key for {host}." if not PV.key() or _same_endpoint(base, PV.key_base()) \
             else f"Enter the API key for {host}: your saved key is for {PV.host(PV.key_base())} and is not sent " \
                  "anywhere else."
@@ -193,11 +199,30 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
     if prob:
         out["error"] = prob
         return out
+
+    def probe_now() -> dict:
+        pr = EP.probe(base, key, model, kind=kind, api_version=ver)
+        out["latency_ms"] = int((time.time() - t0) * 1000)
+        if pr["ok"]:
+            out.update(ok=True, wire=caps["wire"], models=[{"id": model}], error="")
+            _remember(base, key, out["models"])
+        else:
+            out["error"] = pr["error"]
+        return out
+
+    if caps["deployment"] or not caps["lists"]:
+        if not model:
+            out["needs_model"] = True
+            out["error"] = ("Enter the deployment name (the name you gave the model in Azure, not the model's own "
+                            "name) so the key can be tested." if caps["deployment"] else
+                            f"{caps['label']} has no model list: enter a model name so the key can be tested.")
+            return out
+        return probe_now()
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
         wire = "auto"
     order = [wire] if wire != "auto" else (["anthropic", "openai"] if host.endswith("anthropic.com")
-                                           else ["openai", "anthropic"])
+                                           or caps["wire"] == "anthropic" else ["openai", "anthropic"])
     auth_code = 0
     saw_missing = False
     last_status = 0
@@ -229,7 +254,9 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
                 saw_missing = True
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
-        out["error"] = f"The key was rejected ({auth_code}). Check it and try again."
+        out["error"] = EP.explain(auth_code, None, kind=kind, host=host, key=key)
+    elif saw_missing and model:          # no list, but a model was typed: a chat call proves the key
+        return probe_now()
     elif saw_missing:      # something answers, but has no /models: the key stays unchecked, the user types a model
         out.update(ok=True, wire=("openai" if wire == "auto" else wire), base_url=base,
                    error="Connected, but this endpoint does not list models: type a model name.")
@@ -255,28 +282,38 @@ def _remember(base: str, key: str, models: list) -> None:
 
 # ---------- save ---------------------------------------------------------------------------------------------------
 
-ENV_KEYS = {"ANTHROPIC_API_KEY": ("anthropic", ANTHROPIC_BASE), "OPENAI_API_KEY": ("openai", OPENAI_BASE)}
+ENV_KEYS = {v: (EP.wire_of(kind), fixed) for kind, kvars, _b, fixed in EP.ENV_SOURCES for v in kvars}
+ENV_KEYS["OPENAI_API_KEY"] = ("openai", OPENAI_BASE)      # a bare OpenAI key is offered for api.openai.com only
 
 
 def current() -> dict:
     k = PV.key()
+    kind = PV.key_kind()
     return {"base_url": PV.key_base(), "wire": PV.key_wire(),
             "default_model": (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip(),
             "key_set": bool(k), "key_hint": k[-4:] if len(k) >= 8 else "",
             "provider": (C.read().get("MH_PROVIDER") or os.environ.get("MH_PROVIDER") or "meshpool"),
-            "host": PV.host(PV.key_base())}
+            "host": PV.host(PV.key_base()), "kind": kind, "label": EP.caps(kind)["label"],
+            "api_version": PV.key_api_version(), "deployment": EP.caps(kind)["deployment"],
+            "agent_notes": {h: PV.direct_agent_ok(h) for h in ("codex",) if PV.direct_agent_ok(h)}}
+
+
+def catalog() -> list[dict]:
+    return EP.catalog()
 
 
 def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "", allow_custom: bool = False,
-         env: str = "", confirm_env: bool = False) -> dict:
-    base = normalise_base(base_url)
-    model = re.sub(r"[\r\n]", "", str(default_model or "")).strip()
+         env: str = "", confirm_env: bool = False, api_version: str = "", kind: str = "") -> dict:
+    pp = parse(base_url, kind)
+    base, kind = pp.base, pp.kind
+    ver = (api_version or pp.api_version or "").strip()
+    model = re.sub(r"[\r\n]", "", str(default_model or "") or pp.deployment).strip()
     if not model:
         raise SetupError("Pick the default model first.")
     if env and not confirm_env:
         raise SetupError(f"Confirm that Meshpool may copy {env} into its own settings.")
     key = resolve_key(base, api_key, env)
-    if not key and not is_local(base):
+    if not key and not is_local(base) and not EP.caps(kind)["keyless"]:
         raise SetupError(f"Enter the API key for {PV.host(base)}.")
     prob = PV.key_problem(key)
     if prob:
@@ -288,10 +325,14 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
                          "you typed it on purpose.")
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
-        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else "openai"
+        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else EP.wire_of(kind)
     changed = (not _same_endpoint(base, PV.key_base())) or (key and key != PV.key())
+    # The kind and api-version belong to this address only: saved for an Azure endpoint, blanked for any other, so
+    # an old api-version never follows the user to another host.
     vals = {"MESHPOOL_BASE_URL": base, "MH_API_WIRE": wire, "MH_MODEL": model,
-            "MH_PROVIDER": "meshpool" if "meshpool" in PV.host(base) else "custom"}
+            "MH_PROVIDER": "meshpool" if "meshpool" in PV.host(base) else "custom",
+            "MH_API_KIND": "" if kind == "generic" else kind,
+            "MH_API_VERSION": ver if kind in ("azure-classic", "azure-foundry") else ""}
     if key:
         vals["MESHPOOL_API_KEY"] = key
     if changed and (C.read().get("MH_SUBAGENT_MODEL") or "").strip():
@@ -371,12 +412,19 @@ def claude_code() -> dict:
 
 
 def env_keys() -> list[dict]:
+    """Provider keys found in the environment, each with the one address it may go to (never offered for another)."""
+    found = {r["var"]: r for r in EP.env_sources(os.environ)}
     rows = []
     for var, (wire, base) in ENV_KEYS.items():
         k = clean_key(os.environ.get(var, ""))
-        base_env = os.environ.get("OPENAI_BASE_URL", "").strip() if var == "OPENAI_API_KEY" else ""
-        rows.append({"kind": "env_key", "env": var, "found": bool(k), "key_hint": k[-4:] if len(k) >= 8 else "",
-                     "wire": wire, "base_url": base_env or base,
+        r = found.get(var)
+        if not r and var not in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            continue                                          # only the two long-standing rows show when not set
+        kind = r["kind"] if r else ("anthropic" if wire == "anthropic" else "openai")
+        rows.append({"kind": "env_key", "env": var, "found": bool(k and (r or var in ENV_KEYS)),
+                     "key_hint": k[-4:] if len(k) >= 8 else "", "wire": EP.wire_of(kind),
+                     "base_url": (r["base"] if r else base), "provider": kind, "label": EP.caps(kind)["label"],
+                     "api_version": r["api_version"] if r else "", "deployment": r["deployment"] if r else "",
                      "active": bool(k) and k == PV.key()})
     return rows
 

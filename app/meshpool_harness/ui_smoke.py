@@ -47,11 +47,104 @@ FILL_JS = r"""() => { for (const e of document.querySelectorAll("input, textarea
   const t = e.type; const v = t === "number" || t === "range" ? "3" : t === "email" ? "smoke@example.com" : t === "tel" ? "5551234567" : t === "url" ? "https://example.com" : ["text", "search", ""].includes(t) || e.tagName === "TEXTAREA" ? "Smoke test" : null;
   if (v === null) continue; e.value = v; e.dispatchEvent(new Event("input", {bubbles: true})); e.dispatchEvent(new Event("change", {bubbles: true})); } }"""
 
+# Permission-gated browser APIs are replaced by recorders before the page loads. A real prompt needs a person, so the
+# test grants it and only records that the page asked (and whether it showed an alert).
+PERMISSION_STUB = r"""(() => {
+  try {
+    const N = function (title, opts) { try { window.smokeNote("notify-shown"); } catch (e) {} this.title = title; this.close = function () {}; };
+    N.permission = "default";
+    N.requestPermission = function (cb) { try { window.smokeNote("notify-asked"); } catch (e) {} N.permission = "granted"; if (typeof cb === "function") cb("granted"); return Promise.resolve("granted"); };
+    window.Notification = N;
+  } catch (e) {}
+})()"""
+
+NOTIFY_SRC_JS = r"""async () => {
+  let src = document.documentElement.outerHTML;
+  for (const s of [...document.querySelectorAll("script[src]")].slice(0, 6)) {
+    try { const u = new URL(s.src, location.href); if (u.origin === location.origin) src += "\n" + await (await fetch(u)).text(); } catch (e) {}
+  }
+  return /\bNotification\b/.test(src);
+}"""
+
+# things a person drags: native draggable, a grab cursor, or a drag handle. Marked so they can be found again.
+DRAG_JS = r"""() => {
+  const vis = e => { const s = getComputedStyle(e), b = e.getBoundingClientRect(); return s.visibility !== "hidden" && s.display !== "none" && b.width > 4 && b.height > 4; };
+  let c = [...document.querySelectorAll("[draggable=true],[data-draggable],[class*=draggable],[class*=drag-handle],[class*=drag_handle],[class*=grip]")].filter(vis);
+  for (const e of [...document.querySelectorAll("li,div,article,span,button")].slice(0, 500)) if (!c.includes(e) && vis(e) && /grab|move/.test(getComputedStyle(e).cursor)) c.push(e);
+  c = c.filter((e, i) => !c.some((o, j) => j !== i && o !== e && o.contains(e) && !e.matches("[draggable=true]"))).slice(0, 12);
+  c.forEach((e, i) => e.setAttribute("data-smoke-drag", String(i)));
+  const path = e => { let o = [], n = e; for (let k = 0; k < 3 && n && n.parentElement; k++) { o.push([...n.parentElement.children].indexOf(n)); n = n.parentElement; } return o.join("."); };
+  const ctr = e => { const b = e.getBoundingClientRect(); return [Math.round(b.x + b.width / 2), Math.round(b.y + b.height / 2)]; };
+  if (!c.length) return {n: 0};
+  const src = c[0];
+  const other = c.find(e => e.parentElement !== src.parentElement && e !== src);
+  let tgt = other ? other.parentElement : null;
+  if (!tgt && src.parentElement && src.parentElement.parentElement) tgt = [...src.parentElement.parentElement.children].find(e => e !== src.parentElement && vis(e)) || null;
+  if (!tgt) tgt = c.length > 1 ? c[c.length - 1] : null;
+  if (!tgt) return {n: c.length, noTarget: true};
+  tgt.scrollIntoView({block: "center"}); src.scrollIntoView({block: "center"});
+  return {n: c.length, native: src.getAttribute("draggable") === "true", from: ctr(src), to: ctr(tgt)};
+}"""
+DRAG_SIG_JS = r"""() => [...document.querySelectorAll("[data-smoke-drag]")].map(e => { let o = [], n = e; for (let k = 0; k < 3 && n && n.parentElement; k++) { o.push([...n.parentElement.children].indexOf(n)); n = n.parentElement; } return o.join("."); }).join("|") + "#" + document.body.innerText.replace(/\s+/g, " ")"""
+
 BAD_VALUE = {"email": "not-an-email", "tel": "abc", "number": "-5", "url": "nope", "date": "", "time": ""}
 
 
 def _plain(msg: str) -> str:
     return msg.replace("\n", " ")[:200]
+
+
+def _touch_drag(cdp, a, b) -> None:
+    """A finger: press, hold long enough for a long-press drag to start, slide in steps, lift (Chrome DevTools touch events)."""
+    def send(kind, x=None, y=None):
+        cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [] if x is None else [{"x": x, "y": y, "id": 1}]})
+    send("touchStart", a[0], a[1])
+    time.sleep(0.55)
+    for i in range(1, 13):
+        send("touchMove", a[0] + (b[0] - a[0]) * i / 12, a[1] + (b[1] - a[1]) * i / 12)
+        time.sleep(0.03)
+    send("touchEnd")
+    time.sleep(0.3)
+
+
+def _drag_check(browser, addr, view, add, notes) -> None:
+    """Find things made to be dragged (cards, list rows), drag one with a mouse, then with emulated touch events in a
+    fresh page. A drag that works with the mouse and does nothing with a finger is a defect on phones and tablets.
+    Heuristic: it picks the first draggable thing and the first other column or item, so a board that needs an exact
+    drop spot may read as "could not be driven"; that is said as a note, never as a defect."""
+    results = {}
+    for mode in ("mouse", "touch"):
+        ctx = browser.new_context(viewport={"width": view[0], "height": view[1]}, has_touch=(mode == "touch"))
+        try:
+            page = ctx.new_page()
+            page.goto(addr, wait_until="load", timeout=20000)
+            page.wait_for_timeout(400)
+            d = page.evaluate(DRAG_JS)
+            if not d.get("n"):
+                return
+            if d.get("noTarget") or "from" not in d:
+                notes.append("Drag and drop: things that look draggable were found but there was no second place to drop one, so dragging was not tested.")
+                return
+            before = page.evaluate(DRAG_SIG_JS)
+            if mode == "mouse":
+                page.mouse.move(*d["from"])
+                page.mouse.down()
+                page.mouse.move((d["from"][0] + d["to"][0]) / 2, (d["from"][1] + d["to"][1]) / 2, steps=8)
+                page.mouse.move(*d["to"], steps=8)
+                page.mouse.up()
+            else:
+                _touch_drag(ctx.new_cdp_session(page), d["from"], d["to"])
+            page.wait_for_timeout(300)
+            results[mode] = page.evaluate(DRAG_SIG_JS) != before
+            results["native"] = bool(d.get("native"))
+        finally:
+            ctx.close()
+    if not results.get("mouse"):
+        notes.append("Drag and drop: things that look draggable were found, but a mouse drag to the next column or item changed nothing, so touch dragging could not be judged. Not verified.")
+    elif not results.get("touch"):
+        how = " Built-in drag and drop: phone support varies." if results.get("native") else ""
+        add("touch-drag", "should", "drags with a mouse but did not move with a touch drag." + how +
+            " Use pointer events and touch-action: none on the handle, or add a Move button")
 
 
 def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
@@ -60,6 +153,8 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
     browser = (launch or UA.launcher(pw))()
     out: list[dict] = []
     errs: list[str] = []
+    notes: list[str] = []                           # not defects, not verified: said plainly in the output
+    seen_api = {"notify-asked": 0, "notify-shown": 0}
 
     def add(rule, sev, msg):
         if not any(o["rule"] == rule and o["msg"] == msg for o in out):
@@ -67,6 +162,8 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
 
     try:
         ctx = browser.new_context(viewport={"width": view[0], "height": view[1]})
+        ctx.expose_function("smokeNote", lambda k: seen_api.__setitem__(k, seen_api.get(k, 0) + 1))
+        ctx.add_init_script(PERMISSION_STUB)
         page = ctx.new_page()
         origin = {"v": ""}
         page.on("pageerror", lambda e: errs.append(f"script error: {str(e)[:140]}"))
@@ -82,6 +179,10 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
         origin["v"] = page.url.split("#")[0]
         inv = page.evaluate(CONTROLS_JS)
         n_btn = len(inv["btns"])
+        try:
+            uses_notify = bool(page.evaluate(NOTIFY_SRC_JS))
+        except Exception:  # noqa: BLE001
+            uses_notify = False
 
         # 1. every button: does it do anything?
         dead, checked = [], 0
@@ -232,6 +333,22 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
                         add("no-persistence", "should", "an item typed in was gone after reloading the page. Save the data (localStorage for a small app, a file or database for a backend) and load it on start")
                     page.keyboard.press("Tab")
 
+        # 7. desktop notifications: the permission needs a person, so say what could and could not be checked
+        if uses_notify or seen_api["notify-asked"] or seen_api["notify-shown"]:
+            if seen_api["notify-shown"] and not seen_api["notify-asked"]:
+                add("notification-no-permission", "should", "the page shows a desktop notification without ever asking for permission first. Browsers block that: add a button that calls Notification.requestPermission()")
+            elif seen_api["notify-asked"]:
+                notes.append("Desktop notifications: needs permission, button present. A control asked for notification permission (the test granted it; a real browser asks the user and they can refuse). Whether the alert appears at the right moment (a timer ending) was not checked.")
+            else:
+                add("notification-no-ask", "should", "the code uses desktop notifications, but no button or action asked for the permission when clicked (browsers show alerts only after the user allows them). Add a visible button such as \"Enable notifications\" that calls Notification.requestPermission()")
+                notes.append("Desktop notifications: needs permission, no control that asks for it was found. Not verified further.")
+
+        # 8. drag and drop: works with a mouse, and with a finger?
+        try:
+            _drag_check(browser, addr, view, add, notes)
+        except Exception:  # noqa: BLE001
+            pass
+
         if errs:
             for e in dict.fromkeys(errs):
                 add("console-error", "must", e)
@@ -248,7 +365,12 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
     if should:
         lines.append("SHOULD FIX:")
         lines += [f"- {o['msg']}" for o in should]
-    text = "\n".join(lines) if lines else "No problems found by the click-through."
+    if not lines:
+        lines.append("No problems found by the click-through.")
+    if notes:
+        lines.append("NOTES (not defects, not fully checked):")
+        lines += [f"- {n}" for n in notes]
+    text = "\n".join(lines)
     head = (f"Click-through of {shown}: {n_btn} buttons, {len(inv['anchors'])} links, {len(inv['forms'])} forms"
             + (f", {inv['canvas']} canvas" if inv["canvas"] else "") + ". ")
     return {"findings": out, "text": head + text, "time": time.time()}
