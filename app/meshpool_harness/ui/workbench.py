@@ -311,8 +311,7 @@ def attach(root: str, name: str, data: bytes) -> dict:
         name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
-    from meshpool_harness import project_store as PS
-    sub = "attachments" if PS.is_scratch(str(r)) else ""     # a chat's own folder keeps attachments apart from its work
+    sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
     base.mkdir(exist_ok=True)
     p = base / name
