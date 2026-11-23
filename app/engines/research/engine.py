@@ -114,6 +114,61 @@ def finish_check(answer, artifacts, ws):
     return None
 
 
+def answer_section(md: str, limit: int = 1500) -> str:
+    """The report's "Answer" section (the text under a heading containing "Answer", up to the next heading); the
+    first ~1500 characters when there is no such heading."""
+    import re
+    lines = md.splitlines()
+    for i, ln in enumerate(lines):
+        if re.match(r"^\s{0,3}#{1,6}\s+.*answer", ln, re.I):
+            body = []
+            for nxt in lines[i + 1:]:
+                if re.match(r"^\s{0,3}#{1,6}\s", nxt):
+                    break
+                body.append(nxt)
+            text = "\n".join(body).strip()
+            if text:
+                return text
+    return md.strip()[:limit]
+
+
+def salvage(r, ws) -> dict:
+    """The run ended without an accepted finish (cap, abort, tool-less replies). Do not throw a written report away:
+    run the same gate finish uses on report.md. Passing -> ok with the files; failing -> not ok, but with the files
+    and the failures; no report -> not ok with an explanation. The answer is never empty."""
+    rep = ws.root / "report.md"
+    if not rep.exists():
+        return {"ok": False, "artifacts": [], "evidence": [],
+                "answer": (f"Stopped ({r.reason}) before report.md was written; nothing to deliver. Run again with a "
+                           "larger turn budget (MH_RESEARCH_MAX_TURNS) or a narrower question."),
+                "reason": f"{r.reason}; no report.md written"}
+    arts = [str(ws.root / n) for n in ("report.md", "report.docx", "sources.json") if (ws.root / n).exists()]
+    try:
+        text = rep.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        text = ""
+        msg = f"ENGINE CHECK: report.md could not be read: {e}"
+    answer = answer_section(text)
+    if text:
+        try:
+            msg = finish_check(answer, ["report.md"], ws)
+        except Exception as e:                      # noqa: BLE001 - a crashing checker must not lose the file either
+            msg = f"ENGINE CHECK: the checker crashed: {type(e).__name__}: {e}"
+    failures = [ln.strip() for ln in (msg or "").splitlines() if ln.strip() and not ln.startswith("ENGINE CHECK")] \
+        or ([msg] if msg else [])
+    if not msg:
+        return {"ok": True, "artifacts": arts, "evidence": ["engine finish check on report.md: pass"],
+                "answer": (f"{answer}\n\n(The run stopped ({r.reason}) before finish; the saved report.md passes "
+                           "the engine's checks.)"),
+                "reason": f"{r.reason}; delivered report.md, checks pass"}
+    lines = [f"The run stopped ({r.reason}) before finish, and the saved report.md does not pass the engine's "
+             f"checks ({len(failures)} failing):"]
+    lines += [f"- {f}" for f in failures[:15]] + ([f"- and {len(failures) - 15} more"] if len(failures) > 15 else [])
+    return {"ok": False, "artifacts": arts, "evidence": [f"engine finish check on report.md: {len(failures)} failing"],
+            "answer": "\n".join(lines),
+            "reason": f"{r.reason}; saved report.md fails {len(failures)} checks"}
+
+
 def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = None, max_turns: int | None = None,
           model: str = "deepseek-v4.1-flash", client=None, phase: str = "phase_2_build") -> dict:
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
@@ -125,5 +180,8 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
             caps=Caps(max_turns=max_turns or int(os.environ.get("MH_RESEARCH_MAX_TURNS", "40"))), temperature=0.0,
             finish_check=finish_check)
-    return {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
-            "reason": r.reason, "usage": r.usage}
+    out = {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
+           "reason": r.reason, "usage": r.usage}
+    if not r.ok:
+        out.update(salvage(r, ws))
+    return out
