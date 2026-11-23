@@ -500,6 +500,16 @@ def ui_audit(url: str, views: str = "") -> list:
     return B.run(go, timeout=300)
 
 
+def ui_smoke(url: str) -> list:
+    from meshpool_harness import ui_smoke as US
+
+    def go():
+        B.ensure()
+        res = US.smoke(B.pw, url, launch=_launcher())
+        return [text(res["text"])]
+    return B.run(go, timeout=300)
+
+
 def view_output(path: str, pages: str = "") -> list:
     from meshpool_harness import view as V
 
@@ -547,6 +557,11 @@ TOOLS = {
                      "tiny buttons, unnamed controls, broken images, console errors), prints the layout, saves "
                      "screenshots and returns them. Run it after every change to a page; it is done at 'No problems found'.",
                      {"url": S, "views": S}, ["url"]),
+    "ui_smoke": Tool(ui_smoke, "Use a page you built the way a person would: clicks every button, follows the links, "
+                     "submits each form empty and with nonsense, presses keys in a game, tabs through the controls and "
+                     "reloads to see if typed data is kept. Lists buttons that do nothing, forms that accept bad input, "
+                     "console errors and lost data in plain words. Run it after ui_audit; it is done at 'No problems found'.",
+                     {"url": S}, ["url"]),
     "view_output": Tool(view_output, "Look at any visual file you made: a web page, SVG, image, PDF, slides, document, "
                         "workbook or CSV. Returns pictures of the pages, plus the text read from them for models "
                         "that cannot see images. Use pages to pick some, like \"1,3\" or \"2-4\".",
