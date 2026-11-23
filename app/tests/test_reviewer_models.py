@@ -260,3 +260,12 @@ def test_parallel_first_calls_send_a_refused_parameter_only_once(ep):
     [t.join(30) for t in ts]
     assert not errs and len(out) == n
     assert sum(1 for r in ep.requests if "temperature" in r["keys"]) == 1
+
+
+def test_openai_family_reviewers_send_no_temperature(monkeypatch):
+    """Reasoning gpt models refuse temperature in every role: the verifier calls (clarity, reviews) sent it and paid
+    one 400 per endpoint before the client learned it (seen live on gpt-6-luna). The profile omits it up front."""
+    from meshpool_harness.profiles import apply, for_model
+    prof = for_model("gpt-6-luna")
+    for role in ("worker", "planner", "verifier"):
+        assert "temperature" not in apply(prof, [{"role": "user", "content": "x"}], {"temperature": 0.2}, role)[1]
