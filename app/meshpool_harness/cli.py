@@ -123,7 +123,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions", "chats", "projects", "memory", "skills", "plugins",
+            "schedule", "agents", "models", "usage", "settings", "help"}
 
 
 def _agent_parser():
@@ -231,19 +232,7 @@ def _no_console() -> bool:
         return False
 
 
-_HELP = {
-    "login": "Usage: meshpool login\nAsk for your API key and save it.",
-    "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
-    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
-    "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
-    "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
-    "mcp": "Usage: meshpool mcp\nStart the configured MCP servers and show their status.",
-    "app": "Usage: meshpool app\nOpen the desktop app.",
-    "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
-    "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
-    "worktree": "Usage: meshpool worktree list [--all] | diff <id> [--stat] | merge <id> | discard <id>\n"
-                "Isolated copies made by `meshpool --worktree`, chats, sub-agents and scheduled runs.",
-}
+from meshpool_harness.cli_app import HELP as _HELP, NEW as _APP_COMMANDS  # noqa: E402  (one table for help)
 
 
 def _permissions_cmd(argv) -> int:
@@ -396,6 +385,9 @@ def _main(argv=None):
                               **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
+    if argv[0] in _APP_COMMANDS and not (argv[0] == "mcp" and len(argv) == 1):   # the app's features as commands
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
     if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
         from meshpool_harness import worktrees as WT
         return WT.cli(argv[1:])
@@ -476,6 +468,9 @@ def _main(argv=None):
             return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
+    if argv[0] == "mcp" and len(argv) > 1:
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
     if argv[0] == "mcp":
         from meshpool_harness.agent.mcp import Manager, config_file
         from meshpool_harness.agent.tui import Terminal, _mcp_status
