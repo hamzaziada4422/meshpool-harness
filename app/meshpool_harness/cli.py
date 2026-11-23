@@ -159,7 +159,13 @@ def _agent_parser():
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
-    ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--mode", choices=["code", "work", "auto"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps; auto: pick the agent for the request")
+    ap.add_argument("--profile", choices=["code", "work"], help=argparse.SUPPRESS)      # the old name of --mode
+    ap.add_argument("--agent", dest="agent_id", help="the agent to run (an id from `meshpool agents`, e.g. meshpool-code, meshpool-work, codex)")
+    ap.add_argument("--project", help="a project id: its instructions, memory and folder apply")
+    ap.add_argument("--incognito", action="store_true", help="no memory is read or written and nothing is learned from this chat")
+    ap.add_argument("--attach", action="append", default=[], metavar="PATH", help="a file or picture to send with the request (repeatable)")
+    ap.add_argument("--output-last-message", metavar="FILE", help="with -p: also write the final reply to FILE")
     ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
     return ap
 
@@ -316,8 +322,12 @@ def _main(argv=None):
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
-        if a.profile:
-            os.environ["MH_AGENT_PROFILE"] = a.profile
+        if prompt is not None and not prompt.strip():
+            print("error: -p needs a request (an empty one was given)", file=sys.stderr)
+            return 2
+        mode = a.mode or a.profile
+        if mode in ("code", "work"):
+            os.environ["MH_AGENT_PROFILE"] = mode
         if a.max_turns:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
@@ -333,7 +343,11 @@ def _main(argv=None):
         fmt = a.output_format or ("json" if a.json_out else "")
         wt = _worktree_session(a, prompt)
         try:
-            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request,
+                              json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
+                              agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
+                              output_last_message=a.output_last_message,
+                              **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
     if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
