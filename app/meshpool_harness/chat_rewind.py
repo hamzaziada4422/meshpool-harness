@@ -27,6 +27,7 @@ from pathlib import Path
 from meshpool_harness import session_store as SS
 
 STEER = "[Added by the user while you were working]"
+SUMMARY = "[Earlier steps of this task were summarized"
 _HIDDEN = "\n\n​"
 _META_KEEP = ("kind", "mode", "model", "style", "project_id", "plan", "route", "route_label", "route_profile", "routed",
               "incognito", "memory_exclude")
@@ -48,6 +49,43 @@ def _is_steer(m: dict) -> bool:
     if isinstance(c, list):
         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")
     return str(c or "").startswith(STEER)
+
+
+def _is_summary(m: dict) -> bool:
+    """The note compaction leaves in place of older steps: a user-role message the user never wrote."""
+    return str(m.get("content") if not isinstance(m.get("content"), list) else "").startswith(SUMMARY)
+
+
+def _same(a: str, b: str) -> bool:
+    """The text an event shows and the text of a message are the same message (the message may carry a note before it)."""
+    a, b = str(a or "").strip(), str(b or "").strip()
+    return bool(a) and bool(b) and (a == b or a in b or b in a)
+
+
+def _first_line(text) -> str:
+    t = str(text or "").strip().splitlines()
+    return (t[0] if t else "Images").strip()[:120]
+
+
+def turn_event_pos(events: list, turn: dict):
+    """Position of the user event a checkpoint turn began at, or None. Meshpool's agent stamps user events with their
+    message number (``mi``), but compaction can renumber the messages, so every candidate must also carry the turn's
+    title. The last resort is the turn's own checkpoint event: the user event just before it."""
+    title = str(turn.get("title") or "").strip()
+    mi, ei = turn.get("message_index"), turn.get("event_index")
+    cands = [p for p, e in enumerate(events) if e.get("type") == "user" and mi is not None and e.get("mi") == mi]
+    if isinstance(ei, int) and 0 <= ei < len(events) and events[ei].get("type") == "user":
+        cands.append(ei)
+    for p in cands:
+        if _first_line(events[p].get("text")) == title:
+            return p
+    for p, e in enumerate(events):
+        if e.get("type") == "checkpoint" and any(t.get("n") == turn.get("n") for t in e.get("turns") or []):
+            for q in range(p - 1, -1, -1):
+                if events[q].get("type") == "user" and _first_line(events[q].get("text")) == title:
+                    return q
+            break
+    return None
 
 
 def _outside_type(harness_id: str) -> bool:
@@ -112,8 +150,16 @@ class _State:
                         out.append((n, str(e["text"]), bool(e.get("steer"))))
                     n += 1
             return out
-        return [(i, _text(m.get("content")), _is_steer(m)) for i, m in enumerate(self.messages)
-                if i and m.get("role") == "user"]
+        out = []
+        for i, m in enumerate(self.messages):
+            if not i or m.get("role") != "user" or _is_summary(m):
+                continue
+            t = _text(m.get("content"))
+            prev = self.messages[i - 1]
+            if prev.get("role") == "user" and out and out[-1][0] == i - 1 and out[-1][1] == t:
+                continue              # compaction puts the current task back after its summary: one message, not two
+            out.append((i, t, _is_steer(m)))
+        return out
 
     def event_pos(self, message_index: int):
         """Position in the transcript of the user event that shows this message, or None."""
@@ -125,14 +171,21 @@ class _State:
                         return p
                     n += 1
             return None
+        text = next((t for i, t, _ in self.user_messages() if i == message_index), "")
         for p, e in enumerate(self.events):
-            if e.get("type") == "user" and e.get("mi") == message_index:
+            if e.get("type") == "user" and e.get("mi") == message_index and _same(e.get("text"), text):
                 return p
-        # older transcripts carry no "mi": the k-th message the user sent is the k-th user event
+        # no usable "mi" (an older transcript, or compaction renumbered the messages): the k-th message with this text
+        # the user sent is the k-th user event with it
+        same = [i for i, t, steer in self.user_messages() if not steer and _same(t, text)]
+        evs = [p for p, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")
+               and _same(e.get("text"), text)]
+        if message_index in same and len(same) == len(evs):
+            return evs[same.index(message_index)]
         users = [i for i, _, steer in self.user_messages() if not steer]
-        evs = [p for p, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
-        if message_index in users and len(users) == len(evs):
-            return evs[users.index(message_index)]
+        allev = [p for p, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
+        if message_index in users and len(users) == len(allev):
+            return allev[users.index(message_index)]
         return None
 
     def turns(self) -> list:
@@ -142,8 +195,19 @@ class _State:
             return []
 
     def turn_from(self, message_index: int, pos):
-        """The first checkpoint turn that began at or after this message."""
-        for t in self.turns():
+        """The first checkpoint turn that began at or after this message: the first checkpoint event after the message's
+        own event names it (message numbers can be renumbered by compaction); old chats fall back to the turn records."""
+        turns = self.turns()
+        if pos is not None:
+            for e in self.events[pos:]:
+                if e.get("type") == "checkpoint" and e.get("turns"):
+                    n = e["turns"][0].get("n")
+                    t = next((x for x in turns if x.get("n") == n), None)
+                    if t:
+                        return t
+            if any(e.get("type") == "checkpoint" for e in self.events):
+                return None                       # this chat records its turns in the transcript: none came after it
+        for t in turns:
             mi = t.get("message_index")
             if mi is not None and not self.outside:
                 if mi >= message_index:
@@ -187,22 +251,25 @@ def message_for_event(session, event_index: int) -> int:
     if not (0 <= event_index < len(evs)) or evs[event_index].get("type") != "user" or evs[event_index].get("steer"):
         raise ValueError("Pick one of your own messages.")
     ev = evs[event_index]
-    if not st.outside and ev.get("mi") is not None:
-        return int(ev["mi"])
-    st.events = [{k: v for k, v in e.items() if k != "i"} for e in evs]
-    # the same event, counted: for an outside agent the number of conversation entries before it; for Meshpool's agent
-    # the k-th message the user sent (steers do not count)
-    if st.outside:
-        n = 0
-        for e in st.events[:event_index]:
-            if e.get("type") in ("user", "assistant") and str(e.get("text") or "").strip():
-                n += 1
-        return n
-    k = sum(1 for e in st.events[:event_index] if e.get("type") == "user" and not e.get("steer"))
-    users = [i for i, _, steer in st.user_messages() if not steer]
-    if k >= len(users):
-        raise ValueError("That message is no longer in this chat.")
-    return users[k]
+    users = st.user_messages()
+    if not st.outside:
+        by = dict((i, t) for i, t, _ in users)
+        if ev.get("mi") in by and _same(ev.get("text"), by[ev["mi"]]):
+            return int(ev["mi"])
+        # compaction renumbers messages: find it by what was said (the k-th time the user said it)
+        k = sum(1 for e in evs[:event_index] if e.get("type") == "user" and not e.get("steer")
+                and _same(e.get("text"), ev.get("text")))
+        same = [i for i, t, steer in users if not steer and _same(ev.get("text"), t)]
+        if k < len(same):
+            return same[k]
+        raise ValueError("That message was summarized away to save space, so Meshpool cannot go back to it. "
+                         "Pick a later message.")
+    # an outside agent: the number of conversation entries before the event
+    n = 0
+    for e in evs[:event_index]:
+        if e.get("type") in ("user", "assistant") and str(e.get("text") or "").strip():
+            n += 1
+    return n
 
 
 def rewind(sid: str, message_index: int, files: bool = True, session=None) -> dict:

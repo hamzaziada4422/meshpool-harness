@@ -184,3 +184,25 @@ def test_rewind_outside_agent_that_cannot_restart_forks(home, monkeypatch):
     assert r["forked"] and r["text"] == "second"
     assert [m["content"] for m in SS.read(A.SESSIONS / r["forked"])["messages"]] == ["first", "reply 1"]
     assert json.loads((A.SESSIONS / sid / "meta.json").read_text())["title"] == "Outside"
+
+
+def test_rewind_after_compaction_renumbered_the_messages(home):
+    """Compaction replaces older steps with a summary note and puts the current task back after it: the events' message
+    numbers are stale, the message is found by what was said, and the note is not a message of the user's."""
+    sid = "c9"
+    d = A.SESSIONS / sid
+    d.mkdir()
+    note = "[Earlier steps of this task were summarized to save space. The summary is accurate.]"
+    msgs = [{"role": "user", "content": "first task"}, {"role": "user", "content": note},
+            {"role": "user", "content": "second task"}, {"role": "user", "content": "second task"},
+            {"role": "assistant", "content": "done"}]
+    evs = [{"type": "user", "text": "first task", "mi": 1}, {"type": "assistant", "text": "ok"}, {"type": "turn_end"},
+           {"type": "user", "text": "second task", "mi": 9}, {"type": "assistant", "text": "done"}, {"type": "turn_end"}]
+    SS.write_snapshot(d, {"id": sid, "workdir": str(home), "title": "T", "created": 1, "updated": 2,
+                          "harness": "meshpool-code", "kind": "code", "messages": msgs})
+    SS.TranscriptLog(d).rewrite(evs, False)
+    assert [(p["message_index"], p["event_index"]) for p in CR.points(sid)] == [(1, 0), (3, 3)]
+    r = CR.rewind(sid, 3, files=False)
+    assert r["text"] == "second task"
+    assert [m["content"][:10] for m in SS.read(d)["messages"]] == ["first task", "[Earlier s"]
+    assert [e["type"] for e in A._transcript(sid)["events"]] == ["user", "assistant", "turn_end"]

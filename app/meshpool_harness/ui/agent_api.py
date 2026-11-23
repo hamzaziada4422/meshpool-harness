@@ -1240,22 +1240,12 @@ class Session:
 
     def _turn_cut(self, turn: int):
         """Position in the transcript of the user event that started this checkpoint turn, or None (old turns)."""
+        from meshpool_harness import chat_rewind as CR
         t = next((x for x in (self.cp.turns() if self.cp else []) if x.get("n") == int(turn)), None)
         if not t:
             return None
-        first = str(t.get("title") or "").strip()
         with self.lock:
-            evs = self.events
-            mi, ei = t.get("message_index"), t.get("event_index")
-            if mi is not None:                       # Meshpool's agent stamps each user event with its message number
-                for p, e in enumerate(evs):
-                    if e.get("type") == "user" and e.get("mi") == mi:
-                        return p
-            if isinstance(ei, int) and 0 <= ei < len(evs) and evs[ei].get("type") == "user":
-                shown = str(evs[ei].get("text") or "").strip().splitlines()
-                if (shown[0] if shown else "Images").strip()[:120] == first:
-                    return ei                        # the event the turn began at: its title must match its text
-        return None
+            return CR.turn_event_pos(self.events, t)
 
     def revert(self, turn: int) -> dict:
         if self.state in ("working", "waiting"):
