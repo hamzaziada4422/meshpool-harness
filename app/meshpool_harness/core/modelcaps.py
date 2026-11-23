@@ -374,7 +374,7 @@ def _mem_read() -> dict:
     try:
         p = _mem_path()
         mt = p.stat().st_mtime_ns if p.exists() else None
-    except OSError:
+    except (OSError, RuntimeError):                       # no data folder can be named (no home): memory only
         return _MEM["data"] if _MEM["path"] else {}
     if _MEM["path"] == str(p) and _MEM["mtime"] == mt:
         return _MEM["data"]
@@ -514,6 +514,10 @@ class RefusedView:
                 learn_refused(view._base(), m, f)
                 super().add(f)
         return _Marks(refused(self._base(), m))
+
+    def __setitem__(self, model, fields) -> None:
+        for f in fields:
+            learn_refused(self._base(), str(model), f)
 
     def clear(self) -> None:
         clear_refused()
