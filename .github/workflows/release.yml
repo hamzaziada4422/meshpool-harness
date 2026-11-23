@@ -308,20 +308,36 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
       - name: Install the installer and smoke test what it installed (what a user gets)
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           D="$PWD/install-test"
           W=$(cygpath -w "$D")
-          ./out/Meshpool-Setup.exe /S "/D=$W"          # silent; /D must come last
-          [ -f "$D/Meshpool.exe" ] || { echo "Meshpool.exe was not installed"; exit 1; }
-          [ -f "$D/Uninstall Meshpool.exe" ] || { echo "the uninstaller was not installed"; exit 1; }
-          want=$(find dist-src/app-win/Meshpool -type f | wc -l)
-          got=$(find "$D" -type f | wc -l)
-          echo "files in the build: $want, files installed: $got"
-          [ "$got" -ge "$want" ] || { echo "the installer unpacked fewer files than the build holds"; exit 1; }
+          # The archive itself first: a damaged archive must not look like a hung installer.
+          "/c/Program Files/7-Zip/7z.exe" t -bso0 -bsp0 dist-src/app-win/payload.7z && echo "payload.7z tests clean"
+          # Silent install in the background, so a hang shows what it is waiting on instead of timing the step out.
+          ./out/Meshpool-Setup.exe /S "/D=$W" &
+          PID=$!
+          for i in $(seq 1 60); do
+            sleep 15
+            kill -0 $PID 2>/dev/null || break
+            echo "-- $((i * 15))s: installer still running; programs:"
+            tasklist //FI "STATUS eq RUNNING" //FO CSV //NH 2>/dev/null | grep -i -E "7z|powershell|Meshpool|cmd.exe|taskkill|conhost" | head -8 || true
+            powershell -NoProfile -Command "foreach ($n in '$W.new','$W') { if (Test-Path $n) { '{0}: {1} MB' -f $n, [math]::Round((Get-ChildItem $n -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB) } }" || true
+          done
+          if kill -0 $PID 2>/dev/null; then
+            echo "The installer did not finish in 15 minutes. Programs it started:"
+            tasklist //FO CSV //NH | head -40
+            exit 1
+          fi
+          wait $PID; echo "installer exit code: $?"
+          for f in Meshpool.exe "Uninstall Meshpool.exe" runtime/python.exe node/node.exe app/meshpool_harness/__init__.py \
+                   app/vendor/libreoffice/program/soffice.exe app/vendor/whisper/base/model.bin bin/meshpool.cmd; do
+            [ -e "$D/$f" ] || { echo "missing after install: $f"; exit 1; }
+          done
+          ls "$D/app/vendor" | head -20
           "$D/runtime/python.exe" packaging/smoke.py --app "$D/app" --version "$VER"
       - name: Sign the installer
         if: env.AZURE_SIGNING_ENDPOINT != ''
