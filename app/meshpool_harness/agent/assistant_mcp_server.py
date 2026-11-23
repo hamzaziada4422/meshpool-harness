@@ -64,8 +64,23 @@ def run_subtasks(tasks: list, max_parallel: int = 0) -> str:
     """For Hermes, Codex, Pi and other harnesses: read-only sub-agents in this server's project. Meshpool's own chats
     run sub-agents in the app instead (agent/core.py _run_subtasks), where their mode and project are known."""
     import os
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel,
-                          cancelled=cancel_check())       # Stop in Hermes, Codex or Pi cancels the call
+    import time
+    asked, t0 = cancel_check(), time.time()
+
+    def cancelled() -> bool:
+        # Stop in Hermes, Codex or Pi: the call's notifications/cancelled when the harness forwards it, and in any
+        # case the chat's own Stop stamp (MESHPOOL_STOP_FILE), so sub-agents never run on after Stop.
+        if asked():
+            return True
+        f = os.environ.get("MESHPOOL_STOP_FILE")
+        if not f:
+            return False
+        try:
+            with open(f, encoding="utf-8") as fh:
+                return float(fh.read().strip() or 0) >= t0
+        except (OSError, ValueError):
+            return False
+    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, cancelled=cancelled)
 
 
 TOOLS = {

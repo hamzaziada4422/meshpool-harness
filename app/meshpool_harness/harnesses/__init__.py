@@ -115,42 +115,50 @@ def user_codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
 
 
-def prepare_codex(model: str | None = None) -> None:
-    """Point Codex at the API key endpoint and model (its own config.toml in the Meshpool data folder). Codex reads
-    the key from MESHPOOL_API_KEY in its own environment (set by _launch), never from the file."""
+def _chat_dir(base: Path, chat: str) -> Path:
+    import re
+    return base / "chats" / re.sub(r"[^\w.-]", "_", chat) if chat else base
+
+
+def prepare_codex(model: str | None = None, chat: str = "") -> dict:
+    """Point Codex at the API key endpoint and model: its own config.toml, in a folder of the chat's own (its
+    CODEX_HOME), so chats starting at once never run on each other's model. Codex reads the key from MESHPOOL_API_KEY
+    in its own environment (set by _launch), never from the file. Returns the environment that points Codex there."""
     from meshpool_harness import providers as PV
-    home = codex_home()
+    home = _chat_dir(codex_home(), chat)
     home.mkdir(parents=True, exist_ok=True)
     base = PV.key_base()
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     model = bare if prov == "key" and bare else "deepseek-v4.1-flash"
     q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
-    (home / "config.toml").write_text(
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(home / "config.toml",
         f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
         "\n"
         f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
-        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", encoding="utf-8")
+        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", fsync=False)
+    return {"CODEX_HOME": str(home)}
 
 
 def write_private(p: Path, text: str) -> None:
-    """Write a file only the user can read (it holds a key or tokens): created 0600, never readable by others first."""
+    """Write a file only the user can read (it holds a key or tokens): written to a 0600 temp file and moved into
+    place, so it is never readable by others and a reader never sees it half written."""
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(p, text, fsync=False)       # mkstemp: created 0600
     try:
-        if p.exists():
-            os.chmod(p, 0o600)               # narrow an older file before the new secret goes in
+        os.chmod(p, 0o600)
     except OSError:
         pass
-    fd = os.open(p, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(text)
 
 
 def opencode_home() -> Path:
     return C.home() / "opencode"
 
 
-def prepare_opencode(model: str | None = None) -> dict:
-    """Write OpenCode's config for the thread's provider and model; returns the extra environment it needs. The key
-    stays in the environment ({env:...} in the config), never in the file."""
+def prepare_opencode(model: str | None = None, chat: str = "") -> dict:
+    """Write OpenCode's config for the thread's provider and model (a file of the chat's own, so chats starting at
+    once never read each other's); returns the extra environment it needs. The key stays in the environment
+    ({env:...} in the config), never in the file."""
     from meshpool_harness import providers as PV
     prov, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     env = {}
@@ -170,13 +178,22 @@ def prepare_opencode(model: str | None = None) -> dict:
                                      "options": {"baseURL": base, "apiKey": "{env:" + key_env + "}"},
                                      "models": {bare: {"name": bare}}}},
            "model": f"meshpool/{bare}"}
-    (home / "opencode.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-    return env
+    path = (_chat_dir(home, chat) / "opencode.json") if chat else home / "opencode.json"
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(path, json.dumps(cfg, indent=2), fsync=False)
+    return {**env, "OPENCODE_CONFIG": str(path)}
 
 
-def prepare_hermes(model: str | None = None) -> None:
-    """Point the bundled Hermes at the thread's provider (the key endpoint or the ChatGPT relay), model and key
-    (written to its own config in the Meshpool data folder, next to meshpool.config)."""
+HERMES_ENV = {"base_url": "MESHPOOL_HERMES_BASE_URL", "default": "MESHPOOL_HERMES_MODEL",
+              "api_key": "MESHPOOL_HERMES_API_KEY", "api_mode": "MESHPOOL_HERMES_API_MODE"}
+
+
+def prepare_hermes(model: str | None = None) -> dict:
+    """Point the bundled Hermes at the thread's provider (the key endpoint or the ChatGPT relay), model and key.
+    Every chat runs its own Hermes on one HERMES_HOME (its memory is shared across chats), and Hermes re-reads
+    config.yaml whenever the file changes. So the file names no provider: it holds ${VAR} references that each Hermes
+    resolves from its own environment, which this returns. The file is the same for every chat and is rewritten
+    (atomically) only when it changes."""
     from meshpool_harness import providers as PV
     import yaml
     home = hermes_home()
@@ -191,14 +208,13 @@ def prepare_hermes(model: str | None = None) -> None:
     prov = PV.for_harness("hermes", model or os.environ.get("MH_MODEL")) or "key"
     base, key = PV.endpoint(prov)
     p_, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
-    m.update({"provider": "custom", "base_url": base,
-              "default": bare if p_ == prov and bare else "deepseek-v4.1-flash",
-              "api_key": key})
+    env = {HERMES_ENV["base_url"]: base, HERMES_ENV["default"]: bare if p_ == prov and bare else "deepseek-v4.1-flash",
+           HERMES_ENV["api_key"]: key or "",
+           # an Anthropic Messages endpoint (Hermes strips the /v1 itself), else chat completions
+           HERMES_ENV["api_mode"]: "anthropic_messages" if prov == "key" and PV.key_wire() == "anthropic"
+           else "chat_completions"}
+    m.update({"provider": "custom", **{k: "${" + v + "}" for k, v in HERMES_ENV.items()}})
     m.pop("key_env", None)
-    if prov == "key" and PV.key_wire() == "anthropic":
-        m["api_mode"] = "anthropic_messages"    # an Anthropic Messages endpoint (Hermes strips the /v1 itself)
-    else:
-        m.pop("api_mode", None)                 # chat completions; never a mode left from an earlier endpoint
     cfg["model"] = m
     tools = cfg.get("tools") if isinstance(cfg.get("tools"), dict) else {}
     ts = tools.get("tool_search") if isinstance(tools.get("tool_search"), dict) else {}
@@ -219,13 +235,21 @@ def prepare_hermes(model: str | None = None) -> None:
     # write-ahead log the others still held, and Hermes then refused to open the database for every chat.
     db["journal_mode"] = "delete"
     cfg["database"] = db
+    from meshpool_harness import fsio
     try:
         from meshpool_harness import skills as SK
-        SK.sync_to(home / "skills" / "meshpool")           # the user's Meshpool skills, for Hermes too
+        with fsio.file_lock(home / "skills"):              # two launches must not copy over each other
+            SK.sync_to(home / "skills" / "meshpool")       # the user's Meshpool skills, for Hermes too
     except Exception:
         pass
     text = yaml.safe_dump(cfg, sort_keys=False)
-    write_private(p, text)
+    with fsio.file_lock(p):
+        try:
+            same = p.read_text(encoding="utf-8") == text
+        except OSError:
+            same = False
+        if not same:                                       # an unchanged file keeps its mtime: no re-read
+            write_private(p, text)
     # Hermes keeps a "last known good" copy of config.yaml and skips the copy when the newest one matches.
     # Writing it here keeps Hermes off shutil.copy2 at startup (CopyFile2 is missing on some Windows
     # compatibility layers) and keeps the backup folder from filling with one copy per launch.
@@ -241,6 +265,16 @@ def prepare_hermes(model: str | None = None) -> None:
                 stale.unlink(missing_ok=True)
     except OSError:
         pass
+    return env
+
+
+def hermes_model(env: dict) -> dict:
+    """The model section of Hermes's config.yaml as a Hermes started with env (prepare_hermes's result) reads it."""
+    import re
+    import yaml
+    m = (yaml.safe_load((hermes_home() / "config.yaml").read_text(encoding="utf-8")) or {}).get("model") or {}
+    return {k: re.sub(r"\$\{([^}]+)\}", lambda g: env.get(g.group(1), g.group(0)), v) if isinstance(v, str) else v
+            for k, v in m.items()}
 
 
 def folder() -> Path:
