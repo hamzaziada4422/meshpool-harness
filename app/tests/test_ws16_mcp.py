@@ -302,6 +302,18 @@ def test_reaper_runs_without_any_mcp_use(monkeypatch):
     assert M._REAPER_THREAD[0].is_alive()
 
 
+def test_runaway_command_ends_as_a_tree_not_just_its_shell(monkeypatch, tmp_path):
+    """H-18: the output-limit kill used p.kill() on Windows, which leaves a command's children running."""
+    from meshpool_harness.core import tools as T
+    seen = []
+    real = T._kill_tree
+    monkeypatch.setattr(T, "_kill_tree", lambda p: (seen.append(p.pid), real(p)))
+    monkeypatch.setattr(T, "OUTPUT_KILL_CHARS", 20000)
+    ws = T.Workspace(str(tmp_path), str(tmp_path / "run"))
+    ws._proc([sys.executable, "-c", "import sys\nwhile True: sys.stdout.write('x'*1000)"], dict(os.environ), 20)
+    assert seen, "the output-limit path did not use the tree kill"
+
+
 def test_idle_helper_is_reaped(home, monkeypatch):
     monkeypatch.setenv("MH_MCP_IDLE_S", "1")
     M._REAPER_STOP.set()                            # a reaper started earlier still sleeps on the old interval

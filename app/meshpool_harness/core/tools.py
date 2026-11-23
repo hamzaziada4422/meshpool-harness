@@ -1114,10 +1114,7 @@ class Workspace:
                 for t in ts:
                     t.join(0.1)
             if over.is_set():
-                try:
-                    os.killpg(p.pid, 9) if os.name != "nt" else p.kill()
-                except Exception:  # noqa: BLE001
-                    p.kill()
+                _kill_tree(p)                            # the whole tree: taskkill /T /F on Windows, killpg elsewhere
             try:
                 p.wait(10)
             except subprocess.TimeoutExpired:
