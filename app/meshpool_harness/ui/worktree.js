@@ -46,10 +46,11 @@ function wtMenuItem() {
 
 async function panelWorktree(body) {
   const wt = S.cur?.view?.worktree;
+  if (wt?.removed) { body.innerHTML = `<div class="pnote">This chat's isolated copy was discarded${wt.kept_branch ? `; its commits are kept on git branch <b>${esc(wt.kept_branch)}</b>` : ""}. Start a new chat to keep working.</div>`; return; }
   if (!wt) { body.innerHTML = `<div class="pnote">This chat works in the folder itself.</div>`; return; }
   const id = S.cur.id, src = projName(wt.source);
   body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(wt.workdir || "")}">${ICON.branch}${esc(wt.branch || "Isolated copy")}</span><span style="flex:1"></span>
-    <button class="btn" id="wtRef" aria-label="Refresh" title="Refresh">${ICON.refresh}</button><button class="btn danger" id="wtDiscard">Discard</button><button class="btn pri" id="wtMerge" title="Bring these changes into ${esc(src)}">Merge</button></div>
+    <button class="btn" id="wtRef" aria-label="Refresh" title="Refresh">${ICON.refresh}</button><button class="btn" id="wtReset" title="Throw away the changes and start the copy again from ${esc(src)} as it is now">Reset to folder</button><button class="btn danger" id="wtDiscard" title="Delete the changes and remove this copy">Discard</button><button class="btn pri" id="wtMerge" title="Bring these changes into ${esc(src)}">Merge</button></div>
     <div class="pnote" id="wtNote" style="padding:8px 12px">Changes in this chat's isolated copy that <b>${esc(src)}</b> doesn't have yet.${wt.base_dirty ? " The folder had uncommitted changes when the copy was made; they are not in the copy." : ""}</div>
     <div id="wtBody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#wtRef").onclick = renderPanel;
@@ -57,7 +58,7 @@ async function panelWorktree(body) {
   const show = d => {
     const el = $("#wtBody"); if (!el || S.cur?.id !== id) return;
     if (!d) { el.innerHTML = `<div class="pnote">The copy could not be read.</div>`; return; }
-    $("#wtMerge").disabled = $("#wtDiscard").disabled = !d.files.length;
+    $("#wtMerge").disabled = $("#wtDiscard").disabled = $("#wtReset").disabled = !d.files.length;
     if (!d.files.length) { el.innerHTML = `<div class="pnote">No changes waiting: everything here is in ${esc(src)}.</div>`; return; }
     el.innerHTML = `<div class="pnote" style="padding:8px 12px">${esc(d.stat || d.files.length + " files")}</div>
       <ul class="flist">${d.files.map(f => `<li><span class="badge ${f.status === "A" ? "added" : f.status === "D" ? "deleted" : "modified"}">${esc(f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("")}</ul>
@@ -77,10 +78,16 @@ async function panelWorktree(body) {
       }
     } catch (e) { toast(e.message); $("#wtMerge").disabled = false; }
   };
+  $("#wtReset").onclick = async () => {
+    if (busy()) return toast("Wait for the chat to finish (or stop it) first.");
+    if (!await ask({title: "Reset to the folder?", text: `The changes in the isolated copy are deleted and the copy starts again from how ${src} is now. The copy stays. ${src} itself is not touched.`, ok: "Reset copy", cancel: "Keep them", danger: true})) return;
+    try { const r = await post(`/api/worktree/${id}`, {action: "reset"}); show(r.diff); note("Changes deleted. The copy now matches the folder."); }
+    catch (e) { toast(e.message); }
+  };
   $("#wtDiscard").onclick = async () => {
     if (busy()) return toast("Wait for the chat to finish (or stop it) first.");
-    if (!await ask({title: "Discard these changes?", text: `The isolated copy goes back to how ${src} is now. ${src} itself is not touched.`, ok: "Discard changes", cancel: "Keep them", danger: true})) return;
-    try { const r = await post(`/api/worktree/${id}`, {action: "discard"}); show(r.diff); note("Changes discarded. The copy now matches the folder."); }
+    if (!await ask({title: "Discard this isolated copy?", text: `The changes are deleted and the copy is removed, so this chat cannot go on editing in it. ${src} itself is not touched. Its git branch is kept only if it holds commits ${src} does not have.`, ok: "Discard copy", cancel: "Keep it", danger: true})) return;
+    try { const r = await post(`/api/worktree/${id}`, {action: "discard"}); toast(r.note || "Discarded."); await renderPanel(); }
     catch (e) { toast(e.message); }
   };
   try { const r = await api(`/api/worktree/${id}`); show(r.diff); if (r.error) note(esc(r.error), true); }

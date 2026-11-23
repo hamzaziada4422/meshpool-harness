@@ -33,6 +33,7 @@ from meshpool_harness import fsio
 _WINDOWS = os.name == "nt"
 HARNESS_DIRS = (".run", ".junie")                  # the code engine's own folders: never committed or merged
 MAX_COPY_BYTES = 500 * 1024 * 1024
+SUBMODULE_TIMEOUT = 180
 OWNER_KINDS = ("chat", "subagent", "schedule", "cli")
 IDENT = {"GIT_AUTHOR_NAME": "Meshpool", "GIT_AUTHOR_EMAIL": "meshpool@localhost",
          "GIT_COMMITTER_NAME": "Meshpool", "GIT_COMMITTER_EMAIL": "meshpool@localhost"}
@@ -80,10 +81,8 @@ def _rmtree(p) -> None:
     if os.path.islink(p) or os.path.isfile(_long(p)):
         os.unlink(_long(p))
         return
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(_long(p), onexc=_rm_readonly)
-    else:  # pragma: no cover
-        shutil.rmtree(_long(p), onerror=_rm_readonly)
+    kw = {"onexc" if sys.version_info >= (3, 12) else "onerror": _rm_readonly}   # onexc is 3.12+, onerror before
+    shutil.rmtree(_long(p), **kw)
 
 
 # ---------- git ------------------------------------------------------------------------------------------------------
@@ -269,7 +268,7 @@ def set_owner(wid: str, kind: str, oid: str) -> dict:
 def summary(rec: dict) -> dict:
     """What the app shows about a copy."""
     return {k: rec.get(k) for k in ("id", "kind", "mode", "source", "branch", "workdir", "base_dirty", "title",
-                                    "created", "merged")}
+                                    "created", "merged", "note")}
 
 
 # ---------- create ---------------------------------------------------------------------------------------------------
@@ -340,6 +339,28 @@ def _create_git(rec: dict, top: str, src: Path, base: str) -> None:
     rec["base"] = commit
     rec["sub"] = "" if rel == "." else Path(rel).as_posix()
     rec["workdir"] = str(Path(rec["path"], rec["sub"])) if rec["sub"] else rec["path"]
+    _init_submodules(rec)
+
+
+def _init_submodules(rec: dict) -> None:
+    """A repository with submodules: initialise them inside the new worktree (builds there need them). Never fatal:
+    a failure (no network, a missing credential) leaves the copy usable and is told in ``rec["note"]``."""
+    wt = rec["path"]
+    if not Path(wt, ".gitmodules").is_file():
+        return
+    try:
+        e = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+        r = _sp.run(_git_cmd("submodule", "update", "--init", "--recursive"), cwd=wt, capture_output=True, env=e,
+                    timeout=SUBMODULE_TIMEOUT)
+        if not r.returncode:
+            return
+        why = _err(r)
+    except _sp.TimeoutExpired:
+        why = f"it took longer than {SUBMODULE_TIMEOUT} seconds"
+    except (OSError, WorktreeError) as ex:
+        why = str(ex)
+    rec["note"] = ("The folder has git submodules that could not be set up in this copy (" + why + "). Builds in the "
+                   f"copy may fail until you run `git submodule update --init --recursive` in {rec['path']}.")
 
 
 def _walk(base) -> dict:
@@ -621,16 +642,18 @@ def reset(wid: str) -> dict:
 
 
 def discard(wid: str, keep_work: bool = False) -> dict:
-    """Remove the copy. keep_work=True first commits its changes on its branch and keeps the branch when it holds
-    anything the folder does not have (``kept_branch``), so nothing unmerged is lost silently."""
+    """Delete the copy's changes and remove the copy. Its branch stays only when it holds commits the folder does not
+    have (``kept_branch``, with a ``note`` saying so), so finished work is never lost silently. Uncommitted changes
+    are deleted; ``keep_work=True`` (sub-agents, deleted chats) commits them first so they are kept as well."""
     rec = get(wid)
     kept = None
     with _lock(rec.get("top") or rec["source"]):
         top = rec.get("top")
         if rec["kind"] == "git" and top and Path(top).is_dir():
-            if keep_work and Path(rec["path"]).is_dir() and rec.get("state") == "ready":
+            if Path(rec["path"]).is_dir() and rec.get("state") == "ready":
                 try:
-                    _commit_pending(rec["path"], f"Meshpool: unmerged work from {rec.get('title') or rec['id']}")
+                    if keep_work:
+                        _commit_pending(rec["path"], f"Meshpool: unmerged work from {rec.get('title') or rec['id']}")
                     tip = _head(rec["path"])
                     if tip and tip != rec["base"] and not _ancestor(top, tip, _head(top)):
                         kept = rec["branch"]
@@ -645,7 +668,37 @@ def discard(wid: str, keep_work: bool = False) -> dict:
         else:
             _rmtree(rec["path"])
         _drop(rec["id"])
-    return {"ok": True, "kept_branch": kept}
+    note = (f"Discarded. Its branch {kept} was kept because it has commits that are not in the folder; delete it "
+            f"with `git branch -D {kept}` when you do not need them." if kept
+            else "Discarded: the copy and its changes are gone.")
+    return {"ok": True, "kept_branch": kept, "note": note}
+
+
+# ---------- sub-agents: one copy each, applied in order (agent/delegate.py, assistant.run_subtasks) ---------------------
+def subagent_copy(source, owner_id: str, title: str = "") -> dict | None:
+    """An isolated copy of ``source`` (as it is now, unsaved edits included) for one editing sub-agent, or None when
+    none can be made (no git, too big, disk full): the sub-agent then shares the folder."""
+    try:
+        return create(str(source), owner_kind="subagent", owner_id=owner_id, title=title, base="worktree",
+                      max_bytes=50 * 1024 * 1024)       # a plain copy only of a small folder
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def apply_subagent_copy(wt: dict) -> dict:
+    """Bring one sub-agent's copy into its folder and remove the copy. Call in task order. Conflicting changes are
+    never applied: the result is ``{"ok": False, "reason", "bad": [paths]}`` and the work stays on its branch
+    (``kept_branch``)."""
+    try:
+        res = merge(wt["id"])
+    except Exception as e:  # noqa: BLE001
+        res = {"ok": False, "reason": str(e), "conflicts": []}
+    try:
+        kept = discard(wt["id"], keep_work=not res.get("ok")).get("kept_branch")
+    except Exception:  # noqa: BLE001
+        kept = None
+    return {"ok": bool(res.get("ok")), "reason": str(res.get("reason") or ""),
+            "bad": list(res.get("conflicts") or res.get("blocked") or []), "kept_branch": kept}
 
 
 def prune_owner(kind: str, oid: str, keep_work: bool = True) -> list[dict]:
@@ -745,7 +798,8 @@ def recover(alive=None) -> dict:
 USAGE = """usage: meshpool worktree list [--all]
        meshpool worktree diff <id> [--stat]
        meshpool worktree merge <id>
-       meshpool worktree discard <id>
+       meshpool worktree discard <id>   (deletes the copy's changes AND removes the copy; its git branch is kept
+                                        only if it has commits the folder does not)
 
 Isolated copies (git worktrees, or plain copies for folders without git) made by `meshpool --worktree`, chats,
 sub-agents and scheduled runs. `list` shows the copies of the current folder's repository (--all: every copy)."""
@@ -803,7 +857,7 @@ def cli(argv: list[str], out=None) -> int:
             return 1
         if cmd == "discard":
             r = discard(rest[0])
-            print("Discarded.", file=out)
+            print(r["note"], file=out)
             return 0
     except (WorktreeError, KeyError) as e:
         print(f"error: {e.args[0] if e.args else e}", file=out)

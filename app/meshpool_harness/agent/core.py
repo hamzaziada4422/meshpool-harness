@@ -31,6 +31,7 @@ from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import http as _mhttp
+from meshpool_harness.core import permrules as PR
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait, stated_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -644,6 +645,44 @@ def _has_images(messages: list) -> bool:
                for m in messages)
 
 
+def _blind_copy(messages: list) -> list:
+    """The messages with every image part replaced by a short text, for a model that cannot see images.
+    Copies only what it changes; the chat history keeps its images."""
+    out = []
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list) and any(p.get("type") == "image_url" for p in c):
+            m = dict(m, content=[{"type": "text", "text": "[image left out: this model cannot see images]"}
+                                 if p.get("type") == "image_url" else p for p in c])
+        out.append(m)
+    return out
+
+
+def _pair_tool_results(msgs: list) -> list:
+    """A request must answer every assistant tool call with one tool message, and carry no tool message that
+    answers nothing. Returns a repaired copy (the history is not changed)."""
+    out, i, n = [], 0, len(msgs)
+    while i < n:
+        m = msgs[i]
+        if m.get("role") == "tool":
+            i += 1                                   # answers no call before it: drop
+            continue
+        out.append(m)
+        i += 1
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            ids = [c.get("id") for c in m["tool_calls"]]
+            got: dict = {}
+            while i < n and msgs[i].get("role") == "tool":
+                t = msgs[i]
+                if t.get("tool_call_id") in ids and t["tool_call_id"] not in got:
+                    got[t["tool_call_id"]] = t
+                i += 1
+            for cid in ids:
+                out.append(got.get(cid) or {"role": "tool", "tool_call_id": cid,
+                                            "content": "Not run: the turn ended before this call ran."})
+    return out
+
+
 def _drop_images(messages: list, keep: int = 0) -> None:
     """Replace all but the latest `keep` images in the conversation with a short note."""
     seen = 0
@@ -803,14 +842,16 @@ def _bash_segments_match(cmd: str, pattern: str) -> bool:
 
 def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     import fnmatch
-    cmds = [str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])) if x]
+    from meshpool_harness.core import permrules as PR
+    cmds = PR.commands_of(name, args)
     for r in rules:
         if r.startswith("bash:"):
             if deny:                                  # a deny rule hits when any part of a chained command matches
                 if any(_bash_segments_match(x, r[5:].strip()) for c in cmds for x in _CHAIN.split(c) + [c]):
                     return r
-            elif cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
-                return r
+            elif cmds and not any(PR.writes(c) for c in cmds) and \
+                    all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
+                return r                              # an allow rule never covers a command that redirects output
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
     return ""
@@ -908,19 +949,19 @@ class Agent:
         self.approve = approve
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
-        # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
-        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 2000    # a runaway turn stops; the next message continues
+        self.max_steps = max_steps                  # explicit cap (0 = unset): _step_cap() resolves it each turn
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
-        self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self._plan, self._plan_next, self._in_turn = False, None, False   # see the `plan` property
         self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
         self._plan_needed = False              # this turn needs a written plan (decided at its start, free)
         self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
         self._trace_lock = threading.Lock()
+        self._open_calls: dict = {}                    # tool_start sent, tool_end not yet: id -> name
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
         self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
         self.messages = [{"role": "system", "content": self.system_prompt()}]
@@ -1176,10 +1217,29 @@ class Agent:
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0],
                    "images": [im.get("name", "image") for im in images or []], "plan": self.plan, "steer": True})
 
+    @property
+    def plan(self) -> bool:
+        """Plan mode. A change made while a turn runs is held until the turn ends: the turn keeps its tools."""
+        return getattr(self, "_plan", False)
+
+    @plan.setter
+    def plan(self, v):
+        if getattr(self, "_in_turn", False):
+            self._plan_next = bool(v)
+        else:
+            self._plan, self._plan_next = bool(v), None
+
     def _take_inbox(self) -> bool:
         with self._inbox_lock:
             items, self._inbox = self._inbox, []
         for text, images in items:
+            if self.pace_deadline and PACE.classify(text, bool(images)) != "quick":
+                self.pace_deadline = 0.0             # a real task joined a quick turn: the quick budget ends
+                if getattr(self, "_pace_wrapped", False):
+                    self._pace_wrapped = False
+                    self.messages.append({"role": "user", "content": (
+                        "[Meshpool] The user added a request, so this is no longer a quick question: the time limit "
+                        "and the rule against creating or changing files no longer apply. Do what they asked.")})
             body = "[Added by the user while you were working] " + text
             if images:
                 parts = [{"type": "text", "text": body}] + [
@@ -1207,6 +1267,9 @@ class Agent:
         """Run one user request to the end of the agent's turn. Returns the final reply text.
         images: [{"mime": "image/png", "data": base64, "name": ...}] attached by the user."""
         self._stop = False
+        exp = self.__dict__.pop("_expect_gen", None)       # the front end's Stop generation when it took the message
+        if exp is not None and getattr(self, "_gen", 0) != exp:
+            self._stop = True                              # Stop came before this turn began: it ends at once
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
         if not self._style() and "\u200b" in text:      # the app's hidden block repeats what the system prompt already says
@@ -1286,9 +1349,112 @@ class Agent:
         if not self.has_steers():
             return None
         self._stop = False
+        with self._inbox_lock:
+            quick = all(PACE.classify(t, bool(im)) == "quick" for t, im in self._inbox)
+        self.pace_deadline = (time.time() + PACE.QUICK_S) if (self.pace_deadline and quick) else 0.0
         return self._turn()
 
+    def _refuse_wrapped_calls(self, calls: list, g: dict) -> str:
+        """Tool calls returned on a tools-off quick step are not run: each gets a refusal result and the model is
+        asked again. After 2 refused rounds returns the text that ends the turn (else "")."""
+        for c in calls:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content":
+                                  "Not run: time is up for this quick request. Answer now with what you have."})
+        g["wrap_refused"] = g.get("wrap_refused", 0) + 1
+        if g["wrap_refused"] >= 2:
+            return "(I ran out of time for this quick request. Ask again to let me look further.)"
+        return ""
+
+    def _begin_turn_state(self):
+        """Reset what must not leak from one turn into the next. New turn-scoped state goes here."""
+        self._n429 = 0                               # rate-limit backoff step: every turn starts at the short wait
+        self._pace_wrapped = False                   # the quick-turn wrap (no more tools) is on for this turn
+        self._in_turn = True                         # a plan-mode change now waits for the turn to end
+        self._turn_cap = self._step_cap()            # read now, so a settings change applies from the next message
+
+    DEFAULT_STEPS = 200
+
+    def _step_cap(self) -> int:
+        """Steps allowed in one turn (0 = no cap): the constructor's max_steps, else MH_MAX_STEPS (a positive number;
+        0, off or none lift the cap), else 200. A runaway turn stops there; the next message continues."""
+        if self.max_steps:
+            return int(self.max_steps)
+        raw = str(os.environ.get("MH_MAX_STEPS", "") or "").strip().lower()
+        if raw in ("0", "off", "none", "no", "false"):
+            return 0
+        try:
+            n = int(raw)
+        except ValueError:
+            return self.DEFAULT_STEPS
+        return n if n > 0 else self.DEFAULT_STEPS
+
+    def _loop_tripped(self, g: dict) -> bool:
+        """Outer breaker: no progress for MH_STUCK_STEPS + MH_REPEAT_STOP steps and the last MH_REPEAT_STOP step
+        signatures identical or a repeating 2- or 3-step block (MH_REPEAT_STOP=0 turns it off)."""
+        try:
+            stop = int(os.environ.get("MH_REPEAT_STOP", "8") or 0)
+            stuck = int(os.environ.get("MH_STUCK_STEPS", "36") or 36)
+        except ValueError:
+            stop, stuck = 8, 36
+        sigs = g.get("sigs", [])
+        if stop <= 0 or g.get("np", 0) < stuck + stop or len(sigs) < stop:
+            return False
+        w = sigs[-stop:]
+        return any(all(w[i] == w[i - p] for i in range(p, len(w))) for p in (1, 2, 3))
+
+    def _track_progress(self, calls: list, outs: list, g: dict):
+        """Per turn, independent of V3: steps since a file changed or a new non-read-only command succeeded, and the
+        step's signature (its calls plus a hash of what they returned)."""
+        import hashlib
+        seen = g.setdefault("b_seen", set())
+        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in seen and not T.read_only(c["cmd"])]
+        g["b_seen"].update(c["cmd"] for c in self.ws.commands)
+        if new or self.ws.edits != g.get("b_edits", g["edits0"]):
+            g["np"], g["sigs"], g["b_edits"] = 0, [], self.ws.edits
+            return
+        g["np"] = g.get("np", 0) + 1
+        sig = "|".join(str(c.get("function", {}).get("name", "")) + ":" + str(c.get("function", {}).get("arguments", ""))[:2000]
+                       for c in calls) + "#" + hashlib.md5("\x00".join(map(str, outs)).encode("utf-8", "replace")).hexdigest()
+        g["sigs"] = (g.get("sigs", []) + [sig])[-12:]
+
+    def _break_loop(self, calls: list, g: dict, turn: dict) -> str:
+        """End a turn that is going round in circles. The pending calls are not run (each gets a result, so the history
+        stays valid); one last request with tools off gives a best-effort answer, followed by the files changed."""
+        note = "Not run: stopped, the agent was repeating itself."
+        for c in calls:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": note})
+        self.messages.append({"role": "user", "content": (
+            "[Meshpool] You are repeating yourself, so this turn ends now. Do not call any tool. In plain words: say what "
+            "is done, what is not, and what you would try next.")})
+        self._finish, self._no_tools = None, True
+        try:
+            msg, streamed = self._chat(turn)
+        finally:
+            self._no_tools = False
+        text = (msg.get("content") or "").strip()
+        keep = {"role": "assistant", "content": text}
+        late = _sanitize_calls(msg.get("tool_calls") or [])
+        if late:                                     # a model that ignores tool_choice "none": answered, not run
+            keep["tool_calls"] = late
+        self.messages.append(keep)
+        for c in late:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": note})
+        files = []
+        for f in sorted(getattr(self.ws, "turn_files", ()) or ()):
+            try:
+                files.append(os.path.relpath(f, self.root))
+            except ValueError:
+                files.append(str(f))
+        text = text or "I stopped because I was repeating the same steps without making progress."
+        if files:
+            text += "\n\nFiles changed this turn: " + ", ".join(files)
+        self.emit({"type": "assistant", "text": text, "streamed": False, "has_tools": False})
+        self.emit({"type": "error", "text": "Stopped: the agent kept repeating the same steps without progress. What it "
+                                            "did so far is kept; send a message to steer it."})
+        return text
+
     def _turn(self) -> str:
+        self._begin_turn_state()
         turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
@@ -1350,8 +1516,8 @@ class Agent:
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
-            wrapped = False
-            for step in (range(self.max_steps) if self.max_steps else itertools.count()):
+            cap = self._turn_cap
+            for step in (range(cap) if cap else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
                 if time.time() - getattr(self, "_saved_at", 0) > 4:        # a crash or power loss keeps the work so far
@@ -1359,11 +1525,12 @@ class Agent:
                     self._running = True                  # saved as unfinished: a crash here is resumed, not lost
                     self.save()
                 self._maybe_compact()
-                if self.pace_deadline and not wrapped and step and (
+                if self.pace_deadline and not self._pace_wrapped and step and (
                         time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
-                    wrapped = True                      # a quick request ran long: answer now, no more tools
+                    self._pace_wrapped = True           # a quick request ran long: answer now, no more tools
                     self.messages.append({"role": "user", "content": PACE.WRAP})
-                    self._no_tools = True
+                if self._pace_wrapped:
+                    self._no_tools = True               # every later step is tools-off, even if tool_choice is refused
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
@@ -1415,6 +1582,15 @@ class Agent:
                         keep["reasoning_content"] = msg["reasoning_content"]   # thinking models want it back in the turn
                 self.messages.append(keep)
                 self.emit({"type": "assistant", "text": content, "streamed": streamed, "has_tools": bool(calls)})
+                if calls and self._pace_wrapped:
+                    done = self._refuse_wrapped_calls(calls, g)
+                    if done:
+                        final = said + content if content.strip() else done
+                        if not content.strip():
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            self.messages.append({"role": "assistant", "content": done})
+                        break
+                    continue
                 if not calls:
                     final = said + content
                     if cut_off and content and g.get("cont", 0) < 3:
@@ -1486,8 +1662,19 @@ class Agent:
                     if again:
                         continue
                     break
+                if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
+                    g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
+                    if g["off_calls"] >= 2:
+                        final = said + self._break_loop(calls, g, turn)
+                        break
+                    for c in calls:                                # first time: not run, asked once more with tools off
+                        self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": (
+                            "Not run: tools are off for this reply. Answer in words.")})
+                    g["hard_wrap"] = True
+                    continue
                 said = ""
                 shots = []
+                step_out = []
                 for batch in _batches(calls):
                     self._check_stop()
                     if len(batch) > 1:               # independent lookups: run together, answer in the asked order
@@ -1496,6 +1683,7 @@ class Agent:
                             outs = list(ex.map(lambda c: self._guarded_tool(c, g, cut=c["id"] in cut), batch))
                     else:
                         outs = [self._guarded_tool(batch[0], g, cut=batch[0]["id"] in cut)]
+                    step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
@@ -1503,6 +1691,7 @@ class Agent:
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)
+                self._track_progress(calls, step_out, g)
                 if V3 and not cx:
                     note = self._v3_notes(step, calls, g)
                     if note:
@@ -1511,11 +1700,20 @@ class Agent:
                     note = self._plan_note(calls, g)
                     if note:
                         self.messages.append({"role": "user", "content": "[Meshpool] " + note})
+                if self._loop_tripped(g):
+                    final = self._break_loop([], g, turn)
+                    break
             else:
-                self.emit({"type": "error", "text": f"Stopped after {self.max_steps} steps in one turn. "
-                                                    "Send a message to continue."})
+                self.emit({"type": "error", "text": (
+                    f"Stopped after {cap} steps in one turn. What was done so far is kept. Send a message (for example "
+                    "\"continue\") to carry on. The limit is \"Max steps per reply\" in Settings (MH_MAX_STEPS; 0 = no "
+                    "limit).")})
         except (Interrupted, KeyboardInterrupt):
             self._repair()
+            for cid, nm in list(self._open_calls.items()):       # no card stays "running" after a Stop
+                self._open_calls.pop(cid, None)
+                self.emit({"type": "tool_end", "id": cid, "name": nm, "ok": False, "denied": False,
+                           "output": "Not finished: the turn ended."})
             added = [t for t, _ in getattr(self, "_inbox", [])]
             self._take_inbox()                       # keep what the user added; the next turn sees it
             self.emit({"type": "interrupted", "text": "Stopped. " + (
@@ -1554,6 +1752,9 @@ class Agent:
         finally:
             self._last_final = final
             self._prev_plan = bool(self.plan)
+            self._in_turn = False
+            if getattr(self, "_plan_next", None) is not None:          # a plan-mode change made during the turn applies now
+                self.plan = self._plan_next
             try:
                 rec = self.receipt()
                 self.last_receipt = rec
@@ -1939,7 +2140,8 @@ class Agent:
             g["hard_wrap_done"] = g["hard_wrap"] = True   # once: the next call has no tools and must answer
             notes.append("You have made no progress for a long time. Stop here: say what works, what does not, and "
                          "what you would try next. Do not call another tool.")
-        if self.max_steps >= 30 and step == self.max_steps - 15:
+        cap = getattr(self, "_turn_cap", 0)
+        if cap >= 30 and step == cap - 15:
             notes.append("15 steps left in this turn. Make sure what the user asked for exists and works now; refine "
                          "it afterwards if steps remain.")
         return " ".join(notes)
@@ -1948,7 +2150,7 @@ class Agent:
     def _attach_images(self, shots: list):
         """Tool results cannot carry images on the chat API, so screenshots follow as a user message. Only the latest
         two images stay in the conversation; older ones become a short note to keep requests small."""
-        if os.environ.get("MH_VISION", "1") == "0" or getattr(self, "_no_vision", False):
+        if os.environ.get("MH_VISION", "1") == "0" or self._model_is_blind():
             return
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
         # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
@@ -1967,6 +2169,14 @@ class Agent:
         for _, im in shots[-2:]:
             parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
         self.messages.append({"role": "user", "content": parts})
+
+    def _model_is_blind(self) -> bool:
+        """True when this chat's current model refused images earlier (a bare model id in _no_vision_models)."""
+        try:
+            from meshpool_harness import providers as PV
+            return PV.split(self.current_model())[1] in getattr(self, "_no_vision_models", ())
+        except Exception:  # noqa: BLE001
+            return False
 
     # ---------- model ------------------------------------------------------------------------------------------
     def receipt(self) -> str:
@@ -2094,7 +2304,7 @@ class Agent:
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
-        msgs, body = apply(prof, list(self.messages), body, "worker")
+        msgs, body = apply(prof, _pair_tool_results(list(self.messages)), body, "worker")
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
@@ -2106,6 +2316,8 @@ class Agent:
             _drop_images(msgs, keep=keep)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
+        if self._model_is_blind() and _has_images(msgs):     # the history keeps the images; this model never gets them
+            msgs = _blind_copy(msgs)
         body["messages"] = ST.prepare_messages(msgs)       # reasoning_content only inside the tool loop in progress
         caps = self._caps(model, prof)
         eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
@@ -2195,9 +2407,9 @@ class Agent:
                     extra = {k: v for k, v in body.items() if k not in ("model", "messages", "max_tokens", "temperature")}
                     if "reasoning_effort" in extra:      # the Responses API names it reasoning.effort
                         extra["reasoning"] = {"effort": extra.pop("reasoning_effort")}
-                    resp = SimpleLedger("agent").chat(model=body["model"], messages=body["messages"],
-                                                      max_tokens=body.get("max_tokens", 8192),
-                                                      temperature=body.get("temperature"), extra=extra, retries=0)
+                    resp = self._wait(SimpleLedger("agent").chat, model=body["model"], messages=body["messages"],
+                                      max_tokens=body.get("max_tokens", 8192),
+                                      temperature=body.get("temperature"), extra=extra, retries=0)
                 else:
                     h = GW.health(base, key, body["model"])
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
@@ -2286,12 +2498,18 @@ class Agent:
                     self.emit({"type": "status", "text": "The conversation was longer than the model can take; "
                                                          "older tool outputs were shortened before trying again."})
                     continue
-                if kind == "vision" and _has_images(body["messages"]) and not getattr(self, "_no_vision", False):
-                    self._no_vision = True                 # this model does not take images: continue without them
-                    _drop_images(self.messages, keep=0)
-                    _drop_images(body["messages"], keep=0)
-                    self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left out. "
-                                                         "For computer use, choose a vision model in Settings."})
+                if kind == "vision" and _has_images(body["messages"]):
+                    # This model does not take images: leave them out of what it is sent, for this model only.
+                    # The history keeps them, so a vision model chosen later sees them again.
+                    bare = PV.split(self.current_model())[1]
+                    seen = self.__dict__.setdefault("_no_vision_models", set())
+                    if bare not in seen:
+                        seen.add(bare)
+                        self.emit({"type": "status", "text": "This model cannot see images, so screenshots are left "
+                                                             "out. For computer use, choose a vision model in "
+                                                             "Settings."})
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
                     continue
                 if kind == "quota":                        # spent: a retry or a wait cannot help
                     raise RuntimeError("QUOTA: " + msg)
@@ -2493,7 +2711,7 @@ class Agent:
         resp = None
         for _ in range(3):
             try:
-                resp, _s = self._post(base, key, body, False)
+                resp, _s = self._wait(self._post, base, key, body, False)
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):
@@ -2564,7 +2782,7 @@ class Agent:
             if self.mode != "auto" or getattr(self.ws, "container", None):
                 return ""       # it runs the project's tests on this computer: only where commands run unasked, never beside a sandbox
             from meshpool_harness.core import mutate as MU
-            alive = MU.survivors(self.root, set(self.ws.turn_files))
+            alive = self._wait(MU.survivors, self.root, set(self.ws.turn_files), should_stop=lambda: self._stop)
             self._trace_note("mutation", f"{len(alive)} of {self._mutant_total(MU, len(alive))} survived")
             if not alive:
                 return ""
@@ -2835,8 +3053,16 @@ class Agent:
                  else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
         if risky:
             group = "outside-" + name
-        if group in self.always and not (group == "bash" and _destructive(args)):
-            return True, ""                    # "always" never covers a command that destroys or sends things away
+        cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
+        if cmds and self.mode in ("ask", "edits") and not _destructive(args) and \
+                all(PR.safe_read(c, self.root) for c in cmds):
+            return True, ""                    # H-15: a plain read-only command inside the project needs no question
+        if group == "bash":
+            pats = [x[5:] for x in self.always if x.startswith("bash:")]
+            if cmds and not _destructive(args) and all(PR.granted(c, pats) for c in cmds):
+                return True, ""                # the chat grant covers only the command patterns the user allowed
+        elif group in self.always:
+            return True, ""
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky:
@@ -2870,9 +3096,16 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
-        decision, note = self.approve(kind, title, detail)
+        pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args) else []
+        pats = list(dict.fromkeys(pats))
+        scope = ("all file edits" if group == "edit" else "this tool" if group != "bash" else
+                 " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
+        decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
         if decision == "always":
-            self.always.add(group)
+            if group == "bash":
+                self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only
+            else:
+                self.always.add(group)
         return decision in ("yes", "always"), note or ""
 
     def _same_bytes(self, name: str, args: dict) -> bool:
@@ -2977,6 +3210,7 @@ class Agent:
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
+        self._open_calls[cid] = name
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
                    "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
                                  args["timeout_ms"] / 1000 if name == "shell" and isinstance(
@@ -2997,6 +3231,8 @@ class Agent:
                 cp_on = True
             if steer:
                 out, ok = steer, False
+            elif not allowed and self._stop:
+                raise Interrupted()                    # Stop is not a refusal: _repair writes "Not run"
             elif not allowed:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
@@ -3112,6 +3348,7 @@ class Agent:
             step["err"] = out[:160]
         with self._trace_lock:                         # one line per tool call: the benchmark's trace
             self.trace.append(step)
+        self._open_calls.pop(cid, None)
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,
                    "output": out[:6000] + ("\n..." if len(out) > 6000 else "")})
         return out
@@ -3337,4 +3574,5 @@ class Agent:
         a.model = best.get("model_choice")
         a.plan = bool(best.get("plan"))
         a.unfinished = bool(best.get("unfinished"))
+        a._repair("Not run: the app closed before this call finished.")
         return a

@@ -19,7 +19,7 @@ def for_model(model: str, override: str | None = None) -> dict:
     for name, p in allp.items():
         if any(m in model for m in p.get("match", [])):
             return p
-    return allp["deepseek"]
+    return allp.get("default") or allp["deepseek"]       # unknown model: provider-default sampling, not greedy
 
 
 def apply(profile: dict, messages: list, body: dict, role: str = "worker") -> tuple[list, dict]:

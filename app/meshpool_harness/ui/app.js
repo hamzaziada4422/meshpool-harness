@@ -1143,6 +1143,7 @@ function applyEv(ev) {
       if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
       break; }
     case "user": {
+      if (!ev.steer) { cur.turnPlan = !!ev.plan; for (const x of col.querySelectorAll(".buildplan")) x.remove(); }   // the card belongs to a turn sent in plan mode
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
@@ -1188,7 +1189,7 @@ function applyEv(ev) {
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
@@ -1202,7 +1203,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1255,7 +1256,7 @@ function applyEv(ev) {
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
       pvTurnCards(cur, foot, 0);                        // the files it changed arrive with its checkpoint event
-      if (cur.view?.plan && cur.lastText) {
+      if (cur.turnPlan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
         $$("button", b)[1].onclick = () => { b.remove(); $("#input").focus(); };
@@ -2139,7 +2140,20 @@ async function renderSection(sec) {
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
-        <button class="btn" id="addP">${ICON.folder} Add a folder</button>`;
+        <button class="btn" id="addP">${ICON.folder} Add a folder</button>
+        <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
+        <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
+        <div id="rulesBox"></div>
+        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
+        <div class="res" id="ruleRes"></div>`;
+      const drawRules = r => {
+        const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
+        $("#rulesBox", b).innerHTML = `<ul class="rows2">${r.allow.map(x => li("allow", x)).join("")}${r.deny.map(x => li("deny", x)).join("")}${r.allow.length + r.deny.length ? "" : `<li class="pnote">No saved rules.</li>`}</ul>`;
+        $$("[data-rk]", b).forEach(x => x.onclick = async () => drawRules(await post("/api/rules", {action: "remove", kind: x.dataset.rk, rule: x.dataset.rr})));
+      };
+      const addRule = async kind => { try { const r = await post("/api/rules", {action: "add", kind, rule: $("#ruleIn", b).value}); $("#ruleIn", b).value = ""; $("#ruleRes", b).textContent = ""; drawRules(r); } catch (e) { $("#ruleRes", b).className = "res bad"; $("#ruleRes", b).textContent = e.message; } };
+      drawRules(await api("/api/rules"));
+      $("#ruleAllow").onclick = () => addRule("allow"); $("#ruleDeny").onclick = () => addRule("deny");
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));

@@ -193,20 +193,32 @@ def _runner(tests: list[str], cwd: str) -> list[list[str]]:
     return [[sys.executable, f] for f in tests]
 
 
-def _run(cmds: list[list[str]], cwd: str, timeout: float) -> bool | None:
-    """True = pass, False = fail, None = timed out."""
+def _run(cmds: list[list[str]], cwd: str, timeout: float, should_stop=None) -> bool | None:
+    """True = pass, False = fail, None = timed out or stopped. The process (group) is killed on either."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=cwd + os.pathsep + os.environ.get("PYTHONPATH", ""))
     for c in cmds:
-        try:
-            r = subprocess.run(c, cwd=cwd, capture_output=True, timeout=timeout, env=env, stdin=subprocess.DEVNULL)
-        except subprocess.TimeoutExpired:
-            return None
-        if r.returncode != 0:
+        kw = {"start_new_session": True} if os.name != "nt" else {}
+        p = subprocess.Popen(c, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, **kw)
+        end = time.time() + timeout
+        while p.poll() is None:
+            if (should_stop and should_stop()) or time.time() > end:
+                try:
+                    if os.name != "nt":
+                        os.killpg(p.pid, 9)
+                    else:
+                        p.kill()
+                except OSError:
+                    pass
+                p.wait()
+                return None
+            time.sleep(0.2)
+        if p.returncode != 0:
             return False
     return True
 
 
-def survivors(root: str, changed: set[str], per_mutant: float = 10, total: float = 60) -> list[dict]:
+def survivors(root: str, changed: set[str], per_mutant: float = 10, total: float = 60, should_stop=None) -> list[dict]:
     """Mutants of the code under test that the agent's tests do not catch. [] when none, or when feedback is not
     possible (no code under test, tests fail on the original, timeouts)."""
     tests, targets = code_under_test(root, changed)
@@ -218,7 +230,7 @@ def survivors(root: str, changed: set[str], per_mutant: float = 10, total: float
         work = os.path.join(tmp, "p")
         shutil.copytree(root, work, ignore=shutil.ignore_patterns(*SKIP_DIRS), symlinks=True)
         cmds = _runner(tests, work)
-        if _run(cmds, work, per_mutant) is not True:        # the tests must pass on the unmutated copy first
+        if _run(cmds, work, per_mutant, should_stop) is not True:        # the tests must pass on the unmutated copy first
             return []
         alive: list[dict] = []
         for rel in targets:
@@ -228,12 +240,12 @@ def survivors(root: str, changed: set[str], per_mutant: float = 10, total: float
             except (OSError, UnicodeDecodeError):
                 continue
             for src, desc in mutants(orig):
-                if time.time() - start > total:
+                if time.time() - start > total or (should_stop and should_stop()):
                     return alive
                 try:
                     with open(path, "w", encoding="utf-8") as f:
                         f.write(src)
-                    res = _run(cmds, work, per_mutant)
+                    res = _run(cmds, work, per_mutant, should_stop)
                 finally:
                     with open(path, "w", encoding="utf-8") as f:
                         f.write(orig)
