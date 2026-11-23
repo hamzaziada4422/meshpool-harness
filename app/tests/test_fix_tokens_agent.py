@@ -132,15 +132,26 @@ def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_pat
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     outs = [a._repeat_guard(call, g) for _ in range(6)]
     assert len(runs) == 3 and all("Not run" in o for o in outs[3:])
-    # alternating with a failing patch is the same loop
+    # by default alternating with another call is not caught (the measured behaviour) ...
     runs.clear()
     g = {}
     seq = [a._repeat_guard(x, g) for _ in range(6) for x in (call, other)]
+    assert len(runs) == 12 and not any("Not run" in o for o in seq)
+
+
+def test_repeat_window_switch_catches_alternation_and_spares_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REPEAT_WINDOW", "1")
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "same output"
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
+    g = {}
+    seq = [a._repeat_guard(x, g) for _ in range(6) for x in (call, other)]
     assert len(runs) == 6 and sum("Not run" in o for o in seq) == 6
-    # a file changing in between is progress: the same test run is never refused
     runs.clear()
     g = {}
-    for _ in range(8):
+    for _ in range(8):                                 # a file changing in between is progress: never refused
         a._repeat_guard(call, g)
         a.ws.edits += 1
     assert len(runs) == 8
@@ -194,6 +205,7 @@ def test_modelcaps_per_endpoint_kind(base, model, wire, reasoning, cache, hints)
 
 
 def test_reasoning_effort_is_explicit_low_for_chat_medium_for_work_and_overridable(monkeypatch):
+    monkeypatch.setenv("MH_AUTO_EFFORT", "1")
     c = _caps("https://api.openai.com/v1", "gpt-5.6-terra")
     assert c.effort("chat") == "low" and c.effort("task") == "medium"
     monkeypatch.setenv("MH_REASONING_EFFORT", "high")
@@ -204,6 +216,7 @@ def test_reasoning_effort_is_explicit_low_for_chat_medium_for_work_and_overridab
 
 
 def test_user_override_beats_name_and_host_hints(monkeypatch):
+    monkeypatch.setenv("MH_AUTO_EFFORT", "1")
     monkeypatch.setenv("MH_CAPS", json.dumps({"reasoning": "effort", "efforts": ["low", "high"], "cache": "none"}))
     c = _caps("https://strict.example.com/v1", "my-azure-deployment")
     assert c.reasoning == "effort" and c.effort("task") == "high" or c.effort("task") == "low"
@@ -211,6 +224,7 @@ def test_user_override_beats_name_and_host_hints(monkeypatch):
 
 
 def test_body_carries_reasoning_effort_only_for_models_that_take_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_AUTO_EFFORT", "1")
     monkeypatch.setenv("MESHPOOL_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test")
     from meshpool_harness.core import modelcaps as MC
@@ -266,6 +280,7 @@ def test_strict_server_that_400s_on_a_field_is_retried_without_it_and_remembers(
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.setenv("MH_CAPS", json.dumps({"reasoning": "effort", "efforts": ["low", "medium"]}))
     monkeypatch.setenv("MH_STREAM", "0")
+    monkeypatch.setenv("MH_REASONING_EFFORT", "low")
     from meshpool_harness.core import modelcaps as MC
     MC.reset()
     core._REFUSED.clear()
@@ -316,8 +331,14 @@ def test_old_long_tool_call_arguments_are_stubbed_in_the_request_only(tmp_path, 
     assert len(a.messages[1]["tool_calls"][0]["function"]["arguments"]) > 2500          # the saved chat is untouched
 
 
-def test_a_second_identical_failure_gets_a_change_of_approach_note(tmp_path):
+def test_a_second_identical_failure_gets_a_change_of_approach_note(tmp_path, monkeypatch):
     a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
+    c0 = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python slow.py"]}'}}
+    g0 = {}
+    a._repeat_guard(c0, g0)
+    assert "Do not repeat it" not in a._repeat_guard(c0, g0)                           # default: off
+    monkeypatch.setenv("MH_FAILURE_HINT", "1")
     a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
     g = {}
     call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python slow.py"]}'}}
@@ -326,8 +347,14 @@ def test_a_second_identical_failure_gets_a_change_of_approach_note(tmp_path):
     assert "Do not repeat it" not in first and "Do not repeat it" in second
 
 
-def test_same_command_with_only_numbers_changed_counts_as_a_repeat(tmp_path):
+def test_same_command_with_only_numbers_changed_counts_as_a_repeat(tmp_path, monkeypatch):
     a = _agent(tmp_path)
+    cmd = lambda n: {"id": str(n), "function": {"name": "shell", "arguments": json.dumps(  # noqa: E731
+        {"command": ["bash", "-lc", f"timeout 10 python -c 'import sync; sync.fetch_all({n})'"]})}}
+    a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
+    g = {}
+    assert not any("Not run" in a._repeat_guard(cmd(n), g) for n in range(1, 9))      # default: off
+    monkeypatch.setenv("MH_REPEAT_SHAPE", "1")
     a._run_tool = lambda c, cut=False: "[exit 124]\ntimed out"
     g = {}
     outs = [a._repeat_guard({"id": str(n), "function": {"name": "shell", "arguments": json.dumps(
@@ -335,10 +362,30 @@ def test_same_command_with_only_numbers_changed_counts_as_a_repeat(tmp_path):
     assert sum("Not run" in o for o in outs) >= 4
 
 
-def test_finish_check_rule_is_opt_in(monkeypatch):
-    assert "Before you finish" not in core._codex_prompt()
+def test_finish_check_and_scan_rules_are_opt_in(monkeypatch):
+    base = core._codex_prompt()
+    assert "Before you finish" not in base and "find /" not in base
     monkeypatch.setenv("MH_FINISH_CHECK", "1")
     assert "Before you finish" in core._codex_prompt()
+    monkeypatch.delenv("MH_FINISH_CHECK")
+    monkeypatch.setenv("MH_SCAN_RULE", "1")
+    assert "find /" in core._codex_prompt() and "Before you finish" not in core._codex_prompt()
+
+
+def test_default_prompt_is_the_measured_one():
+    assert len(core._codex_prompt()) == 14085          # the after2 build's system prompt, byte for byte in size
+
+
+def test_auto_reasoning_effort_is_opt_in(monkeypatch):
+    c = _caps("https://api.openai.com/v1", "gpt-5.6-terra")
+    monkeypatch.delenv("MH_AUTO_EFFORT", raising=False)
+    monkeypatch.delenv("MH_REASONING_EFFORT", raising=False)
+    assert c.effort("task") == ""
+    monkeypatch.setenv("MH_AUTO_EFFORT", "1")
+    assert c.effort("task") == "medium" and c.effort("chat") == "low"
+    monkeypatch.setenv("MH_REASONING_EFFORT", "high")      # an explicit setting always works
+    monkeypatch.delenv("MH_AUTO_EFFORT")
+    assert c.effort("task") == "high"
 
 
 def _server_with(statuses, seen):

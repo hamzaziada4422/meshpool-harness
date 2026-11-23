@@ -77,8 +77,11 @@ def _codex_prompt() -> str:
     if os.environ.get("MH_CODEX_PROMPT") == "full":
         return text
     text = _trim_codex(text)
-    if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # not measured on the 52 yet (quota ran out): opt-in
+    if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
+    if os.environ.get("MH_SCAN_RULE", "0") == "1":         # MH_SCAN_RULE=1: no whole-file-system scans, no sandbox copies
+        text = text.rstrip() + ("\n\nTest with the project's own tests or a short script in the project; do not scan the "
+                               "file system (`find /`) or copy the project elsewhere to test it.\n")
     return text
 
 
@@ -96,8 +99,7 @@ _TRIM = (
     ("## Sharing progress updates\n", "## Presenting your work and final message\n",
      "## Before you finish\nRe-read the request. For each requirement, check your code or a run against its exact "
      "words: the keys and values returned, empty and single-item inputs, ordering, errors. A requirement you only "
-     "assumed is not done; fix what fails, then answer. Test with the project's own tests or a short script in "
-     "the project; do not scan the file system (`find /`) or copy the project elsewhere to test it.\n\n"),
+     "assumed is not done; fix what fails, then answer.\n\n"),
     ("### Final answer structure and style guidelines\n", "# Sandbox and approvals\n",
      "### Final answer style\nPlain text. At most 10 lines: what changed and how you checked it, nothing else. "
      "Do not restate the task, list every edit, or paste code you wrote. Use `-` bullets and backticks for "
@@ -1551,29 +1553,36 @@ class Agent:
         return self._repeat_guard(c, g, cut)
 
     def _repeat_guard(self, c: dict, g: dict, cut: bool = False) -> str:
-        """Run a tool call, unless the same call (same name and arguments) has already run three times in the last
-        twelve calls with the same result and no file changed in between: a fourth time cannot tell the model anything
-        new. Counting over a window, not only in a row, also stops the alternation of a failing patch with a read of
-        the same lines. One such loop (a command run 60 times, 1M tokens) cost more than a hundred ordinary tasks."""
+        """Run a tool call, unless the same call has just run three times in a row with the same result: a fourth time
+        cannot tell the model anything new (one such loop, 60 calls and 1M tokens, cost more than a hundred tasks).
+        Switches, all off by default (not measured on the 52 tasks yet):
+        MH_REPEAT_WINDOW=1  count over the last 12 calls, not only in a row, and only while no file changed;
+        MH_REPEAT_SHAPE=1   a shell command that differs only in its numbers counts as the same call;
+        MH_FAILURE_HINT=1   the second identical failure gets a note to change approach."""
         f = c.get("function", {})
         key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
-        if f.get("name") in ("shell", "bash", "bash_many"):
-            key = re.sub(r"\d+", "#", key)         # fetch_all(1), fetch_all(2), ...: the same call with other numbers
+        if os.environ.get("MH_REPEAT_SHAPE") == "1" and f.get("name") in ("shell", "bash", "bash_many"):
+            key = re.sub(r"\d+", "#", key)
         runs = g.setdefault("same", [])
         edits = self.ws.edits
-        if sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3 and \
-                len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1:
+        if os.environ.get("MH_REPEAT_WINDOW") == "1":
+            stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits) >= 3
+                     and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
+        else:
+            stuck = len(runs) >= 3 and all(r[0] == key for r in runs[-3:]) and len({r[1] for r in runs[-3:]}) == 1
+        if stuck:
             g["refused"] = g.get("refused", 0) + 1
-            return ("[Meshpool] Not run: this exact call has already run three times with the same result and no file "
-                    "changed since. Running it again changes nothing. Change the command or the files first, or "
-                    "finish and tell the user what is blocking you.")
+            return ("[Meshpool] Not run: this exact call has run three times with the same result. Running it again "
+                    "changes nothing. Change the command or the files first, or finish and tell the user what is "
+                    "blocking you.")
         out = self._run_tool(c, cut=cut)
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
-        if any(r[0] == key and r[1] == h and r[2] == edits for r in runs) and \
+        if os.environ.get("MH_FAILURE_HINT") == "1" and \
+                any(r[0] == key and r[1] == h and r[2] == edits for r in runs) and \
                 re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error", str(out)):
-            out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one case, "
-                              "a shorter timeout), print what it is waiting on, or change the code first.")
+            out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
+                              "case, a shorter timeout), print what it is waiting on, or change the code first.")
         runs.append((key, h, edits, True))
         del runs[:-12]
         return out

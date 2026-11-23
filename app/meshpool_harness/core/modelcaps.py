@@ -53,6 +53,8 @@ class ModelCaps:
             return ""
         if want in self.efforts:
             return want
+        if os.environ.get("MH_AUTO_EFFORT", "0") != "1":
+            return ""                  # MH_AUTO_EFFORT=1: pick low/medium by lane (unmeasured, so off by default)
         if lane == "chat":
             return "low" if "low" in self.efforts else self.efforts[0]
         return "medium" if "medium" in self.efforts else self.efforts[len(self.efforts) // 2]
@@ -112,7 +114,7 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
         put("cache", "explicit", "host")
     elif h.endswith(("openai.com", "openai.azure.com", "azure.com", "meshpool.ai", "deepseek.com")):
         put("cache", "auto", "host")
-        put("cache_hints", h.endswith(("openai.com", "azure.com", "meshpool.ai")), "host")
+        put("cache_hints", h.endswith(("openai.com", "azure.com", "meshpool.ai", "deepseek.com")), "host")
     elif _local(base):
         put("cache", "none", "host")                 # Ollama, LM Studio, llama.cpp: no server-side prompt cache
         put("reliability", "low", "host")
