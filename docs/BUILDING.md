@@ -20,6 +20,8 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `download-cache` | Created by the build: the verified LibreOffice downloads | The Document Foundation, pins in `packaging/bundled_tools.py` |
 
 Also inside every installer, installed by `build_all.py` from the repo (no deps folder): LibreOffice (`app/vendor/libreoffice`), pruned to headless conversion by `packaging/lo_prune.py`, and Chromium (`app/vendor/browsers`, from `playwright install chromium --no-shell`, English only). Codex and OpenCode are not shipped. See `docs/plan/BUNDLED_TOOLS.md`.
+
+Also inside every installer since 0.0.11, again with no deps folder (pinned and hash-checked downloads in `packaging/bundled_tools.py`): ffmpeg and pandoc (`app/vendor/ffmpeg`, `app/vendor/pandoc`, taken out of PyPI wheels) and the speech-to-text model (`app/vendor/whisper/base`), plus the speech, notebook, HEIC and chart Python packages in `packaging/requirements-cli.txt`. Before adding any package or program to a Mac build, read what macOS it needs on Linux with `packaging/mac/wheel_minos.py` and record it (`docs/plan/0.0.11-bundled.md`, "The macOS 11 floor"); `app/tests/test_macos_floor.py` fails otherwise.
 | `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
 
 ## Build

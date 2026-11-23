@@ -1,5 +1,14 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.11**
+- **A second pair of eyes on big jobs.** Before Meshpool tells you a big task is done, a separate reviewer that did not do the work checks it against what you asked for, in code, documents, decks, spreadsheets and research. If something is missing it goes back to be fixed, and the reply ends with a short "Independent check" in plain words. It is on by default, only runs on big tasks, and you can turn it off in Settings or check any reply yourself with "Check this" (or `/grade` in the terminal).
+- **Nothing else opens on your computer.** Files and folders open in a built-in editor inside Meshpool, with a folder tree, search, line numbers, colouring, find, and Save with a warning when a file changed on disk. Markdown and JSON have a readable view. No text editor, Finder or Preview launches.
+- **The browser stays inside Meshpool.** When the agent opens a page it runs in a hidden browser that ships with the app, never in your Chrome. A Browser panel shows what it is doing live, and you can click, type and scroll in it to sign in or pass a check. Settings has a switch to show the browser in its own window.
+- **Sign in without leaving the app.** Connector and account sign-in pages open in that panel. If a site refuses to sign you in there, one link opens it in your own browser.
+- **Meshpool's own window uses its own engine** before it ever looks for Chrome or Edge.
+- **Everything it needs is built in.** ffmpeg, pandoc, speech to text (with its model), notebooks, charts and HEIC photos now ship inside the app, so no skill has to download or install anything. The Apple silicon audio and video converter needs macOS 12; speech to text, PDF and image tools work on macOS 11.
+- **Safer builds.** Every Mac component is checked against the macOS 11 minimum before a release is built.
+
 **New in 0.0.10**
 - **See what Meshpool knows.** A new Memory page shows every fact, filed by category, with where it came from and which chats it was given to. Edit, pin, move or archive any of them, and every change has Undo.
 - **Meshpool asks before it remembers.** Facts it notices wait in a "Meshpool thinks" tray. Nothing reaches an agent until you say yes. Two facts that disagree are shown side by side.
@@ -107,7 +116,7 @@ curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/mai
 tar -xzf ~/Downloads/Meshpool-Linux-x64.tar.gz -C ~/.local/share && ~/.local/share/Meshpool/install.sh
 ```
 
-LibreOffice, Chromium, Node.js, Git and Python ship inside the folder; it uses the desktop libraries every Linux desktop has. To update, unpack the new download over the old folder. Its checksum is in Meshpool-Linux-x64.tar.gz.sha256.
+LibreOffice, Chromium, Node.js, Git and Python ship inside the folder; it uses the desktop libraries every Linux desktop has. To update, unpack the new download over the old folder. Its checksum is in SHA256SUMS.txt.
 
 <img src="https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/docs/setup/windows-smartscreen.png" alt="Click More info" width="300"> <img src="https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/docs/setup/windows-smartscreen-run-anyway.png" alt="Click Run anyway" width="300">
 

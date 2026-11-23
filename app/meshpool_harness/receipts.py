@@ -109,7 +109,8 @@ def receipt_for(chat_id: str, turn_index: int | None = None) -> dict | None:
            "tokens_in": tin, "tokens_cached": tc, "tokens_out": tout, "calls": int(r.get("calls") or 0),
            "cost": cost, "cost_label": "" if cost is not None else "not measured",
            "harness": hid, "harness_name": _harness_name(hid), "model": r.get("model") or "", "reason": reason,
-           "spec": r.get("spec"), "error": bool(r.get("error")), "stopped": bool(r.get("stopped"))}
+           "spec": r.get("spec"), "error": bool(r.get("error")), "stopped": bool(r.get("stopped")),
+           "review": r.get("review") if isinstance(r.get("review"), dict) else None}
     out["text"] = line(out)
     return out
 
@@ -138,6 +139,12 @@ def line(r: dict) -> str:
         bits.append(f"${r['cost']:.2f}" if r["cost"] >= 0.01 else f"${r['cost']:.4f}")
     elif r.get("tokens_in") or r.get("tokens_out"):
         bits.append(f"{_fmt_tokens(r['tokens_in'] + r['tokens_out'])} tokens, cost not measured")
+    rv = r.get("review")
+    if isinstance(rv, dict) and rv.get("verdict"):
+        bits.append("checked independently: " + (
+            "could not run" if rv.get("error") else f"{rv.get('met', 0)} of {rv.get('total', 0)} met"
+            + (f", {rv['rounds']} fix round{'s' if rv['rounds'] != 1 else ''}" if rv.get("rounds") else "")
+            + f" ({_fmt_secs(rv.get('secs'))}, {_fmt_tokens(int(rv.get('tokens') or 0))} tokens)"))
     who = " on ".join(x for x in (r.get("harness_name"), r.get("model")) if x)
     if who:
         why = plain_reason(r.get("reason") or "")

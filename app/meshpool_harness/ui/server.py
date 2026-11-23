@@ -29,7 +29,7 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/")
 
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
@@ -297,7 +297,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -338,7 +338,8 @@ class Handler(BaseHTTPRequestHandler):
             if q.get("t", [""])[0] != TOKEN:
                 return self._send(403, {"error": "forbidden"})
             try:
-                p = W._inside(W.check_root(q.get("root", [""])[0]), q.get("path", [""])[0])
+                from meshpool_harness.ui import files_api as FA
+                p = FA.safe(q.get("root", [""])[0], q.get("path", [""])[0])[1]
             except (ValueError, OSError):
                 return self._send(404, {"error": "not found"})
             if not p.is_file() or p.stat().st_size > 60_000_000:
@@ -642,10 +643,6 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/quit":
                 threading.Timer(0.3, _shutdown).start()
                 return self._send(200, {"ok": True})
-            if u.path == "/api/open-data":
-                from meshpool_harness.ui.desktop import reveal
-                reveal(C.home())
-                return self._send(200, {"ok": True})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_action(self._json()))
             if u.path == "/api/suggest":
@@ -789,7 +786,7 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness.ui import settings_v2 as SV
                 b = self._json()
                 if u.path == "/api/browser-use":
-                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app")))
+                    return self._send(200, SV.set_browser_use(b.get("mode", "meshpool"), b.get("cdp_url"), b.get("app"), b.get("show_window")))
                 if u.path == "/api/profile":
                     return self._send(200, SV.save_profile(**{k: b.get(k) for k in SV.PROFILE_KEYS}))
                 if u.path == "/api/capabilities":
@@ -883,10 +880,8 @@ class Handler(BaseHTTPRequestHandler):
                 elif act == "upload":
                     import base64
                     SK.add_files([(f["name"], base64.b64decode(f["data"])) for f in b.get("files") or []])
-                elif act == "open":
-                    from meshpool_harness.ui.desktop import reveal
+                elif act == "open":                       # the page shows the folder in its own file tree
                     SK.folder().mkdir(parents=True, exist_ok=True)
-                    reveal(SK.folder())
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
             if u.path == "/api/plugins":
                 from meshpool_harness import plugins as PL
@@ -904,21 +899,6 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/git/pr":
                 b = self._json()
                 return self._send(200, W.pr_action(b.get("root", ""), b))
-            if u.path == "/api/open-file":
-                from meshpool_harness.ui.desktop import reveal
-                b = self._json()
-                p = W._inside(W.check_root(b.get("root", "")), b.get("path", ""))
-                if not p.exists():
-                    raise ValueError("That file is gone.")
-                if p.suffix.lower() in RUNNABLE:     # opening would run it, outside the approval for commands
-                    reveal(p.parent)
-                    return self._send(200, {"ok": True, "message": f"{p.name} is a script, so its folder opened "
-                                                                   "instead. Ask the agent to run it."})
-                try:
-                    reveal(p)
-                except OSError:
-                    return self._send(400, {"error": f"There's no app on this computer to open {p.name}. It is at: {p}"})
-                return self._send(200, {"ok": True})
             if u.path == "/api/attach":
                 import base64
                 b = self._json()
@@ -936,8 +916,7 @@ class Handler(BaseHTTPRequestHandler):
                     except CN.NeedsClient as e:
                         return self._send(200, {"needs_client": cid, "redirect": e.redirect, "message": str(e),
                                                 "connectors": CN.listing()})
-                    _open_web(url)
-                    return self._send(200, {"url": url, "connectors": CN.listing()})
+                    return self._send(200, {"url": url, "inapp": _open_web(url), "connectors": CN.listing()})
                 if act == "check":
                     r = CN.check(cid)
                     return self._send(200, dict(r, connectors=CN.listing()))
@@ -951,8 +930,7 @@ class Handler(BaseHTTPRequestHandler):
                         except CN.NeedsClient as e:
                             return self._send(200, {"id": c["id"], "needs_client": c["id"], "redirect": e.redirect,
                                                     "message": str(e), "connectors": CN.listing()})
-                        _open_web(url)
-                        return self._send(200, {"url": url, "id": c["id"], "connectors": CN.listing()})
+                        return self._send(200, {"url": url, "id": c["id"], "inapp": _open_web(url), "connectors": CN.listing()})
                     return self._send(200, {"id": c["id"], "tools": n, "connectors": CN.listing(),
                                             "message": f"Connected: {n} tool{'s' * (n != 1)}. New chats can use it."})
                 if act == "github_found":
@@ -961,8 +939,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, {"connectors": CN.listing(), "message": f"Connected as {r['login']} ({r['source']})."})
                 if act == "github_device":
                     r = CN.github_device_start()
-                    webbrowser.open(r["url"])
-                    return self._send(200, r)
+                    return self._send(200, dict(r, inapp=_open_web(r["url"])))
                 if act == "github_poll":
                     r = CN.github_device_poll()
                     C.load_into_env(override=True)
@@ -982,19 +959,9 @@ class Handler(BaseHTTPRequestHandler):
                 url = str(self._json().get("url", "")).strip()
                 if not re.match(r"https?://", url, re.I):
                     raise ValueError("Only web addresses can be opened.")
-                _open_web(url)
-                return self._send(200, {"ok": True})
+                return self._send(200, {"ok": True, "inapp": _open_web(url)})
             if u.path == "/api/open-editor":
                 return self._send(200, W.open_editor(self._json().get("path", "")))
-            if u.path == "/api/open-path":
-                from meshpool_harness.ui.desktop import reveal
-                target = W.check_root(self._json().get("path", ""))
-                try:
-                    reveal(target)
-                except OSError as e:                      # no file manager here (e.g. a headless Linux machine)
-                    return self._send(400, {"error": f"Could not open the folder on this computer ({e.strerror or e}). "
-                                                     f"It is at: {target}"})
-                return self._send(200, {"ok": True})
             if u.path == "/api/github/workspace":          # clone (or reuse) a repository for a new session
                 return self._send(200, W.github_workspace(self._json()))
             m = re.fullmatch(r"/api/session/([\w-]+)/bg/stop", u.path)
@@ -1033,7 +1000,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
@@ -1041,6 +1008,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
                 elif act == "stop":
                     s.stop()
+                elif act == "grade":
+                    s.grade()
                 elif act == "answer":
                     s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
                 elif act == "compact":
@@ -1068,11 +1037,21 @@ RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat"
             ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool"}
 
 
-def _open_web(url: str) -> None:
-    """Open a sign-in page. The address comes from the app's server metadata: only ever a web page."""
+def _open_web(url: str) -> bool:
+    """Open a sign-in page. The address comes from the app's server metadata: only ever a web page.
+    It opens inside Meshpool, in the Browser panel (True: the page shows it). Only on a computer where Meshpool's
+    own browser cannot start does it use the system browser (False). The terminal sign-in (agent/connect_cli.py) has
+    no panel and keeps printing the link and trying the system browser."""
     if not re.match(r"https?://", url or "", re.I):
         raise ValueError("That app's sign-in address is not a web page, so Meshpool did not open it.")
+    try:
+        from meshpool_harness.ui import browser_api as BA
+        BA.open_signin(url)
+        return True
+    except Exception as e:  # noqa: BLE001 - no browser engine here: the last resort is the system browser
+        print(f"  The in-app browser could not start ({e}); opening the sign-in page in the system browser.")
     webbrowser.open(url)
+    return False
 
 
 class _Server(ThreadingHTTPServer):
@@ -1162,7 +1141,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("")
     if open_browser:
-        threading.Timer(0.8, lambda: _open_web(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()   # the app itself, in a browser tab (not the desktop app)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

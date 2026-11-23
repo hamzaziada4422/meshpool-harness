@@ -37,7 +37,7 @@ RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
-         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight"}
+         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review"}
 
 
 def _transcript(sid: str) -> dict | None:
@@ -360,7 +360,7 @@ class Session:
             # office file (Agent.office_on), so coding chats do not pay for them.
             from meshpool_harness.harnesses.acp import office_extra
             extra = office_extra(self.workdir)
-            self.mcp = M.Manager(roots=[self.workdir], extra=extra).start(
+            self.mcp = M.Manager(roots=[self.workdir], extra=extra, chat=self.id).start(
                 timeout=float(os.environ.get("MH_MCP_START_S", "45")))
             self.agent.mcp = self.mcp
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
@@ -975,6 +975,28 @@ class Session:
                         _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
                                 + (self.agent.title or "task")[:60], last.strip()[:200])
         threading.Thread(target=go, daemon=True).start()
+
+    def grade(self) -> dict:
+        """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
+        Runs beside nothing else: the chat must be idle. The result arrives as a review event."""
+        if self.state in ("working", "waiting"):
+            raise ValueError("Wait for the reply to finish, or stop it, then check it.")
+        if not hasattr(self.agent, "grade_now"):
+            raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
+        with self.lock:
+            self.state = "working"
+        self.t_turn = time.time()
+
+        def go():
+            try:
+                self.agent.grade_now()
+            except Exception as e:  # noqa: BLE001
+                self.emit({"type": "error", "text": "The check could not run: " + str(e)[:160]})
+            finally:
+                with self.lock:
+                    self.state = "idle"
+        threading.Thread(target=go, daemon=True, name="meshpool-grade").start()
+        return {"started": True}
 
     def set_route(self, spec: str):
         """The user picked the harness for this chat (the route chip). Applies from the next message; on the

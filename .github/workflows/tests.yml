@@ -47,6 +47,12 @@ jobs:
           printf '<?xml version="1.0"?><!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n<fontconfig><alias><family>Segoe UI</family><prefer><family>Selawik</family></prefer></alias></fontconfig>\n' > ~/.config/fontconfig/fonts.conf
           fc-cache -f >/dev/null
           fc-match "Segoe UI"
+      - name: The Mac builds of every package and program need macOS 11 or less (reads the real wheels; no Mac needed)
+        # app/tests/test_macos_floor.py holds the repository to packaging/mac/verified_minos.json; this re-reads what is
+        # published today, so a wheel that changed upstream is caught here and not in a release build.
+        run: |
+          python packaging/mac/wheel_minos.py closure -r packaging/requirements-cli.txt -c packaging/mac/constraints.txt
+          python packaging/mac/wheel_minos.py programs
       - name: Tests
         working-directory: app
         run: python -m pytest -q -p no:cacheprovider tests

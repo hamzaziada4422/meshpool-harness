@@ -9,6 +9,28 @@ LOG = sys.argv[2] if len(sys.argv) > 2 else "/tmp/mock_requests.jsonl"
 
 def plan(messages, tools):
     names = {t["function"]["name"] for t in tools or []}
+    if str(messages[0].get("content", "")).startswith("You are the INDEPENDENT REVIEWER"):   # the grader (0.0.11)
+        ev = str(messages[-1].get("content", ""))
+        fixed = "Fixed:" in ev
+        items = [{"requirement": "A problem slide", "status": "met", "evidence": "slide 1 is titled Problem"},
+                 {"requirement": "A solution slide", "status": "met", "evidence": "slide 2 is titled Solution"},
+                 {"requirement": "A pricing slide with the three plan prices", "status": "met" if fixed else "not_met",
+                  "evidence": "slide 3 shows Starter 9, Team 29, Business 99" if fixed else "no slide mentions pricing"},
+                 {"requirement": "Slides are in English", "status": "met", "evidence": "all text is English"}]
+        if not fixed:
+            items.append({"requirement": "Charts render on a phone", "status": "unverified", "evidence": "no browser available to look"})
+        return ("text", json.dumps({"expectations": [i["requirement"] for i in items], "verdict": "pass" if fixed else "partial",
+                                    "acceptance": "accept" if fixed else "would_send_back",
+                                    "acceptance_reasons": [] if fixed else ["You asked for a pricing slide and there is none."],
+                                    "items": items, "blockers": [] if fixed else ["Pricing slide missing"],
+                                    "fix": [] if fixed else ["Add a pricing slide with the three plan prices"]}))
+    if "big job demo" in str(messages[-1].get("content", "")).lower() or any("big job demo" in str(m.get("content", "")).lower() for m in messages if m["role"] == "user"):
+        done_ = [m for m in messages if m["role"] == "tool"]
+        if not done_:
+            return ("tool", "todo_write", {"items": [{"content": "Problem slide", "status": "completed"}, {"content": "Solution slide", "status": "completed"}, {"content": "Pricing slide", "status": "completed"}]})
+        if any("[Independent review]" in str(m.get("content", "")) for m in messages if m["role"] == "user"):
+            return ("text", "Fixed: added the pricing slide with the three plan prices.")
+        return ("text", "Everything is done: the deck has problem, solution and pricing slides.")
     last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
     c = messages[last_user]["content"]
     utext = c if isinstance(c, str) else " ".join(x.get("text", "") for x in c if isinstance(x, dict))

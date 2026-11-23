@@ -90,7 +90,8 @@ def _prune() -> None:
 
 def resolve(root: str, rel: str) -> Path:
     """The file, inside the chat's root. Raises ValueError for anything else (same check as /api/file)."""
-    p = W._inside(W.check_root(root), rel)
+    from meshpool_harness.ui import files_api as FA
+    p = FA.safe(root, rel)[1]
     if not p.is_file():
         raise ValueError("That file is gone.")
     return p
@@ -148,7 +149,7 @@ def _convert_job(src: Path, key: str) -> None:
         with _JOBS_LOCK:
             _JOBS.pop(key, None)
     except subprocess.TimeoutExpired:
-        _fail(key, f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds. Open it in its app instead.")
+        _fail(key, f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds. Try again in a moment.")
     except Exception as e:  # noqa: BLE001 - shown in the pane
         msg = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
         _fail(key, msg[:300])
@@ -171,7 +172,7 @@ def _office_state(p: Path) -> dict:
     from meshpool_harness import office_runtime
     if not office_runtime.find_soffice():
         return {"state": "error", "error": f"Previewing {p.suffix} files needs LibreOffice, which is not available "
-                                           f"({office_runtime.missing_reason()}). Use Open to see it in its app."}
+                                           f"({office_runtime.missing_reason()}). Meshpool cannot show it here."}
     with _JOBS_LOCK:
         job = _JOBS.get(key)
         if job and job["state"] == "working":
@@ -260,7 +261,7 @@ def meta(root: str, rel: str) -> dict:
         return base | {"kind": "pages"} | _office_state(p)
     if k == "sheet":
         if st.st_size > SHEET_MAX_BYTES:
-            return base | {"kind": "none", "note": "This file is too large to preview. Open it in its app."}
+            return base | {"kind": "none", "note": "This file is too large to preview. Meshpool cannot show it here."}
         if p.suffix.lower() in (".xlsx", ".xlsm"):
             try:
                 return base | {"state": "ready", "sheets": _xlsx_sheets(p)}
@@ -270,12 +271,12 @@ def meta(root: str, rel: str) -> dict:
     if k == "image":
         return base | {"state": "ready", "mime": "image/svg+xml" if p.suffix.lower() == ".svg" else None}
     if k == "none":
-        return base | {"state": "ready", "note": "There is no preview for this kind of file. Open it in its app."}
+        return base | {"state": "ready", "note": "There is no preview for this kind of file. Meshpool cannot show it here."}
     if st.st_size > MAX_TEXT:
-        return base | {"kind": "none", "state": "ready", "note": "This file is larger than 2 MB. Open it in its app."}
+        return base | {"kind": "none", "state": "ready", "note": "This file is larger than 2 MB. Meshpool cannot show it here."}
     data = p.read_bytes()
     if b"\0" in data[:8000]:
-        return base | {"kind": "none", "state": "ready", "note": "There is no preview for this kind of file. Open it in its app."}
+        return base | {"kind": "none", "state": "ready", "note": "There is no preview for this kind of file. Meshpool cannot show it here."}
     return base | {"state": "ready", "text": data.decode("utf-8", errors="replace")}
 
 
