@@ -546,8 +546,8 @@ class Workspace:
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(text, encoding="utf-8", errors="replace")
         except OSError:
-            return text[:head] + f"\n... [{cut} chars truncated{"." + more if more else ""}] ...\n" + text[-tail:]
-        return (text[:head] + f"\n... [{cut} chars truncated; full output in {f}{"." + more if more else ""}] ...\n"
+            return text[:head] + f"\n... [{cut} chars truncated{'.' + more if more else ''}] ...\n" + text[-tail:]
+        return (text[:head] + f"\n... [{cut} chars truncated; full output in {f}{'.' + more if more else ''}] ...\n"
                 + text[-tail:])
 
     # -- container (unmounted) file access
