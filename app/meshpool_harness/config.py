@@ -18,6 +18,11 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
+    ("MH_AUTH_HEADER", "Key header", "", "Optional. The header that carries the key when it is not Authorization: "
+     "Bearer: api-key (Azure OpenAI), x-api-key, Authorization. Empty picks the right one for the endpoint."),
+    ("MH_AUTH_SCHEME", "Key scheme", "", "Optional. How the key is sent: bearer, basic, token or raw (the key alone)."),
+    ("MESHPOOL_AZURE_API_VERSION", "Azure api-version", "", "Optional. The api-version sent to an Azure OpenAI "
+     "endpoint. Empty uses the current GA version."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
      "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
@@ -201,6 +206,18 @@ def read(path: Path | None = None) -> dict:
             v = v[1:-1]
         out[k.strip()] = v
     return out
+
+
+def clean_key(k) -> str:
+    """A key the way people paste it: in quotes, with a header name or "Bearer " in front, or with line breaks and
+    zero-width characters in it. Nothing else is touched: dashes, dots, =, _ and any prefix (or none) stay."""
+    k = str(k or "").strip()
+    for _ in range(3):
+        if len(k) >= 2 and (k[0], k[-1]) in {('"', '"'), ("'", "'"), ("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019")}:
+            k = k[1:-1].strip()
+    k = re.sub(r"^(?:(?:authorization|api-key|x-api-key|ocp-apim-subscription-key)\s*[:=]\s*)", "", k, flags=re.I)
+    k = re.sub(r"^(?:bearer|token)\s+", "", k, flags=re.I)
+    return re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", k)
 
 
 _WRITE_LOCK = __import__("threading").Lock()

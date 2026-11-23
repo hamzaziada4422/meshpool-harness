@@ -405,3 +405,4 @@
 
 /* phone width: the tab strip gets its own row so no tab is hidden off-screen */
 @media (max-width:640px){.gbar{flex-wrap:wrap}.gbar .gtabs{order:-1;flex:1 0 100%;overflow-x:auto}}
+.pvadv{margin:6px 0 10px}.pvadv>summary{cursor:pointer;color:var(--ink-3);font-size:var(--fs-s);margin-bottom:6px}.pvadv select{width:100%}

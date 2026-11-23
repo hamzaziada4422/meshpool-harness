@@ -208,4 +208,4 @@ def pdf_page_images(path: str | Path, pages: list[int], dpi: int = 200):
             yield (i, big.image if getattr(big, "image", None) is not None else big.data)
 
 
-os.environ.setdefault("OMP_NUM_THREADS", str(max(1, min(4, (os.cpu_count() or 2) - 1))))
+os.environ.setdefault("OMP_NUM_THREADS", str(max(1, min(4, (os.cpu_count() or 2) // 2))))   # half the cores at most

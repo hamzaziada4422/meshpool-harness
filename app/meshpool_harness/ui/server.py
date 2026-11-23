@@ -87,8 +87,7 @@ def save_settings(body: dict) -> dict:
             continue
         v = re.sub(r"[\r\n]", "", str(v)).strip()
         if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
-            v = re.sub(r"^(?:bearer\s+)", "", v.strip("'\" "), flags=re.I)
-            v = re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", v)   # a pasted zero-width space broke every call
+            v = C.clean_key(v)           # quotes, "Bearer ", line breaks, a pasted zero-width space
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
@@ -156,21 +155,51 @@ def test_connection(values: dict | None = None) -> dict:
     endpoint and send the typed key to it."""
     C.load_into_env(override=True)
     from meshpool_harness import providers as PV
-    from meshpool_harness.cli import ping
     v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
     if v.get("MESHPOOL_API_KEY"):
-        v["MESHPOOL_API_KEY"] = re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "", re.sub(
-            r"^(?:bearer\s+)", "", v["MESHPOOL_API_KEY"].strip("'\" "), flags=re.I))
+        v["MESHPOOL_API_KEY"] = C.clean_key(v["MESHPOOL_API_KEY"])
     try:
         _key_follows_host(v)
     except ValueError as e:
         return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
-    key = v.get("MESHPOOL_API_KEY") or PV.key()
-    if not key:
-        return {"ok": False, "detail": "No API key saved yet."}
+    from meshpool_harness import provider_setup as PS
+    base_in = v.get("MESHPOOL_BASE_URL") or PV.key_base()
+    try:
+        base = PS.normalise_base(base_in)
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e), "endpoint": base_in}
+    same = PS._same_endpoint(base, PV.key_base())
+    key = v.get("MESHPOOL_API_KEY") or (PV.key() if same else "")
+    if not key and not PV.keyless_ok(base):
+        return {"ok": False, "detail": f"No API key {'saved yet' if same else 'entered for ' + PV.host(base)}.",
+                "endpoint": base}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
+    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1] or PV.azure_deployment(base)
+    hdr = v.get("MH_AUTH_HEADER", PV._cfg("MH_AUTH_HEADER") if same else "")
+    sch = v.get("MH_AUTH_SCHEME", PV._cfg("MH_AUTH_SCHEME") if same else "").lower()
+    ver = v.get("MESHPOOL_AZURE_API_VERSION", PV._cfg("MESHPOOL_AZURE_API_VERSION") if same else "")
+    if "api-version=" in base_in and not ver:
+        ver = PV.azure_version(base_in)
+    wire = (v.get("MH_API_WIRE") or (PV.key_wire() if same else "")).lower()
+    if wire not in ("openai", "anthropic"):
+        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else "openai"
+    t0 = time.time()
+    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
+    secs = round(time.time() - t0, 1)
+    if err or st not in (200, 429):
+        why = (("No server at that address." if err == "refused" else "The server did not answer in time.") if err
+               else PS.explain(st, data, base=base, model=model, version=ver))
+        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
+    txt = ""
+    if isinstance(data, dict):
+        try:
+            txt = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        except (AttributeError, IndexError, TypeError):
+            txt = ""
+    return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
+            ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
+            "endpoint": base}
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -294,7 +323,10 @@ class Handler(BaseHTTPRequestHandler):
                 if idle_since and time.time() - idle_since > 0.4:
                     put("event: end\ndata: {}\n\n")
                     return
-                time.sleep(0.03)
+                with s.lock:                      # wake the moment an event arrives; 0.25 s at most for a state change
+                    if len(s.events) <= cursor and s.state == last_state:
+                        s.changed.wait(0.25)
+                time.sleep(0.01)                  # let a burst of text_delta pile up into one frame
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
@@ -598,14 +630,17 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path.endswith("/test"):
                     try:
                         return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
-                                                       j.get("env", "")))
+                                                       j.get("env", ""), j.get("model", ""), j.get("auth_header", ""),
+                                                       j.get("auth_scheme", ""), j.get("api_version", "")))
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
-                                                        j.get("env", ""), bool(j.get("confirm_env"))), ok=True))
+                                                        j.get("env", ""), bool(j.get("confirm_env")),
+                                                        j.get("auth_header"), j.get("auth_scheme"),
+                                                        j.get("api_version")), ok=True))
                 return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))

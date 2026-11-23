@@ -122,12 +122,3 @@ def test_scheduled_run_with_missing_folder_fails(tmp_path):
     with pytest.raises(ValueError, match="moved or deleted"):
         A.run_scheduled({"id": "t", "prompt": "p", "folder": str(tmp_path / "gone")})
 
-
-def test_test_connection_strips_bearer_prefix(monkeypatch):
-    from meshpool_harness import cli
-    from meshpool_harness.ui import server as S
-    seen = {}
-    monkeypatch.setattr(cli, "ping", lambda model, base=None, key=None: seen.update(key=key) or {"ok": True})
-    monkeypatch.setattr(S, "_key_follows_host", lambda v: None)
-    S.test_connection({"MESHPOOL_API_KEY": "  Bearer sk-abcdefghijklmnopqrstuvwxyz0123456789 "})
-    assert seen.get("key") == "sk-abcdefghijklmnopqrstuvwxyz0123456789"

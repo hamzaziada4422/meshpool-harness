@@ -216,8 +216,11 @@ const _applyEv010 = applyEv;
 applyEv = function (ev) { const r = _applyEv010.apply(this, arguments); try { ev010(ev); } catch (e) { /* never break the transcript */ } return r; };
 
 /* "Noted for next time" gets an Undo: the status event carries the fact ids. */
-const _status010 = new MutationObserver(() => {
-  $$(".note:not([data-u010])").forEach(n => {
+const _status010 = new MutationObserver(ms => {
+  const seen = new Set();                         // look only at what was just added, not at every note in a long chat
+  for (const m of ms) for (const a of m.addedNodes) if (a.nodeType === 1) { if (a.matches?.(".note")) seen.add(a); a.querySelectorAll?.(".note:not([data-u010])").forEach(x => seen.add(x)); }
+  seen.forEach(n => {
+    if (n.dataset.u010) return;
     if (!/^Noted for next time/.test(n.textContent)) return;
     n.dataset.u010 = "1";
     const ids = n.dataset.undo ? JSON.parse(n.dataset.undo) : null; if (!ids) return;

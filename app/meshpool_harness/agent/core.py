@@ -298,9 +298,12 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     from meshpool_harness import providers as _PV
     if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
         from meshpool_harness.core import anthropic_wire as AW
-        url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
+        body = AW.to_request(body)
+        url, hdrs = _PV.chat_target(base, key, model, "messages")
     else:
-        url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        body = _PV.adapt_body(base, body)
+        url, hdrs = _PV.chat_target(base, key, model)         # Azure: deployment path, api-version, api-key header
+    hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
@@ -1579,6 +1582,13 @@ class Agent:
         # Older tool outputs are elided once the context passes the limit, down to 60% of it, so the next trim is
         # many steps away and the provider's prompt cache is rebuilt rarely. Recent outputs stay verbatim.
         limit = int(self.hsettings()["compact_chars"])
+        try:                                       # never above 70% of the model's real window (core/context.py)
+            from meshpool_harness.core import context as CTX
+            win = self._ctx_window()
+            fixed = CTX.estimate(self.tool_schemas()) + 600
+            limit = min(limit, CTX.compact_chars(win, fixed, limit))
+        except Exception:  # noqa: BLE001
+            pass
         if _context_size(self.messages) > limit:
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
@@ -1593,7 +1603,11 @@ class Agent:
             EX.run_hooks(self.root, "PreCompact", {"messages": len(self.messages)})
         except Exception:  # noqa: BLE001
             pass
-        r = compaction.compact_history(self.messages)
+        try:
+            win = self._ctx_window()
+        except Exception:  # noqa: BLE001
+            win = None
+        r = compaction.compact_history(self.messages, win=win)
         if r:
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
                                                  "going" + ("." if r["model"] else " (from the log only).")})
@@ -1602,6 +1616,31 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
         return r
+
+    def _ctx_window(self) -> int:
+        """The model's context window in tokens (core/context.py): override, what the endpoint reports, or a default."""
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import context as CTX
+        model = self.current_model()
+        prov = PV.split(model)[0]
+        base, key = PV.endpoint(prov) if prov != "chatgpt" else ("", "")
+        return CTX.window(model, base, key)
+
+    def _fit_body(self, body: dict) -> None:
+        """Keep the request inside the model's window: compact tool schemas, capped instructions, elided old output,
+        a reply limit that leaves room. A one-line notice the first time a small window is seen."""
+        from meshpool_harness.core import context as CTX
+        win = self._ctx_window()
+        CTX.tell_once(self.current_model(), win, lambda t: self.emit({"type": "status", "text": t}))
+        self.ws.max_tool_chars = CTX.tool_output_chars(win)
+        key = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+        msgs, tools, out = CTX.fit(body["messages"], body.get("tools"), win, body.get(key),
+                                   getattr(self, "_ctx_tighten", 1.0))
+        body["messages"] = msgs
+        if tools is not None:
+            body["tools"] = tools
+        if key in body:
+            body[key] = out
 
     def _body(self) -> dict:
         from meshpool_harness.profiles import apply, for_model
@@ -1621,6 +1660,10 @@ class Agent:
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
+        try:
+            self._fit_body(body)
+        except Exception:  # noqa: BLE001 - fitting is an optimisation: never stop the turn over it
+            pass
         if os.environ.get("MH_CACHE_KEY", "1") == "1":
             body["prompt_cache_key"] = self.route_id()
             body["user"] = self.route_id()
@@ -1645,13 +1688,15 @@ class Agent:
         base, key = PV.endpoint(prov)         # the key endpoint: providers.key()/key_base() (an OpenAI key only
                                                # with OPENAI_BASE_URL, never with the Meshpool base)
         wire = "chatgpt" if prov == "chatgpt" else os.environ.get("MH_WIRE", "chat")
-        if not key and wire != "chatgpt":
+        if not key and wire != "chatgpt" and not PV.keyless_ok(base):
             raise RuntimeError(f"No API key. Add MESHPOOL_API_KEY to {C.config_path()} or open Settings in the app.")
         if wire != "chatgpt" and PV.key_problem(key):
             raise RuntimeError(PV.key_problem(key))
         stream = wire == "chat" and os.environ.get("MH_STREAM", "1") != "0"
         self.emit({"type": "model_start"})
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
+        ctx_shrinks = 0
+        self._ctx_tighten = 1.0
         attempt, recoveries, swapped = -1, 0, False
         # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
@@ -1739,8 +1784,17 @@ class Agent:
                         continue
                     raise RuntimeError(f"The endpoint does not serve the model {body['model']}. Choose another model "
                                        f"for this chat. ({msg[:160]})")
-                if kind == "context" and not shrunk:       # over the model's context: shrink hard, retry once
+                if kind == "context" and ctx_shrinks < 4:  # over the model's context: shrink hard, retry at once
+                    ctx_shrinks += 1
                     shrunk = True
+                    try:
+                        from meshpool_harness.core import context as CTX
+                        said = CTX.parse_limit(msg)
+                        if said and said < self._ctx_window():
+                            CTX.learn(self.current_model(), said)       # the server named its real window
+                        self._ctx_tighten *= 0.7
+                    except Exception:  # noqa: BLE001
+                        pass
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
                     # so a screenshot the user just attached still goes with the retry. Older steps are summarized
                     # first, so the task keeps its thread.
@@ -1907,6 +1961,13 @@ class Agent:
             from meshpool_harness.core.metrics import CacheMeter
             self._meter = CacheMeter()
         self._meter.observe(u, self.usage)                 # full_miss_calls / full_miss_tokens, as in the benchmark loop
+        try:                                               # a server that silently cuts a too-long prompt (Ollama)
+            from meshpool_harness.core import context as CTX
+            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
+            if d["in"] >= 512 and sent > 1500 and sent > d["in"] * 1.6:
+                CTX.learn(self.current_model(), int(d["in"] * 1.02) + CTX.max_output(self._ctx_window(), None))
+        except Exception:  # noqa: BLE001
+            pass
         self.emit({"type": "usage", **d})
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
@@ -2078,12 +2139,14 @@ class Agent:
             from meshpool_harness.core import anthropic_wire as AW
             stream = False
             b = AW.to_request(b)
-            url, hdrs = f"{base}/messages", AW.headers(key)
+            url, hdrs = _PV.chat_target(base, key, b.get("model", ""), "messages")
         else:
             if stream:
                 b["stream"] = True
                 b["stream_options"] = {"include_usage": True}
-            url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            b = _PV.adapt_body(base, b)
+            url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key
+        hdrs = {**hdrs, "Content-Type": "application/json"}
         req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a
@@ -2547,7 +2610,7 @@ class Agent:
             self._question = p
             end = time.time() + wait
             try:
-                while not p["ev"].wait(0.2):
+                while not p["ev"].wait(0.5):
                     if self._stop:
                         break
                     if time.time() > end:

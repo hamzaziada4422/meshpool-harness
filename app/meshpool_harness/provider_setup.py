@@ -42,11 +42,7 @@ class SetupError(ValueError):
 
 # ---------- helpers ------------------------------------------------------------------------------------------------
 
-def clean_key(k) -> str:
-    """A key the way people paste it: quoted, with 'Bearer ' in front, or with a zero-width space."""
-    k = str(k or "").strip().strip("'\" ")
-    k = re.sub(r"^(?:bearer\s+)", "", k, flags=re.I)
-    return re.sub(r"[\s​-‏⁠﻿]", "", k)
+clean_key = C.clean_key
 
 
 def _fp(key: str) -> str:
@@ -54,7 +50,7 @@ def _fp(key: str) -> str:
 
 
 def is_local(url: str) -> bool:
-    return PV.host(url) in LOCAL or PV.host(url).endswith(".local")
+    return PV.keyless_ok(url)
 
 
 def normalise_base(url: str) -> str:
@@ -68,9 +64,14 @@ def normalise_base(url: str) -> str:
     p = urlparse(u)
     if not p.hostname or p.scheme not in ("http", "https"):
         raise SetupError("That does not look like a web address. Use the form https://api.example.com/v1.")
+    h = p.hostname.lower()
+    if h.endswith(PV.AZURE_SUFFIXES):                  # Azure OpenAI / Foundry: keep /openai/deployments/DEP, /openai/v1, /models
+        path = re.sub(r"/(?:chat/completions|completions|responses|messages)/?$", "", p.path.rstrip("/"))
+        path = re.sub(r"/models/?$", "", path) if path != "/models" else path
+        path = re.sub(r"/openai/?$", "", path).rstrip("/")
+        return urlunparse((p.scheme, p.netloc, path, "", "", ""))
     path = re.sub(r"/(?:chat/completions|completions|responses|models|messages)/?$", "", p.path.rstrip("/"))
     path = path.rstrip("/")
-    h = p.hostname.lower()
     if not path and (h in ("api.openai.com", "api.anthropic.com") or h.endswith(".anthropic.com")):
         path = "/v1"
     return urlunparse((p.scheme, p.netloc, path, "", "", ""))
@@ -90,9 +91,13 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 _OPENER = urllib.request.build_opener(_NoRedirect)
 
 
-def _get(url: str, headers: dict, timeout: float = 15.0):
-    """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout"."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Meshpool", "Accept": "application/json", **headers})
+def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = None):
+    """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout". With `body`: a JSON POST."""
+    hdr = {"User-Agent": "Meshpool", "Accept": "application/json", **headers}
+    if body is not None:
+        hdr["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, headers=hdr, data=json.dumps(body).encode("utf-8") if body is not None else None,
+                                 method="POST" if body is not None else "GET")
     try:
         with _OPENER.open(req, timeout=timeout) as r:
             raw = r.read(4_000_000)
@@ -113,10 +118,97 @@ def _get(url: str, headers: dict, timeout: float = 15.0):
         return status, None, ""
 
 
-def _headers(wire: str, key: str) -> dict:
+def _headers(wire: str, key: str, base: str = "", header: str = "", scheme: str = "") -> dict:
+    return PV.auth_headers(key, base, wire, header, scheme)
+
+
+def explain(status: int, data, *, base: str, model: str = "", version: str = "") -> str:
+    """What a failed call means, naming the real problem (wrong key, no permission, wrong deployment, wrong
+    api-version, wrong address)."""
+    err = data.get("error") if isinstance(data, dict) else None
+    msg = (err.get("message") if isinstance(err, dict) else err if isinstance(err, str) else
+           (data.get("message") if isinstance(data, dict) else "")) or ""
+    code = str(err.get("code") or "") if isinstance(err, dict) else ""
+    low = f"{msg} {code}".lower()
+    host = PV.host(base)
+    az = PV.is_azure(base)
+    tail = f" Server said: {str(msg)[:200]}" if msg else ""
+    if status == 401:
+        if az:
+            return (f"Azure rejected the key (401) for {host}. Use a key from that resource's Keys and Endpoint page "
+                    "(a key of another resource fails here), or an Entra access token." + tail)
+        return f"The key was rejected (401) by {host}. Check it and try again." + tail
+    if status == 403:
+        if az:
+            return (f"The key is recognised but not allowed (403) on {host}. Check the resource's Networking "
+                    "(firewall, private endpoint) and, for an Entra token, the role Cognitive Services OpenAI User." + tail)
+        return f"The key is valid but not allowed to do this (403). Check its permissions and the address." + tail
+    if status == 404:
+        if az and ("deployment" in low or code == "DeploymentNotFound"):
+            return (f"No deployment named '{model}' on {host}. Type the deployment name from Azure AI Foundry, "
+                    "Deployments (the name you chose, not the model name)." + tail)
+        if az:
+            return (f"Azure did not find that route (404): check the address {host}, the deployment name"
+                    f"{(' ' + repr(model)) if model else ''} and the api-version ({version or PV.azure_version()}); "
+                    "set MESHPOOL_AZURE_API_VERSION to change it." + tail)
+        if "model" in low:
+            return f"The model {model!r} was not found (404) on {host}. Check its name." + tail
+        return (f"Not found (404): check the address (most services end in /v1)"
+                f"{' and the model name ' + repr(model) if model else ''}." + tail)
+    if status == 400 and az and ("api version" in low or "api-version" in low or "apiversion" in low):
+        return (f"Azure does not accept api-version {version or PV.azure_version()}. Set another in the Azure "
+                "api-version field (or MESHPOOL_AZURE_API_VERSION), for example 2024-10-21." + tail)
+    if status == 402:
+        return "The server asks for payment (402): add credit or check the billing for this key." + tail
+    if status == 429:
+        return "The server is limiting requests right now (429). Try again in a moment." + tail
+    if status >= 500:
+        return f"The server answered with an error ({status}). Try again in a moment." + tail
+    return f"The server answered {status}." + tail
+
+
+def probe_chat(base: str, key: str, model: str, wire: str = "openai", header: str = "", scheme: str = "",
+               version: str = "") -> tuple[int, object, str]:
+    """One 1-token chat call: (status, JSON or None, error kind). It exercises the real URL, key header and model."""
+    hdr = _headers(wire, key, base, header, scheme)
     if wire == "anthropic":
-        return {"x-api-key": key, "anthropic-version": AW.VERSION} if key else {"anthropic-version": AW.VERSION}
-    return {"Authorization": f"Bearer {key}"} if key else {}
+        body = AW.to_request({"model": model, "max_tokens": 5, "messages": [{"role": "user", "content": "ping"}]})
+        return _get(base.rstrip("/") + "/messages", hdr, 30.0, body)
+    body = PV.adapt_body(base, {"model": model, "max_tokens": 16 if PV.is_azure(base) else 5,
+                                "messages": [{"role": "user", "content": "ping"}]})
+    return _get(PV.chat_url(base, model, "chat/completions", version), hdr, 30.0, body)
+
+
+def _test_azure(base: str, key: str, model: str, header: str, scheme: str, version: str, t0: float, out: dict) -> dict:
+    dep = PV.azure_deployment(base) or model
+    ver = version or PV.azure_version()
+    hdr = _headers("openai", key, base, header, scheme)
+    if dep:
+        status, data, err = probe_chat(base, key, dep, "openai", header, scheme, version)
+    else:                                    # no deployment yet: the key is still checked, on a read-only route
+        p = urlparse(base).path
+        status, data, err = _get(PV.chat_url(base, "", "info" if p.startswith("/models") else "models", version), hdr)
+    out["latency_ms"] = int((time.time() - t0) * 1000)
+    if err == "refused":
+        out["error"] = f"No server at {PV.host(base)}. Check the resource name in the address and your connection."
+    elif err == "timeout":
+        out["error"] = "The server did not answer in time."
+    elif status in (200, 429) and dep:
+        out.update(ok=True, wire="openai", models=[{"id": dep}])
+        if status == 429:
+            out["error"] = "The key works, but the deployment is rate limited right now."
+    elif status == 200:
+        out.update(ok=True, wire="openai")
+        out["error"] = ("The key is accepted. Azure does not list your deployments: type the deployment name "
+                        "(Azure AI Foundry, Deployments) as the model.")
+    elif not dep and status in (404, 405):
+        out.update(ok=True, wire="openai")
+        out["error"] = "Connected. Azure does not list deployments here: type the deployment name as the model."
+    else:
+        out["error"] = explain(status, data, base=base, model=dep, version=ver)
+    if out["ok"]:
+        _remember(base, key, out["models"])
+    return out
 
 
 def _items(data) -> list | None:
@@ -178,9 +270,12 @@ def _same_endpoint(a: str, b: str) -> bool:
         return False
 
 
-def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict:
+def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: str = "", auth_header: str = "",
+         auth_scheme: str = "", api_version: str = "") -> dict:
     t0 = time.time()
     base = normalise_base(base_url)
+    api_version = (api_version or "").strip() or (PV.azure_version(base_url) if "api-version=" in str(base_url) else "")
+    model = re.sub(r"[\r\n]", "", str(model or "")).strip()
     out = {"ok": False, "wire": "", "base_url": base, "models": [], "latency_ms": 0, "error": ""}
     key = resolve_key(base, api_key, env)
     host = PV.host(base)
@@ -193,6 +288,8 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
     if prob:
         out["error"] = prob
         return out
+    if PV.is_azure(base):
+        return _test_azure(base, key, model, auth_header.strip(), auth_scheme.strip().lower(), api_version, t0, out)
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
         wire = "auto"
@@ -203,7 +300,7 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
     last_status = 0
     for b in _candidates(base):
         for w in order:
-            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key))
+            status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, auth_header.strip(), auth_scheme.strip().lower()))
             if err == "refused":
                 out["error"] = "No server at that address. Check the address and your connection."
                 out["latency_ms"] = int((time.time() - t0) * 1000)
@@ -229,9 +326,15 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
                 saw_missing = True
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
-        out["error"] = f"The key was rejected ({auth_code}). Check it and try again."
-    elif saw_missing:      # something answers, but has no /models: the key stays unchecked, the user types a model
-        out.update(ok=True, wire=("openai" if wire == "auto" else wire), base_url=base,
+        out["error"] = explain(auth_code, None, base=base)
+    elif saw_missing:      # something answers, but has no /models: with a model name, check the key with a chat call
+        w = "openai" if wire == "auto" else wire
+        if model:
+            st, dt, er = probe_chat(base, key, model, w, auth_header.strip(), auth_scheme.strip().lower())
+            if not er and st not in (200, 429):
+                out["error"] = explain(st, dt, base=base, model=model)
+                return out
+        out.update(ok=True, wire=w, base_url=base,
                    error="Connected, but this endpoint does not list models: type a model name.")
     elif last_status >= 500:
         out["error"] = f"The server answered with an error ({last_status}). Try again in a moment."
@@ -266,12 +369,25 @@ def current() -> dict:
             "default_model": (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip(),
             "key_set": bool(k), "key_hint": k[-4:] if len(k) >= 8 else "",
             "provider": (C.read().get("MH_PROVIDER") or os.environ.get("MH_PROVIDER") or "meshpool"),
-            "host": PV.host(PV.key_base())}
+            "host": PV.host(PV.key_base()), "azure": PV.is_azure(PV.key_base()),
+            "auth_header": PV._cfg("MH_AUTH_HEADER"), "auth_scheme": PV._cfg("MH_AUTH_SCHEME"),
+            "api_version": PV._cfg("MESHPOOL_AZURE_API_VERSION")}
 
 
 def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "", allow_custom: bool = False,
-         env: str = "", confirm_env: bool = False) -> dict:
+         env: str = "", confirm_env: bool = False, auth_header: str | None = None, auth_scheme: str | None = None,
+         api_version: str | None = None) -> dict:
     base = normalise_base(base_url)
+    if auth_header is not None:
+        auth_header = auth_header.strip()
+        if auth_header and not PV._HEADER_NAME.match(auth_header):
+            raise SetupError("The key header name may only hold letters, digits and - _ . (for example api-key).")
+    if auth_scheme is not None:
+        auth_scheme = auth_scheme.strip().lower()
+        if auth_scheme not in PV.SCHEMES:
+            raise SetupError("The key scheme must be bearer, basic, token or raw.")
+    if api_version is None and "api-version=" in str(base_url):
+        api_version = PV.azure_version(str(base_url))
     model = re.sub(r"[\r\n]", "", str(default_model or "")).strip()
     if not model:
         raise SetupError("Pick the default model first.")
@@ -296,6 +412,10 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
             "MH_PROVIDER": "meshpool" if "meshpool" in PV.host(base) else "custom"}
     if key:
         vals["MESHPOOL_API_KEY"] = key
+    for k, v in (("MH_AUTH_HEADER", auth_header), ("MH_AUTH_SCHEME", auth_scheme),
+                 ("MESHPOOL_AZURE_API_VERSION", None if api_version is None else api_version.strip())):
+        if v is not None:
+            vals[k] = v
     if changed and (C.read().get("MH_SUBAGENT_MODEL") or "").strip():
         vals["MH_SUBAGENT_MODEL"] = ""                  # named a model of the old endpoint
     C.write(vals)                                        # one atomic replace of the settings file

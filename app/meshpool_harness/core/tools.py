@@ -527,21 +527,28 @@ class Workspace:
         # line endings and a BOM do not count: read_file/edit see \\n text, apply_patch sees the raw text
         return hashlib.sha1(text.lstrip("\ufeff").replace("\r\n", "\n").encode("utf-8", "replace")).hexdigest()
 
+    max_tool_chars = MAX_TOOL_CHARS          # lowered for a small context window (core/context.py)
+
     def _cap(self, text: str, label: str) -> str:
         text = clean(text)
-        if len(text) <= MAX_TOOL_CHARS:
+        cap = self.max_tool_chars
+        if len(text) <= cap:
             return text
+        head = tail = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+        more = {"read": " Read the rest with read_file start/end.", "grep": " Narrow the pattern or the path.",
+                "glob": " Use a narrower pattern."}.get(label, "") if cap < MAX_TOOL_CHARS else ""
         with _CAP_LOCK:                          # bash_many may run commands in threads (MH_PARALLEL_MANY)
             self._n += 1
             n = self._n
         f = self.run_dir / f"out_{n:03d}_{label}.txt"
+        cut = len(text) - head - tail
         try:                                     # the task may delete .run (e.g. git clean): recreate it
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_text(text, encoding="utf-8", errors="replace")
         except OSError:
-            return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
-        return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
-                + text[-TAIL:])
+            return text[:head] + f"\n... [{cut} chars truncated{"." + more if more else ""}] ...\n" + text[-tail:]
+        return (text[:head] + f"\n... [{cut} chars truncated; full output in {f}{"." + more if more else ""}] ...\n"
+                + text[-tail:])
 
     # -- container (unmounted) file access
     def _cpath(self, p: str) -> str:

@@ -146,6 +146,7 @@ def write_meta(sid: str, **kw) -> dict:
         tmp.write_text(json.dumps(m), encoding="utf-8")
         C.replace_file(tmp, _meta_path(sid))
         _METAS.pop(sid, None)
+        list_dirty()
         return m
 
 
@@ -236,6 +237,7 @@ class Session:
         self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
         self.cp = None
         self.lock = threading.RLock()          # re-entrant: a steer taken under it emits an event
+        self.changed = threading.Condition(self.lock)    # notified by emit(): event streams wait on it, not sleep
         self.state = "starting"
         self.queue: list = []                       # messages sent while a harness without mid-turn input works
         self.ctx_pending = not resume_id             # instructions and memory go with the first message
@@ -391,6 +393,7 @@ class Session:
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
+            self.changed.notify_all()
         if ev.get("type") == "user" and not ev.get("steer"):
             self._turn_open = True                   # a turn is running until its turn_end arrives
         elif ev.get("type") == "turn_end":
@@ -401,11 +404,11 @@ class Session:
             self._persist_soon()
 
     def _persist_soon(self):
-        """Steps arrive many per second: write the transcript at most once a second instead of on every step."""
+        """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
         with self.lock:
             if getattr(self, "_flush", None):
                 return
-            self._flush = threading.Timer(1.0, self._persist)
+            self._flush = threading.Timer(2.0, self._persist)
             self._flush.daemon = True
             self._flush.start()
 
@@ -447,7 +450,7 @@ class Session:
                    "options": options})
         if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
-        while not p["ev"].wait(0.3):
+        while not p["ev"].wait(0.5):
             if self.agent._stop:
                 break
         with self.lock:
@@ -685,7 +688,7 @@ class Session:
             self._ck_stop = threading.Event()
 
             def watch(run=self._ck_run, stop=self._ck_stop):
-                while not stop.wait(0.8):
+                while not stop.wait(1.5):
                     self._emit_checks(run)
             threading.Thread(target=watch, daemon=True, name="meshpool-checks").start()
         except Exception:  # noqa: BLE001
@@ -1469,60 +1472,95 @@ def _project_of(meta: dict, workdir: str, legacy: dict | None = None) -> str:
 _ROWS: dict = {}                    # session.json path -> (mtime, size, row): imported histories can be thousands
 
 
-def listing() -> list:
-    rows = {}
-    if SESSIONS.exists():
-        for p in SESSIONS.glob("*/session.json"):
-            if p.parent.name.startswith("sub-"):
-                continue
-            try:
-                st = p.stat()
-                hit = _ROWS.get(str(p))
-                if hit and hit[0] == st.st_mtime_ns and hit[1] == st.st_size:
-                    rows[hit[2]["id"]] = dict(hit[2])
-                    continue
-                d = json.loads(p.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
-                continue
-            row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
-                   "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
-                   "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
-                   "model": d.get("model"),
-                   "imported": (d.get("imported") or {}).get("source", "")}
-            _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
-            rows[d["id"]] = dict(row)
-    with LOCK:
-        for sid, s in LIVE.items():
-            rows[sid] = {"id": sid, "title": nice_title(s.agent.title or "New chat"), "workdir": s.workdir,
-                         "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
-                         "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
-    out = []
+_LIST_CACHE: list = [0.0, None, ""]       # [time built, decorated rows of the chats saved on disk]
+_LIST_TTL = 2.0                        # seconds; writes made here drop the cache at once (list_dirty)
+_LIST_LOCK = threading.Lock()
+
+
+def list_dirty() -> None:
+    """A chat was saved, renamed, moved or deleted here: the next sidebar call rebuilds the saved-chat rows."""
+    _LIST_CACHE[1] = None
+
+
+def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
+    r["title"] = m.get("title") or r["title"]
+    r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
+    r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
+    r["scheduled"] = bool(m.get("scheduled"))
+    r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
+    r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
+    if r["project_id"] and r["project_id"] not in live_pids:
+        r["project_id"] = ""
+    r["scratch"] = bool(m.get("scratch"))
+    r["kind"] = m.get("kind") or r.get("kind") or "code"
+    return r
+
+
+def _project_info() -> tuple:
     try:
         from meshpool_harness import project_store as PS
-        legacy = PS.legacy_map()
-        live_pids = {p["id"] for p in PS.list_projects()}
+        return PS.legacy_map(), {p["id"] for p in PS.list_projects()}
     except Exception:  # noqa: BLE001
-        legacy, live_pids = {}, set()
-    for r in rows.values():
-        if r["id"] in DELETED:
+        return {}, set()
+
+
+def _disk_rows() -> tuple:
+    """Rows of the saved chats, built from session.json and meta.json at most every _LIST_TTL seconds (the page asks
+    every few seconds, and every ask used to stat and decorate every chat)."""
+    with _LIST_LOCK:
+        t, hit = _LIST_CACHE[0], _LIST_CACHE[1]
+        if hit is not None and time.monotonic() - t < _LIST_TTL and _LIST_CACHE[2:] == [str(SESSIONS)]:
+            return hit
+        rows = {}
+        if SESSIONS.exists():
+            for p in SESSIONS.glob("*/session.json"):
+                if p.parent.name.startswith("sub-"):
+                    continue
+                try:
+                    st = p.stat()
+                    hit_row = _ROWS.get(str(p))
+                    if hit_row and hit_row[0] == st.st_mtime_ns and hit_row[1] == st.st_size:
+                        rows[hit_row[2]["id"]] = dict(hit_row[2])
+                        continue
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
+                    continue
+                row = {"id": d["id"], "title": nice_title(d.get("title") or "New chat"), "workdir": d.get("workdir"),
+                       "updated": d.get("updated", 0), "state": "saved", "kind": d.get("kind") or "code",
+                       "harness": HR.LEGACY.get(d.get("harness") or "", d.get("harness") or "meshpool-code"),
+                       "model": d.get("model"),
+                       "imported": (d.get("imported") or {}).get("source", "")}
+                _ROWS[str(p)] = (st.st_mtime_ns, st.st_size, row)
+                rows[d["id"]] = dict(row)
+        legacy, live_pids = _project_info()
+        base = {}
+        for sid, r in rows.items():
+            m = read_meta(sid)
+            if not m.get("deleted"):
+                base[sid] = _decorate(r, m, legacy, live_pids)
+        res = (base, legacy, live_pids)
+        _LIST_CACHE[:] = [time.monotonic(), res, str(SESSIONS)]
+        return res
+
+
+def listing() -> list:
+    base, legacy, live_pids = _disk_rows()
+    rows = {sid: dict(r) for sid, r in base.items() if sid not in DELETED}
+    with LOCK:
+        live = list(LIVE.items())
+    for sid, s in live:
+        if sid in DELETED:
             continue
-        m = read_meta(r["id"])
+        m = read_meta(sid)
         if m.get("deleted"):
             continue
-        r["title"] = m.get("title") or r["title"]
-        r["pinned"], r["archived"] = bool(m.get("pinned")), bool(m.get("archived"))
-        r["unread"] = bool(m.get("unread")) and r.get("state") not in ("working", "waiting")
-        r["scheduled"] = bool(m.get("scheduled"))
-        r["pr"] = m.get("pr") or None                 # the pull request last seen for this session (the row's icon and card)
-        r["project_id"] = _project_of(m, r.get("workdir") or "", legacy)
-        if r["project_id"] and r["project_id"] not in live_pids:
-            r["project_id"] = ""
-        r["scratch"] = bool(m.get("scratch"))
-        r["kind"] = m.get("kind") or r.get("kind") or "code"
-        out.append(r)
-    return sorted(out, key=lambda r: -r["updated"])[:400]
+        r = {"id": sid, "title": nice_title(s.agent.title or "New chat"), "workdir": s.workdir,
+             "updated": time.time() if s.state != "idle" else rows.get(sid, {}).get("updated", time.time()),
+             "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
+        rows[sid] = _decorate(r, m, legacy, live_pids)
+    return sorted(rows.values(), key=lambda r: -r["updated"])[:400]
 
 
 def exists(sid: str) -> bool:
@@ -1559,6 +1597,7 @@ def thread_action(sid: str, body: dict) -> dict:
             scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
         with LOCK:
             DELETED.add(sid)
+            list_dirty()
             s = LIVE.pop(sid, None)
         if s:
             s.deleted = True
@@ -1571,6 +1610,7 @@ def thread_action(sid: str, body: dict) -> dict:
         d = SESSIONS / sid
         if d.is_dir() and d.parent == SESSIONS:
             shutil.rmtree(d, ignore_errors=True)
+        list_dirty()
         try:                                          # its checks records go with it
             from meshpool_harness import checks as CK
             for f in [CK._file(sid), *CK._dir().glob(f"{CK._safe(sid)}_*.jsonl")]:
@@ -1585,6 +1625,11 @@ def thread_action(sid: str, body: dict) -> dict:
     return {"ok": True}
 
 
+_RAW: dict = {}                      # session.json path -> ((mtime, size), text, lowercase text) for search
+_RAW_BYTES = [0]
+_RAW_CAP = 48 * 1024 * 1024          # characters x 2 copies; beyond it a file is read each time
+
+
 def search(q: str) -> list:
     q = q.strip().lower()
     if not q:
@@ -1594,10 +1639,20 @@ def search(q: str) -> list:
         if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
             continue
         try:
-            raw = p.read_text(encoding="utf-8")
+            st = p.stat()
+            key = (st.st_mtime_ns, st.st_size)
+            hit = _RAW.get(str(p))
+            if hit and hit[0] == key:
+                raw, low = hit[1], hit[2]
+            else:
+                raw = p.read_text(encoding="utf-8")
+                low = raw.lower()
+                if _RAW_BYTES[0] + 2 * len(raw) <= _RAW_CAP:      # keep the text of recent searches in memory, up to a cap
+                    old_hit = _RAW.get(str(p))
+                    _RAW_BYTES[0] += 2 * len(raw) - (2 * len(old_hit[1]) if old_hit else 0)
+                    _RAW[str(p)] = (key, raw, low)
         except OSError:
             continue
-        low = raw.lower()
         i = low.find(q)
         if i < 0:
             continue

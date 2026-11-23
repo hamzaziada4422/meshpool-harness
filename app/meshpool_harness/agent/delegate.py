@@ -561,7 +561,7 @@ class Delegation:
             while not done.is_set():
                 if not self.stopped and ((deadline and time.time() > deadline) or cancelled()):
                     self.stop_all("the time limit" if deadline and time.time() > deadline else "Stop")
-                time.sleep(0.25)
+                done.wait(0.5)
         threading.Thread(target=watch, daemon=True).start()
         ex = ThreadPoolExecutor(max(1, min(self.cfg["parallel"], len(self.rows))))
         futs = [ex.submit(self._one, i) for i in range(len(self.rows))]

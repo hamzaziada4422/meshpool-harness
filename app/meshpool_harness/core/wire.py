@@ -191,10 +191,12 @@ class SimpleLedger:
             body = AW.to_request(body)
         elif wire == "responses":
             body = to_responses(body)
-        url = f"{base_url}/{'messages' if anthropic else 'responses' if wire == 'responses' else 'chat/completions'}"
+        path = "messages" if anthropic else "responses" if wire == "responses" else "chat/completions"
+        url, auth = PV.chat_target(base_url, api_key, body.get("model", ""), path)   # Azure path, api-version, key header
+        if not anthropic and wire != "responses":
+            body = PV.adapt_body(base_url, body)
         req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
-                                     headers={**(AW.headers(api_key) if anthropic else
-                                                 {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}),
+                                     headers={**auth, "Content-Type": "application/json",
                                               "X-Harness-Task-Id": task_id,
                                               **({"session_id": task_id.split("-esc")[0]}
                                                  if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})

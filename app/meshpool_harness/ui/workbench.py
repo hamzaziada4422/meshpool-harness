@@ -165,15 +165,14 @@ def models(refresh: bool = False) -> dict:
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key:
+    elif not key and not __import__("meshpool_harness.providers", fromlist=["x"]).keyless_ok(base):
         rows, err = [], "Add your API key to see your models."
     else:
         rows, err = [], ""
         try:
             from meshpool_harness import providers as _PV
-            auth = ({"x-api-key": key, "anthropic-version": "2023-06-01"} if _PV.key_wire() == "anthropic"
-                    else {"Authorization": f"Bearer {key}"})
-            req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
+            url, auth = _PV.chat_target(base, key, "", "models")     # Azure: /openai/models?api-version=, api-key
+            req = urllib.request.Request(url, headers={**auth, "User-Agent": "Meshpool"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
@@ -193,6 +192,8 @@ def models(refresh: bool = False) -> dict:
                              "provider": _provider_of(mid, meta.get("owned_by", "")),
                              "context": meta.get("context_length") or meta.get("context_window"), "caps": caps})
             rows.sort(key=lambda r: (r["provider"].lower(), r["id"].lower()))
+            if _PV.is_azure(base) and "/openai/v1" not in base:      # Azure lists base models, not your deployments
+                rows = []
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
             err = f"The endpoint answered HTTP {e.code} when listing models." + (
@@ -202,7 +203,7 @@ def models(refresh: bool = False) -> dict:
     from meshpool_harness import providers as PV
     dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}
-    if dprov == "key" and dbare not in ids and key:
+    if dprov == "key" and dbare not in ids and (key or PV.keyless_ok(base)):
         rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
     # One section per provider (the key endpoint and ChatGPT), ready or with what to set up.
@@ -389,7 +390,28 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     return r.stdout
 
 
-def git_status(root: str) -> dict:
+_GS: dict = {}                      # project folder -> (time, status): the panel and PR code ask again and again
+_GS_LOCKS: dict = {}
+_GS_TTL = 1.5
+
+
+def git_status(root: str, fresh: bool = False) -> dict:
+    """Status of a project's repository. It is six git processes, so calls within a moment share one answer, and
+    callers at the same time wait for it instead of each starting their own. fresh=True after a change."""
+    key = str(root)
+    gate = _GS_LOCKS.setdefault(key, threading.Lock())
+    with gate:
+        hit = _GS.get(key)
+        if hit and not fresh and time.monotonic() - hit[0] < _GS_TTL:
+            return dict(hit[1])
+        res = _git_status(root)
+        if len(_GS) > 50:
+            _GS.clear()
+        _GS[key] = (time.monotonic(), res)
+        return dict(res)
+
+
+def _git_status(root: str) -> dict:
     r = check_root(root)
     if not git_exe():
         return {"repo": False, "git": False}
@@ -474,11 +496,11 @@ def git_action(root: str, body: dict) -> dict:
         return _open_pr(r, body)
     else:
         raise ValueError("Unknown Git action.")
-    return git_status(str(r))
+    return git_status(str(r), fresh=True)
 
 
 def _open_pr(r: Path, body: dict) -> dict:
-    st = git_status(str(r))
+    st = git_status(str(r), fresh=True)
     slug = st.get("github")
     if not slug:
         raise ValueError("Pull requests work with GitHub remotes. This project's origin is not on GitHub.")

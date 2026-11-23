@@ -67,6 +67,9 @@ def classify_error(msg: str) -> str:
             r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)"
             r"|key_model_access_denied", m, re.I):
         return "model_missing"                      # an old chat on a model the endpoint no longer serves
+    from meshpool_harness.core.context import is_context_error
+    if is_context_error(m) and not re.search(r"HTTP 429|rate.?limit|per minute", m, re.I):
+        return "context"                            # any status: llama.cpp and Ollama servers use 400, 500 or 200
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
     if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
@@ -152,22 +155,40 @@ class LiveClient:
             ex["tools"] = tools
             ex.setdefault("tool_choice", "auto")
         import time
+        from meshpool_harness.core import context as CTX
+        base_url = getattr(self.ledger, "base_url", None)
+        win = CTX.window(model, base_url, getattr(self.ledger, "api_key", "") or "")
+        CTX.tell_once(model, win, self.notify or _tell_retry)
+        tighten, shrinks = 1.0, 0
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
         for attempt in range(3 if side else 25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
             try:
-                r = self.ledger.chat(model=model, messages=messages, profile=profile, task_id=task_id,
-                                     role=role, job_id=job_id, max_tokens=max_tokens, temperature=temperature,
-                                     extra=ex, retries=0)
+                send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
+                ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
+                r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
+                                     role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
+                                     extra=ex2, retries=0)
                 self._n429 = 0                                    # a success resets the 429 backoff
+                self._check_silent_cut(model, send, sent_tools, r, win)
                 _log_event(task_id, role, model, r)
                 return r
             except RuntimeError as e:
                 last = e
                 msg = str(e)
                 kind = classify_error(msg)
-                if kind in ("bad_request", "context", "vision", "gateway_reject") and attempt == 0:
+                if kind == "context":                              # too long: learn the real window, shrink, retry now
+                    shrinks += 1
+                    said = CTX.parse_limit(msg)
+                    if said and said < win:
+                        win = CTX.learn(model, said)
+                        CTX.tell_once(model, win, self.notify or _tell_retry)
+                    tighten *= 0.7
+                    if shrinks > 4:
+                        raise
+                    continue
+                if kind in ("bad_request", "vision", "gateway_reject") and attempt == 0:
                     from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
                         if isinstance(m.get("content"), str):
@@ -201,6 +222,18 @@ class LiveClient:
                                                  f"{int(budget)} s.")
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last
+
+    def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
+        """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far
+        under what was sent: take that as the window, so the next request is trimmed to it."""
+        try:
+            from meshpool_harness.core import context as CTX
+            used = int(((resp or {}).get("usage") or {}).get("prompt_tokens") or 0)
+            sent_tok = CTX.estimate(sent) + CTX.estimate(tools or [])
+            if used and sent_tok > 1500 and sent_tok > used * 1.6 and used >= 512:
+                CTX.learn(model, int(used * 1.02) + CTX.max_output(win, None))
+        except Exception:  # noqa: BLE001
+            pass
 
     def spent(self) -> float | None:
         st = getattr(self.ledger, "state", None)          # SimpleLedger (stand-alone install) has no spend state

@@ -10,7 +10,9 @@ import csv
 import io
 import json
 import re
+import os
 import sys
+import threading
 import zipfile
 from pathlib import Path
 
@@ -28,13 +30,77 @@ def is_image(p: Path) -> bool:
     return p.suffix.lower() in IMAGE_EXT
 
 
+# One read at a time per core pair: several chats reading PDFs at once must not use every core.
+_SLOTS = threading.BoundedSemaphore(max(1, (os.cpu_count() or 2) // 2))
+PDF_PAGES = 80                           # pages read per call when the caller does not name pages
+_CACHE_MAX = 300                         # files kept in the cache folder
+_NOT_CACHED = ("Could not read", "Meshpool cannot read", "[Meshpool] ")
+
+
+def _cache_dir() -> Path:
+    from meshpool_harness import config as C
+    return C.home() / "cache" / "docread"
+
+
+def _cache_key(p: Path, *args) -> str:
+    import hashlib
+    st = p.stat()
+    return hashlib.sha1(repr((str(p.resolve()), st.st_mtime_ns, st.st_size, PDF_PAGES, *args)).encode("utf-8")).hexdigest()
+
+
+def _cache_get(key: str) -> str | None:
+    try:
+        f = _cache_dir() / (key + ".txt")
+        txt = f.read_text(encoding="utf-8")
+        os.utime(f, None)                  # recently used stays
+        return txt
+    except OSError:
+        return None
+
+
+def _cache_put(key: str, text: str) -> None:
+    if not text or text.startswith(_NOT_CACHED) or "OCR did not run" in text:
+        return                             # a failure or a partial OCR must be tried again, not remembered
+    try:
+        d = _cache_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        tmp = d / f"{key}.{os.getpid()}.{threading.get_ident()}.tmp"
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, d / (key + ".txt"))
+        files = sorted(d.glob("*.txt"), key=lambda f: f.stat().st_mtime)
+        for f in files[:max(0, len(files) - _CACHE_MAX)]:
+            f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def extract(path: str | Path, max_chars: int = MAX, sheet: str | None = None, pages: str | None = None,
             lang: str = "auto", ocr: str = "auto") -> str:
     """ocr: "auto" reads scanned pages and pictures with OCR, "always" also OCRs pages that have some text
-    (mixed scans), "never" skips OCR."""
+    (mixed scans), "never" skips OCR. The text of a file is kept on disk keyed by its path, size and modified time,
+    so reading it again (or in another chat) costs nothing."""
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"file not found: {path}")
+    if os.environ.get("MH_DOC_CACHE", "1") == "0":
+        return _extract(p, max_chars, sheet, pages, lang, ocr)
+    try:
+        key = _cache_key(p, max_chars, sheet, pages, lang, ocr)
+    except OSError:
+        return _extract(p, max_chars, sheet, pages, lang, ocr)
+    hit = _cache_get(key)
+    if hit is not None:
+        return hit
+    with _SLOTS:
+        hit = _cache_get(key)              # another chat may have just read it while this one waited its turn
+        if hit is not None:
+            return hit
+        out = _extract(p, max_chars, sheet, pages, lang, ocr)
+    _cache_put(key, out)
+    return out
+
+
+def _extract(p: Path, max_chars: int, sheet, pages, lang: str, ocr: str) -> str:
     ext = p.suffix.lower()
     fn = {".pdf": _pdf, ".docx": _docx, ".docm": _docx, ".pptx": _pptx, ".pptm": _pptx, ".xlsx": _xlsx,
           ".xlsm": _xlsx, ".xls": _xls, ".csv": _csv, ".tsv": _csv, ".pbix": _pbix, ".pbit": _pbix,
@@ -106,14 +172,19 @@ def _pdf(p: Path, pages: str | None = None, lang: str = "auto", ocr_mode: str = 
     meta = r.metadata or {}
     head = f"# {p.name}\n{n} pages" + (f", title: {meta.get('/Title')}" if meta.get("/Title") else "") + "\n"
     idx = _page_set(pages, n)
+    if not pages and len(idx) > PDF_PAGES:        # a long PDF in one go is slow and floods the context: a first part
+        head += (f"\nShowing pages 1 to {PDF_PAGES}; {len(idx) - PDF_PAGES} more pages are not read yet. "
+                 f"Ask for them with pages=\"{PDF_PAGES + 1}-{min(n, 2 * PDF_PAGES)}\" and so on.\n")
+        idx = idx[:PDF_PAGES]
     texts: list[str] = []
-    miner = True
+    miner, tries = True, 0
     for i in idx:
         try:
             t = r.pages[i].extract_text() or ""
         except Exception:  # noqa: BLE001
             t = ""
-        if len(t.strip()) < 20 and miner:
+        if len(t.strip()) < 20 and miner and tries < 6:   # each try re-reads the whole file: only a few
+            tries += 1
             try:                                   # pdfminer handles some layouts pypdf misses
                 from pdfminer.high_level import extract_text
                 t2 = extract_text(str(p), page_numbers=[i]) or ""

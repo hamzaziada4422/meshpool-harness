@@ -194,6 +194,16 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
+    from . import context as CTX
+    _led = getattr(client, "ledger", None)
+    win = CTX.window(model, getattr(_led, "base_url", None), getattr(_led, "api_key", "") or "")
+    ws.max_tool_chars = CTX.tool_output_chars(win)
+    caps.max_output_tokens = CTX.max_output(win, caps.max_output_tokens)
+    caps.compact_chars = CTX.compact_chars(win, CTX.estimate(tools) + CTX.estimate(sys_msg), caps.compact_chars)
+    if CTX.is_small(win):                                # LiveClient tells the user once; the window shrinks the rest
+        caps.keep_recent = min(caps.keep_recent, 4 if win <= 16_384 else 6)
+        sys_msg = CTX.head_tail(sys_msg, int(win * 0.25 * CTX.CHARS_PER_TOKEN), "from the instructions to fit the window")
+        tools = CTX.compact_tools(tools, win)
     messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": task_text}]
     if _box is not None:
         _box["messages"] = messages
@@ -214,6 +224,9 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
             return res
         if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars:
             messages = _compact(messages, caps.keep_recent)
+            if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars and CTX.is_small(win):
+                from meshpool_harness.agent import compaction as _CP     # still over 70% of a small window: summarize
+                _CP.compact_history(messages, client=client, model=model, win=win)
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()

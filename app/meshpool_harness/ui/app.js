@@ -177,6 +177,16 @@ function toast(text, ms = 5000, action) {
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
+// Grow the message box with its text. Reading scrollHeight forces a layout of the whole page, so a single short line
+// (the common keystroke) skips it, and the rest is done at most once per frame.
+let fitRaf = 0;
+function fitInput(inp) {
+  const v = inp.value;
+  if (v.length < 40 && v.indexOf("\n") < 0) { if (inp.dataset.fit !== "1") { inp.dataset.fit = "1"; inp.style.height = ""; } return; }
+  inp.dataset.fit = "";
+  if (fitRaf) return;
+  fitRaf = requestAnimationFrame(() => { fitRaf = 0; inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; });
+}
 function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
@@ -458,7 +468,7 @@ function setupComposer() {
   const inp = $("#input");
   inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
-  inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
+  inp.addEventListener("input", () => { fitInput(inp); menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
     if (pop && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(e.key)) { e.preventDefault(); popKey(e.key); return; }
@@ -897,11 +907,16 @@ async function poll() {
   }
   if (S.cur !== cur) return;
   if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
+  const before = cur.total;
   const again = ingest(cur, v);
   if (again) return poll();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   if (busy) startStream(cur);
-  cur.pollT = setTimeout(poll, cur.es && cur.es.readyState === 1 ? 4000 : busy ? 400 : document.hidden ? 15000 : 3000);
+  // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
+  cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
+  const delay = busy ? (document.hidden ? 2000 : cur.es && cur.es.readyState === 1 ? 4000 : 400)
+    : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
+  cur.pollT = setTimeout(poll, delay);
 }
 // Take one view of the chat (from a poll or the stream): queue its new events and update the chrome around them.
 function ingest(cur, v) {
@@ -919,6 +934,7 @@ function ingest(cur, v) {
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
     cur.q.push(ev); got++;
   }
+  if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
   if (got || prevState !== v.state) progressSoon();
@@ -964,16 +980,23 @@ function drainQ(cur, all) {
 }
 function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
 function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+// The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
+// Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
+let frameR = 0, frameT = 0;
+function wakeFrame() { if (frameT) { clearTimeout(frameT); frameT = 0; } if (!frameR) frameR = requestAnimationFrame(frame); }
 function frame() {
-  requestAnimationFrame(frame);
+  frameR = 0; frameT = 0;
   const cur = S.cur;
   if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
   easeAll(); workTick(cur);
+  const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
+  if (active && !document.hidden) frameR = requestAnimationFrame(frame);
+  else frameT = setTimeout(frame, document.hidden ? 2000 : cur?.working || S.sendHold > Date.now() ? 250 : 1000);
 }
 // The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
 // scrolls with it smoothly instead of stepping a whole line at a time.
 const EASE = new Set();
-function easeStart(node) { if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+function easeStart(node) { wakeFrame(); if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
 function easeEnd(node) { if (node) node.dataset.done = "1"; }
 function easeAll() {
   for (const n of EASE) {
@@ -1010,7 +1033,7 @@ function setupScroll() {
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
   conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
   if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
-  requestAnimationFrame(frame);
+  wakeFrame();
 }
 
 /* ---------- markdown ---------- */
@@ -2566,7 +2589,10 @@ async function restartApp() {
   window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
   { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
-  setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
+  // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
+  let thT = 0;
+  setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */

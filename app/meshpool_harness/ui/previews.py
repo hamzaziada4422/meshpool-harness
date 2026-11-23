@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -126,6 +127,11 @@ def _render(pdf: Path, page: int, width: int) -> bytes:
 
 # ------------------------------------------------------------------ Office -> PDF (background, one at a time)
 def _convert_job(src: Path, key: str) -> None:
+    if sys.platform.startswith("linux"):          # background work: the chat and the page come first (this thread's
+        try:                                      # priority, inherited by LibreOffice)
+            os.nice(10)
+        except OSError:
+            pass
     out = _dir() / key
     try:
         with _CONVERT:
