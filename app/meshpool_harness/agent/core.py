@@ -945,8 +945,7 @@ class Agent:
         self.approve = approve
         self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
         self.always: set[str] = set()
-        # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
-        self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 2000    # a runaway turn stops; the next message continues
+        self.max_steps = max_steps                  # explicit cap (0 = unset): _step_cap() resolves it each turn
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
         self._stop = False
         self._inbox, self._inbox_lock = [], threading.Lock()
@@ -1355,6 +1354,88 @@ class Agent:
         self._n429 = 0                               # rate-limit backoff step: every turn starts at the short wait
         self._pace_wrapped = False                   # the quick-turn wrap (no more tools) is on for this turn
         self._in_turn = True                         # a plan-mode change now waits for the turn to end
+        self._turn_cap = self._step_cap()            # read now, so a settings change applies from the next message
+
+    DEFAULT_STEPS = 200
+
+    def _step_cap(self) -> int:
+        """Steps allowed in one turn (0 = no cap): the constructor's max_steps, else MH_MAX_STEPS (a positive number;
+        0, off or none lift the cap), else 200. A runaway turn stops there; the next message continues."""
+        if self.max_steps:
+            return int(self.max_steps)
+        raw = str(os.environ.get("MH_MAX_STEPS", "") or "").strip().lower()
+        if raw in ("0", "off", "none", "no", "false"):
+            return 0
+        try:
+            n = int(raw)
+        except ValueError:
+            return self.DEFAULT_STEPS
+        return n if n > 0 else self.DEFAULT_STEPS
+
+    def _loop_tripped(self, g: dict) -> bool:
+        """Outer breaker: no progress for MH_STUCK_STEPS + MH_REPEAT_STOP steps and the last MH_REPEAT_STOP step
+        signatures identical or a repeating 2- or 3-step block (MH_REPEAT_STOP=0 turns it off)."""
+        try:
+            stop = int(os.environ.get("MH_REPEAT_STOP", "8") or 0)
+            stuck = int(os.environ.get("MH_STUCK_STEPS", "36") or 36)
+        except ValueError:
+            stop, stuck = 8, 36
+        sigs = g.get("sigs", [])
+        if stop <= 0 or g.get("np", 0) < stuck + stop or len(sigs) < stop:
+            return False
+        w = sigs[-stop:]
+        return any(all(w[i] == w[i - p] for i in range(p, len(w))) for p in (1, 2, 3))
+
+    def _track_progress(self, calls: list, outs: list, g: dict):
+        """Per turn, independent of V3: steps since a file changed or a new non-read-only command succeeded, and the
+        step's signature (its calls plus a hash of what they returned)."""
+        import hashlib
+        seen = g.setdefault("b_seen", set())
+        new = [c for c in self.ws.commands if c.get("code") == 0 and c["cmd"] not in seen and not T.read_only(c["cmd"])]
+        g["b_seen"].update(c["cmd"] for c in self.ws.commands)
+        if new or self.ws.edits != g.get("b_edits", g["edits0"]):
+            g["np"], g["sigs"], g["b_edits"] = 0, [], self.ws.edits
+            return
+        g["np"] = g.get("np", 0) + 1
+        sig = "|".join(str(c.get("function", {}).get("name", "")) + ":" + str(c.get("function", {}).get("arguments", ""))[:2000]
+                       for c in calls) + "#" + hashlib.md5("\x00".join(map(str, outs)).encode("utf-8", "replace")).hexdigest()
+        g["sigs"] = (g.get("sigs", []) + [sig])[-12:]
+
+    def _break_loop(self, calls: list, g: dict, turn: dict) -> str:
+        """End a turn that is going round in circles. The pending calls are not run (each gets a result, so the history
+        stays valid); one last request with tools off gives a best-effort answer, followed by the files changed."""
+        note = "Not run: stopped, the agent was repeating itself."
+        for c in calls:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": note})
+        self.messages.append({"role": "user", "content": (
+            "[Meshpool] You are repeating yourself, so this turn ends now. Do not call any tool. In plain words: say what "
+            "is done, what is not, and what you would try next.")})
+        self._finish, self._no_tools = None, True
+        try:
+            msg, streamed = self._chat(turn)
+        finally:
+            self._no_tools = False
+        text = (msg.get("content") or "").strip()
+        keep = {"role": "assistant", "content": text}
+        late = _sanitize_calls(msg.get("tool_calls") or [])
+        if late:                                     # a model that ignores tool_choice "none": answered, not run
+            keep["tool_calls"] = late
+        self.messages.append(keep)
+        for c in late:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": note})
+        files = []
+        for f in sorted(getattr(self.ws, "turn_files", ()) or ()):
+            try:
+                files.append(os.path.relpath(f, self.root))
+            except ValueError:
+                files.append(str(f))
+        text = text or "I stopped because I was repeating the same steps without making progress."
+        if files:
+            text += "\n\nFiles changed this turn: " + ", ".join(files)
+        self.emit({"type": "assistant", "text": text, "streamed": False, "has_tools": False})
+        self.emit({"type": "error", "text": "Stopped: the agent kept repeating the same steps without progress. What it "
+                                            "did so far is kept; send a message to steer it."})
+        return text
 
     def _turn(self) -> str:
         self._begin_turn_state()
@@ -1419,7 +1500,8 @@ class Agent:
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
-            for step in (range(self.max_steps) if self.max_steps else itertools.count()):
+            cap = self._turn_cap
+            for step in (range(cap) if cap else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
                 if time.time() - getattr(self, "_saved_at", 0) > 4:        # a crash or power loss keeps the work so far
@@ -1436,6 +1518,7 @@ class Agent:
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
+                tools_off = bool(getattr(self, "_no_tools", False))
                 try:
                     msg, streamed = self._chat(turn)
                 finally:
@@ -1545,8 +1628,19 @@ class Agent:
                     if again:
                         continue
                     break
+                if tools_off and os.environ.get("MH_REPEAT_STOP", "8") != "0":
+                    g["off_calls"] = g.get("off_calls", 0) + 1     # tools were off for this reply, yet it asked for some
+                    if g["off_calls"] >= 2:
+                        final = said + self._break_loop(calls, g, turn)
+                        break
+                    for c in calls:                                # first time: not run, asked once more with tools off
+                        self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": (
+                            "Not run: tools are off for this reply. Answer in words.")})
+                    g["hard_wrap"] = True
+                    continue
                 said = ""
                 shots = []
+                step_out = []
                 for batch in _batches(calls):
                     self._check_stop()
                     if len(batch) > 1:               # independent lookups: run together, answer in the asked order
@@ -1555,6 +1649,7 @@ class Agent:
                             outs = list(ex.map(lambda c: self._guarded_tool(c, g, cut=c["id"] in cut), batch))
                     else:
                         outs = [self._guarded_tool(batch[0], g, cut=batch[0]["id"] in cut)]
+                    step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
@@ -1562,6 +1657,7 @@ class Agent:
                         self.mcp.last_images = []
                 if shots:
                     self._attach_images(shots)
+                self._track_progress(calls, step_out, g)
                 if V3 and not cx:
                     note = self._v3_notes(step, calls, g)
                     if note:
@@ -1570,9 +1666,14 @@ class Agent:
                     note = self._plan_note(calls, g)
                     if note:
                         self.messages.append({"role": "user", "content": "[Meshpool] " + note})
+                if self._loop_tripped(g):
+                    final = self._break_loop([], g, turn)
+                    break
             else:
-                self.emit({"type": "error", "text": f"Stopped after {self.max_steps} steps in one turn. "
-                                                    "Send a message to continue."})
+                self.emit({"type": "error", "text": (
+                    f"Stopped after {cap} steps in one turn. What was done so far is kept. Send a message (for example "
+                    "\"continue\") to carry on. The limit is \"Max steps per reply\" in Settings (MH_MAX_STEPS; 0 = no "
+                    "limit).")})
         except (Interrupted, KeyboardInterrupt):
             self._repair()
             added = [t for t, _ in getattr(self, "_inbox", [])]
@@ -1974,7 +2075,8 @@ class Agent:
             g["hard_wrap_done"] = g["hard_wrap"] = True   # once: the next call has no tools and must answer
             notes.append("You have made no progress for a long time. Stop here: say what works, what does not, and "
                          "what you would try next. Do not call another tool.")
-        if self.max_steps >= 30 and step == self.max_steps - 15:
+        cap = getattr(self, "_turn_cap", 0)
+        if cap >= 30 and step == cap - 15:
             notes.append("15 steps left in this turn. Make sure what the user asked for exists and works now; refine "
                          "it afterwards if steps remain.")
         return " ".join(notes)
