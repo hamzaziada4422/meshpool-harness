@@ -678,7 +678,7 @@ class Session:
         self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
                    "handoff": {"harness": hid, "reason": why}})
 
-    def _start_failed_handoff(self, text: str) -> bool:
+    def _start_failed_handoff(self, text: str, ev0: int | None = None) -> bool:
         """The first turn of an Auto-routed chat ended because its agent could not start (the agent recorded it in
         hrouter/health.py, so Auto no longer offers it): move the chat to the agent Auto picks now and say so. True
         when the chat moved and the caller should send the message again. Once per chat; never raises."""
@@ -692,7 +692,17 @@ class Session:
             nxt = HRT.route(text, self.kind).get("harness")
             if not nxt or nxt == self.harness.get("id"):
                 return False
-            self.handoff(nxt, f"{self.harness.get('name', 'The first agent')} could not start")
+            name = self.harness.get("name", "The first agent")
+            if ev0 is not None:
+                # The failed attempt (its copy of the message, the error, its turn end) becomes one note, so the
+                # chat shows the message once, after the switch, and the next agent's history carries it once.
+                with self.lock:
+                    self.events = [dict(e, i=i) for i, e in enumerate(
+                        self.events[:ev0] + [{"type": "status", "t": time.time(),
+                                              "text": f"{name} could not start: {str(err)[:300]}"}])]
+                self.epoch += 1                      # the page reloads the transcript instead of appending to it
+                self._persist(running=True)
+            self.handoff(nxt, f"{name} could not start")
             return True
         except Exception:  # noqa: BLE001 - the failed turn already told the user; nothing new may break it
             return False
@@ -946,7 +956,7 @@ class Session:
                     self.agent.send(body, images=images)
                 else:
                     self.agent.send(body)
-                if self._start_failed_handoff(text):        # M29-02: the agent Auto picked could not start
+                if self._start_failed_handoff(text, ev0):   # M29-02: the agent Auto picked could not start
                     if images:
                         self.agent.send(body, images=images)
                     else:
