@@ -208,9 +208,10 @@ def test_hermes_config_and_its_backup_are_private_from_the_start(home):
     old = HR.hermes_home() / "config.yaml"
     old.write_text("model: {}\n")
     os.chmod(old, 0o644)
-    HR.prepare_hermes("deepseek-v4.1-flash")
+    env = HR.prepare_hermes("deepseek-v4.1-flash")
     backups = list((HR.hermes_home() / "backups" / "config").glob("config.yaml.good.*"))
-    assert backups and "mk-123456789" in old.read_text()
+    # the key reaches Hermes through its own environment; the shared file holds no key at all
+    assert backups and "mk-123456789" not in old.read_text() and HR.hermes_model(env)["api_key"] == "mk-123456789"
     for f in [old, *backups]:
         assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
 

@@ -17,6 +17,33 @@ from meshpool_harness.harnesses.acp import ACPAgent
 from meshpool_harness.harnesses.pi_rpc import PiAgent
 
 LIVE: dict[str, "Session"] = {}
+
+# Update gate: while an update is being installed no turn or scheduled run may start (M11-02).
+GATE = threading.Lock()
+QUIESCING = [False]
+_GATE_MSG = "Meshpool is restarting to install an update. Send this again in a moment."
+
+
+def quiesce() -> bool:
+    """Close the gate if nothing is running. False (gate left open) while any live chat works or waits."""
+    with GATE:
+        if any(s.state in ("working", "waiting") for s in list(LIVE.values())):
+            return False
+        QUIESCING[0] = True
+        return True
+
+
+def resume() -> None:
+    with GATE:
+        QUIESCING[0] = False
+
+
+def _claim_working(sess) -> None:
+    """Set a session to "working" under the gate, or refuse while an update is being installed."""
+    with GATE:
+        if QUIESCING[0]:
+            raise ValueError(_GATE_MSG)
+        sess.state = "working"
 LOCK = threading.Lock()
 _SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
@@ -556,7 +583,8 @@ class Session:
             self.agent.reply(q["id"], text)              # typed in the message box: the answer to the open question
             return {"queued": False, "answered": q["id"]}
         if self.state in ("working", "waiting"):
-            if hasattr(self.agent, "steer") and self.harness["type"] != "acp":
+            if (hasattr(self.agent, "steer") and self.harness["type"] != "acp"
+                    and not getattr(self.agent, "_stop", False)):   # after Stop: queued, it runs once the turn ends
                 with self.lock:                      # the turn may be ending: decide under the lock it ends under
                     if self.state in ("working", "waiting"):
                         self.agent.steer(self._body(text, images), images=images)
@@ -827,7 +855,7 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
         with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
-            self.state = "working"
+            _claim_working(self)
         try:
             caps = self._capability_turn(text)
         except BaseException:
@@ -1002,11 +1030,14 @@ class Session:
                 write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan)
                 nxt = None
                 with self.lock:
-                    if self.queue and not getattr(self.agent, "_stop", False):
+                    # Stop clears the queue, so whatever is queued now was sent after Stop, while the turn wound
+                    # down. The user was told it would run: run it (it was dropped, and its Queued chip stayed).
+                    if self.queue:
                         items, self.queue = self.queue, []
                         nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                    elif self.queue:
-                        self.queue = []
+                        if getattr(self.agent, "_stop", False) and self.harness.get("type") == "acp":
+                            nxt = (nxt[0] + "\n\n\u200b[Meshpool] I stopped your previous request. Do not continue "
+                                   "it; answer this message instead.", nxt[1])
                 if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
                     nxt = self._goal_next(ev0)
                 elif not nxt and not getattr(self.agent, "_stop", False) and not self._stop_req:
@@ -1047,7 +1078,7 @@ class Session:
         if not hasattr(self.agent, "grade_now"):
             raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
         with self.lock:
-            self.state = "working"
+            _claim_working(self)
         self.t_turn = time.time()
 
         def go():
@@ -1220,6 +1251,8 @@ class Session:
             with self.lock:
                 self.events = events_from_messages(self.agent.messages[1:])
         else:
+            if hasattr(self.agent, "forget_session"):
+                self.agent.forget_session()          # the harness's own session still holds the undone turns
             with self.lock:
                 # the harness keeps its own history; keep the transcript up to that turn
                 users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
@@ -1867,7 +1900,7 @@ def scheduler_loop():
     from meshpool_harness import assistant as AS
     while True:
         try:
-            for t in AS.due():
+            for t in ([] if QUIESCING[0] else AS.due()):      # due tasks stay due and run after the restart
                 try:
                     run_scheduled(t)
                 except Exception as e:  # noqa: BLE001

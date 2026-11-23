@@ -102,7 +102,8 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         h["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers=h,
                                  method="POST" if body is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout or PROBE_TIMEOUT_S) as r:
+    from meshpool_harness.core import http as _mhttp   # keyed: no cross-host redirect, no proxy for loopback
+    with _mhttp.open(req, timeout or PROBE_TIMEOUT_S) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 

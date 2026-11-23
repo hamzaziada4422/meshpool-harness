@@ -334,7 +334,14 @@ def run() -> int:
     C.load_into_env()
     _bundled_tools()
     ensure_cli()
+    import time
     url = _running_instance()
+    restarted = os.environ.pop("MESHPOOL_RESTARTED", None)
+    if url and restarted:                                      # started by an update restart: the old app is closing
+        end = time.time() + 90
+        while url and time.time() < end:
+            time.sleep(0.5)
+            url = _running_instance()
     if url:
         if not _show_running(url):
             open_window(url)

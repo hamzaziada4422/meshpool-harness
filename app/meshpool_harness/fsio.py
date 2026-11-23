@@ -117,8 +117,13 @@ def quarantine(path) -> Path | None:
     p = Path(path)
     if not p.exists():
         return None
-    import uuid
-    dst = p.with_name(f"{p.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}")
+    n = 0
+    while True:                         # time-ordered, so the newest copy sorts last; never overwrites an older one
+        stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 10**9:09d}{'-%d' % n if n else ''}"
+        dst = p.with_name(f"{p.name}.corrupt-{stamp}")
+        if not dst.exists():
+            break
+        n += 1
     with contextlib.suppress(OSError):
         _replace(str(p), str(dst))
         return dst
