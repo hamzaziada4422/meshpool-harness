@@ -31,7 +31,7 @@ def _bare_session(workdir: str, monkeypatch):
     s.agent = object()
     s.harness = {"type": "x", "id": "x"}
     started, emitted = [], []
-    monkeypatch.setattr(A.Session, "_start_turn", lambda self, t, i: started.append(t))
+    monkeypatch.setattr(A.Session, "_start_turn", lambda self, t, i, *a: started.append(t))   # *a: the turn token (ws09)
     s.emit = lambda e: emitted.append(e)
     return s, started, emitted
 
