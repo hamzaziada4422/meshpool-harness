@@ -451,6 +451,9 @@ def command_allowed(cmd: str) -> bool:
         return False
     if T.read_only(c):
         return True
+    bare = re.sub(r"^cd\s+[^\s;&|`$<>]+\s*&&\s*", "", c)           # cd project && wc -c file: still only reads
+    if bare != c and T.read_only(bare):
+        return True
     c = re.sub(r"\s*2>&1", "", c)                                    # stderr into stdout is not a write
     c = re.sub(r"^(?:[A-Z_][A-Z0-9_]*=\S+\s+)+", "", c)               # PYTHONPATH=. pytest
     head, *rest = c.split("|")                                       # pytest ... | tail -20
