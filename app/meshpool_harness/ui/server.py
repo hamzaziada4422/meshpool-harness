@@ -1000,7 +1000,7 @@ class Handler(BaseHTTPRequestHandler):
                 s, b = A.get(m.group(1)), self._json()
                 s.reply(b.get("question_id", ""), b.get("answers"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
             if m:
                 s, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "send":
@@ -1008,6 +1008,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
                 elif act == "stop":
                     s.stop()
+                elif act == "grade":
+                    s.grade()
                 elif act == "answer":
                     s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
                 elif act == "compact":

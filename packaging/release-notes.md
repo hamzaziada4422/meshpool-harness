@@ -1,6 +1,7 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
 **New in 0.0.11**
+- **A second pair of eyes on big jobs.** Before Meshpool tells you a big task is done, a separate reviewer that did not do the work checks it against what you asked for, in code, documents, decks, spreadsheets and research. If something is missing it goes back to be fixed, and the reply ends with a short "Independent check" in plain words. It is on by default, only runs on big tasks, and you can turn it off in Settings or check any reply yourself with "Check this" (or `/grade` in the terminal).
 - **Nothing else opens on your computer.** Files and folders open in a built-in editor inside Meshpool, with a folder tree, search, line numbers, colouring, find, and Save with a warning when a file changed on disk. Markdown and JSON have a readable view. No text editor, Finder or Preview launches.
 - **The browser stays inside Meshpool.** When the agent opens a page it runs in a hidden browser that ships with the app, never in your Chrome. A Browser panel shows what it is doing live, and you can click, type and scroll in it to sign in or pass a check. Settings has a switch to show the browser in its own window.
 - **Sign in without leaving the app.** Connector and account sign-in pages open in that panel. If a site refuses to sign you in there, one link opens it in your own browser.
