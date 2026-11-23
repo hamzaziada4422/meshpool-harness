@@ -540,7 +540,28 @@ class PiAgent:
         return PV.join("key" if prov == "meshpool" else prov, m)
 
     # ---------- turns ------------------------------------------------------------------------------------------
+    def turn_token(self) -> int:
+        """Which turn this is: it changes when send() starts a turn. Pass it to nudge()."""
+        return getattr(self, "_turn_seq", 0)
+
+    def nudge(self, text: str, token: int) -> bool:
+        """Tell Pi something while turn `token` runs, without a chat message (a note only the model sees). False when
+        that turn is over or a later one started: it can never reach another turn."""
+        gate = self.__dict__.setdefault("_turn_gate", threading.Lock())
+        with gate:
+            if token != getattr(self, "_turn_seq", 0) or not getattr(self, "_turn_live", False):
+                return False
+            self._request({"type": "steer", "message": text}, timeout=30)
+            return True
+
+    def _turn_over(self):
+        with self.__dict__.setdefault("_turn_gate", threading.Lock()):
+            self._turn_live = False
+
     def send(self, text: str, images: list | None = None) -> str:
+        with self.__dict__.setdefault("_turn_gate", threading.Lock()):
+            self._turn_seq = getattr(self, "_turn_seq", 0) + 1
+            self._turn_live = True
         self._stop = False
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
@@ -584,6 +605,7 @@ class PiAgent:
                     self.close()
                     self._p, self.resume = None, True
                     break
+            self._turn_over()                         # a nudge after this point is refused
             final = "".join(self._text)
             self._flush_text()
             # Text is flushed into the chat at each message boundary, so the buffer is often empty by now: the
@@ -603,6 +625,7 @@ class PiAgent:
             self._flush_text()
             self._emit({"type": "error", "text": str(e)})
         finally:
+            self._turn_over()
             for k in self.usage:
                 self.usage[k] += self._turn[k]
             self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),

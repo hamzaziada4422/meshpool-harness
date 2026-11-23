@@ -953,7 +953,7 @@ class Agent:
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
         self.model: str | None = None          # None: the default model from settings
-        self.plan = False                      # plan mode: read-only tools, the agent writes a plan
+        self._plan, self._plan_next, self._in_turn = False, None, False   # see the `plan` property
         self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
         self._plan_needed = False              # this turn needs a written plan (decided at its start, free)
         self.trace: list = []                  # every tool call: name, seconds, ok, argument summary (benchmarks)
@@ -1205,10 +1205,29 @@ class Agent:
         self.emit({"type": "user", "text": text.split("\n\n\u200b")[0],
                    "images": [im.get("name", "image") for im in images or []], "plan": self.plan, "steer": True})
 
+    @property
+    def plan(self) -> bool:
+        """Plan mode. A change made while a turn runs is held until the turn ends: the turn keeps its tools."""
+        return getattr(self, "_plan", False)
+
+    @plan.setter
+    def plan(self, v):
+        if getattr(self, "_in_turn", False):
+            self._plan_next = bool(v)
+        else:
+            self._plan, self._plan_next = bool(v), None
+
     def _take_inbox(self) -> bool:
         with self._inbox_lock:
             items, self._inbox = self._inbox, []
         for text, images in items:
+            if self.pace_deadline and PACE.classify(text, bool(images)) != "quick":
+                self.pace_deadline = 0.0             # a real task joined a quick turn: the quick budget ends
+                if getattr(self, "_pace_wrapped", False):
+                    self._pace_wrapped = False
+                    self.messages.append({"role": "user", "content": (
+                        "[Meshpool] The user added a request, so this is no longer a quick question: the time limit "
+                        "and the rule against creating or changing files no longer apply. Do what they asked.")})
             body = "[Added by the user while you were working] " + text
             if images:
                 parts = [{"type": "text", "text": body}] + [
@@ -1315,11 +1334,27 @@ class Agent:
         if not self.has_steers():
             return None
         self._stop = False
+        with self._inbox_lock:
+            quick = all(PACE.classify(t, bool(im)) == "quick" for t, im in self._inbox)
+        self.pace_deadline = (time.time() + PACE.QUICK_S) if (self.pace_deadline and quick) else 0.0
         return self._turn()
+
+    def _refuse_wrapped_calls(self, calls: list, g: dict) -> str:
+        """Tool calls returned on a tools-off quick step are not run: each gets a refusal result and the model is
+        asked again. After 2 refused rounds returns the text that ends the turn (else "")."""
+        for c in calls:
+            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content":
+                                  "Not run: time is up for this quick request. Answer now with what you have."})
+        g["wrap_refused"] = g.get("wrap_refused", 0) + 1
+        if g["wrap_refused"] >= 2:
+            return "(I ran out of time for this quick request. Ask again to let me look further.)"
+        return ""
 
     def _begin_turn_state(self):
         """Reset what must not leak from one turn into the next. New turn-scoped state goes here."""
         self._n429 = 0                               # rate-limit backoff step: every turn starts at the short wait
+        self._pace_wrapped = False                   # the quick-turn wrap (no more tools) is on for this turn
+        self._in_turn = True                         # a plan-mode change now waits for the turn to end
 
     def _turn(self) -> str:
         self._begin_turn_state()
@@ -1384,7 +1419,6 @@ class Agent:
             if snap and isinstance(self.messages[-1].get("content"), str):
                 self.messages[-1]["content"] += "\n\n<environment_snapshot>\n" + snap + "\n</environment_snapshot>"
         try:
-            wrapped = False
             for step in (range(self.max_steps) if self.max_steps else itertools.count()):
                 self._check_stop()
                 self._take_inbox()
@@ -1393,11 +1427,12 @@ class Agent:
                     self._running = True                  # saved as unfinished: a crash here is resumed, not lost
                     self.save()
                 self._maybe_compact()
-                if self.pace_deadline and not wrapped and step and (
+                if self.pace_deadline and not self._pace_wrapped and step and (
                         time.time() > self.pace_deadline or step >= PACE.QUICK_STEPS):
-                    wrapped = True                      # a quick request ran long: answer now, no more tools
+                    self._pace_wrapped = True           # a quick request ran long: answer now, no more tools
                     self.messages.append({"role": "user", "content": PACE.WRAP})
-                    self._no_tools = True
+                if self._pace_wrapped:
+                    self._no_tools = True               # every later step is tools-off, even if tool_choice is refused
                 self._finish = None
                 if g.pop("hard_wrap", False):
                     self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
@@ -1430,6 +1465,15 @@ class Agent:
                     keep["tool_calls"] = calls
                 self.messages.append(keep)
                 self.emit({"type": "assistant", "text": content, "streamed": streamed, "has_tools": bool(calls)})
+                if calls and self._pace_wrapped:
+                    done = self._refuse_wrapped_calls(calls, g)
+                    if done:
+                        final = said + content if content.strip() else done
+                        if not content.strip():
+                            self.emit({"type": "assistant", "text": done, "streamed": False, "has_tools": False})
+                            self.messages.append({"role": "assistant", "content": done})
+                        break
+                    continue
                 if not calls:
                     final = said + content
                     if cut_off and content and g.get("cont", 0) < 3:
@@ -1569,6 +1613,9 @@ class Agent:
         finally:
             self._last_final = final
             self._prev_plan = bool(self.plan)
+            self._in_turn = False
+            if getattr(self, "_plan_next", None) is not None:          # a plan-mode change made during the turn applies now
+                self.plan = self._plan_next
             try:
                 rec = self.receipt()
                 self.last_receipt = rec

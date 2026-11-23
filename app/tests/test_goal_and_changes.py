@@ -15,9 +15,9 @@ def session(goal="ship it"):
     return s
 
 
-def turn(s, reply, acted=True, extra=()):
+def turn(s, reply, acted=True, extra=(), after=()):
     s.events += [{"type": "user", "text": "go"}, *([{"type": "tool_end"}] if acted else []), *extra,
-                 {"type": "assistant", "text": reply}, {"type": "turn_end"}]
+                 {"type": "assistant", "text": reply}, *after, {"type": "turn_end"}]
 
 
 def test_goal_continues_until_done(monkeypatch):
@@ -37,7 +37,7 @@ def test_goal_pauses_for_the_user_errors_and_no_progress(monkeypatch):
     turn(s, "Which database should I use?")                       # a question: no GOAL line
     assert s._goal_next(0) is None and s.goal == "ship it"
     n = len(s.events)
-    turn(s, "GOAL: CONTINUE", extra=[{"type": "error", "text": "API down"}])
+    turn(s, "GOAL: CONTINUE", after=[{"type": "error", "text": "API down"}])   # the turn ENDED on the error
     assert s._goal_next(n) is None and "error" in s.events[-1]["text"]
     n = len(s.events)
     turn(s, "Thinking.\nGOAL: CONTINUE", acted=False)

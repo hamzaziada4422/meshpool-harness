@@ -26,10 +26,36 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
+
+
+def agent_token(agent) -> int:
+    f = getattr(agent, "turn_token", None)
+    return f() if callable(f) else 0
+
+
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429|"
                      r"rate.?limit|too many requests|(?:code|status)\W{0,3}429\b|overloaded",
                      re.I)                          # an outage or a key whose slots are full: wait it out
+
+
+def _turn_outcome(evs: list) -> dict:
+    """How a turn ENDED, from its events. An error counts only if nothing came after it: a later reply with text,
+    a text delta or a tool start/end means the agent recovered (Pi reports an error before its own retry)."""
+    err, acted, reply = None, False, ""
+    for e in evs:
+        t = e.get("type")
+        if t == "error":
+            err = e
+        elif err is not None and (t in ("text_delta", "tool_start", "tool_end")
+                                  or (t == "assistant" and (e.get("text") or "").strip())):
+            err = None
+        if t == "tool_end":
+            acted = True
+        if t == "assistant":
+            reply = e.get("text") or ""
+    return {"error": err, "interrupted": any(e.get("type") == "interrupted" for e in evs),
+            "net": bool(err and _NET_RE.search(err.get("text") or "")), "acted": acted, "reply": reply}
 # A turn cut off by a rate limit or an outage (no goal set): the chat waits, then picks the task up by itself, up to
 # RESUME_TRIES times in a row (30 s, 1, 2, 4, 5 min). Typing a message or pressing Stop takes over at once.
 RESUME_NEXT = "Continue where you left off."
@@ -809,7 +835,10 @@ class Session:
             self.state = "idle"
             raise
         if hasattr(self.agent, "plan"):
+            changed = bool(self.agent.plan) != self.plan
             self.agent.plan = self.plan
+            if changed and hasattr(self.agent, "apply_mode"):
+                self.agent.apply_mode()              # an agent with its own modes (Codex): the mode the turn runs in
 
         self.t_turn = time.time()
         ev0 = len(self.events)
@@ -862,12 +891,19 @@ class Session:
                     body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
                     if hasattr(self.agent, "pace_deadline"):
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
-                    elif self.harness["type"] == "pi" and hasattr(self.agent, "steer"):
-                        def wrap(agent=self.agent, turn=self.t_turn):
-                            time.sleep(PACE.QUICK_S + 10)
+                    elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
+                        def wrap(agent=self.agent, turn=self.t_turn, tok0=agent_token(self.agent)):
+                            end = time.time() + PACE.QUICK_S + 10
+                            tok = tok0
+                            while tok == tok0 and time.time() < end:      # send() has not started its turn yet
+                                time.sleep(0.05)
+                                tok = agent_token(agent)
+                            if tok == tok0:
+                                return
+                            time.sleep(max(0.0, end - time.time()))
                             if self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False):
                                 try:
-                                    agent.steer(PACE.WRAP)
+                                    agent.nudge(PACE.WRAP, tok)   # only while that same turn runs; no chat message
                                 except Exception:  # noqa: BLE001
                                     pass
                         threading.Thread(target=wrap, daemon=True).start()
@@ -1087,15 +1123,15 @@ class Session:
         """After a turn with a goal: the next turn's message, or None when the goal is met or the user is needed."""
         with self.lock:
             evs = self.events[ev0:]
+        out = _turn_outcome(evs)
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
         if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
             return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
         verdict = found[-1].upper() if found else ""
-        acted = any(e.get("type") == "tool_end" for e in evs)
-        failed = any(e.get("type") in ("error", "interrupted") for e in evs)
-        net = [e for e in evs if e.get("type") == "error" and _NET_RE.search(e.get("text") or "")]
-        if failed and net and not any(e.get("type") == "interrupted" for e in evs):
+        acted = out["acted"]
+        failed = bool(out["error"]) or out["interrupted"]      # ended on an error (not one it recovered from)
+        if out["net"] and not out["interrupted"]:
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
@@ -1106,7 +1142,7 @@ class Session:
             return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal))
         if not failed:
             self._goal_net = 0
-        if verdict == "DONE":
+        if verdict == "DONE" and not out["interrupted"] and not out["error"]:
             done, self.goal = self.goal, ""
             write_meta(self.id, goal="")
             self.emit({"type": "status", "text": f"Goal met: {done}"})
@@ -1147,10 +1183,11 @@ class Session:
             return None
         with self.lock:
             evs = self.events[ev0:]
-        if any(e.get("type") == "interrupted" for e in evs):
+        out = _turn_outcome(evs)
+        if out["interrupted"]:
             self._resume_n = 0
             return None
-        if not any(e.get("type") == "error" and _NET_RE.search(e.get("text") or "") for e in evs):
+        if not out["net"]:
             self._resume_n = 0                       # a good turn (or another kind of error): start the count again
             return None
         n = self._resume_n = getattr(self, "_resume_n", 0) + 1
@@ -1168,6 +1205,11 @@ class Session:
 
     def set_plan(self, on: bool):
         self.plan = bool(on)
+        if self.state in ("working", "waiting"):     # the running turn keeps its tools; this applies to the next one
+            write_meta(self.id, plan=self.plan)
+            self.emit({"type": "status", "text": f"Plan mode turns {'on' if self.plan else 'off'} from your next "
+                                                 "message."})
+            return
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         if hasattr(self.agent, "apply_mode"):
