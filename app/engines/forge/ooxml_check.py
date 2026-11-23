@@ -166,11 +166,14 @@ def _tables(root, part, problems):
 
 def check(path, schemas: str | None = None, _name: str | None = None) -> dict:
     try:
-        with open(path, "rb") as fh:                       # read once: no handle stays open (Windows locks it)
-            z = zipfile.ZipFile(io.BytesIO(fh.read()))
+        if isinstance(path, (str, bytes, os.PathLike)):
+            with open(path, "rb") as fh:                   # read once: no handle stays open (Windows locks it)
+                z = zipfile.ZipFile(io.BytesIO(fh.read()))
+        else:
+            z = zipfile.ZipFile(path)
     except zipfile.BadZipFile:
         return {"ok": False, "schema_validation": "skipped", "parts_validated": 0,
-                "problems": [{"part": str(_name or Path(path).name), "check": "zip",
+                "problems": [{"part": str(_name or (Path(path).name if isinstance(path, (str, os.PathLike)) else "package")), "check": "zip",
                               "detail": "not a valid Office file (the zip container is unreadable)"}]}
     names = set(z.namelist())
     problems: list[dict] = []

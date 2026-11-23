@@ -102,7 +102,8 @@ def route(text: str, kind: str = "cowork", category: str | None = None, model: s
     scored = {h: q for h, q in quality.items() if h in ready}
     if not scored:
         hid = HR.default_for(kind if kind in HR.MODES else "cowork")
-        return {"harness": hid, "name": ready.get(hid, {}).get("name", hid), "category": cat,
+        _nm = ready.get(hid, {}).get("name") or next((d.get("name") for d in HR.load_all() if d.get("id") == hid), hid)
+        return {"harness": hid, "name": _nm, "category": cat,
                 "reason": "No ranked agent is ready, so the mode's default is used.", "ranking": []}
     best = max(scored.values())
     band = float(t.get("quality_band", DEFAULT_BAND))

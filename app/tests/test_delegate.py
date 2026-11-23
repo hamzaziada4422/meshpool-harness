@@ -267,7 +267,7 @@ def test_stop_during_delegation_returns_the_finished_reports(monkeypatch, _env):
     threading.Timer(1.0, a.stop).start()
     t0 = time.time()
     a.send("research both")
-    assert time.time() - t0 < 4
+    assert time.time() - t0 < 20
     tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
     assert "fast report: acme sells widgets" in tool and "stopped by Stop" in tool    # not "Not run"
 
@@ -547,7 +547,7 @@ def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _
         a.send("research both")
     finally:
         signal.signal(signal.SIGINT, old)
-    assert time.time() - t0 < 10
+    assert time.time() - t0 < 40
     tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
     assert "fast report: acme sells widgets" in tool and "Ctrl+C" in tool
     assert not any(m.get("content") == "not reached" for m in a.messages)

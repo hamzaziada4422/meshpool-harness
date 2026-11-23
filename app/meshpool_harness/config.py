@@ -6,6 +6,7 @@ The config file is plain KEY=VALUE lines. Values already set in the shell enviro
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -69,20 +70,23 @@ SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_AP
           "INSTANTLY_API_KEY"}
 
 
-def replace_file(src, dst) -> None:
+def replace_file(src, dst, keep_src: bool = False) -> None:
     """os.replace that survives Windows: a reader, the search indexer or antivirus holding the target or the fresh
-    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up."""
+    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up. A temp file
+    the caller just wrote is removed on failure; `keep_src` keeps it (a finished download worth retrying later)."""
     import time
-    for i in range(20 if os.name == "nt" else 1):
+    n = (100 if keep_src else 20) if os.name == "nt" else 1
+    for i in range(n):
         try:
             os.replace(src, dst)
             return
         except PermissionError:
-            if i == (19 if os.name == "nt" else 0):
-                try:
-                    os.unlink(src)
-                except OSError:
-                    pass
+            if i == n - 1:
+                if not keep_src:
+                    try:
+                        os.unlink(src)
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.05)
 
@@ -234,6 +238,7 @@ def _write(values: dict, path: Path) -> Path:
     return path
 
 
+_SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)
 _INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
 
 
@@ -241,7 +246,7 @@ def scrub_env(env: dict) -> dict:
     """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
     writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
     for k in list(env):
-        if k == "MESHPOOL_API_KEY" or (k in SECRET and k in _INJECTED):
+        if k == "MESHPOOL_API_KEY" or (k in _INJECTED and (k in SECRET or _SECRET_NAME.search(k))):
             env.pop(k, None)
     return env
 

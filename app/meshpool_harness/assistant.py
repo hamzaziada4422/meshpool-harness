@@ -587,6 +587,8 @@ def update_task(tid: str, **kw) -> dict:
                 _check_task(new)                                     # same rules as add_task; nothing saved on error
                 if new.get("when") != t.get("when") or new.get("at") != t.get("at"):
                     new["last_run"] = None                           # a new time: a fired one-time task runs again
+                if new.get("enabled") and not t.get("enabled") and new.get("when") == "once":
+                    new["last_run"] = None                           # switched back on: run it once more at its time
                 new["next_run"] = next_run(new) if new.get("enabled") else None
                 rows[n] = new
                 _save_tasks(rows)

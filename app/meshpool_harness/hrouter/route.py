@@ -21,6 +21,8 @@ from . import signals as S
 from .packs import PACKS
 from .specs import SPECS, get
 
+_SMALLTALK = re.compile(r"^\s*(?:hi|hello|hey|yo|thanks?(?: you)?(?: so much)?|thx|ty|ok(?:ay)?|cool|great|nice|"
+                        r"awesome|perfect|got it|sounds good|lgtm|good (?:morning|afternoon|evening))\W*$", re.I)
 PRIORITY = ["docs", "data", "browser", "automation", "research", "code", "writing"]   # tie-break between families
 CONFIDENT = 0.6
 
@@ -88,6 +90,8 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
         fam, why, conf = "code", f"a pasted {err} error", 0.95
     elif kind != "code" and not files and S.snippet_request(text):
         fam, why, conf, lane = "chat", "a request for a short snippet", 0.85, "chat"
+    elif _SMALLTALK.match(text or "") and not files:
+        fam, why, conf, lane = "chat", "a greeting or thanks", 0.9, "chat"
     elif kind == "code":
         other = {k: v for k, v in fams.items() if k not in ("code", "research")}
         if repo or langs or any(S.EXT_LANG.get(Path(f).suffix) for f in files):
@@ -181,11 +185,20 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
             r.used_model_call = True
             if got and got[1] >= 0.5:
                 sid, c = got
-                if sid != r.spec:
+                changed = sid != r.spec
+                if changed:
                     r.reason = f"model classification (rules said {r.spec})"
                 r.spec, r.confidence, r.base = sid, round(c, 2), get(sid).base
                 r.family = sid.split(".")[0]
                 r.sub = sid.split(".", 1)[1] if "." in sid else ""
+                if changed:                       # the rules' variant, language and lane described the old spec
+                    r.variant = S.variant(r.sub, text) if r.family == "code" and r.sub else ""
+                    if r.family != "code":
+                        r.language = ""
+                    if sid == "chat":
+                        r.lane = "chat"
+                    elif r.lane == "chat" and sid != "chat":
+                        r.lane = "task"
     r.profile, r.settings = PROF.resolve(r)
     if os.environ.get("MH_HARNESS_ROUTER") == "1" and not force:
         try:                                    # which agent harness runs it; never fails a task

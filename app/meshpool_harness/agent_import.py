@@ -289,8 +289,12 @@ def scan(only: list[str] | None = None) -> dict:
                               "path": str(f), "preview": t[:200].replace("\n", " "), "chars": len(t),
                               "exists": False})
         for f in _files(base, a["memories"]):
+            try:
+                rel = f.relative_to(base).as_posix()           # the path, not just the name: several MEMORY.md files
+            except ValueError:
+                rel = f.name
             for i, fact in enumerate(_facts(_read(f))):
-                items.append({"key": f"memory:{aid}:{f.name}:{i}", "kind": "memory", "name": fact[:60],
+                items.append({"key": f"memory:{aid}:{rel}:{i}", "kind": "memory", "name": fact[:60],
                               "path": str(f), "text": fact, "preview": fact, "exists": _fold(fact) in have_f})
         creds = [str(base / c) for c in a["creds"] if _present(base / c)]
         agents.append({"id": aid, "name": a["name"], "path": str(base), "items": items,

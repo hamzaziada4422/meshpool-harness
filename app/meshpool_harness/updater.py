@@ -233,9 +233,10 @@ def _installer(v: dict, why: str) -> dict:
             return {"ok": False, "error": f"The download of {a['name']} did not match the release's checksum, so it "
                                           "was deleted. The release may have been updating on GitHub while it "
                                           "downloaded: try again in a few minutes.", "url": v["url"]}
-        C.replace_file(part, p)
+        C.replace_file(part, p, keep_src=True)
     except OSError as e:
-        part.unlink(missing_ok=True)
+        if not isinstance(e, PermissionError):
+            part.unlink(missing_ok=True)       # a locked finished download is kept for the next try
         return {"ok": False, "error": f"Could not download {a['name']} ({type(e).__name__}). Try again.",
                 "url": v["url"]}
     _open(p)

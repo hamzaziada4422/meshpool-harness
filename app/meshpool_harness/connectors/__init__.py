@@ -37,6 +37,10 @@ def _load_plugins():
 def get(spec: str):
     """'github:owner/repo#1' -> (connector instance, ref)."""
     _load_plugins()
+    if spec.startswith(("http://", "https://")):      # a bare URL: the host picks the connector
+        from urllib.parse import urlparse
+        host = (urlparse(spec).hostname or "").lower()
+        return REGISTRY["github" if host in ("github.com", "www.github.com") else "http"](), spec
     name, _, ref = spec.partition(":")
     if name not in REGISTRY:
         raise ValueError(f"unknown connector {name!r}; available: {sorted(REGISTRY)}")

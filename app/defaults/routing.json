@@ -184,7 +184,6 @@
         "pdf",
         "document",
         "proposal",
-        "one-pager",
         "brief",
         "letter"
       ],
@@ -217,8 +216,7 @@
         "pbix",
         "dataset",
         "numbers",
-        "table",
-        "financial model"
+        "table"
       ],
       "scores": {
         "meshpool-work": 84,

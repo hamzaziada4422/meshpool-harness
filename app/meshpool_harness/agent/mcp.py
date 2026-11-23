@@ -38,13 +38,14 @@ def config_file() -> Path:
     return Path(p) if p else C.home() / "mcp.json"
 
 
-def _expand(v):
+def _expand(v, extra: dict | None = None):
     if isinstance(v, str):
-        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), v)
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                      lambda m: (extra or {}).get(m.group(1)) or os.environ.get(m.group(1), ""), v)
     if isinstance(v, list):
-        return [_expand(x) for x in v]
+        return [_expand(x, extra) for x in v]
     if isinstance(v, dict):
-        return {k: _expand(x) for k, x in v.items()}
+        return {k: _expand(x, extra) for k, x in v.items()}
     return v
 
 
@@ -83,7 +84,7 @@ def write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
         if mode is None and path.exists():
             mode = path.stat().st_mode & 0o777
         try:
-            os.chmod(tmp, 0o644 if mode is None else mode)
+            os.chmod(tmp, 0o600 if mode is None else mode)     # may hold tokens and API keys
         except OSError:
             pass
         C.replace_file(tmp, path)
@@ -266,6 +267,8 @@ class _Stdio:
             # Someone else's server (often an unpinned npx package) gets no keys it was not given: only the ones its
             # own "env" names. Meshpool's settings are all in this process's environment.
             env = {k: v for k, v in env.items() if not _secret_name(k)}
+        if roots:
+            env["MESHPOOL_PROJECT"] = str(Path(roots[0]).resolve())    # not the shared os.environ: it may be another chat's
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
         env.setdefault("PYTHONUTF8", "1")
         if exe == sys.executable:
@@ -287,6 +290,7 @@ class _Stdio:
         self.pending: dict[int, dict] = {}
         self.cv = threading.Condition()
         self.alive = True
+        self.reader_error = ""
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -453,10 +457,14 @@ class _Http:
                             return msg
                 raise MCPError("the event stream ended without a reply")
             txt = r.read().decode("utf-8", "replace")
-            msg = json.loads(txt) if txt.strip() else {}
+            try:
+                msg = json.loads(txt) if txt.strip() else {}
+            except ValueError:
+                raise MCPError("the server did not answer with an MCP reply (a login or proxy page?): "
+                               + txt.strip()[:80].replace("\n", " "))
             if isinstance(msg, list):
-                msg = next((m for m in msg if m.get("id") == want_id), {})
-            return msg
+                msg = next((m for m in msg if isinstance(m, dict) and m.get("id") == want_id), {})
+            return msg if isinstance(msg, dict) else {}
 
     def request(self, rid, method, params, timeout):
         return self._post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}, timeout, want_id=rid)
@@ -617,7 +625,8 @@ def _sse_spec(spec: dict) -> bool:
 
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
-        self.name, self.spec = name, _expand(spec)
+        # this chat's own folder, not whatever the process-wide variable holds when several chats start together
+        self.name, self.spec = name, _expand(spec, {"MESHPOOL_PROJECT": str(Path(roots[0]).resolve())} if roots else None)
         self.status, self.error, self.tools, self.info = "starting", "", [], {}
         self._id = 0
         self._lock = threading.Lock()
@@ -752,6 +761,8 @@ class Server:
         images: list[dict] = []
         parts = []
         for c in r.get("content") or []:
+            if not isinstance(c, dict):
+                continue
             t = c.get("type")
             if t == "text":
                 parts.append(c.get("text", ""))

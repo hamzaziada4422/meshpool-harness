@@ -2144,6 +2144,13 @@ class Agent:
             carried = len(u.query) + len(u.path) + len(u.fragment) + len(sub)
             return (f"Send this to {host or 'a website'}? The address carries {carried} characters of data."
                     if carried > 300 or len(sub) > 60 or len(u.query) > 200 else "")
+        elif name.replace("-", "_").endswith(("__ui_audit", "__view_output")):
+            p = str(args.get("url") or args.get("path") or "")
+            if re.match(r"^https?://", p, re.I):
+                return ""
+            if re.match(r"^[a-z][a-z0-9+.-]+://", p, re.I) and not re.match(r"^[A-Za-z]:[\\/]", p):
+                return f"Open {p[:80]} (not a web address)?"          # file:// and other schemes read any file
+            p = os.path.expanduser(p)
         else:
             return ""
         try:

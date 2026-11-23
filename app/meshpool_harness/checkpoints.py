@@ -92,6 +92,27 @@ def _unknown(path: str, manifest: dict) -> bool:
     return any("/".join(parts[:i]) + "/" in manifest for i in range(1, len(parts)))
 
 
+def _atomic_write(p: Path, data: bytes) -> None:
+    """Write through a temp file and rename, so a crash never leaves a truncated file behind."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        tmp.write_bytes(data)
+        for i in range(20 if os.name == "nt" else 1):          # Windows: antivirus may hold the new file for a moment
+            try:
+                os.replace(tmp, p)
+                return
+            except PermissionError:
+                if i >= (19 if os.name == "nt" else 0):
+                    raise
+                time.sleep(0.05)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+
+
 class Checkpoints:
     def __init__(self, root: str, store: Path):
         self.root = Path(root).resolve()
@@ -110,14 +131,13 @@ class Checkpoints:
 
     def _save_turns(self, turns: list):
         self.store.mkdir(parents=True, exist_ok=True)
-        self.index_path.write_text(json.dumps(turns), encoding="utf-8")
+        _atomic_write(self.index_path, json.dumps(turns).encode("utf-8"))
 
     def _put(self, data: bytes) -> str:
         sha = hashlib.sha1(data).hexdigest()
         p = self.objects / sha[:2] / sha[2:]
         if not p.exists():
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(zlib.compress(data, 6))
+            _atomic_write(p, zlib.compress(data, 6))
         return sha
 
     def _get(self, sha: str) -> bytes:
@@ -200,8 +220,7 @@ class Checkpoints:
                     self._last[rel] = (st.st_size, st.st_mtime_ns, sha)
         mid = time.strftime("%Y%m%d%H%M%S") + hashlib.sha1(json.dumps(files, sort_keys=True).encode()).hexdigest()[:8]
         p = self._manifest_path(mid)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(files), encoding="utf-8")
+        _atomic_write(p, json.dumps(files).encode("utf-8"))
         return mid
 
     def begin_turn(self, title: str, message_index: int | None = None) -> dict | None:

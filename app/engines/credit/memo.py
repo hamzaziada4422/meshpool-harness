@@ -126,7 +126,7 @@ def write(res: dict, fin: Financials, path: str, commentary: dict | None = None)
     if fin.sources.get("_unmapped"):
         lines += ["", "Lines not mapped to the spread (review): " + ", ".join(fin.sources["_unmapped"][:20])]
     text = "\n".join(lines) + "\n"
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write(text)
     try:
         from engines.research.library import _to_docx
