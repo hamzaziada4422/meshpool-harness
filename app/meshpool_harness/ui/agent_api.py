@@ -276,9 +276,10 @@ class Session:
         self._mcp_ready = threading.Event()          # set once _start_mcp has finished (connected or not)
         self.agent = None
         self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
+        mode = C.normalize_mode(mode, None)
         if mode not in MODES and resume_id:
             mode = read_meta(resume_id).get("mode")      # a chat keeps its own mode across restarts
-        self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
         legacy = False
@@ -1407,8 +1408,8 @@ class Session:
             p["ev"].set()
 
     def set_mode(self, mode: str):
-        self.agent.mode = self.mode = mode if mode in MODES else "ask"
-        write_meta(self.id, mode=self.mode)          # restored on resume: a Supervised chat stays Supervised
+        self.agent.mode = self.mode = C.normalize_mode(mode, "ask")
+        write_meta(self.id, mode=self.mode)          # restored on resume: an Ask chat stays Ask
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()

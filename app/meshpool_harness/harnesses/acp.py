@@ -313,7 +313,7 @@ class ACPAgent:
         self.dir = C.runs_dir() / "sessions" / self.id
         self.emit_cb = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.title = ""
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -724,7 +724,7 @@ class ACPAgent:
 
     def _ask_mode(self, modes: dict):
         """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
-        applies the user's permission setting (Supervised, Auto-accept edits, Full access) the same way for every
+        applies the user's permission setting (Ask, Accept edits, Full access) the same way for every
         harness. Without this Codex, for one, edits files on its own."""
         ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
         self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
@@ -741,7 +741,7 @@ class ACPAgent:
                 pass
 
     def apply_mode(self):
-        """The user changed Supervised / Auto-accept edits / Full access: tell a harness that has its own modes."""
+        """The user changed Ask / Accept edits / Full access: tell a harness that has its own modes."""
         if self.acp_session and self._p and self._p.poll() is None and getattr(self, "modes_seen", None):
             self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 

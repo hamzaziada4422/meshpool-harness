@@ -905,7 +905,7 @@ class Agent:
         self.mcp = mcp
         self.emit = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.always: set[str] = set()
         # 0: no limit. A turn runs until the task is done or the user stops it; a caller may still pass a cap.
         self.max_steps = max_steps or int(os.environ.get("MH_MAX_STEPS", "0") or 0) or 2000    # a runaway turn stops; the next message continues
@@ -2723,7 +2723,7 @@ class Agent:
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:
-        """Why a read-only call still needs a yes in Supervised and Auto-accept edits: it reads outside the project
+        """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
         if name in ("read_file", "grep"):
             p = os.path.expanduser(str(args.get("path") or "."))

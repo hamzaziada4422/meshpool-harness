@@ -37,7 +37,7 @@ COMMANDS = [
     ("compact", "", "shorten old tool output to free context"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
-    ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
+    ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
@@ -1107,8 +1107,9 @@ class Session:
 
     def cmd_auto(self, arg):
         t, st = self.term, self.term.st
-        if arg and arg not in t.modes:
-            return t.p(st.amber(f"  Modes: {', '.join(t.modes)}"))
+        arg = C.normalize_mode(arg, None) if arg else ""
+        if arg is None or (arg and arg not in t.modes):
+            return t.p(st.amber("  Modes: " + ", ".join({"ask": "ask", "edits": "accept-edits", "auto": "full-access"}[m] for m in t.modes)))
         mode = arg or ("ask" if t.mode == "auto" else "auto")
         self.set_mode(mode)
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
@@ -1356,8 +1357,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             extra = None
         mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
-    pm = os.environ.get("MH_PERMISSION_MODE", "")
-    mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
+    pm = C.normalize_mode(os.environ.get("MH_PERMISSION_MODE"), "")
+    mode = "auto" if auto else (pm if pm in ("ask", "edits", "auto") else None)
     kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode,
               profile="work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")   # --profile work: Cowork
     if sub:

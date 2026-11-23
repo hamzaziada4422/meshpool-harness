@@ -214,10 +214,11 @@ def models(refresh: bool = False) -> dict:
 
 
 def set_favorite(mid: str, on: bool) -> dict:
-    vals = C.read()
-    fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
-    fav = [m for m in fav if m != mid] + ([mid] if on else [])
-    C.write({"MH_FAVORITE_MODELS": ",".join(fav)})
+    def change(vals):
+        fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
+        fav = [m for m in fav if m != mid] + ([mid] if on else [])
+        return {"MH_FAVORITE_MODELS": ",".join(fav)}
+    C.update(change)                       # read and write under one lock
     return models()
 
 
