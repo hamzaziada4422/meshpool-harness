@@ -91,7 +91,10 @@ def check(force: bool = False) -> dict:
         with _get(API) as r:
             rel = json.loads(r.read())
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "current": cur, "error": f"Could not reach GitHub to check for updates ({type(e).__name__})."}
+        code = getattr(e, "code", None)
+        why = ("GitHub is limiting update checks right now (rate limit); try again later" if code in (403, 429)
+               else f"GitHub answered {code}" if code else f"Could not reach GitHub ({type(e).__name__})")
+        return {"ok": False, "current": cur, "error": f"Could not check for updates: {why}."}
     rel = _pick(rel if isinstance(rel, list) else [rel], cur)
     if not rel:
         v = {"ok": True, "current": cur, "latest": cur, "tag": "", "newer": False, "notes": "", "kind": kind(),

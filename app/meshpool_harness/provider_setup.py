@@ -225,7 +225,7 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
                 return out
             if status in (401, 403):
                 auth_code = auth_code or status
-            elif status == 404 or (status == 200 and items is None):
+            elif data is not None and (status == 404 or (status == 200 and items is None)):   # JSON, not a portal page
                 saw_missing = True
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
@@ -235,6 +235,8 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "") -> dict
                    error="Connected, but this endpoint does not list models: type a model name.")
     elif last_status >= 500:
         out["error"] = f"The server answered with an error ({last_status}). Try again in a moment."
+    elif last_status == 402:
+        out["error"] = "The server asks for payment (402): add credit or check the billing for this key."
     elif last_status == 429:
         out["error"] = "The server is limiting requests right now (429). Try again in a moment."
     elif last_status:

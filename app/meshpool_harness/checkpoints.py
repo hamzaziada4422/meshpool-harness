@@ -199,7 +199,7 @@ class Checkpoints:
                         return None
                     continue
                 marker = ("!link" if stat.S_ISLNK(st.st_mode) else "!special" if not stat.S_ISREG(st.st_mode)
-                          else "!ignored" if _ignored(rel, False, rules) else "!big" if st.st_size > MAX_FILE else "")
+                          else "!ignored" if _ignored(rel, False, rules) else f"!big:{st.st_size}:{st.st_mtime_ns}" if st.st_size > MAX_FILE else "")
                 if marker:
                     if not note(rel, marker):
                         return None

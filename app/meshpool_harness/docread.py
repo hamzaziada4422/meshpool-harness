@@ -10,6 +10,7 @@ import csv
 import io
 import json
 import re
+import sys
 import zipfile
 from pathlib import Path
 
@@ -382,8 +383,10 @@ def _csv(p: Path, rows: int = 300) -> str:
             delim = csv.Sniffer().sniff(raw[:4000], delimiters=",;\t|").delimiter
         except csv.Error:                          # one column, or no consistent delimiter
             delim = ","
+    csv.field_size_limit(min(sys.maxsize, 2**31 - 1))     # a huge cell must not fail the whole file
     data = list(csv.reader(io.StringIO(raw), delimiter=delim))
-    out = f"# {p.name}\n{len(data)} rows x {max((len(r) for r in data), default=0)} columns\n\n" + _md_table(data[:rows])
+    cut = p.stat().st_size > 5_000_000
+    out = f"# {p.name}\n{'at least ' if cut else ''}{len(data)} rows x {max((len(r) for r in data), default=0)} columns\n\n" + _md_table(data[:rows])
     if len(data) > rows:
         out += f"\n[first {rows} of {len(data)} rows; use analyze_data for the full file]"
     if p.stat().st_size > 5_000_000:
