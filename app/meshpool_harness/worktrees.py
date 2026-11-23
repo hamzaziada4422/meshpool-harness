@@ -81,10 +81,8 @@ def _rmtree(p) -> None:
     if os.path.islink(p) or os.path.isfile(_long(p)):
         os.unlink(_long(p))
         return
-    if sys.version_info >= (3, 12):
-        shutil.rmtree(_long(p), onexc=_rm_readonly)
-    else:  # pragma: no cover
-        shutil.rmtree(_long(p), onerror=_rm_readonly)
+    kw = {"onexc" if sys.version_info >= (3, 12) else "onerror": _rm_readonly}   # onexc is 3.12+, onerror before
+    shutil.rmtree(_long(p), **kw)
 
 
 # ---------- git ------------------------------------------------------------------------------------------------------
