@@ -791,7 +791,7 @@ def _stopped_early(final: str) -> bool:
 
 
 _DESTRUCTIVE = re.compile(
-    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
+    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|checkout\s+\.(\s|$)|restore\s+(--\S+\s+)*\.(\s|$)|worktree\s+remove\s+.*(-f\b|--force)|stash\s+(drop|clear))"
     r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
     r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
     re.I)
@@ -941,6 +941,7 @@ class Agent:
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
+        self.ws.get_mode = lambda: self.mode
         self.mcp = mcp
         self.emit = emit or (lambda ev: None)
         self.approve = approve
@@ -1255,6 +1256,7 @@ class Agent:
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
+        self.ws.get_mode = lambda: self.mode
         self.title = ""
 
     def send(self, text: str, images: list | None = None) -> str:
@@ -1619,6 +1621,16 @@ class Agent:
                             found = self._review_change(g, turn)
                             if found:
                                 self.messages.append({"role": "user", "content": found})
+                                continue
+                        if not g.get("autocheck_done") and self.ws.turn_files:
+                            g["autocheck_done"] = True     # G-15: once per request, off unless MH_AUTO_CHECK is set
+                            try:
+                                from meshpool_harness.core import autocheck as AC
+                                bad = AC.run(self.root, sorted(self.ws.turn_files)) if AC.mode() != "off" else ""
+                            except Exception:  # noqa: BLE001
+                                bad = ""
+                            if bad:
+                                self.messages.append({"role": "user", "content": bad})
                                 continue
                         if not g.get("mutation_done"):
                             g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
@@ -3178,6 +3190,10 @@ class Agent:
         if _rule_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
+        if self.mode == "auto" and _destructive(args):        # OSS-18: Full access still asks about these ...
+            if _rule_hit(rules["allow"], name, args):
+                return True, ""                               # ... unless the user allowlisted this command
+            risky = risky or "destructive"
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
