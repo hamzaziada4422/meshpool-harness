@@ -2550,7 +2550,18 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
-        bad = None                                   # validate first: the card shows the arguments that will run
+        if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",
+                                "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+            rep = self.__dict__.setdefault("_hard_rep", {})
+            if rep.get("turn") != self._turn_no:
+                rep.clear()
+                rep["turn"] = self._turn_no
+            k = name + ":" + str(raw)[:500]
+            rep[k] = rep.get(k, 0) + 1
+            if rep[k] > 10:                         # 0.0.13: a loop one call at a time (379 memory_view calls once)
+                return ("[Meshpool] This exact call was already made more than 10 times this turn and was not run. "
+                        "Stop calling it. Write the deliverable now from what you have, with your assumptions listed.")
+        bad = None                                 # validate first: the card shows the arguments that will run
         if cut:
             bad = ToolError(f"this {name} call was cut off at the model's output limit, so its arguments are "
                             "incomplete and it was not run. Split the content into smaller pieces: write_file the "

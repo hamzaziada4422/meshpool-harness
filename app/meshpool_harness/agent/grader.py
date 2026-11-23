@@ -56,6 +56,7 @@ Method:
 2b. For anything the agent BUILT as code (a web page or app, a game, a dashboard, a script, a CLI, an API), judge it as the user who will run it. Decide what a person expects such a thing to do (the features every version of it has, not only the words of the request), then confirm each one actually works, from the click-through and test evidence below and your own checks: no button or link that does nothing; each feature usable end to end; empty, loading and error states; bad input rejected with a message that says what is wrong; data kept where the user would expect it (a reload must not lose it); keyboard use and a phone-width layout for anything with a screen; no placeholder text or invented facts; tests exist for logic that can break and pass when run; a way to run it is stated (README or the reply). A "MUST FIX" line in the automatic click-through is a real defect: list it under blockers unless you can show it is wrong.
 3. Flag: invented facts, unsupported numbers, claims without a source, instructions that were ignored, the wrong language, the wrong file type or name, anything the user asked for that is missing, plan items marked completed that are not.
 4. Missing evidence counts as NOT met. If you cannot see it or prove it, it is not_met. Use "unverified" only when your tools truly cannot check it (say why in evidence).
+4b. SCOPE (0.0.13): hold the agent to what was asked, no more. A result that fits in the reply (a short plan, a table, post copy, a reply email, a summary) does not need a file unless the user asked for one: do not mark a missing file, plan document, tracker or extra format as not_met. Never ask for extra deliverables, deeper research or more versions than the request called for. Do not ask the agent to fill a gap with an invented fact; a fact that is not known is left out or flagged in the reply.
 5. Judge overall: would this person accept it as it is, or send it back?
 
 E2E-AUTONOMY: an effect in a connected app or live system (a booking, a sent message, a status change, a record) that the log shows the tool accepted, and that no read-only tool can read back, is "unverified", not "not_met". Never ask the agent to create, send, book, update or delete anything just to prove something; ask only for read-only evidence.
@@ -366,27 +367,39 @@ def _strs(v, n: int = 12, cap: int = 400) -> list[str]:
     return [str(x).strip()[:cap] for x in (v or []) if str(x).strip()][:n] if isinstance(v, list) else []
 
 
-# 0.0.13: an effect the reviewer could not read back is "unverified", and a rework request never asks for a second write.
+# 0.0.13: an effect in a LIVE system (a booking, a sent message, a ticket, a connected-app call) that the reviewer could
+# not read back is "unverified", and a rework request never asks for a second write. Both rules apply only to text that
+# names a live effect, so a defect in a file ("the totals row is missing from report.docx") is never downgraded or
+# dropped.
+_LIVE = re.compile(
+    r"mcp__|\b(?:booking|booked|meeting|calendar|appointment|reservation|ticket|invoice|payment|crm|slack|webhook|"
+    r"connected app|connector|live system|status update|sent (?:e-?mail|message)|e-?mail (?:was )?sent|message (?:was )?sent)\b"
+    r"|\b(?:create|send|book|update|delete|post|submit|add|set|schedule|close|cancel|issue|insert)_[a-z_]+\b", re.I)
 _NO_READBACK = re.compile(
-    r"read[- ]?back|can(?:no|')t be (?:read|verified|confirmed|checked|observed)|cannot (?:be )?(?:read|verif|confirm|check|observ|see)\w*"
-    r"|(?:unable|not able|no way|not possible|impossible) to (?:read|verify|confirm|check|observe|see)"
-    r"|(?:could not|couldn't|can't|can not|did not|didn't) (?:read|verify|confirm|observe|see) (?:it|that|the|this)\b"
+    r"read[- ]?back|can(?:no|')t be (?:read|verified|confirmed|checked|observed)|cannot (?:be )?(?:read|verif|confirm|check|observ)\w*"
+    r"|(?:unable|not able|no way|not possible|impossible) to (?:read|verify|confirm|check|observe)"
+    r"|(?:could not|couldn't|can't|can not|did not|didn't) (?:read|verify|confirm|observe) (?:it|that|the|this)\b"
     r"|no (?:read|get|list|lookup|query)(?:[- ]only)? tool|not (?:readable|verifiable|observable)|no read access", re.I)
 _REPEAT_WRITE = re.compile(
-    r"\bre-?(?:send|book|create|submit|issue|post|apply|invoke)\b"
+    r"\bre-?(?:send|book|submit|post|invoke|issue)\b"
     r"|\b(?:call|send|book|create|post|update|submit|write|issue|invoke|trigger|make|run)\b[^.;]{0,50}\b(?:create|send|book|post|update|submit|write|issue|schedule|delete|insert|add)\w*[^.;]{0,30}\bagain\b"
-    r"|\b(?:create|send|book|post|submit|write|issue|schedule)\w*\b[^.;]{0,50}\bagain\b"
+    r"|\b(?:create|send|book|post|submit|issue|schedule)\w*\b[^.;]{0,50}\bagain\b"
     r"|\b(?:repeat|retry)\b[^.;]{0,40}\b(?:write|booking|send|call|request|action|update|creation)\b"
     r"|\bsecond (?:call|write|booking|send|request)\b|\bprobe\b"
     r"|\btest (?:booking|meeting|message|record|ticket|call|email|event|invoice)\b", re.I)
 
 
+def _unreadable_live(text: str) -> bool:
+    return bool(_NO_READBACK.search(text) and _LIVE.search(text))
+
+
 def _unreadable(it: dict) -> bool:
-    return bool(_NO_READBACK.search(f"{it.get('requirement', '')} {it.get('evidence', '')}"))
+    return _unreadable_live(f"{it.get('requirement', '')} {it.get('evidence', '')}")
 
 
 def _no_second_write(lines: list[str]) -> list[str]:
-    return [x for x in lines if not _REPEAT_WRITE.search(x)]
+    """Drop instructions to run a live write again; instructions about the agent's own files stay."""
+    return [x for x in lines if not (_REPEAT_WRITE.search(x) and _LIVE.search(x))]
 
 
 def normalise(raw: dict | None) -> dict | None:
@@ -412,7 +425,7 @@ def normalise(raw: dict | None) -> dict | None:
     bad = sum(1 for i in items if i["status"] == "not_met")
     unv = sum(1 for i in items if i["status"] == "unverified")
     blockers, fix = _no_second_write(_strs(raw.get("blockers"))), _no_second_write(_strs(raw.get("fix")))
-    blockers = [b for b in blockers if not _NO_READBACK.search(b)]
+    blockers = [b for b in blockers if not _unreadable_live(b)]
     verdict = str(raw.get("verdict") or "").strip().lower()
     verdict = verdict if verdict in ("pass", "partial", "fail") else ("pass" if not bad and not unv else "partial")
     acc = str(raw.get("acceptance") or "").strip().lower().replace(" ", "_")

@@ -59,6 +59,26 @@ def test_rubric_and_evidence_carry_the_rule():
     assert "Actions the agent made in connected apps" in ev and "create_booking" in ev
 
 
+@pytest.mark.parametrize("req,ev", [
+    ("Report has a chart", "did not see the chart in report.docx"),
+    ("Totals row in the workbook", "cannot see the totals row in sales.xlsx"),
+    ("Figures match the CSV", "not verifiable from the CSV: the numbers differ"),
+    ("Summary written in English", "could not verify it, the file is in German"),
+])
+def test_file_defects_are_never_downgraded_to_unverified(req, ev):
+    res = GR.normalise({"verdict": "fail", "items": [{"requirement": req, "status": "not_met", "evidence": ev}]})
+    assert res["not_met"] == 1 and res["unverified"] == 0 and GR.needs_rework(res)
+
+
+@pytest.mark.parametrize("fix", [
+    "Recreate the chart with axis labels", "Write the summary again in English", "Reapply the formatting to the header row",
+    "Re-run the test suite after the fix", "Create the missing README",
+])
+def test_file_fixes_are_kept(fix):
+    res = GR.normalise({"verdict": "fail", "items": [{"requirement": "x", "status": "not_met", "evidence": "y"}], "fix": [fix]})
+    assert res["fix"] == [fix]
+
+
 @pytest.fixture(autouse=True)
 def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
