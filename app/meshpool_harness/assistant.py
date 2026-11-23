@@ -766,6 +766,8 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         if isinstance(it, str):
             it = {"title": it[:60], "prompt": it}
         if isinstance(it, dict) and str(it.get("prompt", "")).strip():
+            if any(r["prompt"] == str(it["prompt"]) for r in rows):    # an identical request in one batch runs once
+                continue
             rows.append({"title": str(it.get("title") or it["prompt"])[:80], "prompt": str(it["prompt"])})
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
@@ -783,6 +785,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     deadline = time.time() + cfg["minutes"] * 60
     live: list = []
     halted = {"why": ""}
+    # two or more editing sub-agents each work in their own copy of the project (as agent/delegate.py does); their
+    # changes are brought back in task order below, conflicts reported and not applied
+    isolate = edit and len(rows) > 1
+    copies: dict = {}
+    run_id = "sub-" + uuid.uuid4().hex[:8]
 
     class Sub(K.Agent):
         _delegate_depth = 99                                 # these never start sub-agents of their own
@@ -823,7 +830,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         if halted["why"]:
             return f"## {r['title']}\n\nNot started: the sub-agents were stopped ({halted['why']})."
         try:
-            a = Sub(root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=steps, profile="work")
+            wt = None
+            if isolate:
+                from meshpool_harness import worktrees as WT
+                wt = copies[id(r)] = WT.subagent_copy(root, run_id, r["title"])
+            a = Sub(wt["workdir"] if wt else root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=steps, profile="work")
             if model:
                 a.model = model
             a.messages[0]["content"] += (
@@ -850,11 +861,27 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         return f"## {r['title']}\n({round(time.time() - t0)} s)\n\n{out.strip()}"
 
     threading.Thread(target=watch, daemon=True).start()
+    res: list = []
     try:
         with ThreadPoolExecutor(workers) as ex:
             res = list(ex.map(one, rows))
     finally:
         halted["done"] = True
+        if copies:                                           # in task order; an error leaves unapplied work on branches
+            from meshpool_harness import worktrees as WT
+            for i, r in enumerate(rows):
+                wt = copies.get(id(r))
+                if not wt:
+                    continue
+                ap = WT.apply_subagent_copy(wt)
+                if i >= len(res):
+                    continue
+                if ap["ok"]:
+                    res[i] += "\n\n(Its changes were applied to the project.)"
+                else:
+                    res[i] += ("\n\nIts changes were NOT applied to the project: " + ap["reason"]
+                               + (f" Files: {', '.join(ap['bad'][:10])}." if ap["bad"] else "")
+                               + (f" They are kept on git branch {ap['kept_branch']}." if ap["kept_branch"] else ""))
     head = f"{len(rows)} parts finished." if not halted["why"] else \
         f"{len(rows)} parts; the sub-agents were stopped by {halted['why']}, so some parts are incomplete."
     return head + "\n\n" + "\n\n".join(res)

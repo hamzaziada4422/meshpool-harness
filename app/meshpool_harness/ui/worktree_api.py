@@ -59,7 +59,12 @@ def handle(method: str, u, body: bytes = b""):
     if act == "merge":
         r = WT.merge(rec["id"])
         return 200, dict(r, diff=WT.diff(rec["id"]))
-    if act == "discard":
+    if act == "reset":                                  # start the copy again from the folder as it is now; the copy stays
         r = WT.reset(rec["id"])
         return 200, dict(r, diff=WT.diff(rec["id"]))
-    return 400, {"error": "Unknown action: use merge or discard."}
+    if act == "discard":                                # the same as `meshpool worktree discard`: changes and copy go
+        snap = dict(WT.summary(rec), removed=True)
+        r = WT.discard(rec["id"])
+        A.write_meta(sid, worktree=dict(snap, kept_branch=r.get("kept_branch")))
+        return 200, dict(r, removed=True)
+    return 400, {"error": "Unknown action: use merge, reset or discard."}
