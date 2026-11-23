@@ -6,6 +6,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -358,7 +359,8 @@ def signed_in(which: str) -> bool:
     """Whether the Codex (ChatGPT) sign-in already exists on this computer (it never reads the secret)."""
     try:
         if which == "codex":
-            return (user_codex_home() / "auth.json").is_file()
+            from meshpool_harness.core import chatgpt as CG
+            return bool(CG.signin_state()["ok"])      # a rejected or API-key sign-in is not a ready one
     except Exception:  # noqa: BLE001
         return False
     return False
@@ -368,9 +370,134 @@ def npx() -> str:
     return shutil.which("npx") or "npx"       # source checkouts only: the packaged app has no Codex
 
 
-def login(which: str) -> dict:
-    """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself."""
+LOGIN_TIMEOUT_S = 600                     # an abandoned ChatGPT sign-in is stopped after this long
+_LOGIN: dict = {"proc": None}             # the `npx codex login` this process started
+_LOGIN_LOCK = threading.Lock()
+_LOGIN_ATEXIT = [False]
+
+
+def _login_file() -> Path:
+    return C.home() / "codex-login.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether a process with this pid is running (a zombie is not)."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if os.name == "nt":
+        import subprocess
+        try:
+            out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                                 timeout=10, creationflags=0x08000000).stdout
+        except Exception:  # noqa: BLE001
+            return False
+        return str(pid) in out
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            return f.read().rsplit(b")", 1)[1].split()[0] != b"Z"
+    except (OSError, IndexError):
+        return True
+
+
+def _kill_tree(proc) -> None:
+    """Stop a sign-in and everything it started (npx -> node -> codex)."""
     import subprocess
+    pid = proc.pid
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)], capture_output=True, creationflags=0x08000000)
+    else:
+        import signal
+        import time
+        try:
+            os.killpg(pid, signal.SIGTERM)       # it is its own group leader (start_new_session)
+        except (ProcessLookupError, PermissionError):
+            pass
+        end = time.monotonic() + 2
+        while time.monotonic() < end:
+            try:
+                proc.wait(timeout=0.1)
+            except subprocess.TimeoutExpired:
+                continue
+            try:
+                os.killpg(pid, 0)                # leader gone: wait for the rest of the group too
+            except (ProcessLookupError, PermissionError):
+                break
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+    try:
+        proc.wait(timeout=5)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _clear_login(proc) -> None:
+    """Forget this sign-in: the state and its pid file (only if the file is still ours)."""
+    from meshpool_harness import fsio
+    with _LOGIN_LOCK:
+        if _LOGIN["proc"] is proc:
+            _LOGIN["proc"] = None
+    try:
+        with fsio.file_lock(_login_file(), timeout=5):
+            rec = fsio.read_json(_login_file(), None)
+            if isinstance(rec, dict) and rec.get("pid") == proc.pid:
+                _login_file().unlink(missing_ok=True)
+    except (TimeoutError, OSError, ValueError, fsio.CorruptFile):
+        pass
+
+
+def _login_watchdog(proc) -> None:
+    """Wait for the sign-in; stop it after LOGIN_TIMEOUT_S; either way clear the state when it is over."""
+    import subprocess
+    try:
+        proc.wait(timeout=LOGIN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+    except Exception:  # noqa: BLE001
+        pass
+    _clear_login(proc)
+
+
+def stop_login() -> None:
+    """Stop the ChatGPT sign-in this app started, with its whole process tree. Called when the app quits."""
+    with _LOGIN_LOCK:
+        proc, _LOGIN["proc"] = _LOGIN["proc"], None
+    if proc is None:
+        return
+    if proc.poll() is None:
+        _kill_tree(proc)
+    _clear_login(proc)
+
+
+def _login_running() -> bool:
+    """A sign-in is open: started by this process, or by another Meshpool (its pid file names a live process)."""
+    from meshpool_harness import fsio
+    proc = _LOGIN["proc"]
+    if proc is not None and proc.poll() is None:
+        return True
+    try:
+        rec = fsio.read_json(_login_file(), None)
+    except fsio.CorruptFile:                      # a damaged record names no sign-in
+        return False
+    # A record older than the timeout is stale even if its pid now belongs to an unrelated process.
+    import time
+    fresh = isinstance(rec, dict) and time.time() - float(rec.get("started") or 0) < LOGIN_TIMEOUT_S + 60
+    return fresh and _pid_alive(rec.get("pid"))
+
+
+def login(which: str) -> dict:
+    """Start the official ChatGPT sign-in (Codex's own login), which opens the browser by itself. One at a time: a
+    second click (or a second Meshpool) finds it running instead of fighting it for the sign-in port."""
+    import subprocess
+    import time
+    from meshpool_harness import fsio
     if which == "codex" and unsupported("codex"):      # Codex's sign-in is not part of the packaged app
         raise ValueError("Signing in with ChatGPT needs Codex, which is not part of the Meshpool app. Use the Meshpool "
                          "API key or another API key, or sign in once with `codex login` from a terminal "
@@ -381,10 +508,26 @@ def login(which: str) -> dict:
                              "an API key instead.")
         cmd = [npx(), "-y", CODEX_CLI, "login"]
         try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                             **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
-        except OSError as e:
-            raise ValueError(f"Could not start the sign-in: {e}")
+            with _LOGIN_LOCK, fsio.file_lock(_login_file(), timeout=10):
+                if _login_running():
+                    return {"ok": True, "already": True,
+                            "message": "The ChatGPT sign-in is already open in your browser. Finish it there, or wait "
+                                       "a moment and try again."}
+                flags = {"creationflags": 0x08000000 | 0x00000200} if os.name == "nt" else {"start_new_session": True}
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                            stdin=subprocess.DEVNULL, **flags)
+                except OSError as e:
+                    raise ValueError(f"Could not start the sign-in: {e}")
+                _LOGIN["proc"] = proc
+                fsio.atomic_write_json(_login_file(), {"pid": proc.pid, "started": time.time()})
+        except TimeoutError:
+            raise ValueError("Another sign-in is starting. Try again in a moment.")
+        threading.Thread(target=_login_watchdog, args=(proc,), daemon=True).start()
+        if not _LOGIN_ATEXIT[0]:
+            import atexit
+            _LOGIN_ATEXIT[0] = True
+            atexit.register(stop_login)
         return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "
                                        "are signed in."}
     raise ValueError("Unknown sign-in.")
