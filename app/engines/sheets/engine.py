@@ -24,7 +24,9 @@ How you work:
 1. Read any attached input files first (inspect with a short pandas script: sheets, columns, row counts).
 2. Write ONE Python build script (build_workbook.py) using the helper library below, then run it with python.
    Save a first complete version early; improve it afterwards.
-3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix every issue it reports and rerun until it prints PASS.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. It runs exactly the checks finish applies (workbook
+   QA, Checks tab, Cover tab, formula rules, sources), so PASS means finish will accept it. Fix every issue it reports
+   and rerun until it prints PASS.
 4. Finish with a short answer (what the workbook contains, key outputs with their cell references) and cite the
    checker command as evidence. List the .xlsx in artifacts.
 5. You have a fixed turn budget, stated in the task. A checked workbook delivered on time beats a richer one that is
@@ -32,6 +34,8 @@ How you work:
    build scripts are moved out of the output folder when the run ends; only the .xlsx stays there.
 
 Workbook rules:
+- Raw data copied from an input file goes in as typed values in input style, never as formulas like =34; literal
+  dates, years and rates go in labelled input cells that formulas reference.
 - Structure (banker style): wb = B.banker_workbook(title, purpose, author, date) gives Cover -> Inputs -> Calc ->
   Outputs -> Checks with colored tabs and a linked tab map. Put middle tabs in that order; add tabs only when needed
   (e.g. Historicals/Model/DCF/Valuation inputs, or Comps/Precedents), passing middle=(...). Use B.section(ws, row, "Revenue build")
