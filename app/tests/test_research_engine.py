@@ -389,3 +389,55 @@ def test_grid_excel_keeps_formula_text_as_text(tmp_path):
     g.cells[(0, 0)] = G.Cell("=WEBSERVICE(\"http://evil.example\")", [f"{s.id}.p1"], True)
     ws = load_workbook(G.to_excel(g, c, str(tmp_path / "g.xlsx")))["Grid"]
     assert all(ws[x].data_type == "s" for x in ("B1", "B2"))
+
+
+# ---- M31-03: sources.json is written atomically and a damaged one is quarantined, not fatal
+def test_interrupted_save_keeps_the_previous_sources(tmp_path, monkeypatch):
+    import os
+    c = corpus(tmp_path)
+    c.save()
+    n = len(c.sources)
+    c.add_text("extra", "Another source with enough words to be a passage of its own. " * 5)
+    assert len(c.sources) == n + 1
+    orig = Path.write_text
+
+    def half_write(self, text, *a, **k):               # old code: the file is truncated, then the write dies
+        orig(self, text[: len(text) // 2], *a, **k)
+        raise OSError("disk full")
+
+    def no_fsync(fd):                                  # new code: the death comes before the rename
+        raise OSError("disk full")
+    monkeypatch.setattr(Path, "write_text", half_write)
+    monkeypatch.setattr(os, "fsync", no_fsync)
+    with pytest.raises(OSError):
+        c.save()
+    monkeypatch.undo()
+    again = R.Corpus(str(tmp_path))
+    assert getattr(again, "load_error", None) is None and len(again.sources) == n
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_damaged_sources_json_is_quarantined_and_named_by_the_check(tmp_path):
+    from engines.research.engine import finish_check
+    c = corpus(tmp_path)
+    c.save()
+    raw = (tmp_path / "sources.json").read_text()
+    (tmp_path / "sources.json").write_text(raw[: len(raw) // 2])
+    (tmp_path / "report.md").write_text(good_body(c))
+    msg = finish_check("x [S1.p1]", ["report.md"], SimpleNamespace(root=tmp_path))
+    assert "could not be read" in msg and "Collect the sources again" in msg and "sources.json.corrupt-" in msg
+    assert not (tmp_path / "sources.json").exists()
+    (tmp_path / "sources.json").write_text(raw[: len(raw) // 2])
+    again = R.Corpus(str(tmp_path))                      # a second damaged copy: loads empty, does not raise
+    assert again.sources == {} and again.load_error and "sources.json" in again.load_error
+    kept = sorted(tmp_path.glob("sources.json.corrupt-*"))
+    assert kept and kept[-1].name in again.load_error
+
+
+def test_check_cli_names_a_damaged_corpus(tmp_path):
+    import subprocess
+    (tmp_path / "report.md").write_text("# R\n\n## Answer\n\nx [S1.p1].\n")
+    (tmp_path / "sources.json").write_text("")
+    r = subprocess.run([sys.executable, "-m", "engines.research.check", str(tmp_path / "report.md")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    assert r.returncode != 0 and "could not be read" in (r.stdout + r.stderr)

@@ -302,12 +302,24 @@ class Corpus:
         self._search, self._fetch = search_fn, fetch_fn
         self.now = now or time.strftime("%Y-%m-%d")
         self._sh: dict[str, set[int]] = {}
+        self.load_error: str | None = None
         if self.path.exists():
             self.load()
 
     # ---- persistence
     def load(self):
-        d = json.loads(self.path.read_text(encoding="utf-8"))
+        from meshpool_harness import fsio
+        self.load_error = None
+        try:
+            d = fsio.read_json(self.path, {})
+            if not isinstance(d, dict):
+                raise ValueError("not a JSON object")
+        except (fsio.CorruptFile, ValueError) as e:
+            # A damaged file (older version, killed save): keep it for inspection, start empty, say why.
+            cause = getattr(e, "cause", e)
+            moved = fsio.quarantine(self.path)
+            self.load_error = f"{self.path} was damaged ({cause}); moved to {moved or 'nowhere (could not move it)'}"
+            d = {}
         self.sources = {s["id"]: Source(**s) for s in d.get("sources", [])}
         self.passages = {}
         for p in d.get("passages", []):
@@ -322,10 +334,11 @@ class Corpus:
 
     def save(self) -> str:
         self.folder.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps({
+        from meshpool_harness import fsio
+        fsio.atomic_write_text(self.path, json.dumps({
             "created": self.now, "queries": self.queries, "failures": self.failures[-50:],
             "sources": [asdict(s) for s in self.sources.values()],
-            "passages": [p.to_json() for p in self.passages.values()]}, indent=1), encoding="utf-8")
+            "passages": [p.to_json() for p in self.passages.values()]}, indent=1))
         return str(self.path)
 
     # ---- adding sources
@@ -678,7 +691,8 @@ def finalize(report_path: str, corpus: Corpus, docx: bool = True) -> dict:
     text = split_sources(p.read_text(encoding="utf-8"))[0].rstrip() + "\n"
     cited = {c.split(".")[0] for c in citations_in(text)}
     text += "\n## Sources\n" + corpus.bibliography(cited) + "\n"
-    p.write_text(text, encoding="utf-8")
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(p, text)
     corpus.save()
     out = {"report": str(p), "cited": sorted(cited, key=lambda x: int(x[1:]))}
     if docx:

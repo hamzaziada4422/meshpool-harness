@@ -99,6 +99,9 @@ def finish_check(answer, artifacts, ws):
     if not os.path.exists(p):
         return f"ENGINE CHECK: artifact not found: {md[0]}"
     corpus = Corpus(str(Path(p).parent))
+    if corpus.load_error:
+        return (f"ENGINE CHECK: sources.json could not be read: {corpus.load_error}. Collect the sources again "
+                "(c.search_and_read / c.add_*), then R.finalize.")
     if not corpus.sources:
         return "ENGINE CHECK: no sources.json next to the report; collect sources with the research library first."
     probs = check(Path(p).read_text(encoding="utf-8"), corpus)
