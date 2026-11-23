@@ -1204,6 +1204,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU

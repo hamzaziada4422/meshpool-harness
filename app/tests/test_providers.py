@@ -3,6 +3,7 @@
 The provider decides each harness's credentials: every built-in agent runs on an API key (the Meshpool key or another
 OpenAI-compatible one) or the user's ChatGPT sign-in.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def home(tmp_path, monkeypatch):
 def sign_in(tmp_path, which="chatgpt"):
     assert which == "chatgpt"                                     # the only sign-in Meshpool has
     (tmp_path / "codex").mkdir(parents=True, exist_ok=True)
-    (tmp_path / "codex" / "auth.json").write_text("{}")
+    (tmp_path / "codex" / "auth.json").write_text(json.dumps({"tokens": {"access_token": "a.b.c", "refresh_token": "rt-1"}}))
 
 
 def rows():
