@@ -11,5 +11,12 @@
   "claude-haiku-5.5": {"in": 0.10, "cached": 0.01, "cache_write": 0.125, "out": 0.50},
   "deepseek-v4.1-flash": {"in": 0.15, "cached": 0.003, "cache_write": 0.15, "out": 0.60, "note": "DeepSeek list price. The Meshpool gateway bills about 2.19 times this (measured); the factor is not applied here."},
   "deepseek-v4-flash": {"in": 0.15, "cached": 0.003, "cache_write": 0.15, "out": 0.60, "note": "DeepSeek list price. The Meshpool gateway bills about 2.19 times this (measured); the factor is not applied here."}
+ },
+ "hosts": {
+  "note": "measured gateway billing factor 2.19 (the gateway bills 2.19 times the list price in models)",
+  "llm.meshpool.ai": {
+   "deepseek-v4.1-flash": {"in": 0.3285, "cached": 0.00657, "cache_write": 0.3285, "out": 1.314},
+   "deepseek-v4-flash": {"in": 0.3285, "cached": 0.00657, "cache_write": 0.3285, "out": 1.314}
+  }
  }
 }

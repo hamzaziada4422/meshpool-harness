@@ -73,8 +73,9 @@ def _python_m() -> list[str]:
     return cmd[:len(cmd) - (len(sys.argv) - 1)] if len(sys.argv) > 1 else cmd
 
 
-def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
-    """Register a job (its output folder, command and build number) and return its id; run() runs it."""
+def new_job(engine: str, request: str, paths: list[str], root: Path, env_extra: dict | None = None) -> str:
+    """Register a job (its output folder, command and build number) and return its id; run() runs it. env_extra is
+    added to the engine process's environment (the usage task it records into)."""
     jid = uuid.uuid4().hex[:8]
     out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
     out.mkdir(parents=True, exist_ok=True)
@@ -84,17 +85,25 @@ def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
     now = time.time()
     recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
     JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
-                 "inputs": {Path(x).name for x in paths or []}}
+                 "inputs": {Path(x).name for x in paths or []}, "env_extra": dict(env_extra or {})}
     return jid
 
 
-def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
+def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dict | None = None) -> None:
     """Run a job's engine process to the end. Its output is read while it runs (a full pipe would block the engine
     until the timeout). should_stop() true: the process is killed and the job is marked stopped."""
     j = JOBS[jid]
     timeout = float(timeout if timeout is not None else os.environ.get("OFFICE_JOB_TIMEOUT_S", "1800"))
     env = dict(os.environ, PYTHONPATH=str(APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     env.pop("MH_EVENT_LOG", None)
+    extra = env_extra or j.get("env_extra")
+    if not extra:                           # a usage task is current (the Office MCP server of a chat): bill under it
+        from meshpool_harness.core import usage
+        cur = usage.current()[0]
+        if cur is not None:
+            extra = usage.child_env(usage.start_task(chat=cur.chat, parent=cur, label="office:" + j["engine"]),
+                                    "engine:" + j["engine"])
+    env.update(extra or {})
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}     # CREATE_NO_WINDOW: no console flashes up
     try:
         proc = subprocess.Popen(j["cmd"], cwd=str(j["out"]), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

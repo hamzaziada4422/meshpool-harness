@@ -189,10 +189,12 @@ class LiveClient:
                 req_chars = _request_chars(send)
                 ubase = getattr(self.ledger, "base_url", "") or ""
                 res = usage.reserve(model, request_chars=req_chars, max_tokens=out_tok, base=ubase)   # may raise
+                from meshpool_harness.core.wire import SimpleLedger
+                sk = {"side": side} if isinstance(self.ledger, SimpleLedger) else {}   # side: no waiting out an outage
                 try:
                     r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
                                          role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
-                                         extra=ex2, retries=0)
+                                         extra=ex2, retries=0, **sk)
                 except BaseException:
                     res.close()
                     raise

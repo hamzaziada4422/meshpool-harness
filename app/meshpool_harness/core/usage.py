@@ -251,6 +251,22 @@ def _table() -> dict:
     return t
 
 
+def _host_table(host: str) -> dict:
+    """The table's per-host prices (``hosts``: what a gateway really bills), lower-cased by model."""
+    key = ("hosts", str(_TABLE_FILE))
+    hosts = _TABLE_CACHE.get(key)
+    if hosts is None:
+        try:
+            doc = json.loads(Path(_TABLE_FILE).read_text(encoding="utf-8-sig"))
+            raw = doc.get("hosts") if isinstance(doc, dict) else {}
+            hosts = {str(h).lower(): {str(k).lower(): v for k, v in (m or {}).items() if isinstance(v, dict)}
+                     for h, m in (raw or {}).items() if isinstance(m, dict)}
+        except (OSError, ValueError):
+            hosts = {}
+        _TABLE_CACHE[key] = hosts
+    return hosts.get(host.lower(), {})
+
+
 def _mk(src: str, pin: Any, pout: Any, pc: Any = None, pw: Any = None) -> dict | None:
     i, o = _num(pin), _num(pout)
     if i is None or o is None:
@@ -443,7 +459,12 @@ def price_for(model: str, base: str = "") -> dict:
     """USD per 1M tokens {in, cached, cache_write, out, source}. Never blocks on the network."""
     p = _override(model) or _endpoint_price(model, base)
     if p is None:
-        v = _match(_table(), model)
+        host = ""
+        if base:
+            from urllib.parse import urlparse
+            host = urlparse(base).hostname or ""
+        v = _match(_host_table(host), model) if host else None     # a gateway's own prices come before list prices
+        v = v or _match(_table(), model)
         p = _mk("table", v.get("in"), v.get("out"), v.get("cached"), v.get("cache_write")) if v else None
     return p or {"in": None, "cached": None, "cache_write": None, "out": None, "source": "unknown"}
 

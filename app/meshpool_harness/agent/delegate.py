@@ -26,6 +26,8 @@ import threading
 import time
 import uuid
 
+from meshpool_harness.core import usage
+
 BLOCKED = {"ask_user"}                                  # needs a person
 ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, schedules, run_subtasks: none for them
 # a goal that is nothing but a placeholder ("TODO", "task 3", "<goal>", "{task}"); "<title> tags" or
@@ -35,7 +37,6 @@ _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placehold
 # office_task counts as a command for sub-agents: its engines run model-written code
 NO_COMMANDS = {"bash", "bash_start", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
-_USAGE_LOCK = threading.Lock()
 
 
 # ---------- settings ----------------------------------------------------------------------------------------------
@@ -380,6 +381,8 @@ class Delegation:
                   sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_rec = rec                            # its own sub-agents' files count as its files
+        a.usage_source = "subagent"                      # its calls are recorded under a task of its own, below
+        a.usage_task = usage.start_task(chat=parent.id, parent=getattr(parent, "_task", None), label="subagent")
         a._delegate_depth = depth + 1
         a._delegate_top = top
         a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
@@ -515,14 +518,9 @@ class Delegation:
         p = self.parent
         if isinstance(getattr(p, "_delegate_rec", None), dict):   # a sub-agent's sub-agent wrote these
             p._delegate_rec["files"].update(rec["files"])
-        turn = getattr(p, "_turn_usage", None)            # and in this turn's total
-        with _USAGE_LOCK:                                 # children finish on several threads at once
-            for k in ("in", "cached", "out", "calls"):    # the chat pays for its sub-agents: count it there
-                p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
-                if isinstance(turn, dict):
-                    turn[k] = turn.get(k, 0) + rec["usage"][k]
-        if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
-            p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
+        turn = getattr(p, "_turn_usage", None)
+        if hasattr(p, "_absorb_usage") and isinstance(turn, dict):
+            p._absorb_usage(turn)                         # the sub-agents' calls sit in the chat's task: count them once
         summary = str(rec.get("summary") or "")
         # every report of one call shares a budget (about 60k characters) so the result fits the chat's context;
         # a report cut to fit is kept in full in a file the model can read
