@@ -770,12 +770,17 @@ class WorkbookReview:
             if not (cur and cur.exists() and out.get("ok") and _sha(cur) == best["sha256"]):
                 dst = self.ws.root / best["workbook"]
                 dst.parent.mkdir(parents=True, exist_ok=True)
+                if dst.is_file() and _sha(dst) not in {r["sha256"] for r in self.rounds}:
+                    keep = self.ws.run_dir / "review" / "latest" / dst.name    # a newer version nobody reviewed
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(dst, keep)
+                    self.notes.append(f"The newer, unreviewed version is kept at .run/review/latest/{dst.name}.")
                 shutil.copy2(best["copy"], dst)
                 rest = [a for a in out.get("artifacts") or [] if not str(a).endswith((".xlsx", ".xlsm"))]
                 out["artifacts"] = [str(dst)] + rest
                 if out.get("ok"):
                     self.notes.append(f"Delivered the round {best['round']} version: it scored higher than the later "
-                                      "version, which is kept in .run/review/.")
+                                      "version, which is kept in .run/review/ (as a reviewed round copy, or in latest/).")
                 out["ok"] = True
                 out["reason"] = f"{out.get('reason', '')}; delivered the best reviewed workbook (round {best['round']})"
             delivered = best["round"]

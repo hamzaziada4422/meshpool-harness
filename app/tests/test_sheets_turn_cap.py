@@ -284,3 +284,46 @@ def test_an_unchanged_copy_of_the_input_under_a_new_name_is_not_saved(tmp_path, 
                 files=[str(orig)])
     assert r["ok"] is False and r["artifacts"] == [] and r["reason"].endswith("no workbook saved")
     assert "BUILD NOW" in _all_notes(c)
+
+
+# ---- delivering an earlier reviewed round keeps the newer, unreviewed workbook (M30-03)
+
+def _review_with_one_round(tmp_path):
+    import hashlib
+
+    class WS:
+        root = tmp_path
+        run_dir = tmp_path / ".run"
+        turn = 20
+    WS.run_dir.mkdir()
+    copy = WS.run_dir / "review" / "round1" / "model.xlsx"
+    copy.parent.mkdir(parents=True)
+    copy.write_bytes(b"round1")
+    rv = E.WorkbookReview(object(), WS(), 30, model="m")
+    rv.rounds.append({"round": 1, "turn": 10, "final": False, "workbook": "model.xlsx", "copy": str(copy),
+                      "sha256": hashlib.sha256(b"round1").hexdigest(), "model": "m", "digest_chars": 1,
+                      "signed_off": False, "scores": {"md": 6.0}, "not_run": [], "errors": [],
+                      "reviews": [{"persona": "md", "status": "ok", "overall": 6.0, "verdict": "revise"}],
+                      "issues": [], "research_requests": [], "samples": [], "score": 6.0, "passed_checks": True})
+    return rv
+
+
+def test_delivering_an_earlier_round_keeps_the_newer_version(tmp_path):
+    rv = _review_with_one_round(tmp_path)
+    model = tmp_path / "model.xlsx"
+    model.write_bytes(b"newer")                                    # saved after round 1, fails the engine checks
+    out = rv.finalize({"ok": False, "artifacts": [str(model)], "checks": ["X1 D5: typed numbers"],
+                       "answer": "stopped"}, at_cap=True)
+    assert out["ok"] is True and out["artifacts"] == [str(model)]
+    assert model.read_bytes() == b"round1"
+    kept = tmp_path / ".run" / "review" / "latest" / "model.xlsx"
+    assert kept.read_bytes() == b"newer"
+    assert ".run/review/latest/model.xlsx" in out["answer"]
+
+
+def test_a_destination_that_is_a_reviewed_round_is_not_copied_to_latest(tmp_path):
+    rv = _review_with_one_round(tmp_path)
+    model = tmp_path / "model.xlsx"
+    model.write_bytes(b"round1")                                   # the file on disk is already a reviewed round
+    rv.finalize({"ok": False, "artifacts": [str(model)], "answer": "stopped"}, at_cap=True)
+    assert not (tmp_path / ".run" / "review" / "latest").exists()
