@@ -51,3 +51,23 @@ agent's `_post`, `_probe_once`, `chatgpt.read_stream` and the Anthropic wire all
 
 A, B, C touch disjoint files and run in parallel in one tree; nothing is committed by subagents. Each new test is
 checked to fail with the fix reverted before sign-off.
+
+## Re-plan after the base moved to 370427e (audit branch merged in)
+
+Re-checked on the new base:
+
+- Already fixed there (`wire.sse_to_chat` / `normalize_reply`): W-05 (engine and agent: a plain JSON body to a stream
+  request is read in one call), W-08, W-19 (`sse_to_chat` raises "HTTP 0: the stream ended before the reply was
+  complete"), W-20 in `sse_to_chat`, W-11 (three breakpoints), the Hermes/GLM/Kimi forms of H-03, `<think>` in
+  non-streamed and final content (H-17 partly). These get proving tests, not new code.
+- Still open: W-07 (a second id at index 0 still merges while the first call has no arguments yet), W-09 (engine,
+  ChatGPT and probe readers), W-10 (HTTP-date ignored and capped at 60 s in `SimpleLedger`; agent waits out a reset
+  past its budget; `LiveClient` does not end early), W-12, W-13, W-20 in the agent's own `tee`, W-21, W-22, H-03
+  forms `<function=..>`, `[TOOL_CALLS]`, `<|python_tag|>` and bare JSON (with a name check), H-17 live deltas and
+  thinking progress, H-26.
+
+Changes to the original plan: no parallel assembler. `core/stream.py` keeps only transport helpers (`iter_sse`
+framing and keep-alive clock, `read_body` deadline, `ThinkSplitter` for live deltas, `encode_body`,
+`retry_after_seconds`, `prepare_messages`); `wire.sse_to_chat` and `normalize_reply` stay the one assembler and
+normaliser. `core/textcalls.py` adds the formats `normalize_reply` lacks, called where the offered tool names are
+known (agent turn, engine loop).
