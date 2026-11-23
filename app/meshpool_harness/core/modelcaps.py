@@ -167,7 +167,148 @@ def observe_usage(base: str, model: str, usage: dict) -> None:
     learn(base, model, usage_cached=cached, usage_reasoning=reasoning)
 
 
+# What an endpoint refused for a model, kept on disk so engine subprocesses and later runs know it too: "this model is not
+# deployed here" (a 404), "this parameter is not supported" (a 400) and "this model cannot read images". A fixed list of
+# reviewer models and a retry with the same parameters used to cost one billed failed call per request (S-03).
+_MEM_TTL_S = 24 * 3600.0                     # a model deployed (or a setting changed) later is tried again after a day
+_MEM: dict = {"path": None, "mtime": None, "data": {}}
+_FALLBACK: dict = {}                         # marks that could not be written to disk
+
+
+def _ttl() -> float:
+    try:
+        return float(os.environ.get("MH_MODEL_MEMORY_TTL_S", "") or _MEM_TTL_S)
+    except ValueError:
+        return _MEM_TTL_S
+
+
+def _mem_path():
+    from pathlib import Path
+    h = os.environ.get("MESHPOOL_HOME")
+    return Path(os.path.expanduser(h) if h else os.path.expanduser("~/.meshpool")) / "cache" / "endpoint_models.json"
+
+
+def endpoint_key(base: str, model: str) -> tuple[str, str]:
+    """(endpoint, bare model id): a provider-prefixed model id ("chatgpt:...") is its provider's endpoint, any other
+    model lives on the key endpoint (host and port, so two local servers stay apart)."""
+    from meshpool_harness import providers as PV
+    prov, bare = PV.split(model)
+    if prov != "key":
+        return prov, bare
+    try:
+        net = urlparse(base or PV.key_base()).netloc.lower()
+    except ValueError:
+        net = ""
+    return net or "key", bare
+
+
+def _mem_read() -> dict:
+    """The memory file, re-read when another process changed it (a mark made by an engine subprocess shows within
+    seconds). A damaged or unreadable file counts as empty; it is overwritten by the next mark."""
+    try:
+        p = _mem_path()
+        mt = p.stat().st_mtime_ns if p.exists() else None
+    except OSError:
+        return _MEM["data"] if _MEM["path"] else {}
+    if _MEM["path"] == str(p) and _MEM["mtime"] == mt:
+        return _MEM["data"]
+    data: dict = {}
+    if mt is not None:
+        try:
+            from meshpool_harness import fsio
+            d = fsio.read_json(p, default={})
+            data = d if isinstance(d, dict) else {}
+        except Exception:  # noqa: BLE001 - CorruptFile or unreadable
+            data = {}
+    _MEM.update(path=str(p), mtime=mt, data=data)
+    return data
+
+
+def _mem_mark(base: str, model: str, kind: str, param: str = "") -> None:
+    """Record one fact (kind: "missing" | "no_vision" | "refused" with a param) with the time. Never raises."""
+    import time
+    ep, bare = endpoint_key(base, model)
+    now = time.time()
+
+    def put(cur):
+        cur = cur if isinstance(cur, dict) else {}
+        row = cur.setdefault(ep, {}).setdefault(bare, {})
+        if kind == "refused":
+            row.setdefault("refused", {})[param] = now
+        else:
+            row[kind] = now
+        for e in list(cur):                             # drop expired rows so the file stays small
+            for m in list(cur[e]):
+                r = cur[e][m]
+                r2 = {k: v for k, v in r.items() if k != "refused" and now - v < _ttl()}
+                ref = {k: v for k, v in (r.get("refused") or {}).items() if now - v < _ttl()}
+                if ref:
+                    r2["refused"] = ref
+                if r2:
+                    cur[e][m] = r2
+                else:
+                    del cur[e][m]
+            if not cur[e]:
+                del cur[e]
+        return cur
+    try:
+        from meshpool_harness import fsio
+        try:
+            data = fsio.update_json(_mem_path(), put, default={})
+        except fsio.CorruptFile:                        # damaged: start over (the facts are cheap to learn again)
+            data = put({})
+            fsio.atomic_write_json(_mem_path(), data)
+        _MEM.update(path=str(_mem_path()), mtime=_mem_path().stat().st_mtime_ns, data=data)
+    except Exception:  # noqa: BLE001 - a read-only home must not break a model call
+        put(_FALLBACK)                                  # this process still remembers it
+
+
+def _mem_get(base: str, model: str, kind: str, param: str = "") -> bool:
+    import time
+    ep, bare = endpoint_key(base, model)
+    for src in (_mem_read(), _FALLBACK):
+        row = (src.get(ep) or {}).get(bare) or {}
+        ts = (row.get("refused") or {}).get(param) if kind == "refused" else row.get(kind)
+        if isinstance(ts, (int, float)) and time.time() - ts < _ttl():
+            return True
+    return False
+
+
+def learn_missing(base: str, model: str) -> None:
+    """The endpoint answered that this model is not deployed (404 DeploymentNotFound, "model does not exist")."""
+    _mem_mark(base, model, "missing")
+
+
+def is_missing(base: str, model: str) -> bool:
+    return _mem_get(base, model, "missing")
+
+
+def learn_refused(base: str, model: str, param: str) -> None:
+    """The endpoint refused this request field for this model (400 "Unsupported parameter: 'temperature'")."""
+    _mem_mark(base, model, "refused", param)
+
+
+def refused(base: str, model: str) -> set:
+    import time
+    ep, bare = endpoint_key(base, model)
+    out = set()
+    for src in (_mem_read(), _FALLBACK):
+        row = ((src.get(ep) or {}).get(bare) or {}).get("refused") or {}
+        out |= {k for k, ts in row.items() if isinstance(ts, (int, float)) and time.time() - ts < _ttl()}
+    return out
+
+
+def learn_no_vision(base: str, model: str) -> None:
+    _mem_mark(base, model, "no_vision")
+
+
+def no_vision(base: str, model: str) -> bool:
+    return _mem_get(base, model, "no_vision")
+
+
 def reset() -> None:
     with _LOCK:
         _CACHE.clear()
         _LEARNED.clear()
+    _MEM.update(path=None, mtime=None, data={})
+    _FALLBACK.clear()

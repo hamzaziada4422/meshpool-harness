@@ -65,7 +65,7 @@ def classify_error(msg: str) -> str:
     if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
             r"(?:invalid|unknown|unsupported|no such|not a valid) model|model[ _-]?not[ _-]?found|model\b[^.\n]{0,80}?"
             r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)"
-            r"|key_model_access_denied", m, re.I):
+            r"|key_model_access_denied|deployment ?not ?found|deployment[^.\n]{0,60}(?:does not exist|not found)", m, re.I):
         return "model_missing"                      # an old chat on a model the endpoint no longer serves
     from meshpool_harness.core.context import is_context_error
     if is_context_error(m) and not re.search(r"HTTP 429|rate.?limit|per minute", m, re.I):
@@ -159,6 +159,16 @@ class LiveClient:
         base_url = getattr(self.ledger, "base_url", None)
         win = CTX.window(model, base_url, getattr(self.ledger, "api_key", "") or "")
         CTX.tell_once(model, win, self.notify or _tell_retry)
+        from meshpool_harness.core import modelcaps as MC, models as MD
+        if MC.is_missing(base_url, model):               # learned from an earlier 404: do not call (nothing is billed)
+            raise RuntimeError(f"meshpool HTTP 404: model {model} is not deployed on this endpoint (remembered; not called)")
+        gone, mct = MC.refused(base_url, model), False   # fields this endpoint refused for this model before
+        if "temperature" in gone:
+            temperature = None
+        mct = "max_tokens" in gone
+        for k in gone:
+            ex.pop(k, None)
+        tried: set = set()
         tighten, shrinks = 1.0, 0
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
@@ -167,6 +177,8 @@ class LiveClient:
             try:
                 send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
                 ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
+                if mct:                                       # a model that refuses max_tokens takes the newer name
+                    ex2 = dict(ex2, max_completion_tokens=out_tok)
                 r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
                                      role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
                                      extra=ex2, retries=0)
@@ -188,6 +200,26 @@ class LiveClient:
                     if shrinks > 4:
                         raise
                     continue
+                if kind == "model_missing":                        # not deployed here: remember it, never retry
+                    MC.learn_missing(base_url, model)
+                    raise
+                if kind == "vision" and any(isinstance(m.get("content"), list) and any(
+                        isinstance(p, dict) and p.get("type") in ("image_url", "input_image", "image") for p in m["content"])
+                        for m in messages):
+                    MC.learn_no_vision(base_url, model)            # text-only here: image reviews skip it from now on
+                    raise
+                if "HTTP 400" in msg:                              # a refused field: drop it and resend at once
+                    sent = set(ex) | {"max_tokens"} | ({"temperature"} if temperature is not None else set())
+                    f = MD.unsupported_param(msg, sent)
+                    if f and f not in tried:
+                        tried.add(f)
+                        MC.learn_refused(base_url, model, f)
+                        ex.pop(f, None)
+                        if f == "temperature":
+                            temperature = None
+                        elif f == "max_tokens":
+                            mct = True
+                        continue
                 if kind in ("bad_request", "vision", "gateway_reject") and attempt == 0:
                     from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
