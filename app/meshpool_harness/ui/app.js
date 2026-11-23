@@ -2409,7 +2409,7 @@ function permStep(host) {
     <div class="scope" role="radiogroup" aria-label="Where Meshpool can work">
       <button class="scopeopt" data-scope="pick" role="radio"><b>Folders I choose</b><small>Add one or more folders now.</small></button>
       <button class="scopeopt" data-scope="home" role="radio"><b>My whole home folder</b><small>Documents, Desktop, Downloads and everything else in your user folder.</small></button>
-      <button class="scopeopt" data-scope="later" role="radio"><b>Start in Meshpool Projects</b><small>A folder Meshpool made for you. Add your own folders any time.</small></button>
+      <button class="scopeopt" data-scope="later" role="radio"><b>Start without a folder</b><small>Each chat keeps its files in its own folder. Open it from the chat's Files panel.</small></button>
     </div><div class="res" id="oScope"></div>
     <div id="oPermH"><h3 class="onb-h">What Meshpool can do</h3>
     <ul class="rows2" id="oPerms"></ul></div>
@@ -2431,7 +2431,7 @@ function permStep(host) {
     try {
       if (x.dataset.scope === "pick") { await pickProject(); res.className = S.projects.length ? "res ok" : "res"; res.textContent = S.projects.length ? `Added ${S.projects.map(x => x.name || projName(x.path)).join(", ")}. Add more any time from the sidebar.` : "No folder added yet."; }
       else if (x.dataset.scope === "home") { const r = await post("/api/projects", {action: "home"}); S.projects = r.projects; renderSide(); newThread(r.picked); res.className = "res ok"; res.textContent = "Meshpool can work anywhere in your home folder. It still asks before changing files unless you allow edits."; }
-      else { res.className = "res"; res.textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+      else { res.className = "res"; res.textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
       if (mac && x.dataset.scope !== "later") draw({id: "folders"});
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
@@ -2440,7 +2440,7 @@ function permStep(host) {
   window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
   document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
-  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
+  if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Each chat keeps its files in its own folder; open it from the chat's Files panel. Add your own folders any time from the sidebar."; }
   draw();
 }
 
