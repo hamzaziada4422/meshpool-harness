@@ -29,8 +29,7 @@ FAIL_HINT = ("\n[Meshpool] This call FAILED. Read the message: if it names a mis
              "have tried a corrected call or another tool.")
 SOFT_HINT = ("\n[Meshpool] This result reports a failure even though the call did not error. Treat it as failed: "
              "fix what it names and call again; do not count this step as done.")
-_ERR_START = re.compile(r"^\s*(?:(?:error|err|failed|failure|exception|fatal)\s*[:!]|traceback \(most recent call last\))", re.I)
-_BAD_STATUS = {"error", "failed", "failure", "fail", "denied", "rejected", "invalid", "forbidden", "unauthorized"}
+_ERR_START = re.compile(r"^\s*(?:error|err|failed|failure|exception|fatal)\s*[:!]", re.I)
 _NEXT_KEYS = ("next_cursor", "nextCursor", "next_page_token", "nextPageToken", "next_page", "nextPage", "next_token",
               "nextToken", "next_offset", "continuation", "continuation_token", "cursor_next", "after")
 
@@ -49,23 +48,55 @@ def _json(text: str):
         return None
 
 
+_DATA_KEYS = ("data", "result", "results", "items", "tickets", "records", "rows", "content", "output", "value")
+_STATUS_KEYS = ("status_code", "statusCode", "http_status", "httpStatus", "status")
+SHORT_ERROR = 200
+
+
+def _http_status(d: dict) -> bool:
+    """A top-level HTTP-style status number of 400 or more, or the exact word "error" in a status field."""
+    for k in _STATUS_KEYS:
+        v = d.get(k)
+        if isinstance(v, bool):
+            continue
+        if isinstance(v, int) and 400 <= v <= 599:
+            return True
+        if isinstance(v, str):
+            if v.strip().isdigit() and 400 <= int(v) <= 599:
+                return True
+            if k == "status" and v.strip().lower() == "error":
+                return True
+    return False
+
+
 def soft_failure(text: str) -> bool:
-    """True when ordinary result text reports a failure: it starts with Error/Failed, or is a JSON object saying
-    ok/success false, an error, or a failed status."""
-    t = str(text or "")
-    if _ERR_START.match(t[:80]):
-        return True
-    d = _json(t[:200000])
-    if not isinstance(d, dict):
+    """True when a result that did not raise still reports a failure. Conservative: a wrong "failed" mark makes the
+    model retry or distrust good output, so only clear signals count.
+
+    - structured: a JSON object with ok/success false, a non-empty error or errors key (unless data came with it, or
+      ok/success is true), a JSON-RPC error object, an HTTP-style status of 400 or more, or status "error";
+    - plain text: only a SHORT result (one line, under 200 characters) whose whole text is an error phrase such as
+      "Error: booking failed". Long text that merely starts with or contains the word (a log, grep output, a docs
+      page about errors, a stack trace someone asked to read) is content, not a failure."""
+    t = str(text or "").strip()
+    if not t:
         return False
-    if d.get("ok") is False or d.get("success") is False:
-        return True
-    if d.get("error") or d.get("errors"):
+    if t[0] in "{[":
+        d = _json(t[:200000])
+        if not isinstance(d, dict):
+            return False
+        if d.get("ok") is False or d.get("success") is False:
+            return True
         if d.get("ok") is True or d.get("success") is True:
             return False
-        return not any(k in d for k in ("data", "result", "results", "items", "tickets", "records"))
-    st = str(d.get("status") or "").lower()
-    return st in _BAD_STATUS
+        if "jsonrpc" in d and isinstance(d.get("error"), dict) and "result" not in d:
+            return True
+        if d.get("error") or d.get("errors"):
+            return not any(k in d for k in _DATA_KEYS)
+        return _http_status(d) and not any(k in d for k in _DATA_KEYS)
+    if len(t) <= SHORT_ERROR and "\n" not in t:
+        return bool(_ERR_START.match(t))
+    return False
 
 
 def page_hint(text: str) -> str:
