@@ -1333,6 +1333,11 @@ def _watchdog(idle_s: float):
 
 
 def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on_ready=None) -> int:
+    try:                                                       # OSS-36: old per-chat Codex folders
+        from meshpool_harness.harnesses import prune_codex_homes
+        prune_codex_homes()
+    except Exception:  # noqa: BLE001
+        pass
     global DESKTOP
     DESKTOP = desktop
     RUNS.mkdir(parents=True, exist_ok=True)

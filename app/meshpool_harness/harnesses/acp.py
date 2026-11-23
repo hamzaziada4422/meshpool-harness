@@ -393,8 +393,10 @@ class ACPAgent:
         self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=self._err, cwd=str(self.root), env=env, **kw)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(self.root), env=env, **kw)
         self._alive = True
+        self._last_msg = time.time()
+        threading.Thread(target=self._pump_stderr, args=(self._p, self._err), daemon=True).start()
         threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
         try:
             return self._handshake(m)
@@ -420,14 +422,42 @@ class ACPAgent:
             self._request("authenticate", auth, timeout=120)
         return True
 
+    def _pump_stderr(self, proc, log):
+        """The harness's stderr into its log with secret-looking values removed (OSS-29); a Codex sandbox failure
+        (OSS-02) is told to the user once, plainly."""
+        told = False
+        for raw in proc.stderr:
+            line = C.redact_secrets(raw.decode("utf-8", "replace"))
+            try:
+                log.write(line)
+                log.flush()
+            except (OSError, ValueError):
+                pass
+            if not told and self.manifest.get("id") == "codex":
+                from meshpool_harness.harnesses import codex_sandbox_failure
+                note = codex_sandbox_failure(line)
+                if note:
+                    told = True
+                    self.sandbox_note = note
+                    self._emit({"type": "text_delta", "text": "\n" + note + "\n"})
+
+    def _serve_counted(self, msg):
+        self._serving = getattr(self, "_serving", 0) + 1          # a request waiting on the user is not idleness
+        try:
+            self._serve_request(msg)
+        finally:
+            self._serving -= 1
+            self._last_msg = time.time()
+
     def _reader(self, proc):
         for raw in proc.stdout:
+            self._last_msg = time.time()
             try:
                 msg = json.loads(raw.decode("utf-8", "replace"))
             except ValueError:
                 continue
             if "method" in msg and "id" in msg:
-                threading.Thread(target=self._serve_request, args=(msg,), daemon=True).start()
+                threading.Thread(target=self._serve_counted, args=(msg,), daemon=True).start()
             elif "method" in msg:
                 try:
                     self._notification(msg)
@@ -463,6 +493,9 @@ class ACPAgent:
                                    f"See runs/harness-logs/{self.manifest.get('id', 'acp')}.log")
                 if end and time.time() > end:
                     raise ACPError(f"No reply to {method} within {int(timeout)} s.")
+                if method == "session/prompt" and not getattr(self, "_serving", 0) and self._idle_s() and \
+                        time.time() - getattr(self, "_last_msg", time.time()) > self._idle_s():
+                    break                                   # OSS-09: nothing for MH_ACP_IDLE_S: the harness is hung
                 if self._stop and self._in_turn and (method != "session/prompt" or time.time() - getattr(self, "_stop_t", 1e18) > 3):
                     # session/prompt: the harness ignored the cancel. Anything else (initialize, authenticate,
                     # session/new ...) is start-up, which no cancel reaches: give up now, not at its timeout.
@@ -475,7 +508,17 @@ class ACPAgent:
                     raise ACPError(f"{e.get('message', 'error')}" + (f": {e.get('data')}" if e.get("data") else ""))
                 return msg.get("result") or {}
         self._hard_restart()
+        if self._idle_s() and not self._stop and method == "session/prompt":
+            raise ACPError(f"{self.manifest.get('name', 'The harness')} sent nothing for {int(self._idle_s())} seconds, so "
+                           "this turn was ended. It restarts with your next message (MH_ACP_IDLE_S sets the limit).")
         raise ACPStopped("stopped")
+
+    @staticmethod
+    def _idle_s() -> float:
+        try:
+            return float(os.environ.get("MH_ACP_IDLE_S") or C.read().get("MH_ACP_IDLE_S") or 300)
+        except (TypeError, ValueError, OSError):
+            return 300.0
 
     def _hard_restart(self):
         """End the harness process (and what it started); the next message restarts it and reloads the session."""
