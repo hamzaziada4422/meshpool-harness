@@ -45,6 +45,14 @@ def _no_slot_files_in_real_temp():
                       "MH_SLOTS_DIR. (Slot files other processes create there are not this run's concern.)")
 
 
+def _forget_learned():
+    """Windows and refused fields learned in one test (process-wide, keyed by model) must not trim the next test."""
+    from meshpool_harness.agent import core as _AC
+    from meshpool_harness.core import context as _CX
+    _CX.forget()
+    _AC._REFUSED.clear()
+
+
 @pytest.fixture(autouse=True)
 def _offline_gateway(monkeypatch, tmp_path):
     """No test probes the real endpoint, and no endpoint state leaks between tests."""
@@ -54,6 +62,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness.core import modelcaps as MCAPS
     monkeypatch.setenv("MH_CAPS_LEARNED", str(tmp_path / "caps_learned.json"))   # learned facts never reach the real folder
     MCAPS.reset()
+    _forget_learned()
     # Loopback mocks count as local servers, which wait 15 min for a first byte and 5 min between bytes (H-06): tests that
     # check the timeouts use short ones, so the local floors are off here (the H-06 test turns them on).
     monkeypatch.setenv("MH_LOCAL_FIRST_BYTE_S", "1")
@@ -78,3 +87,4 @@ def _offline_gateway(monkeypatch, tmp_path):
     yield
     GW.reset()
     MCAPS.reset()
+    _forget_learned()
