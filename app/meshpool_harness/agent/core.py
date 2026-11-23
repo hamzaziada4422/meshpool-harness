@@ -88,7 +88,10 @@ _TRIM = (
      "## Responsiveness\nDo not write a sentence before tool calls: just call the tools. Write only the final "
      "answer.\n\n"),
     ("### Examples\n", "## Task execution\n", ""),
-    ("## Sharing progress updates\n", "## Presenting your work and final message\n", ""),
+    ("## Sharing progress updates\n", "## Presenting your work and final message\n",
+     "## Before you finish\nRe-read the request. For each requirement, check your code or a run against its exact "
+     "words: the keys and values returned, empty and single-item inputs, ordering, errors. A requirement you only "
+     "assumed is not done; fix what fails, then answer.\n\n"),
     ("### Final answer structure and style guidelines\n", "# Sandbox and approvals\n",
      "### Final answer style\nPlain text. At most 10 lines: what changed and how you checked it, nothing else. "
      "Do not restate the task, list every edit, or paste code you wrote. Use `-` bullets and backticks for "
