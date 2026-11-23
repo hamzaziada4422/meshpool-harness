@@ -39,7 +39,9 @@ LABELS = {
     "sga": ["sg&a", "selling general and administrative", "operating expenses", "opex", "overheads"],
     "operating_income": ["operating income", "operating profit", "ebit", "income from operations"],
     "interest_expense": ["interest expense", "interest", "finance costs", "interest paid"],
-    "pretax_income": ["pre-tax income", "pretax income", "income before taxes", "profit before tax", "ebt"],
+    "pretax_income": ["pre-tax income", "pretax income", "income before taxes", "profit before tax", "ebt",
+                      "income before income taxes", "earnings before income taxes", "profit before income taxes",
+                      "income before provision for income taxes", "earnings before tax"],
     "income_tax": ["income tax", "income taxes", "tax expense", "taxes", "provision for income taxes"],
     "net_income": ["net income", "net profit", "profit after tax", "net earnings"],
     "da": ["depreciation and amortisation", "depreciation and amortization", "d&a", "depreciation"],
@@ -50,13 +52,16 @@ LABELS = {
     "dividends": ["dividends", "dividends paid", "distributions", "owner distributions", "drawings"],
     "buybacks": ["share repurchases", "buybacks", "repurchase of shares"],
     "cfo": ["cash from operating activities", "operating cash flow", "cash from operations",
-            "net cash provided by operating activities"],
+            "net cash provided by operating activities", "cash flow from operations",
+            "cash flow from operating activities", "cash flows from operating activities",
+            "net cash from operating activities", "cash generated from operations"],
     "cash": ["cash", "cash and cash equivalents", "cash and equivalents"],
     "receivables": ["accounts receivable", "receivables", "trade receivables", "debtors"],
     "inventory": ["inventory", "inventories", "stock"],
     "current_assets": ["total current assets", "current assets"],
     "ppe": ["pp&e", "property plant and equipment", "fixed assets", "net fixed assets",
-            "property, plant and equipment, net"],
+            "property, plant and equipment, net", "property and equipment", "property and equipment net",
+            "property plant and equipment net", "plant and equipment"],
     "goodwill": ["goodwill"],
     "intangibles": ["intangible assets", "intangibles", "other intangibles"],
     "total_assets": ["total assets"],
@@ -335,7 +340,8 @@ EXCLUDE = {
     "operating_income": re.compile(rf"\b(other|{_BALANCE_WORDS})"),
     "interest_expense": re.compile(rf"^(?!.*\bexpense).*\b(income|earned)\b|\b(capitalized|capitalised|{_BALANCE_WORDS})"),
     "pretax_income": re.compile(rf"\b({_BALANCE_WORDS})"),
-    "income_tax": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "income_tax": re.compile(rf"\b(before|{_BALANCE_WORDS})"),
+    "cash": re.compile(r"\b(flow|flows|operating|investing|financing|operations|activities)\b"),
     "net_income": re.compile(rf"\b({_BALANCE_WORDS})"),
     "da": re.compile(rf"\b({_BALANCE_WORDS})"),
     "sbc": re.compile(rf"\b({_BALANCE_WORDS})"),
@@ -421,59 +427,83 @@ def from_table(path: str, name: str | None = None, sheet: str | None = None) -> 
     Labels are mapped to standard keys by synonyms; costs may be positive or negative (they are normalised).
     Unmapped rows are returned in .sources['_unmapped'] for review."""
     p = Path(path)
-    rows: list[list] = []
+    blocks: list[tuple[str, list[list]]] = []             # (sheet name, rows); a CSV is one block
     if p.suffix.lower() in (".xlsx", ".xlsm"):
         from openpyxl import load_workbook
         wb = load_workbook(p, data_only=True)
-        ws = wb[sheet] if sheet else wb.worksheets[0]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        sheets = [wb[sheet]] if sheet else wb.worksheets   # statements often sit on separate tabs (IS, BS, CF)
+        blocks = [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)]) for ws in sheets]
     else:
         try:
             with p.open(newline="", encoding="utf-8-sig") as f:
-                rows = [r for r in csv.reader(f)]
+                blocks = [("", [r for r in csv.reader(f)])]
         except UnicodeDecodeError:                       # an Excel "CSV" saved in the Windows code page
             with p.open(newline="", encoding="cp1252", errors="replace") as f:
-                rows = [r for r in csv.reader(f)]
-    hdr_i = next((i for i, r in enumerate(rows)
-                  if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1), None)
-    if hdr_i is None:
+                blocks = [("", [r for r in csv.reader(f)])]
+
+    def _yr(c):
+        m = re.search(r"(19|20)\d{2}", str(c))
+        return int(m.group(0)) if m else None
+
+    vals: dict = {}
+    srcs: dict = {}
+    unmapped: list = []
+    seen: dict[str, str] = {}
+    notes: list = []
+    used = 0
+    for sname, rows in blocks:
+        hdr_i = next((i for i, r in enumerate(rows)
+                      if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1), None)
+        if hdr_i is None:
+            continue                                      # a cover or notes tab
+        used += 1
+        where = f"{p.name}{' / ' + sname if sname and len(blocks) > 1 else ''}"
+        scale, unit_note = _unit_scale(rows, hdr_i)
+        if unit_note and unit_note not in notes:
+            notes.append(unit_note)
+        hdr = rows[hdr_i]
+        cols, taken = [], set()
+        for j, c in enumerate(hdr):
+            if j > 0 and c is not None and _yr(c) is not None:
+                if _yr(c) in taken:                       # FY2023 Actual / FY2023 Budget: first column wins
+                    unmapped.append(f"column {c!r} repeats year {_yr(c)} and was ignored")
+                    continue
+                taken.add(_yr(c))
+                cols.append((j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()))
+        cols.sort(key=lambda jc: int(re.search(r"(19|20)\d{2}", jc[1]).group(0)))   # oldest first
+        ys = [y if y.upper().startswith("FY") else f"FY{y}" for _, y in cols]
+        for y in ys:
+            vals.setdefault(y, {})
+            srcs.setdefault(y, {})
+        for r in rows[hdr_i + 1:]:
+            if not r or r[0] in (None, ""):
+                continue
+            k = match_label(r[0])
+            if k is None:
+                if not re.search(r"liabilities (and|&) ", _norm_label(r[0])):   # the L&E total is a check line
+                    unmapped.append(str(r[0]))
+                continue
+            if k in seen:                                # the first row for a key is used; say which one was not
+                unmapped.append(f"{r[0]} (also maps to {k}; used '{seen[k]}')")
+                continue
+            seen[k] = str(r[0])
+            benefit = k == "income_tax" and re.search(r"\bbenefit\b", _norm_label(r[0])) and \
+                not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
+            for (j, _), y in zip(cols, ys):
+                x = r[j] if j < len(r) else None
+                v, ok = _parse_cell(x)
+                if not ok:
+                    unmapped.append(f"{r[0]} / {hdr[j]}: cell {x!r} is not a plain number and was skipped")
+                if v is None or k in vals[y]:
+                    continue
+                v *= scale
+                vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
+                srcs[y][k] = f"{where}, row '{r[0]}', column {hdr[j]}"
+    if not used:
         raise ValueError(f"{p.name}: no header row with years such as FY2024 (years must be in columns after the "
                          "line labels)")
-    scale, unit_note = _unit_scale(rows, hdr_i)
-    hdr = rows[hdr_i]
-    cols = [(j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()) for j, c in enumerate(hdr)
-            if j > 0 and c is not None and re.search(r"(19|20)\d{2}", str(c))]
-    cols.sort(key=lambda jc: int(re.search(r"(19|20)\d{2}", jc[1]).group(0)))   # oldest first, whatever the order
-    years = [y if y.upper().startswith("FY") else f"FY{y}" for _, y in cols]
-    vals = {y: {} for y in years}
-    srcs: dict = {y: {} for y in years}
-    unmapped = []
-    seen: dict[str, str] = {}
-    for r in rows[hdr_i + 1:]:
-        if not r or r[0] in (None, ""):
-            continue
-        k = match_label(r[0])
-        if k is None:
-            if not re.search(r"liabilities (and|&) ", _norm_label(r[0])):   # the L&E total is a check line
-                unmapped.append(str(r[0]))
-            continue
-        if k in seen:                                    # the first row for a key is used; say which one was not
-            unmapped.append(f"{r[0]} (also maps to {k}; used '{seen[k]}')")
-            continue
-        seen[k] = str(r[0])
-        benefit = k == "income_tax" and re.search(r"\bbenefit\b", _norm_label(r[0])) and \
-            not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
-        for (j, _), y in zip(cols, years):
-            x = r[j] if j < len(r) else None
-            v, ok = _parse_cell(x)
-            if not ok:
-                unmapped.append(f"{r[0]} / {hdr[j]}: cell {x!r} is not a plain number and was skipped")
-            if v is None or k in vals[y]:
-                continue
-            v *= scale
-            vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
-            srcs[y][k] = f"{p.name}, row '{r[0]}', column {hdr[j]}"
-    if unit_note:
-        unmapped.append(unit_note)
+    years = sorted(vals, key=lambda y: int(re.search(r"(19|20)\d{2}", y).group(0)))
+    vals = {y: vals[y] for y in years}
+    unmapped += notes
     srcs["_unmapped"] = unmapped
     return Financials(name or p.stem, years, vals, srcs)
