@@ -122,6 +122,37 @@ def test_parallel_creates_on_one_repo_all_succeed(repo):
     assert not errs and len({r["id"] for r in out}) == 6 and len(WT.listing()) == 6
 
 
+def test_two_merges_into_one_repo_at_the_same_moment_are_serialised(repo):
+    recs = [WT.create(repo, owner_kind="chat", owner_id=str(i)) for i in range(4)]
+    for i, r in enumerate(recs):
+        (Path(r["workdir"]) / f"f{i}.txt").write_text(f"{i}\n")
+    out = []
+    ts = [threading.Thread(target=lambda r=r: out.append(WT.merge(r["id"]))) for r in recs]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert all(r["ok"] for r in out), out
+    assert sorted(p.name for p in repo.glob("f*.txt")) == ["f0.txt", "f1.txt", "f2.txt", "f3.txt"]
+    assert status(repo) == "" and not (repo / ".git" / "MERGE_HEAD").exists()
+
+
+def test_spaces_and_non_ascii_names_survive_create_diff_merge(tmp_path):
+    r = tmp_path / "my repo é"
+    r.mkdir()
+    git(r, "init", "-q", "-b", "main")
+    (r / "naïve file.txt").write_text("a\n")
+    git(r, "add", "-A")
+    git(r, "commit", "-qm", "init")
+    rec = WT.create(r, owner_kind="cli")
+    (Path(rec["workdir"]) / "naïve file.txt").write_text("b\n")
+    (Path(rec["workdir"]) / "ünïcode new.md").write_text("n\n")
+    assert sorted(f["path"] for f in WT.diff(rec["id"])["files"]) == ["naïve file.txt", "ünïcode new.md"]
+    (r / "ünïcode new.md").write_text("mine\n")            # untracked in the folder, with the same odd name
+    res = WT.merge(rec["id"])
+    assert not res["ok"] and res["blocked"] == ["ünïcode new.md"]
+    (r / "ünïcode new.md").unlink()
+    assert WT.merge(rec["id"])["ok"] and (r / "naïve file.txt").read_text() == "b\n"
+
+
 # ---------- merge safety ---------------------------------------------------------------------------------------------
 def test_merge_conflict_is_reported_and_touches_nothing(repo):
     rec = WT.create(repo, owner_kind="chat", owner_id="c")
