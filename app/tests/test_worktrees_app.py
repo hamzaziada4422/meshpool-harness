@@ -289,3 +289,11 @@ def test_meshpool_worktree_session_and_subcommands(repo, monkeypatch, capsys):
         cli.main(["--worktree", "-c"])
     assert cli.main(["worktree"]) == 2
     assert "worktree" in cli.COMMANDS
+
+
+def test_worktree_routes_reach_their_module_not_the_work_page(app, repo):
+    from meshpool_harness.ui import routes_extra as RX
+    st, out = RX.handle("GET", urlparse(f"/api/worktree?workdir={repo}"))[:2]
+    assert st == 200 and out["repo"] is True                 # "/api/work" is a prefix of "/api/worktree"
+    st, out = RX.handle("GET", urlparse("/api/worktree/list"))[:2]
+    assert st == 200 and out == {"items": []}
