@@ -1,0 +1,11 @@
+  context 1,049k (from the model table); older steps are summarized above 120k tokens
+
+  $ ls
+
+  [exit 0]
+  inventory.xlsx
+
+  Took 0.0s
+
+done
+{"type": "result", "ok": true, "result": "done", "session_id": "20261123-212104-558f", "usage": {"in": 21437, "cached": 0, "out": 40, "calls": 2, "full_miss_calls": 1, "full_miss_tokens": 10754}, "steps": 1}

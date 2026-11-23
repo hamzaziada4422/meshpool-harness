@@ -1,0 +1,1292 @@
+{
+ "codex#1": {
+  "bytes": 40855,
+  "path": "/responses",
+  "n_tools": 13,
+  "tools_chars": 18068,
+  "tools_desc": 9177,
+  "tools_schema": 7752,
+  "text_parts": [
+   [
+    "in0.developer",
+    16979
+   ],
+   [
+    "in1.developer",
+    2513
+   ],
+   [
+    "in2.user",
+    379
+   ],
+   [
+    "in3.user",
+    251
+   ]
+  ],
+  "text_chars": 20122,
+  "top_tools": [
+   [
+    "multi_agent_v1.spawn_agent",
+    7576
+   ],
+   [
+    "update_goal",
+    2172
+   ],
+   [
+    "multi_agent_v1.send_input",
+    1594
+   ],
+   [
+    "exec_command",
+    1529
+   ],
+   [
+    "request_user_input",
+    1355
+   ],
+   [
+    "write_stdin",
+    784
+   ],
+   [
+    "create_goal",
+    760
+   ],
+   [
+    "multi_agent_v1.wait_agent",
+    736
+   ],
+   [
+    "multi_agent_v1.close_agent",
+    548
+   ],
+   [
+    "view_image",
+    371
+   ],
+   [
+    "multi_agent_v1.resume_agent",
+    314
+   ],
+   [
+    "get_goal",
+    281
+   ],
+   [
+    "web_search",
+    48
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 4,
+   "reasoning": 19,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "client_metadata": 1347
+  }
+ },
+ "codex#2": {
+  "bytes": 41274,
+  "path": "/responses",
+  "n_tools": 13,
+  "tools_chars": 18068,
+  "tools_desc": 9177,
+  "tools_schema": 7752,
+  "text_parts": [
+   [
+    "in0.developer",
+    16979
+   ],
+   [
+    "in1.developer",
+    2513
+   ],
+   [
+    "in2.user",
+    379
+   ],
+   [
+    "in3.user",
+    251
+   ],
+   [
+    "in4.function_call",
+    145
+   ],
+   [
+    "in5.function_call_output",
+    208
+   ]
+  ],
+  "text_chars": 20475,
+  "top_tools": [
+   [
+    "multi_agent_v1.spawn_agent",
+    7576
+   ],
+   [
+    "update_goal",
+    2172
+   ],
+   [
+    "multi_agent_v1.send_input",
+    1594
+   ],
+   [
+    "exec_command",
+    1529
+   ],
+   [
+    "request_user_input",
+    1355
+   ],
+   [
+    "write_stdin",
+    784
+   ],
+   [
+    "create_goal",
+    760
+   ],
+   [
+    "multi_agent_v1.wait_agent",
+    736
+   ],
+   [
+    "multi_agent_v1.close_agent",
+    548
+   ],
+   [
+    "view_image",
+    371
+   ],
+   [
+    "multi_agent_v1.resume_agent",
+    314
+   ],
+   [
+    "get_goal",
+    281
+   ],
+   [
+    "web_search",
+    48
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 4,
+   "reasoning": 19,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "client_metadata": 1347
+  }
+ },
+ "mp-cli#2": {
+  "bytes": 44241,
+  "path": "/chat/completions",
+  "n_tools": 60,
+  "tools_chars": 31022,
+  "tools_desc": 14349,
+  "tools_schema": 10750,
+  "text_parts": [
+   [
+    "msg0.system",
+    7757
+   ],
+   [
+    "msg1.user",
+    3599
+   ]
+  ],
+  "text_chars": 11356,
+  "top_tools": [
+   [
+    "mcp__meshpool-office__make_deck",
+    1915
+   ],
+   [
+    "delegate_task",
+    1422
+   ],
+   [
+    "edit",
+    1074
+   ],
+   [
+    "mcp__meshpool-office__edit_office_file",
+    1067
+   ],
+   [
+    "mcp__meshpool-assistant__schedule_task",
+    991
+   ],
+   [
+    "mcp__meshpool-office__add_slides",
+    970
+   ],
+   [
+    "mcp__meshpool-office__find_icon",
+    966
+   ],
+   [
+    "mcp__meshpool-office__read_document",
+    933
+   ],
+   [
+    "grep",
+    792
+   ],
+   [
+    "mcp__meshpool-office__check_deck",
+    775
+   ],
+   [
+    "web_research",
+    714
+   ],
+   [
+    "mcp__meshpool-assistant__memory_save",
+    671
+   ],
+   [
+    "notebook_edit",
+    652
+   ],
+   [
+    "mcp__meshpool-office__check_workbook",
+    634
+   ],
+   [
+    "mcp__meshpool-office__slide_layouts",
+    626
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "max_tokens": 4,
+   "tool_choice": 6,
+   "temperature": 3,
+   "stream": 4,
+   "stream_options": 23
+  }
+ },
+ "mp-cli#3": {
+  "bytes": 44522,
+  "path": "/chat/completions",
+  "n_tools": 60,
+  "tools_chars": 31022,
+  "tools_desc": 14349,
+  "tools_schema": 10750,
+  "text_parts": [
+   [
+    "msg0.system",
+    7757
+   ],
+   [
+    "msg1.user",
+    3599
+   ],
+   [
+    "msg2.assistant",
+    124
+   ],
+   [
+    "msg3.tool",
+    24
+   ]
+  ],
+  "text_chars": 11504,
+  "top_tools": [
+   [
+    "mcp__meshpool-office__make_deck",
+    1915
+   ],
+   [
+    "delegate_task",
+    1422
+   ],
+   [
+    "edit",
+    1074
+   ],
+   [
+    "mcp__meshpool-office__edit_office_file",
+    1067
+   ],
+   [
+    "mcp__meshpool-assistant__schedule_task",
+    991
+   ],
+   [
+    "mcp__meshpool-office__add_slides",
+    970
+   ],
+   [
+    "mcp__meshpool-office__find_icon",
+    966
+   ],
+   [
+    "mcp__meshpool-office__read_document",
+    933
+   ],
+   [
+    "grep",
+    792
+   ],
+   [
+    "mcp__meshpool-office__check_deck",
+    775
+   ],
+   [
+    "web_research",
+    714
+   ],
+   [
+    "mcp__meshpool-assistant__memory_save",
+    671
+   ],
+   [
+    "notebook_edit",
+    652
+   ],
+   [
+    "mcp__meshpool-office__check_workbook",
+    634
+   ],
+   [
+    "mcp__meshpool-office__slide_layouts",
+    626
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "max_tokens": 4,
+   "tool_choice": 6,
+   "temperature": 3,
+   "stream": 4,
+   "stream_options": 23
+  }
+ },
+ "mp-on-codex#1": {
+  "bytes": 67918,
+  "path": "/responses",
+  "n_tools": 62,
+  "tools_chars": 40843,
+  "tools_desc": 19085,
+  "tools_schema": 16287,
+  "text_parts": [
+   [
+    "in0.developer",
+    16979
+   ],
+   [
+    "in1.developer",
+    2342
+   ],
+   [
+    "in2.user",
+    391
+   ],
+   [
+    "in3.user",
+    3870
+   ]
+  ],
+  "text_chars": 23582,
+  "top_tools": [
+   [
+    "multi_agent_v1.spawn_agent",
+    6614
+   ],
+   [
+    "update_goal",
+    2172
+   ],
+   [
+    "mcp__meshpool_office.make_deck",
+    1864
+   ],
+   [
+    "multi_agent_v1.send_input",
+    1594
+   ],
+   [
+    "exec_command",
+    1564
+   ],
+   [
+    "request_user_input",
+    1355
+   ],
+   [
+    "mcp__meshpool_office.edit_office_file",
+    1032
+   ],
+   [
+    "mcp__meshpool_assistant.schedule_task",
+    934
+   ],
+   [
+    "mcp__meshpool_office.add_slides",
+    919
+   ],
+   [
+    "mcp__meshpool_office.find_icon",
+    915
+   ],
+   [
+    "mcp__meshpool_office.read_document",
+    882
+   ],
+   [
+    "mcp__meshpool_web.web_research",
+    856
+   ],
+   [
+    "write_stdin",
+    784
+   ],
+   [
+    "mcp__meshpool_assistant.run_subtasks",
+    782
+   ],
+   [
+    "create_goal",
+    760
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 4,
+   "reasoning": 39,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "client_metadata": 1332
+  }
+ },
+ "mp-on-codex#2": {
+  "bytes": 68337,
+  "path": "/responses",
+  "n_tools": 62,
+  "tools_chars": 40843,
+  "tools_desc": 19085,
+  "tools_schema": 16287,
+  "text_parts": [
+   [
+    "in0.developer",
+    16979
+   ],
+   [
+    "in1.developer",
+    2342
+   ],
+   [
+    "in2.user",
+    391
+   ],
+   [
+    "in3.user",
+    3870
+   ],
+   [
+    "in4.function_call",
+    145
+   ],
+   [
+    "in5.function_call_output",
+    208
+   ]
+  ],
+  "text_chars": 23935,
+  "top_tools": [
+   [
+    "multi_agent_v1.spawn_agent",
+    6614
+   ],
+   [
+    "update_goal",
+    2172
+   ],
+   [
+    "mcp__meshpool_office.make_deck",
+    1864
+   ],
+   [
+    "multi_agent_v1.send_input",
+    1594
+   ],
+   [
+    "exec_command",
+    1564
+   ],
+   [
+    "request_user_input",
+    1355
+   ],
+   [
+    "mcp__meshpool_office.edit_office_file",
+    1032
+   ],
+   [
+    "mcp__meshpool_assistant.schedule_task",
+    934
+   ],
+   [
+    "mcp__meshpool_office.add_slides",
+    919
+   ],
+   [
+    "mcp__meshpool_office.find_icon",
+    915
+   ],
+   [
+    "mcp__meshpool_office.read_document",
+    882
+   ],
+   [
+    "mcp__meshpool_web.web_research",
+    856
+   ],
+   [
+    "write_stdin",
+    784
+   ],
+   [
+    "mcp__meshpool_assistant.run_subtasks",
+    782
+   ],
+   [
+    "create_goal",
+    760
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 4,
+   "reasoning": 39,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "client_metadata": 1332
+  }
+ },
+ "mp-on-codex#3": {
+  "bytes": 48461,
+  "path": "/responses",
+  "n_tools": 3,
+  "tools_chars": 17103,
+  "tools_desc": 14625,
+  "tools_schema": 1886,
+  "text_parts": [
+   [
+    "in1.developer",
+    17730
+   ],
+   [
+    "in2.developer",
+    5862
+   ],
+   [
+    "in3.user",
+    453
+   ],
+   [
+    "in4.user",
+    4411
+   ]
+  ],
+  "text_chars": 28456,
+  "top_tools": [
+   [
+    "functions.exec",
+    14392
+   ],
+   [
+    "functions.wait",
+    1356
+   ],
+   [
+    "functions.request_user_input",
+    1355
+   ]
+  ],
+  "rest": {
+   "model": 14,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 5,
+   "reasoning": 44,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "text": 231,
+   "client_metadata": 1319
+  }
+ },
+ "mp-on-codex#4": {
+  "bytes": 48860,
+  "path": "/responses",
+  "n_tools": 3,
+  "tools_chars": 17103,
+  "tools_desc": 14625,
+  "tools_schema": 1886,
+  "text_parts": [
+   [
+    "in1.developer",
+    17730
+   ],
+   [
+    "in2.developer",
+    5862
+   ],
+   [
+    "in3.user",
+    453
+   ],
+   [
+    "in4.user",
+    4411
+   ],
+   [
+    "in5.custom_tool_call",
+    129
+   ],
+   [
+    "in6.custom_tool_call_output",
+    210
+   ]
+  ],
+  "text_chars": 28795,
+  "top_tools": [
+   [
+    "functions.exec",
+    14392
+   ],
+   [
+    "functions.wait",
+    1356
+   ],
+   [
+    "functions.request_user_input",
+    1355
+   ]
+  ],
+  "rest": {
+   "model": 14,
+   "stream": 4,
+   "tool_choice": 6,
+   "parallel_tool_calls": 5,
+   "reasoning": 44,
+   "store": 5,
+   "include": 31,
+   "prompt_cache_key": 38,
+   "text": 231,
+   "client_metadata": 1319
+  }
+ },
+ "mp-on-pi#1": {
+  "bytes": 93848,
+  "path": "/chat/completions",
+  "n_tools": 53,
+  "tools_chars": 27681,
+  "tools_desc": 11838,
+  "tools_schema": 10439,
+  "text_parts": [
+   [
+    "msg0.system",
+    61276
+   ],
+   [
+    "msg1.user",
+    3870
+   ]
+  ],
+  "text_chars": 65146,
+  "top_tools": [
+   [
+    "mcp__meshpool_office__make_deck",
+    1884
+   ],
+   [
+    "edit",
+    1179
+   ],
+   [
+    "grep",
+    1127
+   ],
+   [
+    "mcp__meshpool_office__edit_office_file",
+    1036
+   ],
+   [
+    "mcp__meshpool_assistant__schedule_task",
+    957
+   ],
+   [
+    "mcp__meshpool_office__add_slides",
+    939
+   ],
+   [
+    "mcp__meshpool_office__find_icon",
+    935
+   ],
+   [
+    "mcp__meshpool_office__read_document",
+    902
+   ],
+   [
+    "mcp__meshpool_web__web_research",
+    873
+   ],
+   [
+    "mcp__meshpool_assistant__run_subtasks",
+    805
+   ],
+   [
+    "mcp__meshpool_office__check_deck",
+    744
+   ],
+   [
+    "read",
+    684
+   ],
+   [
+    "mcp__meshpool_web__web_search",
+    648
+   ],
+   [
+    "mcp__meshpool_assistant__memory_save",
+    637
+   ],
+   [
+    "find",
+    616
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ },
+ "mp-on-pi#2": {
+  "bytes": 94100,
+  "path": "/chat/completions",
+  "n_tools": 53,
+  "tools_chars": 27681,
+  "tools_desc": 11838,
+  "tools_schema": 10439,
+  "text_parts": [
+   [
+    "msg0.system",
+    61276
+   ],
+   [
+    "msg1.user",
+    3870
+   ],
+   [
+    "msg2.assistant",
+    123
+   ],
+   [
+    "msg3.tool",
+    15
+   ]
+  ],
+  "text_chars": 65284,
+  "top_tools": [
+   [
+    "mcp__meshpool_office__make_deck",
+    1884
+   ],
+   [
+    "edit",
+    1179
+   ],
+   [
+    "grep",
+    1127
+   ],
+   [
+    "mcp__meshpool_office__edit_office_file",
+    1036
+   ],
+   [
+    "mcp__meshpool_assistant__schedule_task",
+    957
+   ],
+   [
+    "mcp__meshpool_office__add_slides",
+    939
+   ],
+   [
+    "mcp__meshpool_office__find_icon",
+    935
+   ],
+   [
+    "mcp__meshpool_office__read_document",
+    902
+   ],
+   [
+    "mcp__meshpool_web__web_research",
+    873
+   ],
+   [
+    "mcp__meshpool_assistant__run_subtasks",
+    805
+   ],
+   [
+    "mcp__meshpool_office__check_deck",
+    744
+   ],
+   [
+    "read",
+    684
+   ],
+   [
+    "mcp__meshpool_web__web_search",
+    648
+   ],
+   [
+    "mcp__meshpool_assistant__memory_save",
+    637
+   ],
+   [
+    "find",
+    616
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ },
+ "mp-work#2": {
+  "bytes": 52053,
+  "path": "/chat/completions",
+  "n_tools": 62,
+  "tools_chars": 33519,
+  "tools_desc": 15050,
+  "tools_schema": 12381,
+  "text_parts": [
+   [
+    "msg0.system",
+    12178
+   ],
+   [
+    "msg1.user",
+    4302
+   ]
+  ],
+  "text_chars": 16480,
+  "top_tools": [
+   [
+    "mcp__meshpool-office__make_deck",
+    1915
+   ],
+   [
+    "delegate_task",
+    1422
+   ],
+   [
+    "office_task",
+    1251
+   ],
+   [
+    "ask_user",
+    1246
+   ],
+   [
+    "edit",
+    1074
+   ],
+   [
+    "mcp__meshpool-office__edit_office_file",
+    1067
+   ],
+   [
+    "mcp__meshpool-assistant__schedule_task",
+    991
+   ],
+   [
+    "mcp__meshpool-office__add_slides",
+    970
+   ],
+   [
+    "mcp__meshpool-office__find_icon",
+    966
+   ],
+   [
+    "mcp__meshpool-office__read_document",
+    933
+   ],
+   [
+    "grep",
+    792
+   ],
+   [
+    "mcp__meshpool-office__check_deck",
+    775
+   ],
+   [
+    "web_research",
+    714
+   ],
+   [
+    "mcp__meshpool-assistant__memory_save",
+    671
+   ],
+   [
+    "notebook_edit",
+    652
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "max_tokens": 4,
+   "tool_choice": 6,
+   "temperature": 3,
+   "stream": 4,
+   "stream_options": 23
+  }
+ },
+ "mp-work#3": {
+  "bytes": 52334,
+  "path": "/chat/completions",
+  "n_tools": 62,
+  "tools_chars": 33519,
+  "tools_desc": 15050,
+  "tools_schema": 12381,
+  "text_parts": [
+   [
+    "msg0.system",
+    12178
+   ],
+   [
+    "msg1.user",
+    4302
+   ],
+   [
+    "msg2.assistant",
+    124
+   ],
+   [
+    "msg3.tool",
+    24
+   ]
+  ],
+  "text_chars": 16628,
+  "top_tools": [
+   [
+    "mcp__meshpool-office__make_deck",
+    1915
+   ],
+   [
+    "delegate_task",
+    1422
+   ],
+   [
+    "office_task",
+    1251
+   ],
+   [
+    "ask_user",
+    1246
+   ],
+   [
+    "edit",
+    1074
+   ],
+   [
+    "mcp__meshpool-office__edit_office_file",
+    1067
+   ],
+   [
+    "mcp__meshpool-assistant__schedule_task",
+    991
+   ],
+   [
+    "mcp__meshpool-office__add_slides",
+    970
+   ],
+   [
+    "mcp__meshpool-office__find_icon",
+    966
+   ],
+   [
+    "mcp__meshpool-office__read_document",
+    933
+   ],
+   [
+    "grep",
+    792
+   ],
+   [
+    "mcp__meshpool-office__check_deck",
+    775
+   ],
+   [
+    "web_research",
+    714
+   ],
+   [
+    "mcp__meshpool-assistant__memory_save",
+    671
+   ],
+   [
+    "notebook_edit",
+    652
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "max_tokens": 4,
+   "tool_choice": 6,
+   "temperature": 3,
+   "stream": 4,
+   "stream_options": 23
+  }
+ },
+ "mp-work#4": {
+  "bytes": 803,
+  "path": "/chat/completions",
+  "n_tools": 0,
+  "tools_chars": 0,
+  "tools_desc": 0,
+  "tools_schema": 0,
+  "text_parts": [
+   [
+    "msg0.system",
+    168
+   ],
+   [
+    "msg1.user",
+    373
+   ]
+  ],
+  "text_chars": 541,
+  "top_tools": [],
+  "rest": {
+   "model": 21,
+   "max_tokens": 3,
+   "temperature": 3,
+   "response_format": 23,
+   "stream": 4,
+   "stream_options": 23
+  }
+ },
+ "pi#1": {
+  "bytes": 5796,
+  "path": "/chat/completions",
+  "n_tools": 4,
+  "tools_chars": 2948,
+  "tools_desc": 999,
+  "tools_schema": 1580,
+  "text_parts": [
+   [
+    "msg0.system",
+    2327
+   ],
+   [
+    "msg1.user",
+    251
+   ]
+  ],
+  "text_chars": 2578,
+  "top_tools": [
+   [
+    "edit",
+    1252
+   ],
+   [
+    "read",
+    694
+   ],
+   [
+    "bash",
+    557
+   ],
+   [
+    "write",
+    445
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ },
+ "pi#2": {
+  "bytes": 6048,
+  "path": "/chat/completions",
+  "n_tools": 4,
+  "tools_chars": 2948,
+  "tools_desc": 999,
+  "tools_schema": 1580,
+  "text_parts": [
+   [
+    "msg0.system",
+    2327
+   ],
+   [
+    "msg1.user",
+    251
+   ],
+   [
+    "msg2.assistant",
+    123
+   ],
+   [
+    "msg3.tool",
+    15
+   ]
+  ],
+  "text_chars": 2716,
+  "top_tools": [
+   [
+    "edit",
+    1252
+   ],
+   [
+    "read",
+    694
+   ],
+   [
+    "bash",
+    557
+   ],
+   [
+    "write",
+    445
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ },
+ "pi152#1": {
+  "bytes": 5700,
+  "path": "/chat/completions",
+  "n_tools": 4,
+  "tools_chars": 2836,
+  "tools_desc": 1004,
+  "tools_schema": 1523,
+  "text_parts": [
+   [
+    "msg0.system",
+    2338
+   ],
+   [
+    "msg1.user",
+    251
+   ]
+  ],
+  "text_chars": 2589,
+  "top_tools": [
+   [
+    "edit",
+    1179
+   ],
+   [
+    "read",
+    684
+   ],
+   [
+    "bash",
+    543
+   ],
+   [
+    "write",
+    430
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ },
+ "pi152#2": {
+  "bytes": 5952,
+  "path": "/chat/completions",
+  "n_tools": 4,
+  "tools_chars": 2836,
+  "tools_desc": 1004,
+  "tools_schema": 1523,
+  "text_parts": [
+   [
+    "msg0.system",
+    2338
+   ],
+   [
+    "msg1.user",
+    251
+   ],
+   [
+    "msg2.assistant",
+    123
+   ],
+   [
+    "msg3.tool",
+    15
+   ]
+  ],
+  "text_chars": 2727,
+  "top_tools": [
+   [
+    "edit",
+    1179
+   ],
+   [
+    "read",
+    684
+   ],
+   [
+    "bash",
+    543
+   ],
+   [
+    "write",
+    430
+   ]
+  ],
+  "rest": {
+   "model": 21,
+   "stream": 4,
+   "stream_options": 23,
+   "store": 5,
+   "max_completion_tokens": 5
+  }
+ }
+}
