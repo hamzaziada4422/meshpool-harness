@@ -610,14 +610,17 @@ def fit(messages: list, tools: list | None, win: int, max_tokens: int | None = N
         first = 1 if msgs and msgs[0].get("role") == "system" else 0
         head_n = first + (1 if len(msgs) > first and msgs[first].get("role") == "user" else 0)
         groups = _groups(msgs, head_n)
-        dropped = 0
-        while over() and len(groups) > 1:
-            a, b = groups.pop(0)
-            dropped += b - a
+        sizes = [len(json.dumps(m, ensure_ascii=False)) for m in msgs]      # once: no re-serialising per dropped group
+        total = sum(sizes) + 2 * len(sizes)
+        drop, dropped = set(), 0
+        for a, b in groups[:-1]:                                            # oldest first; the newest group always stays
+            if total <= limit_chars:
+                break
             for k in range(a, b):
-                msgs[k] = None
-            msgs = [m for m in msgs if m is not None]
-            groups = _groups(msgs, head_n)
+                drop.add(k)
+                total -= sizes[k] + 2
+            dropped += b - a
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
         if dropped:
             msgs.insert(head_n, {"role": "user", "content": f"[{dropped} earlier messages were dropped to fit the "
                                                             "model's context window; continue from the messages below.]"})

@@ -98,7 +98,8 @@ def test_a_three_hundred_step_task_finishes_and_never_overflows(tmp_path, monkey
         msgs = body["messages"]
         assert _valid(msgs)
         sizes.append(core._context_size(msgs))
-        notes.append(any("were summarized to save space" in str(m.get("content")) for m in msgs))
+        notes.append(any("were summarized to save space" in str(m.get("content")) or "elided at compaction" in str(m.get("content"))
+                         for m in msgs))        # old output shortened, or the older steps turned into a note
         i = n["i"] = n["i"] + 1
         if i > 300:
             return {"choices": [{"message": {"content": "all 300 steps done"}, "finish_reason": "stop"}], "usage": {}}, False
