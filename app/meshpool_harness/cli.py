@@ -434,21 +434,23 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
         if "401" in msg or "403" in msg:
             msg = "the endpoint rejected the API key (" + msg[:160] + ")"
         return {"ok": False, "detail": msg[:400], "model": model, "seconds": round(time.time() - t0, 1),
-                "endpoint": led.base_url if led else (base or os.environ.get("MESHPOOL_BASE_URL", ""))}
+                "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 
 def _check(live: bool) -> int:
     from meshpool_harness import harnesses as HR
     from meshpool_harness import providers as PV
-    key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    base, key, _src = PV.endpoint_pair()             # the key and the address it was set for, never mixed
     # A ChatGPT sign-in is enough on its own: report what is ready rather than calling the setup broken when there
     # is no Meshpool key.
     ready = {p: _safe(lambda p=p: PV.ready(p)) for p in PV.PROVIDERS}
     usable = _safe(HR.ready)
     print(f"Settings file : {_config.config_path()}")
-    print(f"Endpoint      : {os.environ.get('MESHPOOL_BASE_URL', 'https://llm.meshpool.ai/v1')}")
+    print(f"Endpoint      : {base}")
     print(f"Model         : {os.environ.get('MH_MODEL', 'deepseek-v4.1-flash')}")
-    print(f"API key       : {'set (ends ' + key[-4:] + ')' if key else 'not set'}")
+    kn = PV.key_name()
+    for_ = "" if kn == "Meshpool" else f" for {kn}"        # the key belongs to the endpoint above, not to Meshpool
+    print(f"API key       : {'set' + for_ + ' (ends ' + key[-4:] + ')' if key else 'not set' + for_}")
     names = [_safe(lambda p=p: PV.name(p), p) for p, ok in ready.items() if ok]
     print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()

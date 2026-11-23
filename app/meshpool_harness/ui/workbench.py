@@ -158,8 +158,7 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
-    base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
-    key = os.environ.get("MESHPOOL_API_KEY") or ""
+    base, key, _src = __import__("meshpool_harness.providers", fromlist=["x"]).endpoint_pair()
     cache_key = base + "|" + key[-6:]
     vals = C.read()
     fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]

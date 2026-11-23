@@ -42,27 +42,59 @@ def host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
 
 
-def _openai_pair() -> tuple[str, str]:
-    """(key, base URL) from OPENAI_API_KEY and OPENAI_BASE_URL, only when there is no Meshpool key and both are set:
-    an OpenAI key alone must never be sent to the Meshpool endpoint."""
-    if _cfg("MESHPOOL_API_KEY"):
-        return "", ""
-    k, b = os.environ.get("OPENAI_API_KEY", "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
-    return (k, b) if k and b else ("", "")
+DEFAULT = "https://llm.meshpool.ai/v1"
+
+
+def _shell(k: str) -> str:
+    """The value the user's own shell gave (never one Meshpool copied in from the settings file)."""
+    if k in C._INJECTED:
+        return (C.SHELL.get(k) or "").strip()
+    return (os.environ.get(k) or "").strip()
+
+
+def _file(k: str) -> str:
+    env = os.environ.get(k) if k in C._INJECTED else ""
+    return (C.read().get(k) or env or "").strip()
+
+
+def endpoint_pair() -> tuple[str, str, str]:
+    """(base URL, key, source): the key endpoint decided once, so a key is never paired with an address that came from
+    somewhere else. source is "environment" (the shell's key, with the shell's base or the default), "settings" (the
+    saved file's key, with its base or the default) or "none" (no key anywhere: an explicit base, else the default)."""
+    sk = _shell("MESHPOOL_API_KEY")
+    if sk:
+        return (_shell("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), sk, "environment"
+    fk = _file("MESHPOOL_API_KEY")
+    if fk:
+        return (_file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), fk, "settings"
+    ok, ob = os.environ.get("OPENAI_API_KEY", "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
+    if ok and ob:                                  # an OpenAI key alone is never sent to the Meshpool endpoint
+        return ob.rstrip("/"), ok, "environment"
+    return (_shell("MESHPOOL_BASE_URL") or _file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), "", "none"
+
+
+def _ecfg(k: str) -> str:
+    """A per-endpoint setting (wire, auth header, scheme, Azure version) from the same place the key came from."""
+    src = endpoint_pair()[2]
+    if src == "environment":
+        return _shell(k)
+    if src == "settings":
+        return _file(k)
+    return _cfg(k)
 
 
 def key_base() -> str:
-    return (_openai_pair()[1] or _cfg("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
+    return endpoint_pair()[0]
 
 
 def key() -> str:
-    return _cfg("MESHPOOL_API_KEY") or _openai_pair()[0]
+    return endpoint_pair()[1]
 
 
 def key_wire() -> str:
     """The wire the key endpoint speaks: "openai" (chat completions) or "anthropic" (Messages). MH_API_WIRE when set
     (provider_setup saves it); otherwise guessed from the host, so settings saved by older versions keep working."""
-    w = _cfg("MH_API_WIRE").lower()
+    w = _ecfg("MH_API_WIRE").lower()
     if w in ("openai", "anthropic"):
         return w
     return "anthropic" if host(key_base()).endswith("anthropic.com") else "openai"
@@ -101,7 +133,7 @@ def is_azure(base: str | None = None) -> bool:
 def azure_version(base: str = "") -> str:
     """The api-version to send: MESHPOOL_AZURE_API_VERSION (settings or environment), else the one pasted in the base
     URL's query, else the current GA version."""
-    v = _cfg("MESHPOOL_AZURE_API_VERSION")
+    v = _ecfg("MESHPOOL_AZURE_API_VERSION")
     if not v and base and "api-version=" in base:
         m = re.search(r"api-version=([^&#\s]+)", base)
         v = m.group(1) if m else ""
@@ -127,8 +159,8 @@ def auth_headers(k: str, base: str | None = None, wire: str | None = None, heade
     k = k or ""
     base = base if base is not None else key_base()
     wire = wire or key_wire()
-    header = (_cfg("MH_AUTH_HEADER") if header is None else header).strip()
-    scheme = (_cfg("MH_AUTH_SCHEME") if scheme is None else scheme).strip().lower()
+    header = (_ecfg("MH_AUTH_HEADER") if header is None else header).strip()
+    scheme = (_ecfg("MH_AUTH_SCHEME") if scheme is None else scheme).strip().lower()
     if header and not _HEADER_NAME.match(header):
         header = ""
     if scheme not in SCHEMES:
@@ -172,10 +204,10 @@ def chat_url(base: str, model: str = "", path: str = "chat/completions", version
     u = urlparse(base)
     origin, p = f"{u.scheme}://{u.netloc}", u.path.rstrip("/")
     if p.startswith("/openai/v1"):
-        v = version or _cfg("MESHPOOL_AZURE_API_VERSION")
+        v = version or _ecfg("MESHPOOL_AZURE_API_VERSION")
         return f"{origin}{p}/{path}" + (f"?api-version={quote(v)}" if v else "")
     if p.startswith("/models"):
-        return f"{origin}{p}/{path}?api-version={quote(version or _cfg('MESHPOOL_AZURE_API_VERSION') or AZURE_MODELS_API_VERSION)}"
+        return f"{origin}{p}/{path}?api-version={quote(version or _ecfg('MESHPOOL_AZURE_API_VERSION') or AZURE_MODELS_API_VERSION)}"
     dep = azure_deployment(base) or model
     if path in ("models", "info") or not dep:
         return f"{origin}/openai/{path}?api-version={quote(version or azure_version())}"
@@ -274,7 +306,7 @@ def ready(prov: str) -> bool:
 
 
 def setup(prov: str) -> str:
-    return {"key": "Add your Meshpool key: Settings, Account.",
+    return {"key": f"Add your {key_name()} key: Settings, Account.",
             "chatgpt": "Sign in with ChatGPT: Settings, Account."}[prov]
 
 

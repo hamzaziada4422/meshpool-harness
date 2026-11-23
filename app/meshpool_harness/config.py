@@ -298,6 +298,11 @@ def _write(values: dict, path: Path) -> Path:
 
 _SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)
 _INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
+# The endpoint names exactly as the user's own shell had them, kept apart from what load_into_env copies in from the file,
+# so a key and the address it was set for can be told from a key and an address that came from different places.
+ENDPOINT_NAMES = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_API_WIRE", "MH_AUTH_HEADER", "MH_AUTH_SCHEME",
+                  "MESHPOOL_AZURE_API_VERSION", "OPENAI_API_KEY", "OPENAI_BASE_URL")
+SHELL: dict = {k: os.environ[k].strip() for k in ENDPOINT_NAMES if os.environ.get(k, "").strip()}
 
 
 def scrub_env(env: dict) -> dict:
@@ -315,6 +320,8 @@ def load_into_env(override: bool = False) -> dict:
     for k, v in vals.items():
         if v == "":
             continue
+        if override and k in ENDPOINT_NAMES and os.environ.get(k) and k not in _INJECTED:
+            SHELL[k] = os.environ[k].strip()           # the shell's own value, before the file's replaces it
         if override or k not in os.environ:
             os.environ[k] = v
             _INJECTED.add(k)

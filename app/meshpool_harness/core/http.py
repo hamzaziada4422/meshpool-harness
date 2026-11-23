@@ -163,10 +163,12 @@ def tls_context() -> ssl.SSLContext:
                 if p and os.path.isfile(p) and _load(ctx, p):
                     bundle, needed = p, True
                     break
-            if sys.platform == "darwin":
-                p = _macos_bundle()
-                if p and _load(ctx, p):
-                    bundle, needed = p, True
+        if sys.platform == "darwin" and not os.environ.get("MESHPOOL_CA_BUNDLE", "").strip():
+            # A company TLS proxy's CA lives in the System keychain, which a Python with its own CA bundle (Homebrew,
+            # python.org) never reads: add the keychain certificates on top of whatever was loaded.
+            p = _macos_bundle()
+            if p and _load(ctx, p):
+                bundle, needed = p, True
         _STATE.update(bundle=bundle, needed=needed)
         _CTX = ctx
         return ctx

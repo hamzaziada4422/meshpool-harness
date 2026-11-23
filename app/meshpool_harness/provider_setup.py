@@ -476,6 +476,8 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
             "MH_PROVIDER": "meshpool" if "meshpool" in PV.host(base) else "custom"}
     if key:
         vals["MESHPOOL_API_KEY"] = key
+    else:                                                # a keyless local endpoint: the old endpoint's key goes
+        vals["MESHPOOL_API_KEY"] = ""                    # with it, never to this server
     for k, v in (("MH_AUTH_HEADER", auth_header), ("MH_AUTH_SCHEME", auth_scheme),
                  ("MESHPOOL_AZURE_API_VERSION", None if api_version is None else api_version.strip())):
         if v is not None:

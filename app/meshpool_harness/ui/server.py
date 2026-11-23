@@ -46,6 +46,7 @@ LOCK = threading.Lock()
 # ---------- settings -----------------------------------------------------------------------------------------------
 
 def get_settings() -> dict:
+    from meshpool_harness import providers as PV
     vals = C.read()
     fields = []
     for key, label, default, help_ in C.FIELDS:
@@ -63,7 +64,7 @@ def get_settings() -> dict:
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
-            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
+            "has_key": bool(PV.key()), "key_name": PV.key_name(),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
@@ -95,6 +96,12 @@ def save_settings(body: dict) -> dict:
         u = urlparse(vals["MESHPOOL_BASE_URL"])
         if u.scheme not in ("http", "https") or not u.netloc:
             raise ValueError("The server address must start with http:// or https:// and name a host.")
+    from meshpool_harness import providers as PV
+    new = vals.get("MESHPOOL_BASE_URL")
+    from meshpool_harness import provider_setup as PS
+    if new and not vals.get("MESHPOOL_API_KEY") and not PS._same_endpoint(new, PV.key_base()) and PV.key() \
+            and PV.keyless_ok(new):
+        vals["MESHPOOL_API_KEY"] = ""    # a local server needs no key: the old endpoint's key goes, not to this server
     _key_follows_host(vals)
     from meshpool_harness import browser_use as BU
     BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason

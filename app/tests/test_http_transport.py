@@ -356,6 +356,20 @@ def test_macos_keychain_export(tmp_path, monkeypatch):
     argv = log.read_text()
     assert "find-certificate -a -p" in argv and "System.keychain" in argv and "SystemRootCertificates.keychain" in argv
     assert not list(dest.parent.glob("*.tmp"))
+    # a Python that already has its own CAs (Homebrew) still gets the keychain: a company proxy's CA lives there
+    H.reset()
+    fake2 = FakeCtx(cas=140)
+    monkeypatch.setattr(ssl, "create_default_context", lambda *a, **k: fake2)
+    assert H.tls_context() is fake2
+    assert fake2.loaded == [str(dest)] and H._STATE["needed"] is True
+    # ... unless the user named their own bundle
+    H.reset()
+    monkeypatch.setenv("MESHPOOL_CA_BUNDLE", str(dest))
+    fake4 = FakeCtx(cas=140)
+    monkeypatch.setattr(ssl, "create_default_context", lambda *a, **k: fake4)
+    H.tls_context()
+    assert fake4.loaded == [str(dest)]                       # only their file, loaded once
+    monkeypatch.delenv("MESHPOOL_CA_BUNDLE")
     # not on another platform
     H.reset()
     dest.unlink()
