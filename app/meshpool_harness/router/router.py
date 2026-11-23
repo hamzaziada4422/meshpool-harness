@@ -26,9 +26,11 @@ def _classify(request: str, files: list[str], client, model: str | None = None) 
               "text), sheets (build Excel workbooks), slides (build decks), general (anything else). Chains are "
               "ordered, e.g. [\"data\",\"slides\"]. Reply with JSON only: {\"engines\": [...], \"confidence\": 0-1}.\n"
               f"Request: {request}\nAttached files: {', '.join(Path(f).name for f in files) or 'none'}")
+    from ..core.client import LiveClient
+    kw = {"attempts": 2} if isinstance(client, LiveClient) else {}      # a hint is optional: do not retry for minutes
     resp = client.chat(model=model or DEFAULT_MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=60,
                        temperature=0.0, task_id="router", role="router",
-                       extra={"response_format": {"type": "json_object"}})
+                       extra={"response_format": {"type": "json_object"}}, **kw)
     txt = resp["choices"][0]["message"].get("content") or "{}"
     try:
         d = json.loads(txt[txt.find("{"): txt.rfind("}") + 1])
@@ -48,8 +50,11 @@ def route(request: str, files: list[str] | None = None, output_format: str | Non
     eng, conf, why = decide(request, files, output_format, workdir)
     used = False
     if conf < 0.6 and client is not None:
-        eng2, conf2, why2 = _classify(request, files, client, model)
         used = True
+        try:
+            eng2, conf2, why2 = _classify(request, files, client, model)
+        except Exception as e:  # noqa: BLE001  the hint is optional; the rules already picked an engine
+            return Route(eng, conf, why + f"; routing hint failed ({type(e).__name__}: {str(e)[:80]})", used)
         if conf2 >= 0.5:
             eng, conf, why = eng2, conf2, why2 + f" (rules said {eng} @ {conf})"
         elif conf < 0.5:

@@ -132,7 +132,7 @@ class LiveClient:
             self.ledger = SimpleLedger(phase)
 
     def chat(self, *, model, messages, tools=None, task_id="", job_id="", role="worker", profile="deepseek",
-             max_tokens=8192, temperature=None, extra=None):
+             max_tokens=8192, temperature=None, extra=None, attempts: int | None = None):
         allow = [m.strip() for m in os.environ.get("MH_MODEL_ALLOW", "").split(",") if m.strip()]
         if allow and model not in allow:                 # a cost cap: only these models may be called; a fallback
             raise RuntimeError(f"model {model} not allowed (MH_MODEL_ALLOW={','.join(allow)})")   # chain moves on
@@ -163,7 +163,7 @@ class LiveClient:
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
-        for attempt in range(3 if side else 25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
+        for attempt in range(attempts or (3 if side else 25)):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
             try:
                 send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
                 ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
