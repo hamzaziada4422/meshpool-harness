@@ -412,10 +412,9 @@ def main(argv=None):
 
 
 def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
-    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet).
-    Returns {ok, detail, model, seconds, endpoint}."""
+    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
+    to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
-    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     t0 = time.time()
     led = None
     try:
@@ -424,16 +423,31 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
             led.base_url = base.rstrip("/")
         if key:
             led.api_key = key
+        m = (model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash").strip()
+        if m.partition(":")[0] == "chatgpt" and ":" in m:    # a ChatGPT model is not served by the key endpoint
+            alt = (os.environ.get("MH_MODEL") or "").strip()
+            from meshpool_harness import providers as PV
+            if alt and not alt.startswith("chatgpt:"):
+                m = alt
+            elif "meshpool" in PV.host(led.base_url):
+                m = "deepseek-v4.1-flash"
+            else:
+                return {"ok": False, "detail": "Choose a model this endpoint serves first.", "model": "",
+                        "seconds": 0.0, "endpoint": led.base_url}
+        model = m
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-                     max_tokens=5, retries=1, timeout=60)
-        txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}", "model": model,
-                "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
+                     max_tokens=16, retries=1, timeout=60, key_only=True)   # Responses endpoints need at least 16
+        msg_ = ((r.get("choices") or [{}])[0].get("message"))
+        if not isinstance(msg_, dict):
+            raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
+        txt = msg_.get("content") or ""
+        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
+                "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
         msg = str(e)
         if "401" in msg or "403" in msg:
             msg = "the endpoint rejected the API key (" + msg[:160] + ")"
-        return {"ok": False, "detail": msg[:400], "model": model, "seconds": round(time.time() - t0, 1),
+        return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
                 "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 

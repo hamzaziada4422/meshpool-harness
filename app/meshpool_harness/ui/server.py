@@ -197,7 +197,8 @@ def test_connection(values: dict | None = None) -> dict:
     if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
         why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
-        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
+        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
+                "status": 0 if err else st}
     txt = ""
     if isinstance(data, dict):
         try:
@@ -207,6 +208,41 @@ def test_connection(values: dict | None = None) -> dict:
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
             "endpoint": base}
+
+
+def onboard(body: dict) -> dict:
+    """First-run key setup in one step: check the key (the typed address normalised, the /v1 variant tried when the
+    first answers 404), and only when it works write the key, the address, the model and the provider in ONE write."""
+    from meshpool_harness import provider_setup as PS
+    which = "custom" if body.get("provider") == "custom" else "meshpool"
+    key = C.clean_key(str(body.get("key") or ""))
+    if not key:
+        return {"ok": False, "detail": "Paste your API key first."}
+    model = str(body.get("model") or "").strip()
+    try:
+        base = (PS.normalise_base(str(body.get("base_url") or "")) if which == "custom"
+                else "https://llm.meshpool.ai/v1")
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e)}
+    if which == "custom" and not model:
+        return {"ok": False, "detail": "Enter a model the provider serves."}
+    r, used = {"ok": False, "detail": ""}, base
+    for cand in PS._candidates(base):
+        vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": cand}
+        if model:
+            vals["MH_MODEL"] = model
+        r, used = test_connection(vals), cand
+        if r.get("ok") or r.get("status") != 404:
+            break
+    if not r.get("ok"):
+        return {"ok": False, "detail": r.get("detail") or "The check failed.", "endpoint": used}
+    vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": used if which == "custom" else "",   # default: no saved address
+            **HR.provider_values(which)}
+    if which == "custom":
+        vals["MH_MODEL"] = model
+    C.write(vals)
+    HR.apply_env(vals)
+    return {"ok": True, "base_url": used}
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -656,6 +692,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
                 return self._send(200, get_settings())
+            if u.path == "/api/onboard":
+                return self._send(200, onboard(self._json() or {}))
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":

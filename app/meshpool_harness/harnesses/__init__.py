@@ -530,9 +530,8 @@ def credentials(hid: str, model: str | None = None) -> dict:
     return out
 
 
-def use_provider(which: str) -> None:
-    """Save the provider chosen at sign-up and pick the defaults from it: its models become the default model, and
-    Meshpool Code and Work stay the default agents."""
+def provider_values(which: str) -> dict:
+    """What choosing a provider writes to the settings: the provider, the default agents and a model that fits it."""
     if which not in PROVIDER_NAMES:
         raise ValueError(f"Unknown provider: {which}")
     vals = {"MH_PROVIDER": which, "MH_HARNESS_CODE": "", "MH_HARNESS_COWORK": ""}
@@ -543,14 +542,24 @@ def use_provider(which: str) -> None:
             vals["MH_MODEL"] = "chatgpt:" + CG.default_model()
     elif which in ("meshpool", "custom") and cur.startswith("chatgpt:"):
         vals["MH_MODEL"] = ""                   # back to the key endpoint's default model
+    return vals
+
+
+def apply_env(vals: dict) -> None:
+    """Mirror settings just written into this process."""
+    for k, v in vals.items():
+        if v:
+            os.environ[k] = v
+        elif k != "MH_PROVIDER":
+            os.environ.pop(k, None)
+
+
+def use_provider(which: str) -> None:
+    """Save the provider chosen at sign-up and pick the defaults from it: its models become the default model, and
+    Meshpool Code and Work stay the default agents."""
+    vals = provider_values(which)
     C.write(vals)
-    os.environ["MH_PROVIDER"] = which
-    for k in ("MH_HARNESS_CODE", "MH_HARNESS_COWORK", "MH_MODEL"):
-        if k in vals:
-            if vals[k]:
-                os.environ[k] = vals[k]
-            else:
-                os.environ.pop(k, None)
+    apply_env(vals)
 
 
 def ready() -> bool:
