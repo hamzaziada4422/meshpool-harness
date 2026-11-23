@@ -69,3 +69,12 @@ def test_update_json_refuses_to_overwrite_corrupt(tmp_path):
     with pytest.raises(fsio.CorruptFile):
         fsio.update_json(p, lambda d: d.append(1), default=[])
     assert p.read_text() == "[{"
+
+
+def test_quarantine_never_overwrites_an_earlier_copy(tmp_path):
+    p = tmp_path / "x.json"
+    names = set()
+    for i in range(3):                      # same second, same name
+        p.write_text(f"bad {i}")
+        names.add(fsio.quarantine(p).name)
+    assert len(names) == 3

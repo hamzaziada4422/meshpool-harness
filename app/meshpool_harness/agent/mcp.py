@@ -910,7 +910,7 @@ class Server:
         with self._conn:
             try:
                 from meshpool_harness import mcp_apps as CN
-                headers = CN.refresh_headers(self.name)
+                headers = CN.refresh_headers(self.name, getattr(self.t, "headers", None))
             except Exception:  # noqa: BLE001
                 return False
             if not headers or headers == getattr(self.t, "headers", None):

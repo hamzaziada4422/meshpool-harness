@@ -257,6 +257,11 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         keep = {"role": "assistant", "content": msg.get("content") or ""}
         if calls and os.environ.get("MH_SANITIZE_CALLS", "1") == "1":
             calls = _sanitize_calls(calls)
+        # an accepted finish/need_context returns at once, so they must run after every other call in the reply
+        _orig = calls
+        calls = [c for c in calls if (c.get("function") or {}).get("name") not in ("finish", "need_context")] + \
+                [c for c in calls if (c.get("function") or {}).get("name") in ("finish", "need_context")]
+        reordered = calls != _orig       # finish was written before seeing the actions' results
         if calls:
             keep["tool_calls"] = calls
         messages.append(keep)
@@ -338,6 +343,8 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                         log_failure(ctx, "exploration_lock", True, name)
                     elif name in ("bash", "run_tests"):
                         out, code = ws._run(args["command"], args.get("timeout_s"), "check" if name == "run_tests" else "bash")
+                        if reordered and code != 0:
+                            turn_failed = True
                         g = guards.after_command(args["command"], code, out)
                         if g:
                             injected.append(g)

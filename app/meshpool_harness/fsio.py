@@ -117,7 +117,8 @@ def quarantine(path) -> Path | None:
     p = Path(path)
     if not p.exists():
         return None
-    dst = p.with_name(f"{p.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}")
+    import uuid
+    dst = p.with_name(f"{p.name}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}")
     with contextlib.suppress(OSError):
         _replace(str(p), str(dst))
         return dst

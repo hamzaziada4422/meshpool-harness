@@ -95,7 +95,8 @@ def grid(corpus: Corpus, rows: dict[str, list[str]] | list[str], questions: list
         from meshpool_harness.core.client import LiveClient
         client = LiveClient("research_grid")
     import os
-    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     labels = list(rows)
     g = Grid(labels, list(questions))
 
