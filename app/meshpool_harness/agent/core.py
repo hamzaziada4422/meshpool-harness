@@ -26,6 +26,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import pace as PACE
+from meshpool_harness import session_store as SS
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
@@ -1518,7 +1519,7 @@ class Agent:
             except Exception:  # noqa: BLE001
                 pass
             self._running = False
-            self.save()
+            self.save(full=True)
         return final
 
     # ---------- independent grader (agent/grader.py) -----------------------------------------------------------
@@ -1980,7 +1981,7 @@ class Agent:
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
                                                  "going" + ("." if r["model"] else " (from the log only).")})
             try:
-                self.save()
+                self.save(full=True)               # the saved prefix was replaced by the summary
             except Exception:  # noqa: BLE001
                 pass
         return r
@@ -3123,24 +3124,44 @@ class Agent:
                 break
 
     # ---------- sessions ---------------------------------------------------------------------------------------
-    def save(self):
+    def save(self, full: bool = False):
+        """Persist the chat. A full snapshot when the saved prefix changed (or ``full``); otherwise only the new
+        messages are appended to the journal, so a save during a long turn writes a few kB, not the whole chat."""
         if getattr(self, "deleted", False):           # the user deleted this thread; never bring it back
             return
+        lock = self.__dict__.setdefault("_save_lock", threading.Lock())
         try:
-            self.dir.mkdir(parents=True, exist_ok=True)
-            tmp = self.dir / "session.json.tmp"
-            tmp.write_text(json.dumps({
-                "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
-                "updated": time.time(), "model": self.current_model(), "model_choice": self.model, "plan": self.plan,
-                "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
-                "kind": "cowork" if self.profile == "work" else "code",
-                "usage": self.usage, "unfinished": bool(getattr(self, "unfinished", False) or getattr(self, "_running", False)),
-                "route": self.route.to_dict() if getattr(self, "route", None) is not None else None,
-                "route_text": getattr(self, "_route_text", ""),
-                "messages": self.messages[1:]}, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, self.dir / "session.json")      # a crash mid-write never leaves half a session
+            with lock:
+                if getattr(self, "deleted", False):
+                    return
+                msgs = self.messages[1:]
+                n = len(msgs)
+                meta = {"updated": time.time(), "model": self.current_model(), "model_choice": self.model,
+                        "plan": self.plan, "title": self.title, "usage": self.usage,
+                        "unfinished": bool(getattr(self, "unfinished", False) or getattr(self, "_running", False)),
+                        "route": self.route.to_dict() if getattr(self, "route", None) is not None else None,
+                        "route_text": getattr(self, "_route_text", "")}
+                pn, pfp = getattr(self, "_persist_n", None), getattr(self, "_persist_fp", None)
+                if getattr(self, "_persist_dir", None) != str(self.dir):     # /clear gave the chat a new id: start over
+                    pn = None
+                fp = lambda m: json.dumps(m, ensure_ascii=False, default=str)  # noqa: E731
+                need_full = (full or pn is None or not (self.dir / "session.json").exists() or n < pn
+                             or (pn > 0 and fp(msgs[pn - 1]) != pfp)
+                             or SS.journal_size(self.dir) > SS.JOURNAL_MAX_BYTES)
+                if need_full:
+                    SS.write_snapshot(self.dir, {
+                        "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
+                        "updated": meta["updated"], "model": meta["model"], "model_choice": self.model,
+                        "plan": self.plan, "harness": "meshpool-work" if self.profile == "work" else "meshpool-code",
+                        "kind": "cowork" if self.profile == "work" else "code", "usage": self.usage,
+                        "unfinished": meta["unfinished"], "route": meta["route"], "route_text": meta["route_text"],
+                        "messages": msgs})
+                else:
+                    SS.append_journal(self.dir, pn, msgs[pn:], meta)
+                self._persist_n, self._persist_dir = n, str(self.dir)
+                self._persist_fp = fp(msgs[-1]) if n else ""
         except OSError:
-            pass
+            pass            # the previous files are intact (atomic writes); the next save tries again
 
     @classmethod
     def resume(cls, workdir: str, session_id: str | None = None, **kw) -> "Agent | None":
@@ -3150,9 +3171,8 @@ class Agent:
             for p in SESSIONS.glob("*/session.json"):
                 if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
                     continue
-                try:
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                except (OSError, ValueError):
+                d = SS.read(p.parent)
+                if not d:
                     continue
                 if session_id and d.get("id") != session_id:
                     continue

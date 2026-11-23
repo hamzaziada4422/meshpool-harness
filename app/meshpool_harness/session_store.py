@@ -118,8 +118,7 @@ def _append_line(p: Path, line: str) -> None:
                 if r.read(1) != b"\n":
                     raw = b"\n" + raw
         f.write(raw)
-        f.flush()
-        os.fsync(f.fileno())
+        f.flush()                    # no fsync per append: the full snapshot at turn end is the durable point
 
 
 def append_journal(d, start: int, messages: list, meta: dict) -> None:
