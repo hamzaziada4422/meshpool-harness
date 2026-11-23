@@ -406,6 +406,12 @@ def system_check() -> list[dict]:
                         "renders slides to review them and converts Office files. Files are complete without it."})
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
+    try:                                    # the model's context window and where that number came from
+        from meshpool_harness.core import context as _ctx
+        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": _ctx.describe(),
+                     "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
+    except Exception:  # noqa: BLE001 - a check must report, not crash
+        pass
     return rows
 
 

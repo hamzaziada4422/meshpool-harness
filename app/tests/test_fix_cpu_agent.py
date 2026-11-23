@@ -18,7 +18,7 @@ from meshpool_harness.harnesses.acp import office_extra  # noqa: E402
 def _home(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("MESHPOOL_MCP", str(tmp_path / "mcp.json"))
-    (tmp_path / "home").mkdir()
+    (tmp_path / "home").mkdir(exist_ok=True)
     (tmp_path / "mcp.json").write_text('{"mcpServers": {}}', encoding="utf-8")
     yield
     M.stop_all()

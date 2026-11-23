@@ -17,7 +17,8 @@ from urllib.parse import urlparse
 
 CHARS_PER_TOKEN = 3.5
 DEFAULT_LOCAL = 8192            # an unknown model on this computer or LAN: small until the server says otherwise
-DEFAULT_HOSTED = 128_000
+DEFAULT_HOSTED = 200_000        # an unknown hosted model (defaults/model_windows.json: default_hosted)
+TARGET_CAP = 120_000            # working-context cap in tokens (MH_CONTEXT_TARGET): every call resends it
 SMALL = 32_768                  # at or under this, Meshpool runs in its small-window mode
 TRIGGER = 0.70                  # compaction starts at this share of the window
 FIT = 0.88                      # a request is trimmed to this share of the room left after the reply
@@ -27,15 +28,28 @@ _LEARNED: dict[str, int] = {}   # model -> window learned from an error, silent 
 _PROBED: dict[tuple, int] = {}
 _TOLD: set = set()
 
-# model-name hints, most specific first (tokens)
-_FAMILIES = [
-    (r"gemini", 1_000_000), (r"claude", 200_000), (r"gpt-?4\.1|gpt-?5|o[134](?:-|$)", 200_000),
-    (r"gpt-?4o|gpt-?4-turbo|gpt-?6", 128_000), (r"gpt-?4(?!o)", 8192), (r"gpt-?3\.5", 16_384),
-    (r"deepseek", 128_000), (r"glm", 128_000), (r"kimi|moonshot", 128_000), (r"llama-?3\.[123]|llama3\.[123]", 128_000),
-    (r"llama-?3|llama3", 8192), (r"llama-?2|llama2", 4096), (r"qwen-?3|qwen2\.5|qwen-?2\.5", 32_768),
-    (r"mistral|mixtral|codestral", 32_768), (r"phi-?3|phi3", 4096), (r"gemma-?3", 128_000), (r"gemma", 8192),
-    (r"tinyllama|smollm", 2048),
-]
+_TABLE: list | None = None
+
+
+def _table() -> list:
+    """defaults/model_windows.json (a copy in the Meshpool data folder is read first): [(regex, tokens, uncertain)]."""
+    global _TABLE
+    if _TABLE is None:
+        rows: list = []
+        try:
+            from meshpool_harness import config as C
+            paths = [C.home() / "model_windows.json", C.APP / "defaults" / "model_windows.json"]
+        except Exception:  # noqa: BLE001
+            paths = []
+        for p in paths:
+            try:
+                d = json.loads(p.read_text(encoding="utf-8"))
+                for m in d.get("models") or []:
+                    rows.append((re.compile(m["match"], re.I), int(m["window"]), bool(m.get("uncertain"))))
+            except (OSError, ValueError, KeyError, re.error):
+                continue
+        _TABLE = rows
+    return _TABLE
 
 
 def estimate(obj) -> int:
@@ -58,12 +72,12 @@ def _is_local(base: str) -> bool:
 def _name_hint(model: str) -> int | None:
     low = (model or "").lower()
     m = re.search(r"(?<![\d.])(\d+(?:\.\d+)?)\s?([mk])(?![a-z0-9])", low.replace("-", " ").replace(":", " ").replace("_", " "))
-    if m and not re.search(r"\d+x\d+b|\d+b", m.group(0)):
+    if m:                                   # "qwen2.5-coder:7b-8k": the size in the name
         n = int(float(m.group(1)) * (1_000_000 if m.group(2) == "m" else 1024))
         if 1024 <= n <= 4_000_000:
             return n
-    for rx, n in _FAMILIES:
-        if re.search(rx, low):
+    for rx, n, _unsure in _table():
+        if rx.search(low):
             return n
     return None
 
@@ -71,7 +85,9 @@ def _name_hint(model: str) -> int | None:
 def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float = 2.0):
     import urllib.request
     h = {"Content-Type": "application/json"}
-    if key:
+    if key and "anthropic.com" in url:
+        h.update({"x-api-key": key, "anthropic-version": "2023-06-01"})
+    elif key:
         h["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers=h,
                                  method="POST" if body is not None else "GET")
@@ -115,18 +131,46 @@ def probe(base: str, model: str, key: str = "") -> int | None:
     return None
 
 
-def window(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> int:
-    """Tokens this model can hold (input plus reply)."""
+_LISTS: dict[str, dict] = {}
+
+
+def _listed(base: str, key: str) -> dict:
+    """{model id: context tokens} from the endpoint's /models list, fetched once per endpoint ({} when it has none)."""
+    with _LOCK:
+        if base in _LISTS:
+            return _LISTS[base]
+    out: dict = {}
+    try:
+        d = _http_json(base.rstrip("/") + "/models?limit=1000", None, key)
+        items = d.get("data") if isinstance(d, dict) else d
+        for it in items or []:
+            if not isinstance(it, dict):
+                continue
+            for k in ("loaded_context_length", "context_length", "context_window", "max_context", "max_context_length",
+                      "max_input_tokens", "inputTokenLimit"):
+                v = it.get(k) or (it.get("top_provider") or {}).get(k)
+                if isinstance(v, int) and v > 0:
+                    out[str(it.get("id") or it.get("name") or "")] = v
+                    break
+    except Exception:  # noqa: BLE001 - no list, or not reachable
+        pass
+    with _LOCK:
+        _LISTS[base] = out
+    return out
+
+
+def window_info(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> tuple[int, str]:
+    """(tokens, source) for this model. Source: override, learned, provider, profile, table, default."""
     for var in ("MESHPOOL_CONTEXT_WINDOW", "MH_CONTEXT_WINDOW"):
         try:
             if os.environ.get(var):
-                return max(1024, int(float(os.environ[var])))
+                return max(1024, int(float(os.environ[var]))), "override"
         except ValueError:
             pass
     bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
     with _LOCK:
         if bare in _LEARNED:
-            return _LEARNED[bare]
+            return _LEARNED[bare], "learned"
     if base is None:
         try:
             from meshpool_harness import providers as PV
@@ -134,22 +178,60 @@ def window(model: str, base: str | None = None, key: str = "", probe_endpoint: b
         except Exception:  # noqa: BLE001
             base = ""
     if str(model).startswith("chatgpt:"):
-        return 128_000
+        return 400_000, "default"
     local = _is_local(base or "")
-    if probe_endpoint and base and (local or os.environ.get("MH_PROBE_CONTEXT") == "1"):
+    if probe_endpoint and base and os.environ.get("MH_PROBE_CONTEXT", "1") != "0":
         k = (base, bare)
         with _LOCK:
             known = _PROBED.get(k)
         if known is None:
-            got = probe(base, bare, key) or 0
+            got = (probe(base, bare, key) if local else 0) or _listed(base, key).get(bare) \
+                or _listed(base, key).get(bare.split("/")[-1]) or 0
             with _LOCK:
                 _PROBED[k] = known = got
         if known:
-            return known
+            return known, "provider"
+    try:                                                     # a profile that states its model family's window
+        from meshpool_harness.profiles import for_model
+        w = ((for_model(bare).get("limits") or {}).get("context_window"))
+        if isinstance(w, int) and w > 0 and any(m in bare for m in for_model(bare).get("match", [])):
+            return w, "profile"
+    except Exception:  # noqa: BLE001
+        pass
     hint = _name_hint(bare)
     if hint:
-        return hint
-    return DEFAULT_LOCAL if local else DEFAULT_HOSTED
+        return hint, "table"
+    return (DEFAULT_LOCAL if local else DEFAULT_HOSTED), "default"
+
+
+def window(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> int:
+    """Tokens this model can hold (input plus reply)."""
+    return window_info(model, base, key, probe_endpoint)[0]
+
+
+def describe(model: str | None = None, base: str | None = None, key: str = "") -> str:
+    """"context 1,000k (from provider), working set 120k" for the status line, `meshpool check` and Settings."""
+    model = model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
+    win, src = window_info(model, base, key)
+    where = {"override": "your setting", "learned": "learned from the server", "provider": "from provider",
+             "profile": "from the profile", "table": "from the model table", "default": "assumed"}[src]
+    k = lambda n: f"{n / 1000:,.0f}k" if n >= 10_000 else f"{n:,}"          # noqa: E731
+    return f"context {k(win)} ({where}); older steps are summarized above {k(target(win))} tokens"
+
+
+def target(win: int) -> int:
+    """The working context to aim for, in tokens: MH_CONTEXT_TARGET, else min(70% of the window, 120k).
+    A call resends the whole conversation, so a 1M window would make every call expensive; compaction therefore
+    keeps the conversation near this size, while the hard window still lets one huge read or reply through."""
+    raw = os.environ.get("MH_CONTEXT_TARGET", "").strip().lower()
+    try:
+        if raw:
+            n = float(raw[:-1]) * (1000 if raw.endswith("k") else 1_000_000 if raw.endswith("m") else 1) \
+                if raw[-1] in "km" else float(raw)
+            return max(1000, min(int(n), int(win * 0.9)))
+    except ValueError:
+        pass
+    return int(min(win * TRIGGER, TARGET_CAP))
 
 
 def learn(model: str, tokens: int) -> int:
@@ -169,6 +251,7 @@ def forget() -> None:
     with _LOCK:
         _LEARNED.clear()
         _PROBED.clear()
+        _LISTS.clear()
         _TOLD.clear()
 
 
@@ -213,7 +296,7 @@ def tool_output_chars(win: int, default: int = 8000) -> int:
 def compact_chars(win: int, fixed_tokens: int, limit: int) -> int:
     """The conversation size (chars) at which compaction starts: 70% of the window less the schemas, system prompt
     and reply; never above `limit` (the profile's own number)."""
-    room = win * TRIGGER - fixed_tokens - max_output(win, None) * 0.5
+    room = target(win) - fixed_tokens - max_output(win, None) * 0.5
     return int(max(1500, min(limit, room * CHARS_PER_TOKEN)))
 
 
@@ -226,17 +309,18 @@ def notice(model: str, win: int) -> str:
             f"shortens its instructions and summarizes earlier steps sooner. Set MESHPOOL_CONTEXT_WINDOW if that is wrong.")
 
 
-def tell_once(model: str, win: int, say) -> None:
-    """say(text) once per model when the window is small."""
-    if not is_small(win):
-        return
+def tell_once(model: str, win: int, say, source: str | None = None) -> None:
+    """say(text) once per model and window: the small-window notice, or (with a source) the resolved window."""
     k = (model, win)
     with _LOCK:
         if k in _TOLD:
             return
         _TOLD.add(k)
     try:
-        say(notice(model, win))
+        if is_small(win):
+            say(notice(model, win))
+        elif source is not None:
+            say(describe(model))
     except Exception:  # noqa: BLE001
         pass
 

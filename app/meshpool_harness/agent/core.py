@@ -1708,7 +1708,7 @@ class Agent:
         a reply limit that leaves room. A one-line notice the first time a small window is seen."""
         from meshpool_harness.core import context as CTX
         win = self._ctx_window()
-        CTX.tell_once(self.current_model(), win, lambda t: self.emit({"type": "status", "text": t}))
+        CTX.tell_once(self.current_model(), win, lambda t: self.emit({"type": "status", "text": t}), "agent")
         self.ws.max_tool_chars = CTX.tool_output_chars(win)
         key = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
         msgs, tools, out = CTX.fit(body["messages"], body.get("tools"), win, body.get(key),
