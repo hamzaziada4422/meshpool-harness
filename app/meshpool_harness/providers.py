@@ -251,7 +251,13 @@ DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 def configured_model(explicit: str | None = None) -> str:
     """The one resolver for every engine: the explicit model, else MH_MODEL (environment, then saved settings), else the default."""
-    return ((explicit or "").strip() or os.environ.get("MH_MODEL") or C.read().get("MH_MODEL") or DEFAULT_MODEL)
+    saved = ""
+    if not ((explicit or "").strip() or os.environ.get("MH_MODEL")):
+        try:
+            saved = (C.read().get("MH_MODEL") or "").strip()
+        except OSError:                          # an unreadable settings file must not stop an engine
+            saved = ""
+    return (explicit or "").strip() or (os.environ.get("MH_MODEL") or "").strip() or saved or DEFAULT_MODEL
 
 
 RETIRED = ("claude", "anthropic", "google", "gemini")   # providers of older builds; their saved model ids mean nothing now

@@ -178,3 +178,31 @@ def test_router_resolves_model_at_call_time(monkeypatch):
     c = MockClient([{"role": "assistant", "content": '{"engines":["general"],"confidence":0.9}'}])
     router.route("summarize this", client=c)
     assert c.requests and c.requests[0]["model"] == "late-model"
+
+
+def test_agent_office_never_hands_the_fast_tier_to_an_engine(tmp_path, monkeypatch):
+    """No model picked in the chat: the engine resolves MH_MODEL / settings itself, never the chat's fast tier."""
+    from meshpool_harness.agent import core
+    from meshpool_harness.agent import office_jobs as OJ
+    monkeypatch.setenv("MH_MODEL_FAST", "fast-tier-model")
+    a = core.Agent(str(tmp_path), approve=lambda *x: ("yes", ""), mode="auto", sessions_dir=str(tmp_path / "s"))
+    a.model, a.lane = None, "chat"
+    seen = {}
+    monkeypatch.setattr(OJ, "check_request", lambda e, r: None)
+    monkeypatch.setattr(OJ, "new_job", lambda *args, **kw: seen.update(kw) or "j1")
+    monkeypatch.setattr(OJ, "run", lambda *a, **k: None)
+    monkeypatch.setattr(OJ, "JOBS", {"j1": {}})
+    monkeypatch.setattr(OJ, "report", lambda *a, **k: ("done", False))
+    a.emit = lambda e: None
+    a._office({"engine": "sheets", "request": "make a budget"})
+    assert seen.get("model") is None
+
+
+def test_unreadable_settings_file_falls_back_to_the_default(monkeypatch):
+    from meshpool_harness import providers as PV
+    monkeypatch.delenv("MH_MODEL", raising=False)
+
+    def boom(*a, **k):
+        raise PermissionError(13, "denied")
+    monkeypatch.setattr(PV.C, "read", boom)
+    assert PV.configured_model() == PV.DEFAULT_MODEL
