@@ -677,6 +677,13 @@ def wait_for_exit(pid: int, timeout: float) -> bool:
             return True
         except PermissionError:
             pass                                        # alive, owned by someone else
+        else:
+            try:                                        # an exited process nobody has reaped yet still answers kill 0
+                with open(f"/proc/{int(pid)}/stat", "rb") as f:
+                    if f.read().rsplit(b")", 1)[-1].split()[:1] == [b"Z"]:
+                        return True
+            except OSError:
+                pass
         if time.monotonic() >= deadline:
             return False
         time.sleep(0.05)
