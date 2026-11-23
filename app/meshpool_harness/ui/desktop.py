@@ -394,8 +394,12 @@ def has_folder_picker() -> bool:
     return WINDOW[0] is not None or sys.platform == "darwin" or os.name == "nt" or bool(shutil.which("zenity"))
 
 
+class PickerUnavailable(Exception):
+    """The native folder dialog could not open at all (no display, no helper): not the same as the user cancelling."""
+
+
 def choose_folder(start: str = "") -> str:
-    """Native folder picker. Returns '' when cancelled or not available."""
+    """Native folder picker. Returns '' when cancelled; raises PickerUnavailable when the dialog cannot open (F-05)."""
     start = start if start and Path(start).is_dir() else str(Path.home())
     w = WINDOW[0]
     if w is not None:                          # the app's own window: a native sheet attached to it
@@ -425,9 +429,13 @@ def choose_folder(start: str = "") -> str:
         if shutil.which("zenity"):
             r = subprocess.run(["zenity", "--file-selection", "--directory", f"--filename={start}/"],
                                capture_output=True, text=True, timeout=600)
+            if r.returncode != 0 and r.stderr.strip() and not r.stdout.strip():     # a cancel prints nothing
+                raise PickerUnavailable(r.stderr.strip()[:200])
             return r.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         return ""
+    except OSError as e:
+        raise PickerUnavailable(str(e)) from None
     return ""
 
 

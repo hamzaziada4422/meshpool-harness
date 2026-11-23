@@ -253,6 +253,12 @@ def _perm_hint(p: Path) -> str:
     return f"Meshpool cannot read {p}: permission denied."
 
 
+# B4: decided by name first, so an empty or odd-looking .jpg is never opened as text with a Save button.
+BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".heic", ".avif",
+              ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".mp4", ".mov", ".m4v", ".webm", ".ogv", ".avi", ".mkv",
+              ".zip", ".gz", ".7z", ".exe", ".dll", ".so", ".dylib", ".pyc", ".sqlite", ".db"}
+
+
 def read_file(root: str, rel: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
@@ -263,8 +269,17 @@ def read_file(root: str, rel: str) -> dict:
     if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
         if size > 60_000_000:
             return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 60 MB."}
-        return {"path": rel, "binary": False, "readonly": True, "size": size,
-                "text": docread.extract(p, max_chars=400_000), "note": "Preview of the document's text"}
+        try:
+            text = docread.extract(p, max_chars=400_000)
+            if text.startswith("Could not read "):         # docread reports a parser failure as text: "Could not read x: PackageNotFoundError ..."
+                raise ValueError(text)
+        except Exception as e:  # noqa: BLE001 - B6: a damaged document is a plain sentence, not a parser traceback
+            from meshpool_harness.ui.previews import friendly_error
+            raise ValueError(friendly_error(p, e)) from None
+        return {"path": rel, "binary": False, "readonly": True, "size": size, "text": text,
+                "note": "Preview of the document's text"}
+    if p.suffix.lower() in BINARY_EXT:
+        return {"path": rel, "binary": True, "readonly": True, "size": size, "text": "", "note": "This is not a text file."}
     if size > 2_000_000:
         return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 2 MB."}
     try:
@@ -689,9 +704,12 @@ def term_stop(tid: str) -> dict:
 
 def term_stop_all() -> None:
     """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
-    for t in list(TERMS.values()):
-        if t.get("rc") is None:
-            _term_kill(t, 1.0)
+    ths = [threading.Thread(target=_term_kill, args=(t, 1.0), daemon=True) for t in list(TERMS.values())
+           if t.get("rc") is None]
+    for th in ths:                               # all at once: ten dev servers must not take ten seconds to stop
+        th.start()
+    for th in ths:
+        th.join(5)
 
 
 # ======================================== usage ===================================================================
