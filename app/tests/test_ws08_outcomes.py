@@ -65,7 +65,7 @@ def test_undo_marks_turn_failed(home, monkeypatch):
     proj = home / "proj"
     proj.mkdir()
     s = A.Session(workdir=str(proj), harness="meshpool-code", kind="code")
-    s.cp = SimpleNamespace(revert_to_before=lambda n: {"restored": [], "deleted": []})
+    s.cp = SimpleNamespace(revert_to_before=lambda n: {"restored": [], "deleted": []}, turns=lambda: [])
     s.state = "idle"
     s.events = [{"type": "user", "i": 0}, {"type": "assistant", "i": 1}, {"type": "user", "i": 2},
                 {"type": "assistant", "i": 3}]

@@ -46,9 +46,9 @@ def test_send_saves_files_into_the_scratch_folder_and_lists_them(tmp_path, monke
     wd = Path(PS.new_scratch())
     s, started, _ = _bare_session(str(wd), monkeypatch)
     s.send("look", files=[{"name": "a.txt", "data": _b64("hello")}])
-    assert (wd / "attachments" / "a.txt").read_text() == "hello"
+    assert (wd / "a.txt").read_text() == "hello"            # S-05: attachments sit at the folder root
     assert started and "look" in started[0]
-    assert "Attached files (in this chat's folder): attachments/a.txt" in started[0]
+    assert "a.txt" in started[0] and "Attached files" in started[0]
 
 
 def test_send_into_a_read_only_folder_is_a_friendly_error_and_nothing_starts(tmp_path, monkeypatch):
