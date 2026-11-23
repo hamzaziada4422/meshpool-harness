@@ -162,3 +162,22 @@
 .mermaid-box{margin:10px 0;overflow-x:auto}.mermaid-box.rendered svg{max-width:100%;height:auto}.mm-err{display:block;color:var(--ink-3)}
 .mathsrc[data-display="1"]{display:block;margin:8px 0;overflow-x:auto}
 .closedapp{margin:20px 0 0;padding:12px 4px;border-top:1px solid var(--line,#ddd)}.closedapp small{display:block;color:var(--ink-3);margin-top:4px}
+
+/* the independent check card (0.0.11) */
+.rev010{margin:6px 0 4px;font-size:var(--fs-xs);color:var(--ink-3)}
+.rev010 summary{list-style:none;display:flex;flex-wrap:wrap;gap:4px 8px;align-items:center;cursor:pointer;min-height:24px}
+.rev010 summary::-webkit-details-marker{display:none}
+.rev010 summary svg{width:13px;height:13px;flex:none;color:var(--pool-text)}
+.rev010.rv-partial summary svg,.rev010.rv-fail summary svg,.rev010.rv-error summary svg{color:var(--warn)}
+.rev010 .rv-t{color:var(--ink-2);font-weight:500}
+.rev010 .rv-m{color:var(--ink-3)}
+.rev010 summary:focus-visible{outline:2px solid var(--pool-text);outline-offset:2px;border-radius:4px}
+.rev010 .rv-body{margin:6px 0 2px 21px;max-width:60ch}
+.rev010 p{margin:0 0 6px}
+.rev010 .rv-acc{color:var(--ink-2)}
+.rev010 .rv-list{list-style:none;margin:6px 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.rev010 .rv-list li{line-height:1.4;overflow-wrap:anywhere}
+.rev010 .rv-list small{display:block;color:var(--ink-3);margin-top:1px}
+.rev010 .rv-s{display:inline-block;min-width:5.5em;font-weight:600;color:var(--ink-2)}
+.rev010 li.not_met .rv-s{color:var(--warn)}
+@media (max-width:520px){.rev010 .rv-s{display:block}}
