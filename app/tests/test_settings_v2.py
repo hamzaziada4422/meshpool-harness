@@ -54,11 +54,11 @@ def test_spend_never_returns_the_key(home, monkeypatch):
         def __exit__(self, *a): return False
         def read(self): return b"{}"
     monkeypatch.setenv("MESHPOOL_API_KEY", "sk-secret-secret-secret")
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: R())
+    monkeypatch.setattr("meshpool_harness.core.endpoint.urlopen", lambda *a, **k: R())
     SV._SPEND.update(t=0.0, v=None)
     r = SV.key_spend(force=True)
     assert r == {"available": True, "spent": 3.5, "budget": 20.0} and "secret" not in json.dumps(r)
-    monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
+    monkeypatch.setattr("meshpool_harness.core.endpoint.urlopen", lambda *a, **k: (_ for _ in ()).throw(OSError("down")))
     assert SV.key_spend(force=True)["available"] is False
 
 

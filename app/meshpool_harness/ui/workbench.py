@@ -157,24 +157,27 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
-    base = (os.environ.get("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
-    key = os.environ.get("MESHPOOL_API_KEY") or ""
+    from meshpool_harness import providers as _PV
+    from meshpool_harness.core import endpoint as _EP
+    base, key = _PV.key_base(), _PV.key()           # the saved endpoint, or the environment pair when none is saved
+    kind = _PV.key_kind()
     cache_key = base + "|" + key[-6:]
     vals = C.read()
     fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key:
+    elif not key and not _EP.caps(kind)["keyless"]:
         rows, err = [], "Add your API key to see your models."
+    elif not _EP.caps(kind)["lists"]:               # Azure and Perplexity have no list to read: the chosen model shows
+        rows, err = [], ""
     else:
         rows, err = [], ""
         try:
-            from meshpool_harness import providers as _PV
-            auth = ({"x-api-key": key, "anthropic-version": "2023-06-01"} if _PV.key_wire() == "anthropic"
-                    else {"Authorization": f"Bearer {key}"})
+            auth = {k: v for k, v in _EP.auth_headers("anthropic" if _PV.key_wire() == "anthropic" else kind,
+                                                      key).items() if k != "Content-Type"}
             req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with _EP.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
             for it in items or []:
@@ -195,8 +198,7 @@ def models(refresh: bool = False) -> dict:
             rows.sort(key=lambda r: (r["provider"].lower(), r["id"].lower()))
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
-            err = f"The endpoint answered HTTP {e.code} when listing models." + (
-                " Check your API key." if e.code in (401, 403) else "")
+            err = "Could not list models. " + _EP.explain(e.code, e.read(200_000), kind=kind, host=_PV.host(base), key=key)
         except Exception as e:  # noqa: BLE001
             err = f"Could not list models: {e}"
     from meshpool_harness import providers as PV

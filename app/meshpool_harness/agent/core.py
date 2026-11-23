@@ -336,7 +336,8 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
         from meshpool_harness.core import anthropic_wire as AW
         url, body, hdrs = f"{base}/messages", AW.to_request(body), AW.headers(key)
     else:
-        url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        from meshpool_harness.core import endpoint as _EP        # URL, key header and body fields: core/endpoint.py
+        url, body, hdrs = _EP.chat_request(base, key, body)
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
@@ -2260,7 +2261,8 @@ class Agent:
             if stream:
                 b["stream"] = True
                 b["stream_options"] = {"include_usage": True}
-            url, hdrs = f"{base}/chat/completions", {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            from meshpool_harness.core import endpoint as _EP    # URL, key header and body fields: core/endpoint.py
+            url, b, hdrs = _EP.chat_request(base, key, b)
         req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",
                                      headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
         # Two clocks: a large context can take minutes before the first byte (prefill, a queue upstream), while a

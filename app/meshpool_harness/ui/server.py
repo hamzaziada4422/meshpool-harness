@@ -165,7 +165,8 @@ def test_connection(values: dict | None = None) -> dict:
         return {"ok": False, "detail": "No API key saved yet."}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
+    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key,
+                kind=v.get("MH_API_KIND", ""), api_version=v.get("MH_API_VERSION", ""))
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -405,7 +406,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, get_settings())
             if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
                 from meshpool_harness import provider_setup as PS
-                return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
+                return self._send(200, dict(PS.current(), catalog=PS.catalog()) if u.path == "/api/provider"
+                                  else {"logins": PS.logins()})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
             if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
@@ -584,14 +586,16 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path.endswith("/test"):
                     try:
                         return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
-                                                       j.get("env", "")))
+                                                       j.get("env", ""), j.get("model", ""), j.get("api_version", ""),
+                                                       j.get("kind", "")))
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
-                                                        j.get("env", ""), bool(j.get("confirm_env"))), ok=True))
+                                                        j.get("env", ""), bool(j.get("confirm_env")),
+                                                        j.get("api_version", ""), j.get("kind", "")), ok=True))
                 return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))

@@ -116,7 +116,7 @@ def prepare(root: Path) -> Path:
     h = pi_home()
     (h / "sessions").mkdir(parents=True, exist_ok=True)
     from meshpool_harness import providers as PV
-    base = PV.key_base()
+    base = PV.agent_endpoint("key")[0]          # the key endpoint, or the local relay when it needs more than Bearer
     if PV.key_wire() == "anthropic":           # an Anthropic Messages endpoint: Pi's own Anthropic client, whose SDK
         key_provider = {"baseUrl": re.sub(r"/v1/?$", "", base),        # adds /v1/messages itself
                         "api": "anthropic-messages", "apiKey": "$MESHPOOL_API_KEY", "models": _models()}
@@ -274,7 +274,7 @@ class PiAgent:
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
                     "MESHPOOL_PI_SAFE": json.dumps(sorted(READ_ONLY)),     # pi_gate.js: tools that never ask
                     "MESHPOOL_PI_ROOT": str(self.root),       # ... unless they read outside the project
-                    "MESHPOOL_API_KEY": PV.key()})
+                    "MESHPOOL_API_KEY": PV.agent_endpoint("key")[1]})
         if PV.ready("chatgpt"):
             from meshpool_harness.core import chatgpt_relay
             env.update(chatgpt_relay.env())    # the relay's address and token, never the ChatGPT sign-in
