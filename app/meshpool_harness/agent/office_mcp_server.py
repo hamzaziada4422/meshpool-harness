@@ -205,6 +205,30 @@ def _safe_name(filename: str, default: str, ext: str) -> str:
     return (stem.strip() or Path(default).stem) + ext
 
 
+def _dest(filename: str | None, default: str, ext: str, named: bool | None = None) -> Path:
+    """Where a file made for `filename` goes. A name the user gave (not the tool's default) is written exactly there
+    when it is a plain name or a path inside the project folder, so "make report.pdf" gives ./report.pdf; with no
+    name (or one outside the project) it goes to "<project>/Meshpool outputs". Either way an existing file is never
+    replaced: a free "name (2).ext" is used."""
+    name = _safe_name(filename or "", default, ext)
+    given = str(filename or "").strip()
+    if named is None:
+        named = bool(given) and Path(given).name.lower() != default.lower()
+    if named:
+        try:
+            proj = _project().resolve()
+            rel = Path(given).expanduser()
+            d = (rel.parent if rel.is_absolute() else proj / rel.parent).resolve()
+            if d == proj or proj in d.parents:
+                d.mkdir(parents=True, exist_ok=True)
+                return _free(d / name)
+        except OSError:
+            pass
+    out = _project() / "Meshpool outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    return _free(out / name)
+
+
 def _pdf_font(text: str) -> tuple[str, str]:
     """(regular, bold) font names for a PDF: Helvetica covers Latin only, so other scripts got black boxes. The first
     Unicode font on this computer that covers the text is embedded; CJK falls back to a built-in CID font."""
@@ -276,13 +300,11 @@ def _set_num(par, num_id: int):
     ppr.numPr.get_or_add_ilvl().val = 0
 
 
-def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
+def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
+                  _named: bool | None = None):
     from docx import Document
     from docx.shared import Pt
-    name = _safe_name(filename, "document.docx", ".docx")
     markdown, title = _clean_md(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(11)
@@ -365,7 +387,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
-    path = _free(out / name)
+    path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
 
@@ -393,7 +415,11 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     if ext not in (".docx", ".xlsx", ".pptx"):
         return "This edits .docx, .xlsx and .pptx files.", True
     if not isinstance(operations, list) or not operations:
-        return "Give `operations`: a list of {op, ...} steps.", True
+        return ("Give `operations`: a list of {op, ...} steps. Word: replace_text{find,replace}, "
+                "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
+                "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
+                "add_row{values}, add_comment{sheet,cell,text}. PowerPoint: replace_text{find,replace}, "
+                "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
     if out != p:
         shutil.copyfile(p, out)
@@ -583,7 +609,7 @@ def _md_inline(s: str) -> str:
     return re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<link href='\2' color='#1A56DB'>\1</link>", s)
 
 
-def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None):
+def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -591,8 +617,6 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
     markdown, title = _clean_md(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     st = getSampleStyleSheet()
     reg, bold = _pdf_font(markdown + (title or ""))
     for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
@@ -656,7 +680,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
         i += 1
     flush()
-    path = _free(out / name)
+    path = _dest(filename, "document.pdf", ".pdf", _named)
     SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False
@@ -667,7 +691,7 @@ def _soffice() -> str | None:
     return office_runtime.find_soffice()
 
 
-def convert_document(path: str, to: str = "pdf"):
+def convert_document(path: str, to: str = "pdf", output: str | None = None):
     src = _resolve(path)
     if not src.exists():
         return f"File not found: {src}", True
@@ -675,8 +699,10 @@ def convert_document(path: str, to: str = "pdf"):
     if src.suffix.lower() in (".md", ".txt") and to in ("pdf", "docx"):
         text = src.read_text(encoding="utf-8", errors="replace")      # a conversion keeps the words as they are:
         if to == "pdf":                                                # no clarity rewrite
-            return make_pdf(text, src.stem + ".pdf")
-        return make_document(text, src.stem + ".docx", _clarity=False)
+            return make_pdf(text, output, _named=True) if output else make_pdf(text, src.stem + ".pdf", _named=False)
+        if output:
+            return make_document(text, output, _clarity=False, _named=True)
+        return make_document(text, src.stem + ".docx", _clarity=False, _named=False)
     infilter: list[str] = []
     if src.suffix.lower() == ".pdf":
         # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
@@ -692,8 +718,6 @@ def convert_document(path: str, to: str = "pdf"):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     import shutil
     import tempfile
@@ -703,7 +727,7 @@ def convert_document(path: str, to: str = "pdf"):
         made = Path(tmp) / (src.stem + "." + to)
         if r.returncode != 0 or not made.exists():
             return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
-        dst = _free(out / made.name)
+        dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
 
@@ -734,82 +758,50 @@ def find_icon(query: str = "", set: str | None = None, limit: int = 8, style: st
 
 
 S = {"type": "string"}
-FILES = {"type": "array", "items": S, "description": "Input files, relative to the project folder or absolute"}
+FILES = {"type": "array", "items": S, "description": "Input files (project-relative or absolute)"}
+# Descriptions stay short: they ride in every request. Option lists (themes, icon sets, edit operations) are in the
+# BRIEF NEEDED answer, in an error message or in find_icon list_sets, which the model reaches only when it needs them.
 TOOLS = {
-    "add_slides": (add_slides, "Add slides to a PowerPoint deck the user already has (the deck in `deck`). The "
-                   "slides engine builds them in that deck's own look (fonts, colours, master) to the same standard "
-                   "as make_deck, and appends them in a copy saved next to it as '<name> (updated).pptx'; the "
-                   "original is never changed. Use this for any new or changed slide in an existing deck: never "
-                   "write slides with python-pptx code. Describe what the slides must show in `request` (with the "
-                   "numbers, or the files that hold them in `files`). Takes 2 to 5 minutes.",
-                   {"deck": S, "request": S, "slides": {"type": "integer", "description": "How many slides to add (1-12)"},
+    "add_slides": (add_slides, "Add slides to an existing .pptx in its own look; saves '<name> (updated).pptx' and "
+                   "never changes the original. Never hand-write slides with python-pptx. 2 to 5 minutes.",
+                   {"deck": S, "request": S, "slides": {"type": "integer", "description": "1-12"},
                     "files": FILES}, ["deck", "request"]),
-    "make_deck": (make_deck, "Build a finished PowerPoint deck (.pptx) with Meshpool's slides engine, which plans "
-                  "the storyline, lays out charts and checks the result. Describe the content in `request` and give "
-                  "the brief as fields (audience, purpose, density, slides, theme, opening, closing, sources). If "
-                  "audience, density, length or look is left open, it does not build: it answers BRIEF NEEDED with "
-                  "questions, options and a recommendation for each. Ask the user, then call again with the answers, "
-                  "or pass brief_ok=true to build with the recommendations. Takes 2 to 6 minutes.",
-                  {"request": S, "files": FILES,
-                   "audience": {"type": "string", "description": "Who the deck is for, e.g. the board, investors"},
-                   "purpose": {"type": "string", "description": "What it should achieve, e.g. approve the budget"},
-                   "density": {"type": "string", "enum": ["present", "balanced", "read"],
-                               "description": "present: visual, few words, to present live; balanced; read: a dense "
-                                              "pre-read"},
-                   "slides": {"type": "integer", "description": "Number of slides"},
-                   "theme": {"type": "string", "description": "navy, ocean, forest, burgundy, graphite or mono"},
-                   "icon_set": {"type": "string", "description": "One icon set for the whole deck, e.g. phosphor, "
-                                "phosphor-light, material, carbon, heroicons (find_icon list_sets=true lists them); "
-                                "default lucide"},
-                   "opening": {"type": "string", "description": "Opening slides, e.g. title and agenda"},
-                   "closing": {"type": "string", "description": "Closing slides, e.g. next steps, questions"},
-                   "sources": {"type": "string", "description": "Sources to use or leave out"},
-                   "brief_ok": {"type": "boolean", "description": "Build now: recommended answers for anything not "
-                                                                  "given"}}, ["request"]),
-    "make_spreadsheet": (make_spreadsheet, "Build a finished Excel workbook (.xlsx) with live formulas, such as a "
-                         "model, budget or tracker, with Meshpool's sheets engine (it recalculates and checks the "
-                         "formulas). Takes 2 to 6 minutes.", {"request": S, "files": FILES}, ["request"]),
-    "analyze_data": (analyze_data, "Analyze CSV or Excel data and produce charts, tables and a written summary "
-                     "with Meshpool's data engine.", {"request": S, "files": FILES}, ["request", "files"]),
-    "make_document": (make_document, "Save Markdown as a Word document (.docx). Supports headings, bullet and "
-                      "numbered lists, tables, bold, italic, quotes and code blocks.",
+    "make_deck": (make_deck, "Build a finished .pptx with the slides engine (storyline, charts, checks). If the brief "
+                  "is open it answers BRIEF NEEDED with questions and recommendations: ask the user, or pass "
+                  "brief_ok=true. 2 to 6 minutes.",
+                  {"request": S, "files": FILES, "audience": S, "purpose": S,
+                   "density": {"type": "string", "enum": ["present", "balanced", "read"]},
+                   "slides": {"type": "integer"}, "theme": S, "icon_set": S, "opening": S, "closing": S,
+                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"}},
+                  ["request"]),
+    "make_spreadsheet": (make_spreadsheet, "Build a new .xlsx with live formulas (model, budget, tracker). Not for "
+                         "changing a file that exists: use edit_office_file. 2 to 6 minutes.",
+                         {"request": S, "files": FILES}, ["request"]),
+    "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
+                     {"request": S, "files": FILES}, ["request", "files"]),
+    "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
                       {"markdown": S, "filename": S, "title": S}, ["markdown"]),
-    "read_document": (read_document, "Read a PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx, .xls), CSV, Power BI "
-                      "(.pbix, .pbit: pages, visuals, tables, DAX measures, Power Query and sample rows), OpenDocument, "
-                      "notebook, email or HTML file as text, and reads the text in images and scanned PDFs with OCR "
-                      "(Arabic, Chinese, English, Japanese, Korean, Cyrillic, Hindi, Thai, Greek and Latin-script "
-                      "languages). `sheet` picks one Excel sheet; `pages` picks PDF pages such as \"1-3,7\"; "
-                      "`language` (optional, e.g. ar, ru, ko, hi) forces an OCR language; `ocr` is auto (scanned pages and "
-                      "pictures), always (also pages that mix text and scans) or never.",
+    "read_document": (read_document, "Read a PDF, Word, PowerPoint, Excel, CSV, Power BI, OpenDocument, notebook, "
+                      "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
+                      "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
-    "edit_office_file": (edit_office_file, "Change an existing Word, Excel or PowerPoint file in place of rebuilding it: "
-                         "formatting, formulas and layout stay as they are, and LibreOffice is not needed. `operations` is a "
-                         "list. Word: {op:replace_text, find, replace}, {op:tracked_replace, find, replace} and "
-                         "{op:tracked_delete, find} and {op:tracked_insert_after, find, text} (real Word tracked changes "
-                         "the user accepts or rejects), {op:append_paragraph, text}, {op:add_comment, find, text}. Excel: {op:set_cell, sheet, cell, value (or a formula like =SUM(A1:A9))}, {op:add_row, "
-                         "values}, {op:add_comment, sheet, cell, text}. PowerPoint: {op:replace_text, find, replace}, "
-                         "{op:set_notes, slide, text}. Saved as '<name> (edited)' next to the file unless in_place is true.",
+    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx without rebuilding it (formatting "
+                         "and formulas stay). Saves '<name> (edited)' unless in_place=true. `operations`: list of "
+                         "{op, ...}; ops are listed if one is missing.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
-    "make_pdf": (make_pdf, "Save Markdown as a PDF (headings, paragraphs, lists, tables, code, links).",
+    "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder.",
                  {"markdown": S, "filename": S, "title": S}, ["markdown"]),
-    "convert_document": (convert_document, "Convert a document to another format, for example .docx, .pptx or .xlsx "
-                         "to PDF, a PDF to Word (words and tables, approximate layout), or Markdown to PDF or Word. `to` is the target "
-                         "extension.",
-                         {"path": S, "to": S}, ["path", "to"]),
-    "find_icon": (find_icon, "Find icons for a slide or document by meaning (e.g. \"money\", \"supply chain\", "
-                  "\"M&A\", \"datacentre\"). Searches the bundled open-licence sets (Lucide, Tabler, Phosphor, "
-                  "Iconoir, Heroicons, Bootstrap, Material Symbols, IBM Carbon; no company logos) by name, tags and "
-                  "synonyms, and returns set:name, style, licence and the SVG path, best first. `set` keeps a deck to "
-                  "one set (e.g. lucide, phosphor, phosphor-fill, material, carbon); `style` (outline, filled, "
-                  "duotone) searches that style of every family; `list_sets` lists the sets with counts, licences "
-                  "and styles; `limit` is the number of results (default 8).",
+    "convert_document": (convert_document, "Convert a document to another format (docx, pptx, xlsx, md to pdf; pdf to "
+                         "docx). `to` is the target extension; `output` names the result.",
+                         {"path": S, "to": S, "output": S}, ["path", "to"]),
+    "find_icon": (find_icon, "Find icons by meaning in the open-licence sets; returns set:name and the SVG path. "
+                  "list_sets=true lists the sets.",
                   {"query": S, "set": S, "style": {"type": "string", "enum": ["outline", "filled", "duotone"]},
                    "limit": {"type": "integer"}, "list_sets": {"type": "boolean"}}, []),
-    "office_job_status": (office_job_status, "Get the result of an office job that was still running.",
+    "office_job_status": (office_job_status, "Result of an office job that was still running.",
                           {"job_id": S}, ["job_id"]),
 }
-
 
 def _forge_tool(name):
     def call(path: str | None = None, **kw):
@@ -859,9 +851,15 @@ def _as_mcp(fn, props: dict):
     return call
 
 
+EDIT_TOOLS = ("edit_office_file", "read_document", "convert_document", "check_deck", "check_workbook", "check_document")
+
+
 def tools() -> dict:
+    """Every office tool; with MH_OFFICE_TOOLS=edit only those that read, change and check a file the user has (an
+    outside agent that was asked to change a file, not to make one, pays for six schemas, not sixteen)."""
     from meshpool_harness.agent.mcp_stdio import Tool
-    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items()}
+    only = EDIT_TOOLS if os.environ.get("MH_OFFICE_TOOLS", "") == "edit" else None
+    return {k: Tool(_as_mcp(fn, p or {}), d, p, r) for k, (fn, d, p, r) in TOOLS.items() if only is None or k in only}
 
 
 def handle(msg: dict, wait_s: float = 900) -> dict | None:

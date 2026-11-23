@@ -120,7 +120,7 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
 def test_conversions_keep_the_words(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "_project", lambda: tmp_path)
     seen = {}
-    monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True: (seen.update(clarity=_clarity), ("ok", False))[1])
+    monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True, **kw: (seen.update(clarity=_clarity), ("ok", False))[1])
     (tmp_path / "a.md").write_text("# Title\n\nSome words.")
     assert O.convert_document("a.md", "docx") == ("ok", False) and seen["clarity"] is False
 

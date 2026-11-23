@@ -7,10 +7,18 @@ import path from "node:path";
 // Reading tools ask too when they reach outside the project (an SSH key, another app's secrets).
 const ROOT = process.env.MESHPOOL_PI_ROOT || "";
 const FILE_TOOLS = new Set(["read", "grep", "find", "ls"]);
+let READ_OK = [];
+try {
+  READ_OK = JSON.parse(process.env.MESHPOOL_PI_READ || "[]").map((d) => path.resolve(d));
+} catch {
+  READ_OK = [];
+}
 function outside(input) {
   if (!ROOT) return false;
   const raw = String(input?.path ?? input?.directory ?? ".").replace(/^~(?=$|[\\/])/, process.env.HOME || process.env.USERPROFILE || "~");
-  const rel = path.relative(ROOT, path.resolve(ROOT, raw));
+  const full = path.resolve(ROOT, raw);
+  if (READ_OK.some((d) => full === d || full.startsWith(d + path.sep))) return false;   // Meshpool's skills
+  const rel = path.relative(ROOT, full);
   return rel.startsWith("..") || path.isAbsolute(rel);
 }
 

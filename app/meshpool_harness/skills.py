@@ -377,10 +377,11 @@ def remove(sid: str):
         shutil.rmtree(d)
 
 
-def sync_to(dst: Path):
-    """Mirror enabled skills into another harness's skills folder (Hermes reads HERMES_HOME/skills)."""
+def sync_to(dst: Path, only: set | None = None):
+    """Mirror enabled skills into another harness's skills folder (Hermes reads HERMES_HOME/skills); with `only`, just
+    those ids (Pi gets the skills that match its task, not the whole catalog)."""
     dst.mkdir(parents=True, exist_ok=True)
-    want = {s["id"]: Path(s["path"]).parent for s in enabled()}
+    want = {s["id"]: Path(s["path"]).parent for s in enabled() if only is None or s["id"] in only}
     for d in dst.iterdir():
         if d.is_dir() and (d / ".from-meshpool").exists() and d.name not in want:
             shutil.rmtree(d, ignore_errors=True)

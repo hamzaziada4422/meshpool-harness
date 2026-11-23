@@ -1121,9 +1121,9 @@ class Agent:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
         lz = getattr(self, "_lazy", None)
         if lz is None:
-            lz = self._lazy = MA.LazyTools()
+            lz = self._lazy = MA.LazyTools(self.profile)
         self._lazy_all, self._lazy_hidden = ms, []
-        if not ms or not MA.LazyTools.wanted(ms):
+        if not ms or not MA.LazyTools.wanted(ms, self.profile):
             return ms
         shown, hidden = lz.split(ms)
         self._lazy_hidden = [h["function"]["name"] for h in hidden]
@@ -3245,7 +3245,7 @@ class Agent:
                 ok = not err
                 out = self.ws._cap(str(out), "mcp")
             elif name == MA.FIND:
-                lz = getattr(self, "_lazy", None) or MA.LazyTools()
+                lz = getattr(self, "_lazy", None) or MA.LazyTools(self.profile)
                 self._lazy = lz
                 out = lz.search(getattr(self, "_lazy_all", []), str(args.get("query") or ""), args.get("names"))
             elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:

@@ -106,10 +106,39 @@ def _models() -> list[dict]:
     return out
 
 
-def _mcp_for_pi(root: Path, chat: str = "") -> dict:
+# One line per Meshpool server for Pi's system prompt (Pi lists a deferred server by this line and loads its tools
+# through tool_search), so a chat pays for the lines, not for the 50 tool schemas.
+SERVER_NOTE = {
+    "meshpool-office": "Office files: read, edit and convert Word, Excel, PowerPoint and PDF; make decks, workbooks, "
+                       "documents and PDFs.",
+    "meshpool-assistant": "Meshpool memory, scheduled tasks, past chats and sub-agents.",
+    "meshpool-web": "Web search, page fetch and multi-step research.",
+    "meshpool-tools": "Time, exact arithmetic and project statistics.",
+    "browser": "A browser to open, read and drive web pages.",
+}
+# What stays declared in a chat that asks for an office file: the tools that change or read the user's own file.
+OFFICE_DIRECT = {"edit_office_file": "direct", "read_document": "direct", "convert_document": "direct",
+                 "check_*": "direct"}
+
+
+def pi_skills_all() -> bool:
+    """MH_PI_SKILLS=all gives Pi every skill in its system prompt, as before (about 15k tokens on every request)."""
+    return os.environ.get("MH_PI_SKILLS", "").lower() == "all"
+
+
+def pi_mcp_direct() -> bool:
+    """MH_PI_MCP=direct declares every Meshpool tool to Pi, as before (about 5k tokens on every request)."""
+    return os.environ.get("MH_PI_MCP", "").lower() == "direct"
+
+
+def _mcp_for_pi(root: Path, chat: str = "", office: bool = False) -> dict:
+    """Pi's mcp.json. Every server is deferred: Pi lists it by one line and loads its tools through tool_search when
+    the model asks. A chat that asks for an office file also declares edit_office_file, read_document,
+    convert_document and the check_* tools of the office server."""
     from meshpool_harness.harnesses.acp import mcp_servers_for_acp, office_server
     servers = {}
     rows = mcp_servers_for_acp([str(root)], chat) + [office_server([str(root)])]
+    every = pi_mcp_direct()
     for s in rows:
         name = s["name"]
         if s.get("url"):
@@ -121,7 +150,11 @@ def _mcp_for_pi(root: Path, chat: str = "") -> dict:
                 env["MH_CHAT_KIND"] = "code"             # Pi is a Code agent: what it schedules runs in Code mode
             spec = {"command": s["command"], "args": s.get("args") or [], "env": env,
                     "timeout": 1800 if name == "meshpool-assistant" else 300,
-                    "exposure": "direct"}
+                    "exposure": "direct" if every else "deferred"}
+            if name in SERVER_NOTE:
+                spec["description"] = SERVER_NOTE[name]
+            if name == "meshpool-office" and office and not every:
+                spec["toolExposure"] = dict(OFFICE_DIRECT)
         servers[name] = spec
     return {"mcpServers": servers, "autoEnableCodemode": False}
 
@@ -135,7 +168,7 @@ def _pi_model(model: str | None) -> tuple[str, str]:
     return "meshpool", (bare if prov == "key" and bare else "deepseek-v4.1-flash")
 
 
-def prepare(root: Path, chat: str = "") -> Path:
+def prepare(root: Path, chat: str = "", office: bool = False, task: str = "") -> Path:
     """Write Pi's config folder for this launch and return it. Each chat has its own folder (pi/chats/<chat>), so two
     chats starting at once never read each other's project, MCP servers or model (a shared one was rewritten in place
     at every launch); the user's skills stay in one shared folder that every chat's settings list."""
@@ -166,7 +199,7 @@ def prepare(root: Path, chat: str = "") -> Path:
                             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}} for i in ids]}
     fsio.atomic_write_text(h / "models.json", json.dumps(models, indent=1), fsync=False)
     try:
-        mcp = _mcp_for_pi(root, chat)
+        mcp = _mcp_for_pi(root, chat, office)
     except Exception:  # noqa: BLE001
         mcp = {"mcpServers": {}}
     from meshpool_harness.harnesses import write_private
@@ -180,20 +213,75 @@ def prepare(root: Path, chat: str = "") -> Path:
     settings = settings if isinstance(settings, dict) else {}
     dp, dm = _pi_model(os.environ.get("MH_MODEL"))
     settings.update({"defaultProvider": dp, "defaultModel": dm,
-                     "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"]})
+                     "defaultTools": ["read", "bash", "edit", "write"]})
     if os.name == "nt" and os.environ.get("MH_BASH"):
         settings["shellPath"] = os.environ["MH_BASH"]
-    skills = shared / "skills" / "meshpool"
-    try:
-        from meshpool_harness import skills as SK
-        with fsio.file_lock(shared / "skills"):          # two launches must not copy over each other
-            SK.sync_to(skills)
-    except Exception:  # noqa: BLE001
-        pass
-    if h != shared:
-        settings["skills"] = [str(skills)]
+    if pi_skills_all():                          # as before: every skill in Pi's system prompt
+        skills = shared / "skills" / "meshpool"
+        try:
+            from meshpool_harness import skills as SK
+            with fsio.file_lock(shared / "skills"):          # two launches must not copy over each other
+                SK.sync_to(skills)
+        except Exception:  # noqa: BLE001
+            pass
+        if h != shared:
+            settings["skills"] = [str(skills)]
+    else:
+        settings.pop("skills", None)
+        pi_skill_dirs(h, task)
     fsio.atomic_write_text(sp, json.dumps(settings, indent=1), fsync=False)
     return h
+
+
+def pi_skill_dirs(h: Path, task: str = "") -> list[str]:
+    """Stage the skills this chat may use in <pi home>/skills/meshpool and return the folders to load: the (at most 3)
+    that match the task (skills.search, the same ranking the built-in agents use) and any the user names with $name.
+    Pi starts with --no-skills, so its system prompt lists only these, not the whole catalog. Every other skill stays
+    one read away: INDEX.md next to them lists them by name with their path, and the system prompt says so in one
+    line (see pi_skill_note)."""
+    try:
+        from meshpool_harness import skills as SK
+        from meshpool_harness import capabilities as CAP
+        text = str(task or "").split(CAP.SEP)[0]
+        rows = SK.enabled()
+        pick = SK.search(text, k=3, rows=rows)
+        named = {m.lower() for m in re.findall(r"(?<![\w$])\$([a-z0-9][a-z0-9-]*)", text)}
+        want = {s["id"]: s for s in pick}
+        want.update({s["id"]: s for s in rows if s["id"].lower() in named or s["name"].lower() in named})
+        dst = h / "skills" / "meshpool"
+        SK.sync_to(dst, only=set(want))
+        idx = ["# Meshpool skills not loaded for this chat (name: path). Read a skill's SKILL.md when it fits the task.", ""]
+        idx += [f"- {s['name']}: {Path(s['path'])}" for s in rows if s["id"] not in want]
+        (dst / "INDEX.md").write_text("\n".join(idx) + "\n", encoding="utf-8")
+        return [str(dst / sid) for sid in want]
+    except Exception:  # noqa: BLE001 - Pi still runs, without skills
+        return []
+
+
+def skill_args(home: Path) -> list[str]:
+    """Pi's command-line options for skills: no catalog in the system prompt (--no-skills), the skills staged for this
+    chat loaded explicitly, and one line pointing at the index of the others. MH_PI_SKILLS=all: none, as before."""
+    if pi_skills_all():
+        return []
+    args = ["--no-skills"]
+    for d in sorted((home / "skills" / "meshpool").glob("*/SKILL.md")):
+        args += ["--skill", str(d.parent)]
+    note = pi_skill_note(home)
+    return args + (["--append-system-prompt", note] if note else [])
+
+
+def _skill_read_dirs(home: Path) -> list[str]:
+    try:
+        from meshpool_harness import skills as SK
+        return [str(home / "skills"), str(SK.folder())]
+    except Exception:  # noqa: BLE001
+        return [str(home / "skills")]
+
+
+def pi_skill_note(h: Path) -> str:
+    idx = h / "skills" / "meshpool" / "INDEX.md"
+    return (f"Other Meshpool skills (task instructions) are listed in {idx}; read the one that fits the task."
+            if idx.is_file() and idx.stat().st_size > 200 else "")
 
 
 def _edit_diff(path: str, inp: dict, root: Path) -> str:
@@ -265,6 +353,8 @@ class PiAgent:
         self.events: list[dict] = []
         self.messages = [None]
         self.mcp = None
+        self.office_on = False             # the chat asked for an office file: the office tools are declared to Pi
+        self._task = ""                    # the first message: which skills Pi starts with
         self.agent_info = {"name": "Pi"}
         self.model: str | None = None
         self.available_models = None
@@ -320,12 +410,13 @@ class PiAgent:
         node, cli = node_exe(), pi_cli()
         if not (node and cli):
             raise PiError("Pi is not included in this copy of Meshpool. Reinstall Meshpool to get it back.")
-        home = prepare(self.root, self.id)
+        home = prepare(self.root, self.id, bool(self.office_on), getattr(self, "_task", ""))
         sess = self.dir / "pi"
         sess.mkdir(parents=True, exist_ok=True)
         args = [node, str(cli), "--mode", "rpc", "--session-dir", str(sess),
                 *(["--no-approve"] if _takes_no_approve(node, cli) else []),
                 "-e", str(Path(__file__).with_name("pi_gate.js"))]
+        args += skill_args(home)
         if any(sess.glob("*.jsonl")):             # also after a crash: Pi's own session files hold the tool history
             args.append("--continue")
         elif any(e.get("type") in ("user", "assistant") for e in _before_turn(self)):
@@ -337,6 +428,7 @@ class PiAgent:
         env.update({"PI_CODING_AGENT_DIR": str(home), "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0",
                     "MESHPOOL_PI_SAFE": json.dumps(sorted(READ_ONLY)),     # pi_gate.js: tools that never ask
                     "MESHPOOL_PI_ROOT": str(self.root),       # ... unless they read outside the project
+                    "MESHPOOL_PI_READ": json.dumps(_skill_read_dirs(home)),     # (Meshpool's skills are fine to read)
                     "MESHPOOL_API_KEY": PV.key()})
         if PV.ready("chatgpt"):
             from meshpool_harness.core import chatgpt_relay
@@ -598,7 +690,13 @@ class PiAgent:
             root = Path(self.root).resolve()
         except (OSError, ValueError):
             return p
-        return "" if q == root or root in q.parents else str(q)
+        if q == root or root in q.parents:
+            return ""
+        return "" if any(Path(d) == q or Path(d) in q.parents for d in _skill_read_dirs(self._home())) else str(q)
+
+    def _home(self) -> Path:
+        shared = pi_home()
+        return shared / "chats" / re.sub(r"[^\w.-]", "_", self.id) if self.id else shared
 
     def _tell(self, note: str):
         """A note left with a denial reaches Pi as a message before its next step (the gate only says no)."""
@@ -681,6 +779,8 @@ class PiAgent:
         final = ""
         try:
             self._emit({"type": "model_start"})
+            if not (self._p and self._p.poll() is None):
+                self._task = text
             self._start_tracked()
             if self._stop:                               # Stop pressed while Pi was starting: send nothing
                 raise PiError("stopped")

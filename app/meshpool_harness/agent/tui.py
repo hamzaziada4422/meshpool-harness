@@ -952,7 +952,7 @@ def _context() -> str:
     The same block the app sends (assistant.context_block), so the two never drift apart."""
     try:
         from meshpool_harness import assistant as AS
-        return AS.context_block() or ""
+        return AS.context_block(rules=False) or ""   # the CLI agent carries HONESTY and PLAIN in its system prompt
     except Exception:  # noqa: BLE001
         return ""
 
