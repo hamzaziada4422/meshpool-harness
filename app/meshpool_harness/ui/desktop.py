@@ -412,7 +412,25 @@ def default_project() -> Path:
     return Path.home() / "Meshpool Projects"
 
 
+def show_in_folder(path: Path) -> None:
+    """Show a file or folder in the system file manager (Finder, File Explorer). Only the explicit "Show in ..."
+    context-menu item calls this. It selects a file where the system can and never opens the file itself."""
+    path = Path(path)
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", str(path)] if path.is_file() else ["open", str(path)])
+    elif os.name == "nt":
+        if path.is_file():
+            subprocess.Popen(["explorer", f"/select,{path}"])
+        else:
+            os.startfile(str(path))  # noqa: S606  a folder: File Explorer
+    else:
+        subprocess.Popen(["xdg-open", str(path if path.is_dir() else path.parent)], stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL)
+
+
 def reveal(path: Path) -> None:
+    """Hand a path to the operating system. Nothing in the app calls this on a normal click any more: files and
+    folders open inside Meshpool (ui/files_api.py). Kept for callers that explicitly want the system's own app."""
     if sys.platform == "darwin":
         subprocess.Popen(["open", str(path)])
     elif os.name == "nt":

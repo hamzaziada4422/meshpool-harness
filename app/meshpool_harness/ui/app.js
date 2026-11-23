@@ -39,7 +39,7 @@ function ago(t) {
   if (s < 86400 * 7) return Math.floor(s / 86400) + "d"; return new Date(t * 1000).toLocaleDateString(undefined, {month: "short", day: "numeric"});
 }
 // Paths as people read them: ~/Documents/report instead of /Users/name/Documents/report.
-// Paths inside the project become buttons that open the file in its app.
+// Paths inside the project become buttons that open the file in Meshpool.
 function linkFiles(html) {
   const root = String(curRoot() || "").replace(/[\\/]+$/, ""); if (!root) return html;
   const rx = new RegExp(esc(root).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\\\/]([^\\n<\"'`)]+?\\.(?:docx|doc|xlsx|xls|pptx|ppt|odt|odp|ods|pdf|csv|tsv|md|html|htm|txt|png|jpe?g|gif|webp|svg|py|js|ts|json)(?![\\w]))", "g");
@@ -1445,13 +1445,13 @@ function panelProgress(body) {
     <section><h4>Progress <span id="pgState"></span></h4><div id="pgSteps"></div></section>
     <section><h4>Files made</h4><div id="pgFiles"></div></section>
     <section><h4>Context</h4><ul class="ctxl">
-      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen">Open</button></li>
+      <li>${ICON.dir}<span><b>${esc(projName(curRoot()))}</b><small title="${esc(curRoot())}">${esc(shortPath(curRoot()))}</small></span><button class="linkbtn" id="cwOpen" aria-label="Browse the project's files">Browse files</button></li>
       <li>${ICON.cpu}<span><b id="pgHarness"></b><small id="pgModel"></small></span></li>
       <li>${ICON.plug}<span><b>Connectors</b><small id="cwConn">Loading...</small></span><button class="linkbtn" id="cwConnMgr">Manage</button></li>
       ${skills.length ? `<li>${ICON.skill}<span><b>Skills</b><small>${esc(skills.join(", "))}</small></span></li>` : ""}
     </ul></section></div>`;
   progressUpdate();
-  $("#cwOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
+  $("#cwOpen").onclick = () => openFolderInApp(curRoot(), "");
   $("#cwConnMgr").onclick = () => openSettings("connectors");
   (S.connCache ? Promise.resolve(S.connCache) : api("/api/connectors").then(r => (S.connCache = r.connectors))).then(cs => {
     const on = cs.filter(c => c.connected && c.enabled).map(c => c.name); const el = $("#cwConn"); if (el) el.textContent = on.length ? on.join(", ") : "None connected";
@@ -1459,12 +1459,12 @@ function panelProgress(body) {
 }
 function panelOutputs(body) {
   const outs = S.cur ? outputFiles() : [];
-  body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen">Open folder</button></div>
+  body.innerHTML = `<div class="pbar"><span class="chip">${ICON.dir}${esc(projName(curRoot()))}</span><span style="flex:1"></span><button class="btn" id="oOpen" aria-label="Show every file in the folder">Browse files</button></div>
     ${outs.length ? `<ul class="outs" style="padding:10px">${outs.map(o => `<li><button data-open="${esc(o.path)}"><span class="fi">${fileIcon(o.path)}</span><span class="fp">${esc(o.path.split("/").pop())}<small>${esc(o.path)}</small></span></button></li>`).join("")}</ul>` : `<div class="pnote">Files this chat makes or changes show here. Click one to preview it.</div>`}
-    <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto"><ul class="tree" id="tree"></ul></div><div class="viewer" id="viewer" hidden></div></div>`;
-  $("#oOpen").onclick = () => post("/api/open-path", {path: curRoot()}).catch(e => toast(e.message));
+    <div style="border-top:1px solid var(--line-2);flex:1;min-height:160px;display:flex;flex-direction:column"><div class="pnote" style="padding:8px 12px 0">All files in the folder</div><div style="flex:1;overflow:auto" id="tree"></div></div></div>`;
+  $("#oOpen").onclick = () => $("#tree")?.scrollIntoView({block: "start", behavior: "smooth"});
   $$("[data-open]", body).forEach(b => b.onclick = () => openPreview(curRoot(), b.dataset.open));
-  loadTree($("#tree"), "");
+  fsTree($("#tree"), curRoot(), {open: S.fsOpen?.root === curRoot() ? S.fsOpen.path : ""}); S.fsOpen = null;
 }
 async function panelDiff(body) {
   if (!S.cur) { body.innerHTML = `<div class="pnote">This chat hasn't changed any files yet. Each reply's changes show here, and you can undo them.</div>`; return; }
@@ -1496,39 +1496,11 @@ function patchHTML(p) {
 }
 async function panelFiles(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
-  body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(root)}">${ICON.dir}${esc(projName(root))}</span><span style="flex:1"></span><button class="btn" id="fref">${ICON.refresh}</button></div><div style="flex:1;overflow:auto;min-height:120px"><ul class="tree" id="tree"></ul></div><div class="viewer" id="viewer" hidden></div>`;
+  body.innerHTML = `<div class="pbar"><span class="chip" title="${esc(root)}">${ICON.dir}${esc(projName(root))}</span><span style="flex:1"></span><button class="btn" id="fref" aria-label="Refresh the file list" title="Refresh">${ICON.refresh}</button><button class="iconbtn" id="fmore" aria-label="More actions for this folder" title="More actions">${ICON.more}</button></div><div style="flex:1;overflow:auto;min-height:120px" id="tree"></div>`;
   $("#fref").onclick = renderPanel;
-  await loadTree($("#tree"), "");
-}
-async function loadTree(ul0, rel0) {
-  const root = curRoot(); if (!root || !ul0) return;
-  const load = async (ul, rel) => {
-    try {
-      const r = await api(`/api/files?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`);
-      ul.innerHTML = r.entries.map(e => `<li><div data-path="${esc(e.path)}" data-dir="${e.dir ? 1 : ""}">${e.dir ? ICON.dir : ICON.file}<span>${esc(e.name)}</span></div>${e.dir ? `<ul hidden></ul>` : ""}</li>`).join("") || `<li class="pnote" style="padding:4px 8px">Empty folder</li>`;
-      $$(":scope > li > div", ul).forEach(d => d.onclick = async () => {
-        if (d.dataset.dir) { const sub = d.nextElementSibling; sub.hidden = !sub.hidden; if (!sub.hidden && !sub.children.length) await load(sub, d.dataset.path); }
-        else openFile(root, d.dataset.path, d);
-      });
-    } catch (e) { ul.innerHTML = `<li class="pnote">${esc(e.message)}</li>`; }
-  };
-  await load(ul0, rel0);
-}
-async function openFile(root, rel, node) {
-  $$("#tree div.on").forEach(x => x.classList.remove("on")); node?.classList.add("on");
-  const v = $("#viewer"); v.hidden = false; v.innerHTML = `<div class="pnote">Loading...</div>`;
-  try {
-    const f = await api(`/api/file?root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`);
-    const raw = `/raw?t=${encodeURIComponent(MP.token)}&root=${encodeURIComponent(root)}&path=${encodeURIComponent(rel)}`;
-    if (f.binary && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(rel)) { v.innerHTML = `<div class="pbar"><span class="p" style="font-family:var(--mono);font-size:12px">${esc(rel)}</span></div><div class="imgview"><img src="${raw}" alt="${esc(rel)}"></div>`; return; }
-    if (f.binary) { v.innerHTML = `<div class="pbar"><span class="p" style="font-family:var(--mono);font-size:12px">${esc(rel)}</span></div><div class="pnote">${esc(f.note || "Binary file. Open it from the folder.")}</div>`; return; }
-    v.innerHTML = `<div class="pbar"><span style="font-family:var(--mono);font-size:12px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(rel)}</span><button class="btn" id="fsave" disabled>Save</button></div><textarea id="ftext" spellcheck="false"></textarea>`;
-    const ta = $("#ftext"); ta.value = f.text;
-    if (f.readonly) { ta.readOnly = true; $("#fsave").outerHTML = `<span class="pnote" style="padding:0">${esc(f.note || "Read only")}</span>`; return; }
-    ta.oninput = () => $("#fsave").disabled = false;
-    ta.onkeydown = e => { if ((isMac ? e.metaKey : e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); $("#fsave").click(); } };
-    $("#fsave").onclick = async () => { try { await post("/api/file", {root, path: rel, text: ta.value}); $("#fsave").disabled = true; toast("File saved"); } catch (e) { toast(e.message); } };
-  } catch (e) { v.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+  $("#fmore").onclick = e => ctxMenu(e, [{label: "Copy folder path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }}, {sep: true}, {label: edRevealLabel(), icon: ICON.ext, fn: () => edReveal(root, "")}]);
+  const open = S.fsOpen?.root === root ? S.fsOpen.path : (PVX.open && PVX.root === root ? PVX.path : ""); S.fsOpen = null;
+  fsTree($("#tree"), root, {open});
 }
 function panelTerm(body) {
   const root = curRoot(); if (!root) { body.innerHTML = `<div class="pnote">Choose a project folder first.</div>`; return; }
@@ -2017,7 +1989,7 @@ async function renderSection(sec) {
         <label class="field"><span>When to use it (one line)</span><input id="skDesc" placeholder="Write release notes from the commits since the last tag."></label>
         <label class="field"><span>Instructions</span><textarea id="skBody" class="code" placeholder="Step-by-step instructions the agent follows."></textarea></label>
         <button class="btn primary" id="skCreate">Create skill</button></div></details>
-      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Open the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
+      <div class="res" id="skRes"></div><div style="display:flex;gap:8px;margin-top:10px"><button class="btn" id="skImp">Import from other apps</button><button class="btn" id="skOpen">Browse the skills folder</button></div><div id="skImpBox" style="margin-top:10px"></div>`;
     $("#skImp").onclick = () => importPanel($("#skImpBox"), r => { if (r) renderSection("skills"); });
     const drawSk = () => {
       $("#skl").innerHTML = S.skills.map(s => `<li><label class="switch"><input type="checkbox" data-id="${esc(s.id)}" ${s.enabled ? "checked" : ""} aria-label="Use ${esc(s.name)}"><span></span></label><span class="tg"><b>$${esc(s.name)}</b><small>${esc(s.description)}</small></span><button class="btn" data-edit="${esc(s.id)}">Edit</button><button class="iconbtn" data-rm="${esc(s.id)}" aria-label="Remove ${esc(s.name)}">${ICON.x}</button></li>`).join("") || `<li class="pnote">No skills yet.</li>`;
@@ -2057,7 +2029,7 @@ async function renderSection(sec) {
       } else upload([...e.dataTransfer.files]);
     };
     $("#skCreate").onclick = () => { if (!$("#skName").value.trim() || !$("#skBody").value.trim()) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Give the skill a name and instructions."; return; } skillAct({action: "create", name: $("#skName").value, description: $("#skDesc").value, body: $("#skBody").value}); };
-    $("#skOpen").onclick = () => post("/api/skills", {action: "open"});
+    $("#skOpen").onclick = () => openHomeFolder("skills");
   } else if (sec === "plugins") { await drawPlugins(b, close);
   } else if (sec === "harnesses") {
     await loadHarnesses();
@@ -2129,9 +2101,9 @@ async function renderSection(sec) {
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
       ${keys.map(x => CH[x.key] ? `<label class="field"><span>${esc(x.label)}</span><select id="ad_${x.key}">${CH[x.key].map(([v, l]) => `<option value="${esc(v)}" ${(x.value || x.default) === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select><small>${esc(x.help)}</small></label>`
         : `<label class="field"><span>${esc(x.label)}</span><input id="ad_${x.key}" ${x.key === "GITHUB_TOKEN" ? `type="password" placeholder="${x.set ? "Saved, " + esc(x.hint) : "ghp_... or github_pat_..."}"` : `value="${esc(x.value)}" placeholder="${esc(x.default)}"`} spellcheck="false"><small>${esc(x.help)}</small></label>`).join("")}
-      <div style="display:flex;gap:8px"><button class="btn primary" id="adSave">Save</button><button class="btn" id="adData">Open the data folder</button></div><div class="res" id="adRes"></div>`;
+      <div style="display:flex;gap:8px"><button class="btn primary" id="adSave">Save</button><button class="btn" id="adData">Browse the data folder</button></div><div class="res" id="adRes"></div>`;
     $("#adSave").onclick = async () => { const values = {}; keys.forEach(x => { values[x.key] = $("#ad_" + x.key).value; }); try { await post("/api/settings", {values}); RES("adRes").className = "res ok"; RES("adRes").textContent = "Saved."; } catch (e) { RES("adRes").className = "res bad"; RES("adRes").textContent = e.message; } };
-    $("#adData").onclick = () => post("/api/open-data");
+    $("#adData").onclick = () => openHomeFolder("");
   }
   done();
 }

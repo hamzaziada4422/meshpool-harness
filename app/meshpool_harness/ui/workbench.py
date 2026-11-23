@@ -604,32 +604,10 @@ def usage() -> dict:
     return {"total": total, "by_model": by_model, "threads": rows[:200]}
 
 
-EDITORS = [("Cursor", "cursor", "Cursor"), ("Visual Studio Code", "code", "Visual Studio Code"), ("Windsurf", "windsurf", "Windsurf"),
-           ("Zed", "zed", "Zed"), ("Sublime Text", "subl", "Sublime Text"), ("PyCharm", "pycharm", "PyCharm"),
-           ("IntelliJ IDEA", "idea", "IntelliJ IDEA")]
-
-
 def open_editor(root: str) -> dict:
-    """Open a project folder in the first code editor found on this computer."""
+    """"Open in Meshpool editor": the project folder opens in the app's own file tree and editor. No other program starts."""
     r = check_root(root)
-    for name, cli, mac_app in EDITORS:
-        exe = shutil.which(cli)
-        if exe:
-            subprocess.Popen([exe, str(r)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             **({"creationflags": 0x08000000} if os.name == "nt" else {}))
-            return {"ok": True, "message": f"Opened in {name}."}
-        if sys.platform == "darwin":
-            for base in (Path("/Applications"), Path.home() / "Applications"):
-                if (base / f"{mac_app}.app").exists():
-                    subprocess.Popen(["open", "-a", mac_app, str(r)])
-                    return {"ok": True, "message": f"Opened in {name}."}
-        if os.name == "nt":
-            la = Path(os.environ.get("LOCALAPPDATA", "")) / "Programs"
-            for exe in (la / "Microsoft VS Code" / "Code.exe", la / "cursor" / "Cursor.exe"):
-                if exe.exists():
-                    subprocess.Popen([str(exe), str(r)], creationflags=0x08000000)
-                    return {"ok": True, "message": f"Opened in {exe.stem}."}
-    raise ValueError("No code editor found. Install VS Code, Cursor or another editor, or open the folder yourself.")
+    return {"ok": True, "open": {"root": str(r), "path": ""}, "message": "Opened in the Meshpool editor."}
 
 
 # ======================================== pull request, CI and deployments =======================================
