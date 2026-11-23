@@ -187,7 +187,7 @@ def test_outcomes_log_and_refit(tmp_path, monkeypatch):
                      "tokens_out": 100, "error": False, "stopped": False})
     OUT.mark("c1", "undo")
     got = OUT.refit()["chat|meshpool-work"]
-    assert got["turns"] == 3 and got["fail_rate"] == 1.0 and got["median_secs"] == 5
+    assert got["turns"] == 3 and got["fail_rate"] == round(1 / 3, 3) and got["median_secs"] == 5   # a mark hits one row (M29-04)
 
 
 # ---------- zero-call checks ---------------------------------------------------------------------------------------
