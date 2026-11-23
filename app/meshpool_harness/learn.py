@@ -21,9 +21,9 @@ import threading
 
 from meshpool_harness import assistant as A
 
-GATE = re.compile(r"(?i)\b(never|always|don'?t|do not|stop|i (?:prefer|like|love|hate|dislike|want|need)|"
-                  r"from now on|make sure|by default|default to|should(?:n'?t)?|hard no|too (?:long|short|much|little|"
-                  r"wordy|dense|thin)|instead of|rather than|not like (?:that|this)|i told you|again)\b")
+GATE = re.compile(r"(?i)\b(never|always|don'?t|do not|stop|i (?:prefer|like|love|hate|dislike)|"
+                  r"from now on|make sure|by default|default to|hard no|too (?:long|short|much|little|"
+                  r"wordy|dense|thin)|instead of|rather than|not like (?:that|this)|i told you)\b")
 SYSTEM = """You keep a user's standing preferences. Read the user's message (and the reply it answers, for context).
 List only LASTING preferences about how this user wants work done that a future chat should follow: style, format,
 tone, defaults, things to always or never do. Not tasks, not facts about this one piece of work, not the content of

@@ -39,5 +39,8 @@ class HTTPSource(Connector):
         return Task("http", ref, j.get("title", ""), j.get("body", ""), ref, j.get("labels", []), j)
 
     def report(self, task: Task, result: dict) -> None:
-        http_json("POST", os.environ.get("MH_HTTP_RESULT_URL", task.ref.rstrip("/") + "/result"), self.h,
+        from urllib.parse import urlsplit, urlunsplit
+        u = urlsplit(task.ref)                       # "/result" goes on the path, before any query string
+        default = urlunsplit((u.scheme, u.netloc, u.path.rstrip("/") + "/result", u.query, ""))
+        http_json("POST", os.environ.get("MH_HTTP_RESULT_URL", default), self.h,
                   {"ok": bool(result.get("ok")), "summary": self.summary(result)})

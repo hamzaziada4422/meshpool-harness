@@ -551,7 +551,7 @@ def _user_prefs() -> str:
 
 def today_line() -> str:
     d = _today()
-    return (f"- Today is {d:%-d %B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
+    return (f"- Today is {d.day} {d:%B %Y}. The cover date is {d:%B %Y} (or the meeting date the brief gives); every date "
             f"in a plan, roadmap or next step is after today.")
 
 

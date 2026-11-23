@@ -1,0 +1,7 @@
+# names.csv
+3 rows x 1 columns
+
+| name |
+|---|
+| alice |
+| bob |

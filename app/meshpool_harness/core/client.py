@@ -67,6 +67,9 @@ def classify_error(msg: str) -> str:
             r"(?:not found|does not exist|doesn't exist|is not available|not supported|no longer|unavailable)"
             r"|key_model_access_denied", m, re.I):
         return "model_missing"                      # an old chat on a model the endpoint no longer serves
+    from meshpool_harness.core.context import is_context_error
+    if is_context_error(m) and not re.search(r"HTTP 429|rate.?limit|per minute", m, re.I):
+        return "context"                            # any status: llama.cpp and Ollama servers use 400, 500 or 200
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
     if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
@@ -106,8 +109,21 @@ def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None
     return wait
 
 
+MAIN_PHASES = ("phase_2_build",)             # the user's own turn; every other phase is a side call
+CONNECT_BUDGET_S = 120.0                     # a main turn gives up on a dead connection or 5xx after this long
+SIDE_BUDGET_S = 15.0                         # compaction, classify, memory, summaries: two tries, then fail fast
+
+
+def _tell_retry(text: str) -> None:
+    import sys
+    print(f"[Meshpool] {text}", file=sys.stderr, flush=True)
+
+
 class LiveClient:
+    notify = None                            # optional callable(text): told once after the first failure that a retry follows
+
     def __init__(self, phase: str = "phase_2_build"):
+        self.phase = phase
         try:
             from eval.ledger import Ledger          # benchmark runs: budget ledger + accounting
             self.ledger = Ledger(phase)
@@ -123,28 +139,56 @@ class LiveClient:
         from meshpool_harness.profiles import apply, for_model
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         if prof["family"] != "deepseek":
-            messages, b = apply(prof, messages, {"temperature": temperature}, role if role in ("planner", "verifier") else "worker")
+            _b = {"max_tokens": max_tokens} if max_tokens else {}
+            if temperature is not None:
+                _b["temperature"] = temperature
+            messages, b = apply(prof, messages, _b, role if role in ("planner", "verifier") else "worker")
             temperature = b.get("temperature")
             profile = prof["family"]
+            _mct = b.get("max_completion_tokens")             # profile limits.param: models that reject max_tokens
+        else:
+            _mct = None
         ex = dict(extra or {})
+        if _mct:
+            ex["max_completion_tokens"] = _mct
         if tools:
             ex["tools"] = tools
             ex.setdefault("tool_choice", "auto")
         import time
+        from meshpool_harness.core import context as CTX
+        base_url = getattr(self.ledger, "base_url", None)
+        win = CTX.window(model, base_url, getattr(self.ledger, "api_key", "") or "")
+        CTX.tell_once(model, win, self.notify or _tell_retry)
+        tighten, shrinks = 1.0, 0
         last = None
-        for attempt in range(25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
+        side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
+        t_start, told = time.time(), False
+        for attempt in range(3 if side else 25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
             try:
-                r = self.ledger.chat(model=model, messages=messages, profile=profile, task_id=task_id,
-                                     role=role, job_id=job_id, max_tokens=max_tokens, temperature=temperature,
-                                     extra=ex, retries=0)
+                send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
+                ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
+                r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
+                                     role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
+                                     extra=ex2, retries=0)
                 self._n429 = 0                                    # a success resets the 429 backoff
+                self._check_silent_cut(model, send, sent_tools, r, win)
                 _log_event(task_id, role, model, r)
                 return r
             except RuntimeError as e:
                 last = e
                 msg = str(e)
                 kind = classify_error(msg)
-                if kind in ("bad_request", "context", "vision", "gateway_reject") and attempt == 0:
+                if kind == "context":                              # too long: learn the real window, shrink, retry now
+                    shrinks += 1
+                    said = CTX.parse_limit(msg)
+                    if said and said < win:
+                        win = CTX.learn(model, said)
+                        CTX.tell_once(model, win, self.notify or _tell_retry)
+                    tighten *= 0.7
+                    if shrinks > 4:
+                        raise
+                    continue
+                if kind in ("bad_request", "vision", "gateway_reject") and attempt == 0:
                     from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
                         if isinstance(m.get("content"), str):
@@ -161,12 +205,35 @@ class LiveClient:
                     continue
                 if kind == "rate_limit":                    # meshpool team token limit: wait for the window to reset
                     self._n429 = getattr(self, "_n429", 0) + 1
-                    time.sleep(rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1"))
+                    wait = rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1")
+                    if side and (wait > SIDE_BUDGET_S or time.time() - t_start + wait > SIDE_BUDGET_S):
+                        raise
+                    time.sleep(wait)
                     continue
                 if kind != "transient":
                     raise
-                time.sleep(min(30, 2 ** (attempt + 1)))
+                wait = min(30, 2 ** (attempt + 1))
+                budget = SIDE_BUDGET_S if side else CONNECT_BUDGET_S
+                if side and attempt >= 1 or time.time() - t_start + wait > budget:
+                    raise                                       # out of budget: the user sees the real error now
+                if not told and not side:
+                    told = True
+                    (self.notify or _tell_retry)(f"The model did not answer ({msg[:120]}). Retrying for up to "
+                                                 f"{int(budget)} s.")
+                time.sleep(min(wait, 2.0) if side else wait)
         raise last
+
+    def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
+        """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far
+        under what was sent: take that as the window, so the next request is trimmed to it."""
+        try:
+            from meshpool_harness.core import context as CTX
+            used = int(((resp or {}).get("usage") or {}).get("prompt_tokens") or 0)
+            sent_tok = CTX.estimate(sent) + CTX.estimate(tools or [])
+            if used and sent_tok > 1500 and sent_tok > used * 1.6 and used >= 512:
+                CTX.learn(model, int(used * 1.02) + CTX.max_output(win, None))
+        except Exception:  # noqa: BLE001
+            pass
 
     def spent(self) -> float | None:
         st = getattr(self.ledger, "state", None)          # SimpleLedger (stand-alone install) has no spend state

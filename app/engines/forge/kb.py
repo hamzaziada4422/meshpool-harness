@@ -450,7 +450,7 @@ def build_golden(min_quality: int = 4, max_items: int = 600, dup_hamming: int = 
     finally:
         con.close()
     out = [_row_dict(x) for x in chosen]
-    with open(r / "library" / "golden.jsonl", "w") as f:
+    with open(r / "library" / "golden.jsonl", "w", encoding="utf-8") as f:
         for x in out:
             f.write(json.dumps(x) + "\n")
     log.info("golden set: %d items, %d near duplicates dropped", len(out), dropped)

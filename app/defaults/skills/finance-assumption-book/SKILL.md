@@ -1,6 +1,6 @@
 ---
 name: finance-assumption-book
-description: Keep every model assumption fact-based: value, unit, as-of date, source link, the evidence it rests on (industry data, filings, guidance, peers), why it was chosen and its low/high range. Use whenever a financial model, valuation, forecast or deal analysis needs assumptions.
+description: 'Keep every model assumption fact-based: value, unit, as-of date, source link, the evidence it rests on (industry data, filings, guidance, peers), why it was chosen and its low/high range. Use whenever a financial model, valuation, forecast or deal analysis needs assumptions.'
 ---
 
 # Assumption book

@@ -38,13 +38,14 @@ def config_file() -> Path:
     return Path(p) if p else C.home() / "mcp.json"
 
 
-def _expand(v):
+def _expand(v, extra: dict | None = None):
     if isinstance(v, str):
-        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), v)
+        return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}",
+                      lambda m: (extra or {}).get(m.group(1)) or os.environ.get(m.group(1), ""), v)
     if isinstance(v, list):
-        return [_expand(x) for x in v]
+        return [_expand(x, extra) for x in v]
     if isinstance(v, dict):
-        return {k: _expand(x) for k, x in v.items()}
+        return {k: _expand(x, extra) for k, x in v.items()}
     return v
 
 
@@ -83,7 +84,7 @@ def write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
         if mode is None and path.exists():
             mode = path.stat().st_mode & 0o777
         try:
-            os.chmod(tmp, 0o644 if mode is None else mode)
+            os.chmod(tmp, 0o600 if mode is None else mode)     # may hold tokens and API keys
         except OSError:
             pass
         C.replace_file(tmp, path)
@@ -133,6 +134,22 @@ def edit_config(fn, path: Path | None = None, create: bool = True, whole: bool =
         return out
 
 
+_PLACEHOLDER_TOKEN = re.compile(r"^(x+|\*+|\.+|-+|none|null|todo|changeme|change[-_ ]?me|your[-_ ]?\w*|"
+                                r"<.*>|\$\{.*\}|\{\{.*\}\}|.*(?:proxy|placeholder|example|dummy|token[-_]here).*)$", re.I)
+
+
+def token_problem(spec: dict) -> str:
+    """Why the token in a connector's Authorization header cannot be real (empty, whitespace or a line break inside,
+    an obvious placeholder), or "" when it may be."""
+    hdr = (spec.get("headers") or {}).get("Authorization")
+    if hdr is None:
+        return ""
+    tok = re.sub(r"^bearer\s+", "", str(hdr), flags=re.I)
+    if not tok.strip() or re.search(r"\s", tok) or _PLACEHOLDER_TOKEN.match(tok.strip()):
+        return "looks invalid"
+    return ""
+
+
 def active_config(path: Path | None = None) -> dict:
     """mcp.json plus the connectors the user signed in to (GitHub, Jira, Linear, ...), with fresh credentials."""
     cfg = load_config(path)
@@ -141,6 +158,9 @@ def active_config(path: Path | None = None) -> dict:
         for name, spec in CN.servers().items():
             cur = cfg.get(name)
             if not isinstance(cur, dict) or cur.get("disabled"):
+                if token_problem(spec):          # a placeholder token only makes a red "failed" server
+                    spec = dict(spec, disabled=True, description=(
+                        f"The {name.upper()}_TOKEN looks invalid: unset it, or run meshpool connect {name}."))
                 cfg[name] = spec
     except Exception:  # noqa: BLE001  a connector problem must never block the other servers
         pass
@@ -266,6 +286,8 @@ class _Stdio:
             # Someone else's server (often an unpinned npx package) gets no keys it was not given: only the ones its
             # own "env" names. Meshpool's settings are all in this process's environment.
             env = {k: v for k, v in env.items() if not _secret_name(k)}
+        if roots:
+            env["MESHPOOL_PROJECT"] = str(Path(roots[0]).resolve())    # not the shared os.environ: it may be another chat's
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
         env.setdefault("PYTHONUTF8", "1")
         if exe == sys.executable:
@@ -287,6 +309,7 @@ class _Stdio:
         self.pending: dict[int, dict] = {}
         self.cv = threading.Condition()
         self.alive = True
+        self.reader_error = ""
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
@@ -453,10 +476,14 @@ class _Http:
                             return msg
                 raise MCPError("the event stream ended without a reply")
             txt = r.read().decode("utf-8", "replace")
-            msg = json.loads(txt) if txt.strip() else {}
+            try:
+                msg = json.loads(txt) if txt.strip() else {}
+            except ValueError:
+                raise MCPError("the server did not answer with an MCP reply (a login or proxy page?): "
+                               + txt.strip()[:80].replace("\n", " "))
             if isinstance(msg, list):
-                msg = next((m for m in msg if m.get("id") == want_id), {})
-            return msg
+                msg = next((m for m in msg if isinstance(m, dict) and m.get("id") == want_id), {})
+            return msg if isinstance(msg, dict) else {}
 
     def request(self, rid, method, params, timeout):
         return self._post({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}, timeout, want_id=rid)
@@ -613,11 +640,161 @@ def _sse_spec(spec: dict) -> bool:
         str(spec.get("url", "")).rstrip("/").endswith("/sse")
 
 
+# ---------- one process per app, not per chat -----------------------------------------------------------------------
+# A stdio server (the office tools, the web and assistant servers...) is a Python or Node process. Every chat used to
+# start its own: five chats, five processes, each importing its libraries at once. Now chats on the same folder share
+# one process; it starts on the first tool call (the tool list comes from a cache on disk), a chat that closes lets
+# go of it, and one nobody has used for MH_MCP_IDLE_S seconds (60) is stopped and starts again on the next call.
+# Browser and computer servers keep per-chat state (pages, the screen), so they stay one process per chat.
+
+_STATEFUL = ("browser", "computer")
+_POOL: dict[str, "_Entry"] = {}
+_PLOCK = threading.Lock()
+_REAPER: list = []
+
+
+class _Entry:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.t = None                    # the shared _Stdio, None while stopped
+        self.ready = False               # initialize already done on self.t
+        self.info: dict = {}
+        self.refs: set = set()           # the Server objects (chats) using it
+        self.inflight = 0
+        self.last = time.time()
+        self._n = 0
+
+    def next_id(self) -> int:
+        with self.lock:
+            self._n += 1
+            return self._n
+
+    def stop(self):
+        with self.lock:
+            t, self.t, self.ready = self.t, None, False
+        if t is not None:
+            try:
+                t.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def idle_seconds() -> float:
+    try:
+        return float(os.environ.get("MH_MCP_IDLE_S", "60"))
+    except ValueError:
+        return 60.0
+
+
+def _reap_loop():
+    stop = _REAPER_STOP
+    while True:
+        limit = idle_seconds()
+        if stop.wait(max(0.5, min(15.0, limit / 4 if limit > 0 else 15.0))):
+            return
+        with _PLOCK:
+            entries = list(_POOL.values())
+        for e in entries:
+            with e.lock:
+                if limit > 0 and e.t is not None and not e.inflight and time.time() - e.last > limit:
+                    e.stop()                          # idle: no process, no CPU; the next call starts it again
+        with _PLOCK:
+            if not _POOL:
+                _REAPER.clear()
+                return
+
+
+_REAPER_STOP = threading.Event()
+
+
+def _ensure_reaper():
+    with _PLOCK:
+        if _REAPER:
+            return
+        _REAPER.append(1)
+        _REAPER_STOP.clear()
+    threading.Thread(target=_reap_loop, daemon=True, name="mcp-reaper").start()
+
+
+def stop_all() -> None:
+    """Stop every shared server process (the app is closing)."""
+    with _PLOCK:
+        entries = list(_POOL.values())
+        _POOL.clear()
+    for e in entries:
+        e.stop()
+
+
+import atexit  # noqa: E402
+
+atexit.register(stop_all)
+
+
+def _pool_key(spec: dict, roots: list) -> str:
+    """Same command, environment and folder: one process. A server that takes the folder with each call
+    (per_call_project) is one process for the whole app."""
+    env = spec.get("env")
+    where = str(Path(roots[0]).resolve()) if roots else ""
+    if spec.get("per_call_project"):
+        where = ""
+        env = {k: v for k, v in env.items() if k != "MESHPOOL_PROJECT"} if isinstance(env, dict) else env
+    return json.dumps([spec.get("command"), spec.get("args"), env, spec.get("cwd"), where], sort_keys=True, default=str)
+
+
+def _cache_file() -> Path:
+    return C.home() / "mcp-tools-cache.json"
+
+
+def _cache_key(name: str, spec: dict) -> str:
+    stamp = ""
+    try:
+        stamp = str(int(max(f.stat().st_mtime for f in Path(__file__).parent.glob("*_mcp_server.py"))))
+    except (OSError, ValueError):
+        pass
+    sig = json.dumps([name, _pool_key(spec, []), stamp, _VERSION, sys.executable], sort_keys=True, default=str)
+    return _short_hash(sig)
+
+
+_CACHE_TTL = 24 * 3600
+
+
+def cached_tools(name: str, spec: dict):
+    """(tools, info) saved from an earlier start of this exact server, or None."""
+    try:
+        d = json.loads(_cache_file().read_text(encoding="utf-8"))
+        e = d.get(_cache_key(name, spec))
+        if e and time.time() - float(e.get("t") or 0) < _CACHE_TTL and e.get("tools"):
+            return e["tools"], e.get("info") or {}
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return None
+
+
+def save_tools(name: str, spec: dict, tools: list, info: dict) -> None:
+    try:
+        f = _cache_file()
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            d = {}
+        if not isinstance(d, dict):
+            d = {}
+        d = {k: v for k, v in d.items() if isinstance(v, dict) and time.time() - float(v.get("t") or 0) < _CACHE_TTL}
+        d[_cache_key(name, spec)] = {"t": time.time(), "tools": tools, "info": info}
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_name(f.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, f)
+    except OSError:
+        pass
+
+
 # ---------- one server ---------------------------------------------------------------------------------------------
 
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
-        self.name, self.spec = name, _expand(spec)
+        # this chat's own folder, not whatever the process-wide variable holds when several chats start together
+        self.name, self.spec = name, _expand(spec, {"MESHPOOL_PROJECT": str(Path(roots[0]).resolve())} if roots else None)
         self.status, self.error, self.tools, self.info = "starting", "", [], {}
         self._id = 0
         self._lock = threading.Lock()
@@ -627,13 +804,64 @@ class Server:
         self.t = None
         self.images: list[dict] = []           # images from the latest tool call
         self.log_dir, self.roots = log_dir, roots
+        self._entry: _Entry | None = None      # the shared process of a stdio server (see the pool above)
+        self._key = ""
+
+    def _poolable(self) -> bool:
+        return (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
+                and not any(w in self.name.lower() for w in _STATEFUL) and os.environ.get("MH_MCP_POOL", "1") != "0")
+
+    def _join_pool(self):
+        key = _pool_key(self.spec, self.roots)
+        with _PLOCK:
+            e = _POOL.setdefault(key, _Entry())
+        with e.lock:
+            e.refs.add(id(self))
+        self._entry, self._key = e, key
+        _ensure_reaper()
+
+    def _acquire(self, timeout: float):
+        """The shared process, started and initialized when it is not running (first use, or after an idle stop)."""
+        e = self._entry
+        with e.lock:
+            if e.t is not None and not e.t.alive:
+                e.stop()
+            if e.t is None:
+                e.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
+                e.ready = False
+            if not e.ready:
+                rid = e.next_id()
+                msg = e.t.request(rid, "initialize", self._init_params(), min(timeout, 90))
+                if "error" in msg:
+                    er = msg["error"]
+                    e.stop()
+                    raise MCPError(f"{er.get('message', 'error')} (code {er.get('code')})")
+                e.info = (msg.get("result") or {}).get("serverInfo") or {}
+                e.t.notify("notifications/initialized")
+                e.ready = True
+            self.t, self.info = e.t, e.info
+            e.last = time.time()
 
     def _rpc(self, method, params, timeout):
         retried = set()
+        e = self._entry
+        if e is not None:
+            self._acquire(timeout)
+            with e.lock:
+                e.inflight += 1
+        try:
+            return self._rpc_inner(method, params, timeout, retried, e)
+        finally:
+            if e is not None:
+                with e.lock:
+                    e.inflight -= 1
+                    e.last = time.time()
+
+    def _rpc_inner(self, method, params, timeout, retried, e):
         while True:
             with self._lock:
                 self._id += 1
-                rid = self._id
+                rid = e.next_id() if e is not None else self._id
                 gen = self._gen
             try:
                 msg = self.t.request(rid, method, params, timeout)
@@ -710,8 +938,13 @@ class Server:
                     except MCPError:
                         raise e from None              # not an SSE server either: report what the POST said
             elif self.spec.get("command"):
-                self.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
-                self._handshake(timeout)
+                if self._poolable():
+                    if self._entry is None:
+                        self._join_pool()
+                    self._acquire(timeout)
+                else:
+                    self.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
+                    self._handshake(timeout)
             else:
                 raise MCPError("needs either a command or a url")
             tools, cursor = [], None
@@ -726,11 +959,27 @@ class Server:
                     raise MCPError(self.error or "cancelled")
                 self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
                 self.status = "connected"
+            if self._entry is not None and self.tools:
+                save_tools(self.name, self.spec, self.tools, self.info)
         except Exception as e:
             with self._lock:
                 if not self.cancelled:
                     self.status, self.error = "error", redact(e)[:400]
             self.close()
+
+    def start_lazy(self) -> bool:
+        """Connected from the saved tool list, without starting the process: it starts on the first tool call.
+        False when this server is not shared, or its tool list was never saved (it then starts as usual)."""
+        if not self._poolable():
+            return False
+        hit = cached_tools(self.name, self.spec)
+        if not hit:
+            return False
+        self._join_pool()
+        self.tools = [t for t in hit[0] if isinstance(t, dict) and isinstance(t.get("name"), str)]
+        self.info = hit[1]
+        self.status = "connected"
+        return True
 
     def cancel(self, reason: str):
         """Give up on a server whose start is taking too long. Its start thread may still finish later; it then
@@ -748,10 +997,14 @@ class Server:
 
     def call_with_images(self, tool: str, args: dict):
         """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
+        if self.spec.get("per_call_project") and self.roots:
+            args = {**args, "_project": str(Path(self.roots[0]).resolve())}
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
         for c in r.get("content") or []:
+            if not isinstance(c, dict):
+                continue
             t = c.get("type")
             if t == "text":
                 parts.append(c.get("text", ""))
@@ -771,6 +1024,18 @@ class Server:
 
     def close(self):
         self.closed = True
+        e = self._entry
+        if e is not None:                          # shared: the process stops when the last chat lets go of it
+            with e.lock:
+                e.refs.discard(id(self))
+                last = not e.refs
+            if last:
+                with _PLOCK:
+                    if _POOL.get(self._key) is e:
+                        del _POOL[self._key]
+                e.stop()
+            self.t = None
+            return
         if self.t:
             try:
                 self.t.close()
@@ -797,7 +1062,10 @@ class Manager:
         self._lock = threading.Lock()
         self.last_images: list[dict] = []
 
-    def start(self, timeout: float = 90, use_health: bool = True) -> "Manager":
+    def start(self, timeout: float = 90, use_health: bool = True, lazy: bool | None = None) -> "Manager":
+        """lazy (default: when use_health is on, that is for real chats; off for a server test): a shared stdio server
+        whose tool list is saved is connected without starting its process."""
+        lazy = use_health if lazy is None else lazy
         try:
             cfg = active_config(self.path)
         except (ValueError, OSError) as e:
@@ -816,6 +1084,8 @@ class Manager:
             bad = recently_failed(name, spec) if use_health else None
             if bad is not None:                       # failed a moment ago: do not make every thread wait for it
                 s.status, s.error = "error", f"skipped, it failed recently ({bad}). Check it in Settings, MCP servers."
+                continue
+            if lazy and s.start_lazy():
                 continue
             th = threading.Thread(target=s.start, args=(timeout,), daemon=True)
             th.start()

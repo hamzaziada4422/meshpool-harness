@@ -67,7 +67,8 @@ def load_suites(names: list[str]) -> list[dict]:
     out = []
     for n in names:
         p = HERE / "suites" / f"{n}.json"
-        for t in json.loads(p.read_text()):
+        swe_dir = os.environ.get("MESHPOOL_SWE_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "meshpool-swe")
+        for t in json.loads(p.read_text(encoding="utf-8").replace("${MESHPOOL_SWE_DIR}", swe_dir.replace("\\", "/"))):
             t["suite"] = n
             out.append(t)
     return out

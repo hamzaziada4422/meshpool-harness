@@ -9,6 +9,7 @@ from meshpool_harness.agent.core import Agent
 
 
 def _home(monkeypatch, tmp_path):
+    monkeypatch.setenv("MH_TRUST_PROJECT", "1")
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     (tmp_path / "home").mkdir(exist_ok=True)
 

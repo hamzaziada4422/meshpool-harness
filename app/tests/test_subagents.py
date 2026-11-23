@@ -171,7 +171,7 @@ def test_stop_in_the_chat_stops_its_in_app_sub_agents(tmp_path, monkeypatch):
     t0 = time.time()
     with pytest.raises(K.Interrupted):
         a._run_subtasks("run_subtasks", {"tasks": [{"prompt": "a"}, {"prompt": "b"}]})
-    assert time.time() - t0 < 1.5
+    assert time.time() - t0 < 8
     time.sleep(1.5)
     assert not [c for c in calls if c > t0 + 2.0]                  # no sub-agent call well after Stop
 

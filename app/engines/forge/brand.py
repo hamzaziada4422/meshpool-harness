@@ -511,6 +511,9 @@ def make_master(deck_path: str, out_path: str) -> tuple[bool, str, float | None]
     prs = open_pptx(deck_path)                            # a .potx too
     if abs(prs.slide_width - WIDE[0]) > WIDE[0] * 0.003 or abs(prs.slide_height - WIDE[1]) > WIDE[1] * 0.003:
         w, h = prs.slide_width / EMU, prs.slide_height / EMU
+        if abs(w / h - 16 / 9) < 0.01:
+            return False, (f"its slides are 16:9 but {w:.2f} x {h:.2f} in; the forge layouts are drawn for "
+                           "13.33 x 7.5 in (resize the deck to Widescreen 13.33 x 7.5 in to use its master)"), None
         return False, (f"its slides are {w:.2f} x {h:.2f} in; the forge layouts need 16:9 widescreen "
                        "(13.33 x 7.5 in)"), None
     try:
@@ -672,7 +675,7 @@ def store_dir(create: bool = True) -> Path:
 def _index() -> dict:
     p = store_dir(create=False) / "profiles.json"
     try:
-        return json.loads(p.read_text())
+        return json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"active": None, "profiles": {}}
 
@@ -680,7 +683,7 @@ def _index() -> dict:
 def _write_index(ix: dict) -> None:
     p = store_dir() / "profiles.json"
     tmp = p.with_suffix(".tmp")
-    tmp.write_text(json.dumps(ix, indent=1))
+    tmp.write_text(json.dumps(ix, indent=1), encoding="utf-8")
     tmp.replace(p)
 
 
@@ -719,6 +722,8 @@ def save(prof: dict, activate: bool | None = None) -> dict:
     prof = clean(prof)
     if not prof.get("id"):
         prof["id"] = uuid.uuid4().hex[:10]
+    elif not isinstance(prof["id"], str) or not (_ID_RE.fullmatch(prof["id"]) or ix.get("profiles", {}).get(prof["id"])):
+        raise ValueError("Invalid brand profile id.")
     ix.setdefault("profiles", {})[prof["id"]] = prof
     if activate or (activate is None and not ix.get("active")):
         ix["active"] = prof["id"]
@@ -728,27 +733,43 @@ def save(prof: dict, activate: bool | None = None) -> dict:
     return prof
 
 
+_ID_RE = re.compile(r"[0-9a-f]{10}")
+
+
+def _safe_dir(pid) -> Path | None:
+    """The store folder of profile `pid`, or None unless pid is a plain 10-hex id and the folder resolves to a
+    strict child of the brand store (no separators, '.', '..' or symlink escapes)."""
+    if not isinstance(pid, str) or not _ID_RE.fullmatch(pid):
+        return None
+    base = store_dir(create=False).resolve()
+    d = (base / pid).resolve()
+    if d == base or d.parent != base:
+        return None
+    return d
+
+
 def delete(pid: str) -> None:
     ix = _index()
     ix.get("profiles", {}).pop(pid, None)
     if ix.get("active") == pid:
         ix["active"] = None
     _write_index(ix)
-    d = store_dir(create=False) / pid
-    if d.is_dir() and d.parent == store_dir(create=False):
+    d = _safe_dir(pid)
+    if d is not None and d.is_dir() and not d.is_symlink():
         shutil.rmtree(d, ignore_errors=True)
 
 
 def set_logo(pid: str, name: str, data: bytes) -> dict:
     prof = get(pid)
-    if not prof:
+    if not prof or _safe_dir(pid) is None:
         raise KeyError(pid)
     ext = Path(name).suffix.lower()
     if ext not in (".png", ".jpg", ".jpeg", ".gif"):
         raise ValueError("Upload the logo as a PNG or JPEG.")
     from PIL import Image
     Image.open(io.BytesIO(data)).verify()                      # a real image, not a renamed file
-    d = store_dir() / pid
+    store_dir()
+    d = _safe_dir(pid)
     d.mkdir(parents=True, exist_ok=True)
     for old in d.glob("logo.*"):
         old.unlink()

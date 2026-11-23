@@ -21,8 +21,11 @@ import re
 import time
 from pathlib import Path
 
-CAPITAL_ALLOCATION = re.compile(r"(?i)capital allocation|return (?:more )?cash|buy ?backs?|special dividend|"
-                                r"uses of cash|cash return")
+CAPITAL_ALLOCATION = re.compile(r"(?i)capital allocation|return (?:more )?cash|uses of cash|cash return")
+# a buyback / special dividend only selects the recipe when the request is not mainly about another model
+_WEAK_CA = re.compile(r"(?i)buy ?backs?|special dividend")
+_OTHER_MODEL = re.compile(r"(?i)three[- ]statement|\bdcf\b|\blbo\b|\bcomps\b|comparable|valuation|\beps\b|"
+                          r"merger|accretion|credit|3[- ]statement|income statement|balance sheet")
 
 # name, label, number format, what the model must give (units)
 CA_INPUTS = [
@@ -55,7 +58,10 @@ def applies(task: str) -> str | None:
     """The recipe for this request, or None (the agent builds it)."""
     if os.environ.get("MH_SHEETS_PIPELINE", "1") == "0":
         return None
-    return "capital_allocation" if CAPITAL_ALLOCATION.search(task or "") else None
+    t = task or ""
+    if CAPITAL_ALLOCATION.search(t):
+        return "capital_allocation"
+    return "capital_allocation" if _WEAK_CA.search(t) and not _OTHER_MODEL.search(t) else None
 
 
 PROMPT = """You fill the inputs of a capital-allocation model for a finance professional. Use ONLY the facts and
@@ -220,7 +226,7 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
         B._f(out, f"B{i}", expr, fmt)
     B.widths(out, {"A": 46, "B": 22, "C": 14, "D": 14, "E": 14, "F": 14, "G": 14})
     B.widths(wb["Model"], default=14, first=40)
-    safe = re.sub(r"[^A-Za-z0-9]+", "_", company).strip("_") or "Company"
+    safe = re.sub(r"[^\w]+", "_", company).strip("_")[:60] or "Company"
     path = Path(ws.root) / f"{safe}_capital_allocation_model.xlsx"
     wb.save(path)
     notes = [f"Built by the capital-allocation recipe in code: {len(CA_INPUTS)} sourced inputs, {n} forecast years "

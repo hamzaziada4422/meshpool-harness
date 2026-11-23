@@ -29,17 +29,20 @@ def _no_slot_files_in_real_temp():
     """A whole run leaves nothing new in the slot folder real chats share for their MH_MAX_INFLIGHT cap."""
     from meshpool_harness.core import gateway as GW
     real = GW.default_slots_dir()
+    used = []                                # slot folders THIS process opened: other processes may share the real one
+    orig = GW._Slots.__init__
 
-    def names():
-        try:
-            return set(os.listdir(real))
-        except OSError:
-            return set()
-    before = names()
-    yield
-    new = sorted(names() - before)
-    assert not new, (f"new slot files in the real {real}: {new[:10]}. A test ran without MH_SLOTS_DIR, or a Meshpool "
-                     "window open during the run took a slot; close it and run again to tell which.")
+    def spy(self, *a, **k):
+        orig(self, *a, **k)
+        if os.path.abspath(self.dir) == os.path.abspath(real):
+            used.append(a[:1])
+    GW._Slots.__init__ = spy
+    try:
+        yield
+    finally:
+        GW._Slots.__init__ = orig
+    assert not used, (f"{len(used)} slot lock(s) were taken in the real {real} by this run: a test ran without "
+                      "MH_SLOTS_DIR. (Slot files other processes create there are not this run's concern.)")
 
 
 @pytest.fixture(autouse=True)
@@ -57,6 +60,11 @@ def _offline_gateway(monkeypatch, tmp_path):
     # Unit tests exercise the mechanisms with no shipped profile assignment (app/defaults/profiles.json picks the
     # Codex-design engine for every route); test_profiles.test_shipped_assignment and test_codex_engine test that file.
     monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")
+    # Never the real data folder: a saved company profile, settings or memory on the developer's machine must not
+    # change what a test sees (the brief tests failed on machines with a saved company look).
+    iso = tmp_path.parent / (tmp_path.name + "_mh_home")   # beside tmp_path: tests list and create inside tmp_path
+    iso.mkdir(exist_ok=True)
+    monkeypatch.setenv("MESHPOOL_HOME", str(iso))
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")

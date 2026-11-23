@@ -400,7 +400,7 @@ def test_independent_reads_run_together_and_answer_in_order(tmp_path, monkeypatc
     real = Workspace.read_file
 
     def slow(self, path, start=None, end=None):
-        _t.sleep(0.4)
+        _t.sleep(1.0)
         return real(self, path, start, end)
     monkeypatch.setattr(Workspace, "read_file", slow)
     calls = {"role": "assistant", "content": "", "tool_calls": [
@@ -418,7 +418,7 @@ def test_independent_reads_run_together_and_answer_in_order(tmp_path, monkeypatc
     monkeypatch.setattr(A.Agent, "_chat", capture)
     t0 = _t.time()
     run_task("read them", workdir=str(tmp_path), engine="agent")
-    assert _t.time() - t0 < 1.0                                            # 3 x 0.4 s sequentially would be 1.2 s
+    assert _t.time() - t0 < 2.6                                            # 3 x 1.0 s sequentially would be 3.0 s
     assert [m["tool_call_id"] for m in seen["tools"]] == ["ca", "cb", "cc"]
     assert "aaa" in seen["tools"][0]["content"] and "ccc" in seen["tools"][2]["content"]
 

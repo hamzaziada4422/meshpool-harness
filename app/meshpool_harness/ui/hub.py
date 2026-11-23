@@ -38,7 +38,7 @@ def _events(sid: str) -> list:
     if s is not None:
         with s.lock:
             return list(s.events)
-    msgs = ((A._saved(sid) or {}).get("messages") or [])[1:]
+    msgs = A.saved_messages(sid)
     try:
         return A.events_from_messages(msgs)
     except Exception:  # noqa: BLE001
@@ -106,7 +106,8 @@ def _task_row(t: dict, threads: dict) -> dict:
                 pj = p.get("name", "")
     return {"id": t["id"], "name": t.get("name") or "Scheduled task", "prompt": t.get("prompt", ""),
             "enabled": bool(t.get("enabled")), "status": "Active" if t.get("enabled") else "Paused",
-            "schedule": AS.describe(t), "when": t.get("when"), "next_run": t.get("next_run"),
+            "schedule": AS.describe(t), "when": t.get("when"), "time": t.get("time"), "day": t.get("day"),
+            "minutes": t.get("minutes"), "at": t.get("at"), "only_on_change": bool(t.get("only_on_change")), "next_run": t.get("next_run"),
             "last_run": t.get("last_run"), "last_thread": t.get("last_thread"), "kind": t.get("kind", "cowork"),
             "project": pj, "folder": t.get("folder", ""), "unread": bool(last and last.get("unread"))}
 
