@@ -1,0 +1,11 @@
+{
+  "pdf_report": "Re-read loop: the agent wrote make_report.py, then re-read the same line ranges with `sed -n` over and over (44 + 44 + 24 + 21 identical reads), 418 model calls / 217k output tokens before it was stopped; no repeated-read guard or step budget cut it off. The PDF itself passed.",
+  "pptx_chart": "Built the deck one shape at a time: 63 separate edit_office_file calls plus 7 check_deck rounds (128 calls vs Codex 16), each call resending a ~20-50k-token context.",
+  "xlsx_budget": "Office engine built a 4-sheet 'model' (Cover/Assumptions/Budget/Checks) with nested engine calls (42 calls vs Codex 7); formulas use named ranges (CoversPerDay*AverageTicket...) instead of Assumptions! references, so the strict 'formulas reference the Assumptions sheet' check fails (the live-update check passes: partly grader strictness).",
+  "invoices_fx": "Over-built workbook (Cover/Inputs/Invoices/Calc/Outputs/Checks) that repeats invoice ids on extra sheets, failing 'one row per invoice line'; Codex wrote one sheet in 8 calls.",
+  "sympy__sympy-23534": "Probe loop: ~45 near-identical `python -c` experiments plus git stash round-trips and whole-directory test runs; 78 calls, hit the 900 s timeout (fix was already correct).",
+  "sympy__sympy-23262": "Search sprawl: ~30 consecutive `grep -rn` calls and repeated module introspection before editing; 54 calls vs Codex 27 / Pi 11.",
+  "sympy__sympy-22914": "Correct one-line fix early, then 7 separate `python -c` checks and a full sympy/printing test run; 18 calls vs Codex 6.",
+  "md_to_docx": "Cheap but wrong: rewrote the brief's ISO dates as '9 February 2026' and appended '(excl. VAT)' instead of copying the given values.",
+  "csv_sales": "Cheap; rounding of a half-cent tie (both answers accepted after the grader fix)."
+}
