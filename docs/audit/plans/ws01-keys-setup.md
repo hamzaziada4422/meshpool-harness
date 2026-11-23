@@ -166,3 +166,24 @@ Four Sonnet subagents, each in its own worktree, merged here:
 - D (R3 ping side + R4): wire.py reply validation, cli.ping, server.test_connection/save_settings validation, /api/onboard,
   app.js onboarding, onboard.py, providers wording + test_onboarding_keys.py and the ping half of R3 tests.
 Then review line by line, revert-and-rerun each new test, full suite with `-n 4`.
+
+## Re-check on the new base (370427e, the audit branch rebased under the ledger)
+
+| ID | on 370427e | notes |
+|---|---|---|
+| S-01 | reproduces | `providers._cfg` now lets a shell value win, but `load_into_env(override=True)` (ui/server.py, workbench.py, settings_v2.py) replaces the shell's MESHPOOL_BASE_URL with the file's default and marks it injected, while the shell key stays: mixed pair. R2 fix stands; build on `config._INJECTED` (record shell originals before overriding). |
+| W-01, S-07, W-15, H-04 | reproduce | wire.py:432, agent/core.py:360/379/2574, workbench.py:176, settings_v2 key_spend, forge/design.py still use default urllib handlers. R1 stands. Use `providers.auth_headers` (new) unchanged. |
+| M15-01 | reproduces | `provider_setup.save` and `server.save_settings` still keep the old key. |
+| M15-04 | reproduces | app.js still posts /api/test, /api/settings, /api/provider. |
+| F-38 | already fixed | `config.clean_key` strips "Bearer " before removing whitespace; used by save_settings and test_connection. Proving test only. |
+| F-15 | already fixed | `test_connection` runs `normalise_base` first and returns the address message. Proving test only. |
+| F-14 | partly | `test_connection` now probes the key endpoint directly (`probe_chat`, no ChatGPT routing): fixed there. `provider_setup.test` (Settings page "Test connection", which sends no model) still returns ok when /models is missing without checking the key. |
+| W-06 | reproduces | `probe_chat` / `test_connection` treat any 200 as ok (LM Studio 200 error body); `provider_setup.test` treats a 200 JSON `{"error"}` from /models as "no /models" -> ok; `cli.ping`/SimpleLedger accept a 200 non-reply. |
+| W-16, W-17, W-18 | reproduce | normalise_base scheme rule, wire default openai when /models missing, `_get` does not catch `http.client.HTTPException`. Use `providers.keyless_ok` for the local/LAN rule. |
+| W-23 | partly | `/api/test` normalises the base now, but onboarding saves the raw base through `/api/settings`, which rejects "localhost:11434", and no `/v1` candidate is tried. Fixed with M15-04's single route. |
+| X-07 | reproduces | `cli.ping` max_tokens=5; `probe_chat` 5 except Azure. |
+| F-16 | reproduces | `providers.setup`, onboarding wording. |
+
+Execution on the new base, at most two executors at a time: wave 1 = A (R1 transport) and B (S-01, M15-01, F-16);
+wave 2 = C (provider_setup.test/_get/normalise/probe_chat: F-14, W-06, W-16, W-17, W-18, X-07 probe) and D (cli.ping
+and SimpleLedger reply check: W-06, X-07; /api/onboard + app.js: M15-04, W-23; proving tests for F-38, F-15).
