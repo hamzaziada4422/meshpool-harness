@@ -185,8 +185,8 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
                 env.setdefault("MESHPOOL_CONFIG", str(C.config_path()))
                 env.setdefault("MESHPOOL_PROJECT", os.environ["MESHPOOL_PROJECT"])
                 env.setdefault("PYTHONUTF8", "1")
-                if chat and any("browser_mcp_server" in str(x) for x in spec.get("args", [])):
-                    env["MH_CHAT_ID"] = chat                  # the app finds this chat's browser for its live view
+                if chat and any(k in str(x) for x in spec.get("args", []) for k in ("browser_mcp_server", "office_mcp_server")):
+                    env["MH_CHAT_ID"] = chat                  # the app finds this chat's browser; office builds count per chat
                 if os.environ.get("PYTHONPYCACHEPREFIX"):        # never write caches inside the signed app
                     env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
                 else:

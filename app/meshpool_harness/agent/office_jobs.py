@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +21,8 @@ APP = Path(__file__).resolve().parents[2]
 JOBS: dict[str, dict] = {}
 REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of one engine in a session before we say stop
 REBUILD_WINDOW_S = 45 * 60
+SIMILAR = 0.6                          # word-set overlap at which a new request counts as the same one again
+_LOCK = threading.RLock()              # JOBS is shared by threads (parallel tool calls in one turn)
 
 
 # What each engine builds. A request that names a Word-type deliverable and none of these goes to make_document.
@@ -73,19 +76,79 @@ def _python_m() -> list[str]:
     return cmd[:len(cmd) - (len(sys.argv) - 1)] if len(sys.argv) > 1 else cmd
 
 
-def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
-    """Register a job (its output folder, command and build number) and return its id; run() runs it."""
-    jid = uuid.uuid4().hex[:8]
-    out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
-    out.mkdir(parents=True, exist_ok=True)
-    cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
-    if paths:
-        cmd += ["--files", *paths]
+def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str = "") -> str:
+    """Register a job (its output folder, command and build number) and return its id; run() runs it. scope is the
+    chat the job serves: build numbers, reuse and the rebuild stop are counted per scope, not per process."""
+    with _LOCK:
+        jid = uuid.uuid4().hex[:8]
+        out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
+        out.mkdir(parents=True, exist_ok=True)
+        cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
+        if paths:
+            cmd += ["--files", *paths]
+        now = time.time()
+        recent = [x for x in JOBS.values() if x["engine"] == engine and x.get("scope", "") == scope
+                  and now - x["started"] < REBUILD_WINDOW_S]
+        JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
+                     "scope": scope, "request": request, "paths": sorted(paths or []), "event": threading.Event(),
+                     "inputs": {Path(x).name for x in paths or []}}
+        return jid
+
+
+def _norm(request: str) -> str:
+    return " ".join((request or "").lower().split())
+
+
+def _words(request: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", (request or "").lower()))
+
+
+def _made(j: dict) -> list[Path]:
+    """The files a finished job made: the engine's own results, not the copies of the user's inputs or build scripts."""
+    out: Path = j["out"]
+    res = j.get("result") or {}
+    arts = [Path(a) if Path(a).is_absolute() else out / a for s in res.get("steps") or [] for a in s.get("artifacts") or []]
+    return sorted({a.resolve() for a in arts if a.is_file()}) or [
+        p for p in sorted(out.rglob("*"))
+        if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
+        and not (p.parent == out and p.name in j.get("inputs", set())) and p.suffix not in (".py", ".run", ".log")]
+
+
+def start(engine: str, request: str, paths: list[str], root: Path, scope: str = "") -> tuple[str, str]:
+    """(job id, how) for a request. One request is one engine run: the same request (same chat, engine and input
+    files) while its job runs returns that job ("running": wait on its "event"); after it finished within the
+    window, returns it again ("done": report it, nothing is rebuilt); otherwise a new job (""). A new request that
+    only rewords an earlier finished build, once the chat has REBUILD_LIMIT builds of the engine, is not started:
+    ("<earlier id>", "refused"; the text is refusal_text). X-04: a sales deck took 24.5 min for 1 request: 4 decks,
+    3 engine runs."""
+    key = (scope, engine, _norm(request), sorted(paths or []))
     now = time.time()
-    recent = [x for x in JOBS.values() if x["engine"] == engine and now - x["started"] < REBUILD_WINDOW_S]
-    JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
-                 "inputs": {Path(x).name for x in paths or []}}
-    return jid
+    with _LOCK:
+        mine = [(i, j) for i, j in JOBS.items() if j.get("scope", "") == scope and j["engine"] == engine
+                and now - j["started"] < REBUILD_WINDOW_S and "request" in j]
+        for i, j in reversed(mine):
+            if (scope, engine, _norm(j["request"]), j["paths"]) != key:
+                continue
+            if not j.get("done"):
+                return i, "running"
+            if j.get("result") and not j.get("stopped") and _made(j):
+                return i, "done"
+        if len(mine) >= REBUILD_LIMIT:
+            w = _words(request)
+            for i, j in reversed(mine):
+                v = _words(j["request"])
+                if (j.get("done") and j.get("result") and j["paths"] == sorted(paths or []) and w and v
+                        and len(w & v) / len(w | v) >= SIMILAR and _made(j)):
+                    return i, "refused"
+        return new_job(engine, request, paths, root, scope), ""
+
+
+def refusal_text(jid: str, rel_to: Path | None = None) -> str:
+    j = JOBS[jid]
+    files = ", ".join(str(m.relative_to(rel_to)) if rel_to and rel_to in m.parents else str(m) for m in _made(j))
+    return (f"Not rebuilt: this chat already has {REBUILD_LIMIT} {j['engine']} builds and this request is nearly the "
+            f"same as an earlier one, which made: {files}. Deliver the best build so far and tell the user which "
+            "checks remain. Build again only for a materially different request (new content, not a rewording).")
 
 
 def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
@@ -122,23 +185,19 @@ def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
         j["result"], j["stderr"] = {}, f"{type(e).__name__}: {e}"
     finally:
         j["done"] = time.time()
+        if j.get("event"):
+            j["event"].set()
 
 
-def report(jid: str, rel_to: Path | None = None) -> tuple[str, bool]:
+def report(jid: str, rel_to: Path | None = None, reused: str = "") -> tuple[str, bool]:
     """(the text the agent reads, failed). Files are listed relative to rel_to when given, else absolute."""
     j = JOBS[jid]
     if not j.get("done"):
         mins = int((time.time() - j["started"]) // 60)
         return (f"Still working on the {j['engine']} job ({mins} min so far). Job id: {jid}. "
                 f"Call office_job_status with this id to get the result."), False
-    out: Path = j["out"]
     res = j.get("result") or {}
-    # the engine's own files: the copies of the user's inputs and the engine's build scripts are not results
-    arts = [Path(a) if Path(a).is_absolute() else out / a for s in res.get("steps") or [] for a in s.get("artifacts") or []]
-    made = sorted({a.resolve() for a in arts if a.is_file()}) or [
-        p for p in sorted(out.rglob("*"))
-        if p.is_file() and not any(x.startswith(".") for x in p.relative_to(out).parts)
-        and not (p.parent == out and p.name in j.get("inputs", set())) and p.suffix not in (".py", ".run", ".log")]
+    made = _made(j)
     if not res:
         return f"The {j['engine']} engine failed. {j.get('stderr', '')}", True
     notes = "\n".join((s.get("answer") or "") for s in res.get("steps") or []).strip()
@@ -167,13 +226,19 @@ def report(jid: str, rel_to: Path | None = None) -> tuple[str, bool]:
         except ValueError:
             return str(p)
     lines = [f"The {j['engine']} engine finished; its quality checks {checks}.", "Files:"] + [f"- {show(m)}" for m in made]
+    if reused == "done":
+        lines.insert(0, "This request was already built in this chat; here is that build again (nothing was rebuilt). "
+                        "To build again, ask with the changes you want in the request.")
     if notes:
         lines.append("Engine notes: " + notes[:2500])
     if qa:
         lines += ["Forge QA:", qa]
     n = j.get("build_no", 1)
+    if checks != "passed" and n < REBUILD_LIMIT:
+        lines.append("Deliver this file: the flagged items are listed for the user; rebuilding the same request "
+                     "rarely clears them.")
     if n >= REBUILD_LIMIT:
-        lines.append(f"This is build {n} from the {j['engine']} engine in this session. If you are rebuilding to clear "
+        lines.append(f"This is build {n} from the {j['engine']} engine in this chat. If you are rebuilding to clear "
                      "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
                      "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made

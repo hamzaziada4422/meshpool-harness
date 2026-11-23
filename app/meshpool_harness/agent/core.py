@@ -3084,12 +3084,20 @@ class Agent:
             return f"ERROR: office_task refused, nothing was built: {why}", False
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
-        jid = OJ.new_job(engine, args["request"], paths, self.root)
-        self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
-        OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
+        jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id)   # one request, one engine run
+        if reused == "refused":
+            return OJ.refusal_text(jid, rel_to=self.root), True
+        if reused != "done":
+            self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
+        if reused == "running":              # the same request is already building (a parallel call): wait for it
+            while not OJ.JOBS[jid]["event"].wait(0.5):
+                if self._stop:
+                    raise Interrupted()
+        elif not reused:
+            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
         if OJ.JOBS[jid].get("stopped"):
             raise Interrupted()
-        text, failed = OJ.report(jid, rel_to=self.root)
+        text, failed = OJ.report(jid, rel_to=self.root, reused=reused)
         return text, not failed
 
     def _search(self, query: str, n: int = 8, recency: str = "", site: str = "") -> str:

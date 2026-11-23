@@ -73,6 +73,11 @@ def _report(jid: str) -> tuple[str, bool]:
     return OJ.report(jid)
 
 
+def _scope() -> str:
+    """The chat this server serves (the app passes MH_CHAT_ID), else this server process: builds are counted per chat."""
+    return os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
+
+
 def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     paths, missing = OJ.resolve_files(_project(), files)
     if missing:
@@ -80,7 +85,14 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     why = OJ.check_request(engine, request)
     if why:                                      # before the job folder: nothing is built
         return f"Refused, nothing was built: {why}", True
-    jid = OJ.new_job(engine, request, paths, _project())
+    jid, reused = OJ.start(engine, request, paths, _project(), scope=_scope())   # one request, one engine run
+    if reused == "refused":
+        return OJ.refusal_text(jid), False
+    if reused == "done":
+        return OJ.report(jid, reused=reused)
+    if reused == "running":
+        OJ.JOBS[jid]["event"].wait(WAIT)
+        return _report(jid)
     t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
     t.start()
     t.join(WAIT)
