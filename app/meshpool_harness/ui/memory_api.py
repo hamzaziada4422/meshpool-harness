@@ -183,7 +183,7 @@ def act(b: dict) -> dict:
     if a == "expiry":
         until = b.get("until")
         if isinstance(until, str) and until:
-            until = datetime.fromisoformat(until).timestamp()
+            until = datetime.fromisoformat(until.strip().replace("Z", "+00:00")).timestamp()
         return {"fact": row(MS.set_expiry(b["id"], float(until) if until else None))}
     if a == "archive":
         return {"fact": row(MS.archive(b["id"]))}
