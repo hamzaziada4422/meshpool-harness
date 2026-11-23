@@ -238,6 +238,34 @@ _HELP = {
 
 
 def main(argv=None):
+    """The command line. Anything that goes wrong comes out as one `error: ...` line and exit code 1, never a
+    traceback (F-10); MH_DEBUG=1 keeps the traceback. Ctrl+C and sys.exit pass through."""
+    try:
+        return _main(argv)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("MH_DEBUG") == "1":
+            raise
+        from meshpool_harness.errors import plain
+        expected = isinstance(e, (ValueError, KeyError, OSError, zipfile.BadZipFile, RuntimeError))
+        line = f"error: {plain(e)}"
+        if not expected:
+            try:
+                import traceback
+                log = _config.runs_dir() / "logs" / "cli-error.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as f:
+                    f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(sys.argv[1:])}\n"
+                            + traceback.format_exc() + "\n")
+                line += f" (details: {log})"
+            except OSError:
+                pass
+        print(line, file=sys.stderr)
+        return 1
+
+
+def _main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command

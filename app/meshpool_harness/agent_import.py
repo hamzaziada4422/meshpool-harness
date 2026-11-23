@@ -386,6 +386,9 @@ def cli(args: list[str]) -> int:
     for i, a in enumerate(args):
         if a == "--from" and i + 1 < len(args):
             only = [x.strip() for x in args[i + 1].split(",") if x.strip()]
+    bad = [x for x in (only or []) if x not in AGENTS]
+    if bad:
+        raise ValueError(f"unknown agent {', '.join(bad)} in --from; choose from {', '.join(AGENTS)}")
     found = scan(only)
     if not found["agents"]:
         print("No other agents found on this computer.")
