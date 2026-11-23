@@ -165,7 +165,8 @@ def test_connection(values: dict | None = None) -> dict:
         return {"ok": False, "detail": "No API key saved yet."}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
+    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key,
+                kind=v.get("MH_API_KIND", ""), api_version=v.get("MH_API_VERSION", ""))
 
 
 def save_upload(name: str, data: bytes) -> dict:
