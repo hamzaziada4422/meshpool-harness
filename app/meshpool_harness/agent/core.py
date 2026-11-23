@@ -27,6 +27,7 @@ from pathlib import Path
 
 from meshpool_harness import pace as PACE
 from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
@@ -2071,6 +2072,7 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
+        msgs = repair_tool_pairs(msgs)[0]          # outgoing copy only: no orphan tool result reaches the API
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
@@ -3271,13 +3273,22 @@ class Agent:
                     SS.append_journal(self.dir, pn, msgs[pn:], meta)
                 self._persist_n, self._persist_dir = n, str(self.dir)
                 self._persist_fp = fp(msgs[-1]) if n else ""
-        except OSError:
-            pass            # the previous files are intact (atomic writes); the next save tries again
+        except OSError as e:
+            # the previous files are intact (atomic writes); the next save tries again, and the user is told once
+            first = not getattr(self, "save_error", None)
+            self.save_error = e.strerror or str(e) or "write failed"
+            if first:
+                self.emit({"type": "status", "save_error": True, "text": (
+                    f"Couldn't save this chat ({self.save_error}). Free some disk space; Meshpool keeps trying.")})
+        else:
+            if getattr(self, "save_error", None):
+                self.save_error = None
+                self.emit({"type": "status", "text": "Saved again."})
 
     @classmethod
     def resume(cls, workdir: str, session_id: str | None = None, **kw) -> "Agent | None":
         root = str(Path(workdir).expanduser().resolve())
-        best = None
+        best, best_dir = None, None
         if SESSIONS.exists():
             for p in SESSIONS.glob("*/session.json"):
                 if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
@@ -3292,7 +3303,7 @@ class Agent:
                 if d.get("harness") not in (None, "meshpool-code", "meshpool-work"):
                     continue
                 if best is None or d.get("updated", 0) > best.get("updated", 0):
-                    best = d
+                    best, best_dir = d, p.parent
         if not best:
             return None
         kw.setdefault("profile", "work" if best.get("harness") == "meshpool-work" else "code")
@@ -3306,7 +3317,8 @@ class Agent:
                 a.messages = [{"role": "system", "content": a.system_prompt()}]
             except TypeError:
                 a.route = None
-        a.messages = [a.messages[0]] + best.get("messages", [])
+        saved = SS.resolve_refs(best_dir, best.get("messages", []))      # images back from their blob files
+        a.messages = [a.messages[0]] + repair_tool_pairs(saved)[0]
         a.usage = best.get("usage") or a.usage
         a.title = best.get("title", "")
         a.created = best.get("created", a.created)

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from meshpool_harness import config as C
 from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
@@ -477,8 +478,16 @@ class Session:
                     log.append(evs)
                     log.set_running(run)
                 self._tlog_n, self._tlog_epoch = total, epoch
-        except OSError:
-            pass
+        except OSError as e:
+            first = not getattr(self, "_persist_err", None)
+            self._persist_err = e.strerror or str(e) or "write failed"
+            if first:                                # one notice per failure streak
+                self.emit({"type": "status", "save_error": True, "text": (
+                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; Meshpool keeps trying.")})
+        else:
+            if getattr(self, "_persist_err", None):
+                self._persist_err = None
+                self.emit({"type": "status", "text": "Saved again."})
 
     def approve(self, kind, title, detail, options=None):
         if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
@@ -1793,7 +1802,7 @@ def _disk_rows() -> tuple:
                     if hit_row and hit_row[0] == key:
                         rows[hit_row[2]["id"]] = dict(hit_row[2])
                         continue
-                    d = SS.read(p.parent)
+                    d = SS.read_head(p.parent) or SS.read(p.parent)     # the small head record: no messages loaded
                 except OSError:
                     continue
                 if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
@@ -2199,7 +2208,10 @@ def scheduler_loop():
 
 def _saved(sid: str) -> dict | None:
     try:
-        return SS.read(SESSIONS / sid)
+        d = SS.read(SESSIONS / sid)
+        if d and isinstance(d.get("messages"), list):
+            d["messages"] = repair_tool_pairs(d["messages"])[0]       # a saved chat never loads with an orphan
+        return d
     except OSError:
         return None
 
