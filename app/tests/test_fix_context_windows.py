@@ -172,11 +172,12 @@ def test_budgets_scale_with_window():
 
 
 def test_window_sources(monkeypatch):
-    assert CTX.window("claude-sonnet-x", "https://api.example.com/v1") == 200_000
+    assert CTX.window("claude-sonnet-x", "https://api.example.com/v1", probe_endpoint=False) == 200_000
     assert CTX.window("qwen2.5-coder:7b-8k", "http://localhost:11434/v1", probe_endpoint=False) == 8192
-    assert CTX.window("some-model", "https://api.example.com/v1") == CTX.DEFAULT_HOSTED
+    assert CTX.window("some-model", "https://api.example.com/v1", probe_endpoint=False) == CTX.DEFAULT_HOSTED == 200_000
     monkeypatch.setenv("MESHPOOL_CONTEXT_WINDOW", "16384")
     assert CTX.window("claude-sonnet-x") == 16384
+    assert CTX.window_info("claude-sonnet-x") == (16384, "override")
 
 
 def test_ollama_and_lmstudio_metadata():
@@ -241,3 +242,59 @@ def test_compaction_budgets_fit_small_windows():
     assert r and seen[0]["max_tokens"] <= 512
     ids = {tc["id"] for m in msgs for tc in m.get("tool_calls") or []}
     assert all(m["tool_call_id"] in ids for m in msgs if m.get("role") == "tool")
+
+
+@pytest.mark.parametrize("model,tokens", [
+    ("claude-sonnet-5-5", 1_000_000), ("claude-opus-4-6", 1_000_000), ("claude-opus-4-1", 200_000),
+    ("claude-sonnet-4-5", 200_000), ("deepseek-v4.1-flash", 1_048_576), ("deepseek-chat", 131_072),
+    ("gpt-5", 400_000), ("gpt-4.1-mini", 1_047_576), ("gpt-4o", 128_000), ("o3-mini", 200_000), ("gpt-4", 8192),
+    ("gemini-2.5-pro", 1_048_576), ("kimi-k3", 1_048_576), ("kimi-k2-0711", 131_072), ("glm-4.6", 200_000),
+    ("llama-3.1-70b", 131_072), ("llama3-8b", 8192), ("qwen2.5-coder-32b", 32_768), ("mistral-small", 32_768)])
+def test_model_table(model, tokens):
+    assert CTX.window_info(model, "https://api.example.com/v1", probe_endpoint=False) == (tokens, "table")
+
+
+def test_provider_metadata_beats_the_table_and_is_labelled():
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            out = json.dumps({"data": [{"id": "claude-sonnet-5-5", "context_length": 321000},
+                                       {"id": "other", "max_input_tokens": 77000}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    assert CTX.window_info("claude-sonnet-5-5", base) == (321000, "provider")
+    assert CTX.window_info("other", base) == (77000, "provider")
+    assert "from provider" in CTX.describe("other", base)
+    srv.shutdown()
+
+
+def test_context_target_caps_the_working_set(monkeypatch):
+    assert CTX.target(1_000_000) == 120_000
+    assert CTX.target(100_000) == 70_000
+    assert CTX.target(8192) == int(8192 * 0.7)
+    monkeypatch.setenv("MH_CONTEXT_TARGET", "300k")
+    assert CTX.target(1_000_000) == 300_000
+    monkeypatch.setenv("MH_CONTEXT_TARGET", "50000")
+    assert CTX.target(1_000_000) == 50_000
+    monkeypatch.delenv("MH_CONTEXT_TARGET")
+    # compaction starts near the target, not at 70% of a 1M window; the hard window still takes a big single read
+    chars = CTX.compact_chars(1_000_000, 5000, 10**9)
+    assert chars < 120_000 * 3.5
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "x" * 900_000}]
+    out, _t, _o = CTX.fit(msgs, None, 1_000_000)
+    assert out is msgs                                         # 900 KB is inside a 1M-token window: sent as it is
+
+
+def test_describe_and_check_row(monkeypatch):
+    monkeypatch.setenv("MESHPOOL_CONTEXT_WINDOW", "1000000")
+    assert CTX.describe("m") .startswith("context 1,000k (your setting)")
+    from meshpool_harness import config as C
+    row = [r for r in C.system_check() if r["name"] == "Context window"][0]
+    assert "1,000k" in row["detail"]
