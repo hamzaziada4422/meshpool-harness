@@ -189,8 +189,8 @@
         const r = await post("/api/company/sample", {id: CO.sel});
         redraw();
         RES("coRes").className = "res ok";
-        RES("coRes").innerHTML = `Sample ready: <a href="${esc(r.url)}" download="${esc(r.file)}">${esc(r.file)}</a> · <button class="linkbtn" id="coOpen">Open it</button>`;
-        $("#coOpen")?.addEventListener("click", () => post("/api/company/open", {id: CO.sel}).catch(e => toast(e.message)));
+        RES("coRes").innerHTML = `Sample ready: <a href="${esc(r.url)}" download="${esc(r.file)}">${esc(r.file)}</a> · <button class="linkbtn" id="coOpen">View it</button>`;
+        $("#coOpen")?.addEventListener("click", () => post("/api/company/sample-path", {id: CO.sel}).then(r => openPreview(r.root, r.path)).catch(e => toast(e.message)));
       } catch (e) { RES("coRes").className = "res bad"; RES("coRes").textContent = e.message; }
     };
     $("#coLogoBtn", b).onclick = () => $("#coLogo", b).click();

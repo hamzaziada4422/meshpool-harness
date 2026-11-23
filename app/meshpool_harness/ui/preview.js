@@ -2,7 +2,7 @@
    Server side: ui/previews.py (GET /api/preview). Loaded after app.js; uses its helpers ($, esc, md, api, post, toast, ICON).
    Page images and tables come from the server; HTML runs in a sandboxed frame (scripts yes, same origin no);
    SVG is only ever an <img> from a blob, never markup in the page. */
-const PVX = {open: false, id: 0, root: "", path: "", m: null, page: 0, code: false, sheet: 0, urls: [], opener: null, snippet: null, poll: 0};
+const PVX = {open: false, id: 0, root: "", path: "", m: null, page: 0, code: false, sheet: 0, urls: [], opener: null, snippet: null, poll: 0, back: null, backNext: null};
 
 const PV_GROUPS = [
   [/^(pptx|ppt|pptm|ppsx|pps|potx|odp|key)$/, "Deck", "PowerPoint"],
@@ -16,9 +16,7 @@ const PV_GROUPS = [
 const pvExt = p => (String(p).match(/\.([^./\\]+)$/) || [, ""])[1].toLowerCase();
 function pvType(path) {
   const ext = pvExt(path), g = PV_GROUPS.find(x => x[0].test(ext));
-  const mac = /Mac/i.test(navigator.platform || "");
-  const app = g ? (g[2] || (g[1] === "PDF" || g[1] === "Image" ? (mac ? "Preview" : g[1] === "PDF" ? "PDF viewer" : "image viewer") : null)) : null;
-  return {label: g ? g[1] : (ext ? ext.toUpperCase() : "File"), app, ext};
+  return {label: g ? g[1] : (ext ? ext.toUpperCase() : "File"), ext};
 }
 const pvQuery = (root, path) => `root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`;
 const pvPage = (root, path, n, w, v) => `/api/preview?${pvQuery(root, path)}&page=${n}&w=${w}&v=${v || 0}&t=${encodeURIComponent(MP.token)}`;
@@ -27,9 +25,9 @@ function pvEnsure() {
   let el = $("#pvp"); if (el) return el;
   el = document.createElement("aside"); el.id = "pvp"; el.className = "pvp"; el.hidden = true; el.tabIndex = -1;
   el.setAttribute("aria-label", "Preview");
-  el.innerHTML = `<div class="pv-bar"><span class="pv-ic">${ICON.files}</span><b class="pv-name" id="pvName"></b><span class="pv-type" id="pvType"></span><span class="sp"></span>
+  el.innerHTML = `<div class="pv-bar"><button class="iconbtn pv-back" id="pvBack" aria-label="Back to the folder" title="Back to the folder" hidden>${ICON.chev}</button><span class="pv-ic">${ICON.files}</span><b class="pv-name" id="pvName"></b><span class="pv-type" id="pvType"></span><span class="sp"></span>
     <span class="pv-seg" id="pvSeg" role="group" aria-label="View" hidden><button data-v="view" aria-pressed="true">Preview</button><button data-v="code" aria-pressed="false">Code</button></span>
-    <button class="btn" id="pvOpen" hidden></button><button class="iconbtn" id="pvClose" aria-label="Close preview" title="Close (Esc)">${ICON.x}</button></div>
+    <button class="btn" id="pvAlt" hidden></button><button class="iconbtn" id="pvMore" aria-label="More actions for this file" title="More actions">${ICON.more}</button><button class="iconbtn" id="pvClose" aria-label="Close preview" title="Close (Esc)">${ICON.x}</button></div>
     <div class="pv-tabs" id="pvTabs" role="tablist" hidden></div>
     <div class="pv-stage" id="pvStage"></div>
     <div class="pv-strip" id="pvStrip" hidden><button class="iconbtn" id="pvPrev" aria-label="Previous page">${ICON.chev}</button><div class="pv-thumbs" id="pvThumbs"></div><button class="iconbtn" id="pvNext" aria-label="Next page">${ICON.chev}</button><span class="pv-count" id="pvCount" aria-live="polite"></span></div>`;
@@ -37,11 +35,14 @@ function pvEnsure() {
   $("#pvClose").onclick = () => closePreview();
   $("#pvPrev").onclick = () => pvGo(PVX.page - 1);
   $("#pvNext").onclick = () => pvGo(PVX.page + 1);
-  $$("#pvSeg button").forEach(b => b.onclick = () => { PVX.code = b.dataset.v === "code"; pvBody(); });
-  $("#pvOpen").onclick = () => {
-    if (!PVX.path) return;
-    toast(`Opening ${PVX.path.split("/").pop()}…`, 2500);
-    post("/api/open-file", {root: PVX.root, path: PVX.path}).then(r => r.message && toast(r.message, 4000)).catch(e => toast(e.message));
+  $$("#pvSeg button").forEach(b => b.onclick = () => { if (PVX.m?.kind === "editor") return edMode(b.dataset.v === "code" ? "src" : "view"); PVX.code = b.dataset.v === "code"; pvBody(); });
+  $("#pvBack").onclick = async () => { const b = PVX.back; if (b && await edGuard()) edFolderPane(b.root, b.rel); };
+  // The only route to the system file manager: a menu item a person picks on purpose, never a click on the file itself.
+  $("#pvMore").onclick = e => {
+    if (!PVX.root || (PVX.m?.kind !== "folder" && !PVX.path)) return;
+    const root = PVX.root, path = PVX.path;
+    ctxMenu(e, [{label: "Copy path", icon: ICON.copy, fn: () => { try { navigator.clipboard.writeText(root.replace(/[\\/]$/, "") + (path ? "/" + path : "")); toast("Path copied", 2000); } catch (err) { toast("Could not copy the path."); } }},
+      {sep: true}, {label: edRevealLabel(), icon: ICON.ext, fn: () => edReveal(root, path)}]);
   };
   el.addEventListener("keydown", e => {
     if (PVX.m?.kind !== "pages" || e.altKey || e.ctrlKey || e.metaKey || e.target.closest?.("input, textarea, select")) return;
@@ -53,14 +54,17 @@ function pvEnsure() {
   return el;
 }
 function pvFree() { PVX.urls.forEach(u => { try { URL.revokeObjectURL(u); } catch (e) {} }); PVX.urls = []; }
-function pvShell(name, type, openLabel) {
+function pvShell(name, type, altLabel) {
   const el = pvEnsure(), app = $("#app");
+  if (typeof edStop === "function") edStop();
   PVX.opener = document.activeElement && document.activeElement !== document.body ? document.activeElement : PVX.opener;
   pvFree(); PVX.open = true; PVX.id++; PVX.m = null; PVX.page = 0; PVX.code = false; PVX.sheet = 0;
+  PVX.back = PVX.backNext; PVX.backNext = null; $("#pvBack").hidden = !PVX.back;
+  const sb = $$("#pvSeg button"); sb[0].textContent = "Preview"; sb[1].textContent = "Code";
   el.hidden = false; app.classList.add("pvopen");
   if (typeof fitPanel === "function") fitPanel();
   $("#pvName").textContent = name; $("#pvName").title = PVX.path || name; $("#pvType").textContent = type;
-  const ob = $("#pvOpen"); ob.hidden = !openLabel; ob.textContent = openLabel || "";
+  const ob = $("#pvAlt"); ob.hidden = !altLabel; ob.textContent = altLabel || "";
   $("#pvSeg").hidden = true; $("#pvTabs").hidden = true; $("#pvStrip").hidden = true;
   if (typeof renderTop === "function") renderTop();
   el.focus({preventScroll: true});
@@ -72,6 +76,8 @@ function pvNote(text, busy) {
 }
 function closePreview(quiet) {
   if (!PVX.open) return;
+  if (typeof EDX !== "undefined" && EDX.dirty) { edGuard().then(ok => ok && closePreview(quiet)); return; }
+  if (typeof edStop === "function") edStop();
   PVX.open = false; PVX.id++; pvFree();
   const el = $("#pvp"); if (el) { el.hidden = true; $("#pvStage").innerHTML = ""; $("#pvThumbs").innerHTML = ""; }
   $("#app")?.classList.remove("pvopen");
@@ -85,9 +91,10 @@ function closePreview(quiet) {
 async function openPreview(root, path) {
   root = root || (typeof curRoot === "function" ? curRoot() : "");
   if (!root || !path) return;
+  if (typeof edGuard === "function" && !await edGuard()) return;
   PVX.root = root; PVX.path = path; PVX.snippet = null;
   const t = pvType(path), name = path.split("/").pop();
-  const id = pvShell(name, t.label, t.app ? `Open in ${t.app}` : "Open");
+  const id = pvShell(name, t.label, null);
   pvNote("Loading the preview...", true);
   let tries = 0;
   const load = async () => {
@@ -96,16 +103,18 @@ async function openPreview(root, path) {
     catch (e) { if (id === PVX.id) pvNote(e.message); return; }
     if (id !== PVX.id) return;
     if (m.state === "working") {
-      if (++tries > 150) { pvNote("Preparing the preview is taking too long. Use Open to see it in its app."); return; }
+      if (++tries > 150) { pvNote("Preparing the preview is taking too long. Close it and try again in a moment."); return; }
       pvNote(tries > 3 ? "Preparing the pages. The first time takes a few seconds..." : "Loading the preview...", true);
       PVX.poll = setTimeout(load, 1000); return;
     }
+    if (m.kind === "text" || m.kind === "md") return edLoad(root, path, id);      // text and code open in the editor
     PVX.m = m; PVX.page = 0; pvBody();
   };
   load();
 }
 // Code from a reply (no file): html or svg, shown the same way.
-function openPreviewCode(lang, code) {
+async function openPreviewCode(lang, code) {
+  if (typeof edGuard === "function" && !await edGuard()) return;
   PVX.root = ""; PVX.path = ""; PVX.snippet = code;
   pvShell(lang === "svg" ? "SVG preview" : "HTML preview", lang.toUpperCase(), null);
   PVX.m = {kind: lang === "svg" ? "image" : "html", ext: lang, name: "snippet", text: code, state: "ready", snippet: true};
@@ -118,6 +127,8 @@ function pvBody() {
   $("#pvTabs").hidden = true; $("#pvStrip").hidden = true;
   const textual = m.kind === "html" || m.kind === "md" || (m.kind === "image" && m.snippet);
   $("#pvSeg").hidden = !textual;
+  const alt = $("#pvAlt"), editable = !m.snippet && /^(html?|svg|csv|tsv)$/.test(m.ext || "");   // these open as a preview; Edit shows their text
+  alt.hidden = !editable; alt.textContent = "Edit"; alt.onclick = () => edLoad(PVX.root, PVX.path, PVX.id, "src");
   if (textual) { $$("#pvSeg button").forEach(b => b.setAttribute("aria-pressed", String((b.dataset.v === "code") === PVX.code))); $("#pvSeg [data-v=code]").textContent = m.kind === "md" ? "Source" : "Code"; }
   st.innerHTML = "";
   if (m.kind === "pages") return pvPages(m);
@@ -153,7 +164,7 @@ function pvBody() {
     return;
   }
   if (m.kind === "text") return pvCode(m.text);
-  pvNote(m.note || "There is no preview for this kind of file. Use Open to see it in its app.");
+  pvNote(m.note || "Meshpool cannot show this kind of file yet.");
 }
 function pvCode(text) {
   const pre = document.createElement("pre"); pre.className = "pv-code"; pre.tabIndex = 0; pre.textContent = text;
@@ -269,6 +280,6 @@ document.addEventListener("click", e => {
   PVX.opener = b; openPreviewCode(b.dataset.pvcode, code);
 });
 window.addEventListener("keydown", e => {            // Esc closes the pane first, unless a menu or dialog is open over it
-  if (e.key !== "Escape" || !PVX.open || $("#pop, #ctx, .scrim, #srch, #onb")) return;
+  if (e.key !== "Escape" || !PVX.open || $("#pop, #ctx, .scrim, #srch, #onb") || e.target.closest?.("#edTa, #edFq, .fs-q")) return;
   e.preventDefault(); e.stopPropagation(); closePreview();
 }, true);
