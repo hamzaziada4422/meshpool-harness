@@ -203,9 +203,18 @@ def main(argv=None):
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command
         return 0
-    if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
+    _rw = os.environ.pop("MESHPOOL_RESTART_WAIT", None)
+    if _rw:                                               # started by "Restart" after an update: let the old app close
         import time
-        time.sleep(3)
+        if _rw.isdigit() and int(_rw) > 1:                # the old app's PID: wait until it has really exited
+            try:
+                from meshpool_harness import updater as _up
+                _up.wait_for_exit(int(_rw), 120)
+            except Exception:  # noqa: BLE001
+                time.sleep(3)
+        else:
+            time.sleep(3)
+        os.environ["MESHPOOL_RESTARTED"] = "1"
     if os.name == "nt" and (sys.executable.lower().endswith("pythonw.exe") or _no_console()):
         # The Windows app runs windowless under pythonw.exe, whose children get no usable stdin/stdout. Launch child
         # Pythons (Hermes, MCP servers, engines) with python.exe; their console windows are suppressed.
