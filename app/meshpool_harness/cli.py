@@ -147,7 +147,8 @@ def _agent_parser():
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
     ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
-    ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
+    ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
+                    help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
@@ -281,7 +282,7 @@ def main(argv=None):
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
         if a.profile:
             os.environ["MH_AGENT_PROFILE"] = a.profile
-        if a.max_turns:
+        if a.max_turns is not None:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
