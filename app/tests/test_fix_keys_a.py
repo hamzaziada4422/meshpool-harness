@@ -62,7 +62,8 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_AUTH_HEADER", "MH_AUTH_SCHEME", "MESHPOOL_AZURE_API_VERSION",
               "MH_API_WIRE", "OPENAI_API_KEY", "OPENAI_BASE_URL", "MH_PROVIDER"):
-        monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv(k, "")         # recorded, so PS.save()'s os.environ writes are undone after the test
+        monkeypatch.delenv(k)
     C.ensure_home()
     return tmp_path
 

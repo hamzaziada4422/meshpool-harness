@@ -40,8 +40,11 @@ WAIT = float(os.environ.get("OFFICE_WAIT_S", "100"))   # under the common 120 s 
                                                        # a job id for office_job_status instead of timing out
 
 
+_CALL = threading.local()                    # the folder of the chat whose call this thread is running
+
+
 def _project() -> Path:
-    p = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).expanduser()
+    p = Path(getattr(_CALL, "project", None) or os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).expanduser()
     return p if p.is_dir() else Path.cwd()
 
 
@@ -825,8 +828,12 @@ def _as_mcp(fn, props: dict):
     from meshpool_harness.agent.mcp_stdio import ToolFailed
 
     def call(**args):
+        _CALL.project = args.pop("_project", None)       # one server process for every chat: the caller's folder
         extra = sorted(k for k in args if k not in props) if props else []
-        text, err = fn(**{k: v for k, v in args.items() if k not in extra})
+        try:
+            text, err = fn(**{k: v for k, v in args.items() if k not in extra})
+        finally:
+            _CALL.project = None
         if extra:
             text = f"(Ignored unknown argument(s): {', '.join(extra)}.)\n{text}"
         if err:

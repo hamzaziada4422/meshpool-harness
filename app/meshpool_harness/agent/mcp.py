@@ -730,6 +730,17 @@ import atexit  # noqa: E402
 atexit.register(stop_all)
 
 
+def _pool_key(spec: dict, roots: list) -> str:
+    """Same command, environment and folder: one process. A server that takes the folder with each call
+    (per_call_project) is one process for the whole app."""
+    env = spec.get("env")
+    where = str(Path(roots[0]).resolve()) if roots else ""
+    if spec.get("per_call_project"):
+        where = ""
+        env = {k: v for k, v in env.items() if k != "MESHPOOL_PROJECT"} if isinstance(env, dict) else env
+    return json.dumps([spec.get("command"), spec.get("args"), env, spec.get("cwd"), where], sort_keys=True, default=str)
+
+
 def _cache_file() -> Path:
     return C.home() / "mcp-tools-cache.json"
 
@@ -740,8 +751,7 @@ def _cache_key(name: str, spec: dict) -> str:
         stamp = str(int(max(f.stat().st_mtime for f in Path(__file__).parent.glob("*_mcp_server.py"))))
     except (OSError, ValueError):
         pass
-    sig = json.dumps([name, spec.get("command"), spec.get("args"), spec.get("env"), spec.get("cwd"), stamp,
-                      _VERSION, sys.executable], sort_keys=True, default=str)
+    sig = json.dumps([name, _pool_key(spec, []), stamp, _VERSION, sys.executable], sort_keys=True, default=str)
     return _short_hash(sig)
 
 
@@ -802,8 +812,7 @@ class Server:
                 and not any(w in self.name.lower() for w in _STATEFUL) and os.environ.get("MH_MCP_POOL", "1") != "0")
 
     def _join_pool(self):
-        key = json.dumps([self.spec.get("command"), self.spec.get("args"), self.spec.get("env"), self.spec.get("cwd"),
-                          str(Path(self.roots[0]).resolve()) if self.roots else ""], sort_keys=True, default=str)
+        key = _pool_key(self.spec, self.roots)
         with _PLOCK:
             e = _POOL.setdefault(key, _Entry())
         with e.lock:
@@ -988,6 +997,8 @@ class Server:
 
     def call_with_images(self, tool: str, args: dict):
         """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
+        if self.spec.get("per_call_project") and self.roots:
+            args = {**args, "_project": str(Path(self.roots[0]).resolve())}
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []

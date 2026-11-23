@@ -428,7 +428,10 @@ class Delegation:
             a = rec["agent"] = self._child(sid, index, rec)
             cfg_steps0 = a.max_steps
             reply = a.send(row["goal"]) or ""
-            if row["schema"] and reply.strip() and not (a._stop or self.stopped or rec["stop"]):
+            # Stop is decided per agent, at the moment its own work ended: a report that was already written is
+            # kept even if Stop is pressed a moment later (self.stopped only keeps new agents from starting)
+            stopped = bool(a._stop or rec["stop"])
+            if row["schema"] and reply.strip() and not stopped:
                 rec["schema_retries"] = 0
                 errs = self._check(reply, row["schema"])
                 used = sum(1 for m in a.messages if m.get("role") == "assistant")
@@ -437,9 +440,9 @@ class Delegation:
                     a.max_steps = cfg_steps0 - used
                     reply = a.send("Your reply does not match the output schema: " + "; ".join(errs) +
                                    ". Reply again with only the JSON.") or reply
+                    stopped = bool(a._stop or rec["stop"])
                     errs = self._check(reply, row["schema"])
                 rec["schema_valid"], rec["schema_errors"] = not errs, errs
-            stopped = a._stop or self.stopped or rec["stop"]
             hit_steps = any("Stopped after" in e for e in rec["errors"])
             if hit_steps and not stopped:                 # out of steps: one last answer, no tools, with the report
                 a.final_only, a._no_tools, a.max_steps = True, True, 1   # tools stay listed; tool_choice "none"
@@ -447,7 +450,7 @@ class Delegation:
                                "you did, what you found, files you changed, and what is left undone." +
                                (" Your reply must still be only JSON matching the output schema." if row["schema"]
                                 else "")) or ""
-                stopped = a._stop or self.stopped or rec["stop"]
+                stopped = bool(a._stop or rec["stop"])
                 if final.strip() or stopped:
                     reply = final
                 else:                                     # no report even then: say so, never stale narration

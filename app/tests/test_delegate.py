@@ -824,3 +824,20 @@ def test_sub_agent_grep_searches_attached_files_and_its_own_full_outputs(monkeyp
     out = c.ws.grep("needle", ".")
     spill = out.split("full output in ")[1].split("]")[0]
     assert "SPECIAL" in c.ws.grep("SPECIAL", spill)
+
+
+def test_stop_right_after_a_sub_agent_finished_keeps_its_report(monkeypatch, _env):
+    """Stop lands between a sub-agent's last reply and its bookkeeping: that report is still returned as completed."""
+    fake(monkeypatch, lambda b: _msg('{"x": 1}'))
+    a = _agent(_env)
+    real = D.schema_errors
+
+    def stop_then_check(value, sch, path="$"):
+        for d in list(a._delegations.values()):
+            d.stop_all("Stop")
+        return real(value, sch, path)
+    monkeypatch.setattr(D, "schema_errors", stop_then_check)
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Research Acme", "output_schema": {"type": "object"}}]})
+    data = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
+    assert data["results"][0]["status"] == "completed"
+    assert '{"x": 1}' in out

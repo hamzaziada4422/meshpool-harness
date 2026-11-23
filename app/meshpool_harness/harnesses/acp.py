@@ -217,7 +217,9 @@ def office_extra(workdir: str) -> dict:
     spec = office_server([workdir])
     env_ = {e["name"]: e["value"] for e in spec["env"]}
     env_.setdefault("OFFICE_WAIT_S", "280")
-    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330}}
+    # per_call_project: one office process for the whole app; each call carries its own chat's folder
+    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330,
+                           "per_call_project": True}}
 
 
 def _auth_failure(text: str) -> bool:

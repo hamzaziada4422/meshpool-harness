@@ -137,7 +137,7 @@ def explain(status: int, data, *, base: str, model: str = "", version: str = "")
         if az:
             return (f"Azure rejected the key (401) for {host}. Use a key from that resource's Keys and Endpoint page "
                     "(a key of another resource fails here), or an Entra access token." + tail)
-        return f"The key was rejected (401) by {host}. Check it and try again." + tail
+        return "The key was rejected (401). Check it and try again." + tail
     if status == 403:
         if az:
             return (f"The key is recognised but not allowed (403) on {host}. Check the resource's Networking "

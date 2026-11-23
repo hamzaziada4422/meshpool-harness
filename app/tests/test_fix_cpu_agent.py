@@ -95,3 +95,68 @@ def test_document_text_is_cached_and_long_pdfs_are_paged(tmp_path, monkeypatch):
 
 def test_parallel_document_reads_are_capped():
     assert docread._SLOTS._initial_value == max(1, (os.cpu_count() or 2) // 2)
+
+
+def test_twenty_reads_across_three_chats_use_one_reader_started_once(tmp_path, monkeypatch):
+    spawns, inits = [], []
+    real_init, real_req = M._Stdio.__init__, M._Stdio.request
+
+    def counting_init(self, *a, **k):
+        spawns.append(1)
+        real_init(self, *a, **k)
+
+    def counting_req(self, rid, method, params, timeout):
+        if method == "initialize":
+            inits.append(1)
+        return real_req(self, rid, method, params, timeout)
+    monkeypatch.setattr(M._Stdio, "__init__", counting_init)
+    monkeypatch.setattr(M._Stdio, "request", counting_req)
+    M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60).close()   # saves the tool list
+    spawns.clear()
+    inits.clear()
+    folders = []
+    for i in range(3):                                   # three chats, three different project folders
+        d = tmp_path / f"proj{i}"
+        d.mkdir()
+        (d / "note.docx").write_bytes(b"")
+        (d / "a.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+        folders.append(d)
+    chats = [M.Manager(roots=[str(d)], extra=office_extra(str(d))).start(timeout=60) for d in folders]
+    assert spawns == [] and inits == []                  # opening chats that never ask for a document starts nothing
+    name = _tool(chats[0], "read_document")
+    for n in range(20):
+        chat, d = chats[n % 3], folders[n % 3]
+        text, failed = chat.call(name, {"path": "a.csv"})
+        assert not failed and "x" in text
+    assert len(spawns) == 1 and len(inits) == 1          # one reader, initialised once, for all 20 reads
+    for c in chats:
+        c.close()
+
+
+def test_chat_without_document_request_never_starts_the_reader(tmp_path, monkeypatch):
+    spawns = []
+    real_init = M._Stdio.__init__
+    monkeypatch.setattr(M._Stdio, "__init__", lambda self, *a, **k: (spawns.append(1), real_init(self, *a, **k))[1])
+    M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60).close()
+    spawns.clear()
+    chat = M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60)
+    time.sleep(1)
+    assert spawns == [] and not _kids()
+    chat.close()
+
+
+def test_reader_restarts_after_a_crash(tmp_path):
+    m = M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60)
+    (tmp_path / "a.csv").write_text("x,y\n1,2\n", encoding="utf-8")
+    name = _tool(m, "read_document")
+    assert not m.call(name, {"path": "a.csv"})[1]
+    for c in _kids():
+        c.kill()
+    time.sleep(0.5)
+    ok = False
+    for _ in range(2):                                   # the call in flight at the crash may fail; the next works
+        ok = not m.call(name, {"path": "a.csv"})[1]
+        if ok:
+            break
+    assert ok
+    m.close()
