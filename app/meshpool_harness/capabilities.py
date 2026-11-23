@@ -114,7 +114,8 @@ def labels(caps) -> str:
 
 
 EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_file (it keeps the formatting and "
-             "formulas), or edit it directly with openpyxl, python-docx or python-pptx. Do not rebuild it with "
+             "formulas), add_slides for new slides in an existing deck, or edit it directly with openpyxl, "
+             "python-docx or python-pptx. Do not rebuild it with "
              "make_spreadsheet, make_deck or office_task.")
 
 
