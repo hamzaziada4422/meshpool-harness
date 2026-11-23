@@ -370,7 +370,7 @@ async function prCard(ic) {
 
 /* ================================== pages ================================== */
 /* The Memory and Project pages bind handlers on the persistent #col; drop them whenever the column is reused. */
-function clearColHandlers() { const c = $("#col"); if (c) for (const k of ["onclick", "onkeydown", "ondrop", "ondragover", "ondragleave", "ondragstart"]) c[k] = null; c?.classList.remove("drag"); }
+function clearColHandlers() { const c = $("#col"); if (c) for (const k of ["onclick", "onkeydown", "ondrop", "ondragover", "ondragleave", "ondragstart"]) c[k] = null; c?.classList.remove("drag"); const i = $("#input"); if (i) i.disabled = false; }
 function goPage(name) {
   clearColHandlers();
   leaveChat(S.cur); S.cur = null; setWorking(null);

@@ -359,14 +359,17 @@ function projMenu(e, pid) {
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
+// A delete still waiting out its undo window is sent when the page goes away, so a reload never brings the chat back.
+addEventListener("pagehide", () => { for (const id of S.delFlush?.keys() || []) { try { fetch(`/api/threads/${id}`, {method: "POST", keepalive: true, headers: {"X-Meshpool-Token": MP.token, "Content-Type": "application/json"}, body: JSON.stringify({action: "delete"})}); } catch (e) { /* page is closing */ } } });
 async function threadAct(id, action) {
   if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
     if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); renderSide(); toast("Chat restored"); }});
+    const t = setTimeout(async () => { S.pendingDelete.delete(id); S.delFlush?.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
+    (S.delFlush = S.delFlush || new Map()).set(id, t);
+    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); S.delFlush?.delete(id); renderSide(); toast("Chat restored"); }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -533,13 +536,14 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
+  let created = null;
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
       S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
+    const cur = S.cur, root = curRoot() || created?.workdir || "";          // before any wait: the user may open another chat meanwhile
     const files = atts.filter(a => !a.image);
     if (files.length) {
       const saved = [];
@@ -558,7 +562,7 @@ async function sendNow(interrupt) {
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
     S.pendingGoal = null;
-    S.stopping = false; renderBar();
+    S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
     toast(e.message, 4000);
@@ -569,7 +573,7 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new chat", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#mPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],

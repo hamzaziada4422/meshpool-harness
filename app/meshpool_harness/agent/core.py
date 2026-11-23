@@ -1865,8 +1865,10 @@ class Agent:
                         self.emit({"type": "status", "text": note})   # one line, saying what was done
                         continue
                     if attempt >= 5:                       # up, yet this conversation's requests keep failing
-                        raise RuntimeError(msg + " [the endpoint answers small requests, but this conversation's "
-                                           "requests keep failing]")
+                        if re.search(r"HTTP 5\d\d", msg):  # the endpoint itself fails: no claim that it is fine
+                            raise RuntimeError(msg)
+                        raise RuntimeError(msg + " (the endpoint answers small requests, but this conversation's "
+                                           "requests keep failing)")
                     if re.search(r"timed out", msg, re.I):   # up but slow to start (prefill, a queue): wait longer
                         self._first_scale = min(5.0, self._first_scale * 2.5)
                     if attempt == 1:                       # a stuck sticky route (cache affinity) upstream: new route
