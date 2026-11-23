@@ -1992,7 +1992,15 @@ class Agent:
         model = self.current_model()
         prov = PV.split(model)[0]
         base, key = PV.endpoint(prov) if prov != "chatgpt" else ("", "")
-        return CTX.window(model, base, key)
+        win = CTX.window(model, base, key)
+        try:                                       # a window an earlier chat learned from this endpoint's replies
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(base, PV.split(model)[1])
+            if c.source.get("window") == "learned" and 512 <= c.window < win:
+                win = c.window
+        except Exception:  # noqa: BLE001
+            pass
+        return win
 
     def _fit_body(self, body: dict) -> None:
         """Keep the request inside the model's window: compact tool schemas, capped instructions, elided old output,
@@ -2064,6 +2072,40 @@ class Agent:
         except Exception:  # noqa: BLE001 - shaping is an adaptation: never stop the turn over it
             return body
 
+    def _tls_text(self, base: str, msg: str) -> str:
+        from meshpool_harness.core import refusals as RF
+        return (f"The connection to {base or 'the endpoint'} failed: its TLS certificate is not trusted. "
+                + RF.diagnose(msg)["note"] + " (" + msg[:160] + ")")
+
+    def _diagnose(self, kind: str, msg: str, body: dict):
+        """refusals.diagnose for a 4xx the request itself caused (None for anything else or when nothing is named)."""
+        if kind not in ("bad_request", "vision", "context"):
+            return None
+        try:
+            from meshpool_harness.core import refusals as RF
+            return RF.diagnose(msg, body)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _apply_fix(self, fix: dict, fixed: set, base: str, body: dict) -> bool:
+        """Remember what a refusal taught (per endpoint+model, on disk). False when this fix was already applied in this
+        call: the same refusal came back, so the request cannot be fixed that way."""
+        from meshpool_harness.core import context as CTX
+        from meshpool_harness.core import modelcaps as MC
+        key = (fix["action"], tuple(fix.get("fields") or ()) or fix.get("max_output") or "")
+        if key in fixed:
+            return False
+        fixed.add(key)
+        model = str(body.get("model") or "")
+        MC.learn(base, model, **(fix.get("learn") or {}))
+        win = fix.get("context_window")
+        if win:
+            try:
+                CTX.learn(self.current_model(), int(win))
+            except Exception:  # noqa: BLE001
+                pass
+        return True
+
     def _caps(self, model: str, prof: dict | None = None):
         """What this model on its endpoint can do (core/modelcaps.py): every provider-specific choice reads this."""
         from meshpool_harness import providers as PV
@@ -2095,6 +2137,8 @@ class Agent:
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
         rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
         self._first_scale = 1.0
+        fixed: set = set()                                 # (action, field) refusals already fixed in this call
+        cut_resent = False                                 # a silently cut prompt is resent once per call (H-02)
         while True:
             attempt += 1
             if attempt >= 8:                               # every attempt waited or withheld: report the last error
@@ -2158,6 +2202,19 @@ class Agent:
                 if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                if kind == "tls":                          # an untrusted certificate: no probe, no waiting (S-11)
+                    raise RuntimeError(self._tls_text(base, msg))
+                fix = self._diagnose(kind, msg, body)
+                if fix:
+                    if not self._apply_fix(fix, fixed, base, body):
+                        raise                              # the same refusal after its fix: report it
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    if fix["action"] == "max_out":         # W-03: only the reply was too long; never compact for it
+                        k = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+                        body[k] = min(int(body.get(k) or fix["max_output"]), fix["max_output"])
+                    self.emit({"type": "status", "text": fix["note"]})
+                    continue
                 if kind == "auth":
                     # A gateway under load answers a good key with a spurious 401 now and then. A key that worked
                     # earlier in this chat gets two short retries; any key gets one, so a bad key still fails fast.
@@ -2224,10 +2281,14 @@ class Agent:
                     if cleaned:
                         raise
                     cleaned = True                         # control characters in a tool output: clean and retry
+                    changed = False
                     for m in body["messages"]:
                         if isinstance(m.get("content"), str):
-                            m["content"] = clean(m["content"])
-                    continue
+                            c = clean(m["content"])
+                            changed, m["content"] = changed or c != m["content"], c
+                    if changed:
+                        continue
+                    raise                                  # nothing to fix: a resend would fail the same way (W-04)
                 if kind == "rate_limit":
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
