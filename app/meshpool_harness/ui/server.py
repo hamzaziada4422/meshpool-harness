@@ -554,7 +554,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__,
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
-                return self._send(200, {"sessions": A.listing()})
+                q = parse_qs(u.query)
+                def _n(k):
+                    try:
+                        return max(0, int(q.get(k, ["0"])[0]))
+                    except ValueError:
+                        return 0
+                return self._send(200, A.listing_page(_n("limit"), _n("offset")))
             if u.path == "/api/styles":
                 from meshpool_harness import styles as ST
                 return self._send(200, ST.listing())
@@ -1300,6 +1306,7 @@ from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the t
 class _Server(ThreadingHTTPServer):
     # Windows' SO_REUSEADDR lets a second server bind a port already in use, so the free-port search never moved on
     allow_reuse_address = os.name != "nt"
+    request_queue_size = 128                     # P-13: the default of 5 drops connections when many tabs reconnect at once
 
 
 def _running() -> bool:

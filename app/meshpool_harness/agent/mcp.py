@@ -405,16 +405,21 @@ class _Stdio:
             env["PYTHONPATH"] = str(C.APP) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         log_dir.mkdir(parents=True, exist_ok=True)
         self.log = log_dir / f"{name}.log"
-        self.err = open(self.log, "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import PipedLog       # H-23: the server's log rotates by size while it runs
+        self.err = PipedLog(self.log)
         self.log_start = self.err.tell()
         kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {"start_new_session": True}
         try:
             self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err,
                                       env=env, cwd=spec.get("cwd") or None, **kw)
-        except FileNotFoundError:
+        except BaseException as e:
+            self.err.close()
+            if not isinstance(e, FileNotFoundError):
+                raise
             raise MCPError(f"command not found: {spec['command']}"
                            + (" (install Node.js from nodejs.org)" if spec["command"] in ("npx", "node") else "")
                            + (" (install uv from docs.astral.sh/uv)" if spec["command"] in ("uvx", "uv") else ""))
+        self.err.release()
         self.roots = roots
         self.grace = 6.0 if any("browser_mcp_server" in str(a) for a in args) else 0.0   # time to exit on EOF
         self.pending: dict[int, dict] = {}

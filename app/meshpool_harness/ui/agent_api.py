@@ -2085,7 +2085,16 @@ def listing() -> list:
              "state": s.state, "kind": s.kind, "harness": s.harness["id"]}
         rows[sid] = _decorate(r, m, legacy, live_pids)
         rows[sid].pop("_m", None)
-    return sorted(rows.values(), key=lambda r: -r["updated"])[:400]
+    return sorted(rows.values(), key=lambda r: -r["updated"])        # P-07: no cap; the page asks for a window (limit, offset)
+
+
+def listing_page(limit: int = 0, offset: int = 0) -> dict:
+    """The sidebar list in windows: the newest ``limit`` chats after ``offset`` (0 = all), with the total and whether more follow."""
+    rows = listing()
+    if limit and limit > 0:
+        window = rows[max(0, offset): max(0, offset) + limit]
+        return {"sessions": window, "total": len(rows), "more": max(0, offset) + limit < len(rows)}
+    return {"sessions": rows, "total": len(rows), "more": False}
 
 
 def exists(sid: str) -> bool:
@@ -2268,6 +2277,7 @@ def search(q: str) -> list:
     if not q:
         return []
     hits = []
+    quick = all(32 <= ord(c) < 127 for c in q) and not any(c in q for c in '"\\')     # plain ASCII text is never escaped in the saved JSON
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         if p.parent.name.startswith("sub-"):             # a sub-agent's session, not a chat
             continue
@@ -2277,6 +2287,14 @@ def search(q: str) -> list:
             if hit and hit[0] == key:
                 raw, low = hit[1], hit[2]
             else:
+                if quick and not (p.parent / "session.journal").exists():
+                    # P-07: a chat that cannot contain the words is skipped from its raw text (no parse, no re-dump)
+                    try:
+                        if q not in p.read_text(encoding="utf-8", errors="replace").lower() \
+                                and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+                            continue
+                    except OSError:
+                        continue
                 sd = SS.read(p.parent)
                 if not isinstance(sd, dict):
                     continue

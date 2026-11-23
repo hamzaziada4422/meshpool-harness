@@ -138,18 +138,20 @@ def _log_to_file() -> None:
     log = C.runs_dir() / "app.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if log.exists() and log.stat().st_size > 2_000_000:
-            log.replace(log.with_suffix(".old.log"))
-        f = open(log, "a", encoding="utf-8", errors="replace", buffering=1)
+        from meshpool_harness.logfiles import PipedLog, RotatingFile   # H-23: the app log rotates by size while it runs
+        if os.name != "nt":
+            f = PipedLog(log)                  # native output (fd 1 and 2) goes through the same rotating file
+            sys.stdout = sys.stderr = f.sink
+            try:
+                os.dup2(f.fileno(), 1)
+                os.dup2(f.fileno(), 2)
+            except OSError:
+                pass
+            f.release()
+        else:
+            sys.stdout = sys.stderr = RotatingFile(log)
     except OSError:
         return
-    sys.stdout = sys.stderr = f
-    if os.name != "nt":
-        try:
-            os.dup2(f.fileno(), 1)
-            os.dup2(f.fileno(), 2)
-        except OSError:
-            pass
 
 
 def _mac_environment() -> None:

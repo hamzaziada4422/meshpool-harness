@@ -3705,7 +3705,7 @@ class Agent:
             for p in SESSIONS.glob("*/session.json"):
                 if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
                     continue
-                d = SS.read(p.parent)
+                d = SS.read_head(p.parent) or SS.read(p.parent)      # the small head first: not every chat is read in full
                 if not d:
                     continue
                 if session_id and d.get("id") != session_id:
@@ -3718,6 +3718,8 @@ class Agent:
                     best, best_dir = d, p.parent
         if not best:
             return None
+        if "messages" not in best:                       # only the chat that won is read in full
+            best = SS.read(best_dir) or best
         kw.setdefault("profile", "work" if best.get("harness") == "meshpool-work" else "code")
         a = cls(best["workdir"], session_id=best["id"], **kw)
         if isinstance(best.get("route"), dict):

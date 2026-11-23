@@ -212,7 +212,7 @@ def _gc_blobs(d: Path, snapshot_json: str) -> None:
 
 def _head_of(data: dict, count: int) -> dict:
     h = {k: data.get(k) for k in ("id", "workdir", "title", "created", "updated", "model", "harness", "kind",
-                                  "imported", "unfinished")}
+                                  "imported", "unfinished", "usage")}
     h["count"] = count
     return h
 
@@ -284,7 +284,7 @@ def append_journal(d, start: int, messages: list, meta: dict) -> None:
         _append_line(d / "session.journal", _dumps(rec) + "\n")
         h = read_head(d)
         if h is not None:                              # keep the listing record current without reading the chat
-            h.update({k: meta[k] for k in ("title", "updated", "model", "unfinished") if k in meta})
+            h.update({k: meta[k] for k in ("title", "updated", "model", "unfinished", "usage") if k in meta})
             h["count"] = start + len(messages)
             with contextlib.suppress(OSError):
                 fsio.atomic_write_json(d / HEAD, h, indent=None, fsync=False, default=str)

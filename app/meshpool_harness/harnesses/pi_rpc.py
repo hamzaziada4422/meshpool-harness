@@ -345,10 +345,12 @@ class PiAgent:
         env["PATH"] = nb + os.pathsep + env.get("PATH", "")      # npx and node for MCP servers the user adds
         log_dir = C.runs_dir() / "harness-logs"
         log_dir.mkdir(parents=True, exist_ok=True)
-        self._err = open(log_dir / "pi.log", "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import PipedLog      # H-23: rotates by size while Pi runs
+        self._err = PipedLog(log_dir / "pi.log")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err,
                                    cwd=str(self.root), env=env, **kw)
+        self._err.release()
         self._alive = True
         self._exited.clear()
         with self._sl:                     # messages an earlier Pi had queued but not read: the new one gets them

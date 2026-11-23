@@ -928,7 +928,7 @@ async function poll() {
   if (busy) startStream(cur);
   // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
   cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
-  const delay = busy ? (document.hidden ? 2000 : cur.es && cur.es.readyState === 1 ? 4000 : 400)
+  const delay = busy ? (document.hidden ? 2000 : (cur.es && cur.es.readyState === 1) || cur.relay ? 4000 : 400)
     : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
   cur.pollT = setTimeout(poll, delay);
 }
@@ -963,12 +963,35 @@ function ingest(cur, v) {
   return false;
 }
 // ---- Server-Sent Events: the open chat's events pushed as they happen
+// P-11: browsers allow six connections per site, and every tab used to hold its own stream: twenty tabs on a running chat
+// starved each other. One tab per chat (the one that holds a Web Lock) keeps the EventSource and relays what arrives to the
+// other tabs over a BroadcastChannel; when it closes, the next tab takes over. An idle tab holds no stream at all.
 function startStream(cur) {
-  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
-  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  if (cur.es || cur.relay || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  if (!(window.BroadcastChannel && navigator.locks)) return openStream(cur);
+  const name = "mp-sse-" + cur.id;
+  let ch, ac;
+  try { ch = new BroadcastChannel(name); ac = new AbortController(); } catch (e) { return openStream(cur); }
+  const r = cur.relay = {ch, ac, leader: false, release: null};
+  ch.onmessage = e => {                              // a follower: what the leader's stream delivered
+    if (r.leader || cur.relay !== r || S.cur !== cur) return;
+    const d = e.data || {};
+    if (d.end) { poll(); return; }
+    let v; try { v = JSON.parse(d.data); } catch (err) { return; }
+    const first = (v.events || []).find(x => typeof x.i === "number");
+    if (first && first.i > (cur.next || 0)) { poll(); return; }     // a gap (this tab joined late): fetch what it missed
+    if (ingest(cur, v)) poll();
+  };
+  navigator.locks.request(name, {signal: ac.signal}, () => new Promise(done => {
+    if (cur.relay !== r || S.cur !== cur) return done();
+    r.leader = true; r.release = done; openStream(cur);
+  })).catch(() => {});
+}
+function openStream(cur) {
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; stopStream(cur); return; }
   cur.es = es;
-  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
-  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; try { cur.relay?.ch.postMessage({data: m.data}); } catch (e) { /* closed */ } if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { try { cur.relay?.ch.postMessage({end: true}); } catch (e) { /* closed */ } stopStream(cur); if (S.cur === cur) poll(); });
   es.onerror = () => {                           // fall back to polling; try the stream again a few times
     stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
     if (cur.esFails >= 4) { cur.sseOff = true; return; }
@@ -976,7 +999,10 @@ function startStream(cur) {
     if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
   };
 }
-function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+function stopStream(cur) {
+  if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; }
+  const r = cur?.relay; if (r) { cur.relay = null; try { r.release?.(); r.ac.abort(); r.ch.close(); } catch (e) { /* already gone */ } }
+}
 // ---- the paced drain: events leave the queue in order; text goes a few characters per frame
 function drainQ(cur, all) {
   const q = cur.q; if (!q || !q.length) return;

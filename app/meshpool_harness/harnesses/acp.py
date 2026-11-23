@@ -390,7 +390,8 @@ class ACPAgent:
                 self._err.close()              # the log of a process that exited
             except OSError:
                 pass
-        self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import RotatingFile      # H-23: rotates by size while the harness runs
+        self._err = RotatingFile(log_dir / f"{m.get('id', 'acp')}.log")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(self.root), env=env, **kw)

@@ -714,12 +714,15 @@ def term_stop_all() -> None:
 
 # ======================================== usage ===================================================================
 def usage() -> dict:
+    from meshpool_harness import session_store as SS
     from meshpool_harness.agent.core import SESSIONS
     rows, total = [], {"in": 0, "cached": 0, "out": 0, "calls": 0}
     by_model: dict[str, dict] = {}
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = SS.read_head(p.parent)           # P-07/H-14: the small head record; a chat saved before heads held usage is read once
+            if not isinstance(d, dict) or "usage" not in d:
+                d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         u = d.get("usage") or {}

@@ -150,7 +150,8 @@ async function pickProject() {
 }
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
-  S.threads = (await api("/api/agent")).sessions;
+  const pg = await api(`/api/agent?limit=${S.threadLimit || 300}`);        // P-07: the newest chats; "Load more" widens the window
+  S.threads = pg.sessions; S.threadsMore = !!pg.more; S.threadsTotal = pg.total || S.threads.length;
   for (const t of S.threads) {
     const w = was.get(t.id);
     if (w === "working" && t.state === "waiting") window.notifyEvent?.("wait", t.title);
@@ -254,6 +255,7 @@ function renderSide() {
     html += `<div class="sec"><button class="sechd" id="togArch" aria-expanded="${!!S.showArchived}"><span>Archived</span><span class="cnt">${arch.length}</span><span class="chev">${ICON.chev}</span></button></div>`;
     if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, {})).join("")}</ul>`;
   }
+  if (S.threadsMore) html += `<button class="linkbtn moreproj" id="moreThreads">Load more chats (${Math.max(0, (S.threadsTotal || 0) - S.threads.length)} older)</button>`;
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it. When only the status
   // dots changed, patch them in place.
   if (el._html === html) return;
@@ -299,6 +301,7 @@ function bindSide() {
     const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
     if (e.target.closest("#codeFilter")) return codeFilterMenu(e.target.closest("#codeFilter"));
     if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#moreThreads")) { S.threadLimit = (S.threadLimit || 300) + 300; S.allRecents = true; loadThreads(); return; }
     if (e.target.closest("#moreRecents")) { S.allRecents = !S.allRecents; return renderSide(); }
     const va = e.target.closest("[data-vall]"); if (va) return openProject(va.dataset.vall);
     if (e.target.closest(".rn")) return;
