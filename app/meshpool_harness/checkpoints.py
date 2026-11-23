@@ -48,6 +48,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import stat
 import threading
 import time
@@ -284,8 +285,67 @@ _WINDOWS: dict[str, dict] = {}
 _WIN_IDS = itertools.count(1)
 
 
-def _win_open(root_key: str, store_key: str) -> dict:
-    w = {"id": next(_WIN_IDS), "root": root_key, "store": store_key, "start": time.time(), "over": False}
+def _pid_alive(pid) -> bool:
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            k = ctypes.windll.kernel32
+            h = k.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+            if not h:
+                return k.GetLastError() == 5           # access denied: it exists
+            code = ctypes.c_ulong()
+            ok = k.GetExitCodeProcess(h, ctypes.byref(code))
+            k.CloseHandle(h)
+            return bool(ok) and code.value == 259      # STILL_ACTIVE
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _entry_live(e, now: float, host: str) -> bool:
+    if not isinstance(e, dict):
+        return False
+    try:
+        if now - float(e.get("start", 0)) > 6 * 3600:        # abandoned
+            return False
+    except (TypeError, ValueError):
+        return False
+    if e.get("host") == host and not _pid_alive(e.get("pid")):
+        return False
+    return True
+
+
+def _win_file_update(shared, fn) -> None:
+    """Locked read-modify-write of ``<shared>/windows.json``. A damaged file only holds transient state, so it is
+    quarantined and treated as empty. Failures here never break a turn (the in-process registry still works)."""
+    path = Path(shared) / "windows.json"
+    for _ in range(2):
+        try:
+            fsio.update_json(path, fn, default={}, timeout=5)
+            return
+        except fsio.CorruptFile:
+            fsio.quarantine(path)
+        except Exception:
+            return
+
+
+def _win_open(root_key: str, store_key: str, shared=None) -> dict:
+    wid = f"{os.getpid()}-{next(_WIN_IDS)}-{os.urandom(3).hex()}"
+    w = {"id": wid, "root": root_key, "store": store_key, "start": time.time(), "over": False, "shared": shared}
     with _WIN_LOCK:
         cur = _WINDOWS.setdefault(root_key, {})
         for k, o in list(cur.items()):
@@ -294,13 +354,46 @@ def _win_open(root_key: str, store_key: str) -> dict:
             elif o["store"] != store_key:
                 o["over"] = w["over"] = True
         cur[w["id"]] = w
+    if shared is not None:
+        host = socket.gethostname()
+
+        def add(d):
+            if not isinstance(d, dict):
+                d = {}
+            now = time.time()
+            for k in [k for k, e in d.items() if not _entry_live(e, now, host)]:
+                del d[k]                                          # stale: pruned
+            mine = {"store": store_key, "pid": os.getpid(), "start": w["start"], "host": host}
+            for e in d.values():
+                if e.get("store") != store_key:
+                    e["overlap"] = mine["overlap"] = True
+            d[wid] = mine
+            return d
+        _win_file_update(shared, add)
     return w
 
 
 def _win_close(w: dict) -> bool:
     with _WIN_LOCK:
         _WINDOWS.get(w["root"], {}).pop(w["id"], None)
-    return w["over"]
+    over = w["over"]
+    if w.get("shared") is not None:
+        host = socket.gethostname()
+
+        def drop(d):
+            nonlocal over
+            if not isinstance(d, dict):
+                return {}
+            e = d.pop(w["id"], None)
+            if isinstance(e, dict) and e.get("overlap"):
+                over = True
+            now = time.time()
+            for k in [k for k, x in d.items() if not _entry_live(x, now, host)]:
+                del d[k]
+            return d
+        _win_file_update(w["shared"], drop)
+    w["over"] = over
+    return over
 
 
 _PATCH_RE = re.compile(r"^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+?)\s*$")
@@ -639,7 +732,7 @@ class Checkpoints:
 
     # ---------- windows (scan-mode turns, journal opaque tools) -----------------------------------------------------
     def _begin_window(self) -> dict | None:
-        w = _win_open(str(self.root), str(self.store.resolve()))
+        w = _win_open(str(self.root), str(self.store.resolve()), self.shared)
         w["before"] = self._scan()
         if w["before"] is None:
             _win_close(w)
