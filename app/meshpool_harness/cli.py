@@ -46,6 +46,13 @@ def _engine(name):
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
+    from meshpool_harness import telemetry
+    with telemetry.span("meshpool.run", {"meshpool.engine": engine or ""}):
+        return _run_request(request, files, out, engine, workdir, client, output_format, model)
+
+
+def _run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
+                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -162,6 +169,8 @@ def _agent_parser():
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
+    ap.add_argument("--effort", choices=["off", "low", "medium", "high", "xhigh"],
+                    help="how hard the model thinks (setting MH_REASONING_EFFORT; /effort in a session)")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--mode", choices=["code", "work", "auto"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps; auto: pick the agent for the request")
     ap.add_argument("--profile", choices=["code", "work"], help=argparse.SUPPRESS)      # the old name of --mode
@@ -349,6 +358,10 @@ def _main(argv=None):
         a = _agent_parser().parse_args(argv)
         if a.model:
             os.environ["MH_MODEL"] = a.model
+        if os.environ.get("MH_EFFORT") and not os.environ.get("MH_REASONING_EFFORT"):
+            os.environ["MH_REASONING_EFFORT"] = os.environ["MH_EFFORT"]      # the old name, kept as an alias
+        if getattr(a, "effort", None):
+            os.environ["MH_REASONING_EFFORT"] = a.effort
         from meshpool_harness.agent.tui import main as agent_main
         prompt = a.prompt
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
@@ -383,7 +396,7 @@ def _main(argv=None):
             return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request,
                               json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
                               agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
-                              output_last_message=a.output_last_message,
+                              output_last_message=a.output_last_message, effort=getattr(a, "effort", None),
                               **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)

@@ -299,8 +299,13 @@ class Session:
                  no_mcp: bool = False):
         self.events: list[dict] = []
         self.listeners: list = []
+        from meshpool_harness import telemetry as _TM
+        _tl = _TM.listener(self)                  # G-16: spans and metrics, only with MH_OTEL=1 and an endpoint
+        if _tl:
+            self.listeners.append(_tl)
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
+        self.effort = ""                        # /effort: this chat's reasoning effort ("" = the setting)
         self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
         self.cp = None
         self.lock = threading.RLock()          # re-entrant: a steer taken under it emits an event
@@ -403,11 +408,14 @@ class Session:
         if resume_id:
             meta = read_meta(self.id)
             self.plan = bool(meta.get("plan", self.plan))
+            self.effort = str(meta.get("effort") or "")
             self.goal = str(meta.get("goal") or "")
             if meta.get("model") and not getattr(self.agent, "model", None) and not legacy:
                 self.set_model(meta["model"])
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
+        if self.effort:
+            self._apply_effort()
         from meshpool_harness.checkpoints import Checkpoints
         outside = self.harness["type"] in ("acp", "pi")
         self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints", mode="scan" if outside else "journal",
@@ -1474,6 +1482,24 @@ class Session:
             self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
+    EFFORTS = ("off", "low", "medium", "high", "xhigh")
+
+    def _apply_effort(self):
+        self.agent.effort = self.effort                  # core.Agent reads it when it builds the request
+        if hasattr(self.agent, "set_effort"):
+            self.agent.set_effort(self.effort)           # an agent with its own models (Codex's bare[effort] ids)
+
+    def set_effort(self, level: str):
+        """/effort: how hard the model thinks, for this chat only ("" goes back to the Settings value)."""
+        level = (level or "").strip().lower()
+        if level in ("default", "auto", "none-set"):
+            level = ""
+        if level and level not in self.EFFORTS:
+            raise ValueError("Effort is one of: " + ", ".join(self.EFFORTS) + " (or empty for the default).")
+        self.effort = level
+        self._apply_effort()
+        write_meta(self.id, effort=level)
+
     def _turn_cut(self, turn: int):
         """Position in the transcript of the user event that started this checkpoint turn, or None (old turns)."""
         from meshpool_harness import chat_rewind as CR
@@ -1601,6 +1627,7 @@ class Session:
                 "model": (a.current_model() if hasattr(a, "current_model") else
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
+                "effort": self.effort,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
                 "worktree": meta.get("worktree") or None,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
@@ -1717,6 +1744,8 @@ def _create(body: dict, made: list) -> dict:
                              "Close the chats you are not using, then send again.") from e
         raise
     made.clear()                                    # the chat exists: it owns its folder now
+    if body.get("effort"):
+        s.set_effort(str(body["effort"]))
     if wt:
         from meshpool_harness import worktrees as WT
         WT.set_owner(wt["id"], "chat", s.id)

@@ -407,6 +407,8 @@ def to_request(body: dict, model: str) -> dict:
         out["tool_choice"] = body.get("tool_choice", "auto")
     if body.get("prompt_cache_key"):
         out["prompt_cache_key"] = body["prompt_cache_key"]
+    if body.get("reasoning_effort"):
+        out["reasoning"] = {"effort": body["reasoning_effort"]}
     if (body.get("response_format") or {}).get("type") == "json_object":
         out["text"] = {"format": {"type": "json_object"}}
     return out

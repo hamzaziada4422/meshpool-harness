@@ -1394,7 +1394,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
          json_out: bool = False, mode: str | None = None, agent: str | None = None, project: str | None = None,
          incognito: bool = False, attach: list | None = None, output_last_message: str | None = None,
-         model: str | None = None, worktree_id: str | None = None) -> int:
+         model: str | None = None, worktree_id: str | None = None, effort: str | None = None) -> int:
     """The terminal. A chat is the app's chat (meshpool_harness.chats, the same Session the web page uses): this only
     draws it, answers its questions at the prompt, and reports the outcome. Exit codes: 0 done, 1 failed, 3 done but
     something was not allowed (-p cannot ask)."""
@@ -1426,7 +1426,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
             "plan": True if pm == "plan" else None, "incognito": incognito, "project_id": project or "",
-            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or ""}
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
     elif agent:
