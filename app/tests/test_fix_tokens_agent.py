@@ -109,7 +109,8 @@ def test_anthropic_request_has_cache_breakpoints_and_tolerates_missing_usage():
     assert out["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert out["tools"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in out["tools"][0]
     assert out["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
-    assert json.dumps(out).count("cache_control") == 3
+    assert out["messages"][0]["content"][-1]["cache_control"] == {"type": "ephemeral"}   # the previous user turn
+    assert json.dumps(out).count("cache_control") == 4                                     # the API allows 4
     # the reply without any cache fields still gives a usable usage block
     r = AW.from_response({"content": [{"type": "text", "text": "x"}], "usage": {"input_tokens": 5, "output_tokens": 2}})
     assert r["usage"]["prompt_tokens"] == 5 and r["usage"]["prompt_tokens_details"]["cached_tokens"] == 0
