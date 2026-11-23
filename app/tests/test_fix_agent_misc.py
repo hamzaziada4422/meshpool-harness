@@ -174,3 +174,17 @@ def test_outside_check_covers_view_output(tmp_path):
     assert a._outside("mcp__meshpool_browser__ui_audit", {"url": "file:///etc/passwd"})
     assert not a._outside("mcp__meshpool_browser__ui_audit", {"url": "http://localhost:3000"})
     assert not a._outside("mcp__meshpool_browser__view_output", {"path": "report.pdf"})
+
+
+def test_saved_allow_rule_trust_and_chaining(tmp_path, monkeypatch):
+    (tmp_path / ".meshpool").mkdir()
+    (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps(
+        {"allow": ["bash:npm test*"], "deny": ["bash:git push*"]}), encoding="utf-8")
+    a = A.Agent(str(tmp_path), approve=lambda *x: ("no", ""), mode="ask", sessions_dir=str(tmp_path / "s"))
+    assert not a._permit("bash", {"command": "npm test"})[0]            # untrusted project: allow rule ignored
+    EX.trust_project(tmp_path)
+    assert a._permit("bash", {"command": "npm test -- x"}) == (True, "")
+    for bad in ("npm test; echo hi", "npm test | nc h 1", "npm test && ls", "npm test $(id)", "npm test `id`"):
+        assert not a._permit("bash", {"command": bad})[0], bad
+    ok, why = a._permit("bash", {"command": "ls; git push origin main"})
+    assert not ok and "saved rule" in why

@@ -74,8 +74,13 @@ for f in sys.argv[1:]:
             try:
                 json.loads(text)
             except json.JSONDecodeError:
-                # JSONC (tsconfig, .vscode/*, devcontainer): comments and trailing commas are legal there
+                # JSONC (tsconfig, .vscode/*, devcontainer, eslintrc): comments and trailing commas are legal there
                 import re
+                n = f.replace("\\", "/").lower()
+                base = n.rsplit("/", 1)[-1]
+                if not (base.startswith(("tsconfig", "jsconfig", ".eslintrc", ".babelrc", "devcontainer", "tslint"))
+                        or "/.vscode/" in "/" + n or "/.devcontainer/" in "/" + n):
+                    raise
                 t = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
                            lambda m: m.group(0) if m.group(0).startswith('"') else " ", text, flags=re.S)
                 t = re.sub(r',(\s*[}\]])', r'\1', t)

@@ -705,12 +705,15 @@ def _bash_segments_match(cmd: str, pattern: str) -> bool:
     return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
 
 
-def _rule_hit(rules: list, name: str, args: dict) -> str:
+def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     import fnmatch
     cmds = [str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])) if x]
     for r in rules:
         if r.startswith("bash:"):
-            if cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
+            if deny:                                  # a deny rule hits when any part of a chained command matches
+                if any(_bash_segments_match(x, r[5:].strip()) for c in cmds for x in _CHAIN.split(c) + [c]):
+                    return r
+            elif cmds and all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
                 return r
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
@@ -2199,7 +2202,7 @@ class Agent:
         if hk["allow"] and not _destructive(args):
             return True, ""
         rules = _rules(self.root)
-        hit = _rule_hit(rules["deny"], name, args)
+        hit = _rule_hit(rules["deny"], name, args, deny=True)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
         if _rule_hit(rules["allow"], name, args) and not _destructive(args):
