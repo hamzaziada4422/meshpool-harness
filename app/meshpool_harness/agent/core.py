@@ -2872,13 +2872,15 @@ class Agent:
         cp = getattr(self, "checkpoint", None)          # the chat's checkpoints (journal mode); sub-agents have none
         cp_ctx = cp.tool(name, args, read_only=name in READ_ONLY or self._inspection(
             name, raw if isinstance(raw, str) else json.dumps(raw))) if cp else None
-        if cp_ctx:
-            cp_ctx.__enter__()
+        cp_on = False                                    # opened only once the call may run: never across an approval wait
         try:
             if bad:
                 raise bad
             steer = self._engine_only(name, args)
             allowed, note = (False, "") if steer else self._permit(name, args)
+            if cp_ctx and allowed and not steer:
+                cp_ctx.__enter__()
+                cp_on = True
             if steer:
                 out, ok = steer, False
             elif not allowed:
@@ -2984,7 +2986,7 @@ class Agent:
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
         finally:
-            if cp_ctx:
+            if cp_on:
                 cp_ctx.__exit__(None, None, None)
                 if name == "bash_start" and ok and not denied:
                     cp.window_open()                    # the background process may still change files

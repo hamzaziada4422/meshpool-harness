@@ -206,3 +206,24 @@ def test_live_session_rewind_and_fork(env):
     assert [t["n"] for t in s.cp.turns()] == [1]
     with pytest.raises(ValueError):
         s.rewind(0)                                          # not a user message
+
+
+def test_user_edit_while_a_command_waits_for_approval_is_not_booked(env):
+    """M05-01: the scan window of a shell command opens only once the user allowed it. Files the user edits while the
+    approval card waits are theirs, and Undo must not touch them."""
+    import json
+    s = _session(env)
+    a = s.agent
+    s.cp.begin_turn("t", len(a.messages), 0)
+
+    def permit(name, args):
+        (env / "mine.txt").write_text("typed by the user while the approval card waited\n")
+        return True, ""
+    a._permit = permit
+    a._run_tool({"id": "c1", "function": {"name": "bash", "arguments": json.dumps(
+        {"command": "echo agent > agent.txt"})}})
+    s.cp.end_turn()
+    changed = [c["path"] for c in s.cp.turns()[0]["changed"]]
+    assert "agent.txt" in changed and "mine.txt" not in changed, changed
+    s.cp.revert_to_before(s.cp.turns()[0]["n"])
+    assert (env / "mine.txt").exists() and not (env / "agent.txt").exists()
