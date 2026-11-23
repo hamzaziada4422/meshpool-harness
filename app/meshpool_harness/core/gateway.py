@@ -533,7 +533,7 @@ def call(base: str, key: str, model: str, send, *, probe=None, check_stop=None, 
     h = health(base, key, model)
     if h.is_down():
         up = False
-        if probe is not None:
+        if probe is not None and recover_s != 0:       # recover_s=0: fail at once, no probe (side calls)
             def sleep(s):
                 end = time.time() + s
                 while time.time() < end:

@@ -388,7 +388,7 @@ class SimpleLedger:
         return out
 
     def _chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
-              temperature=None, extra=None, timeout=600, retries=2, **_):
+              temperature=None, extra=None, timeout=600, retries=2, side=False, **_):
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -466,7 +466,8 @@ class SimpleLedger:
 
         while True:
             try:
-                status, raw, retry_after = GW.call(base_url, api_key, model, send_once, probe=probe)
+                status, raw, retry_after = GW.call(base_url, api_key, model, send_once, probe=probe,
+                                                   recover_s=0 if side else None)   # a side call never waits out an outage
             except _Attempt as a:
                 status, raw, retry_after = a.status, a.raw, a.retry_after
             if status in (200, 429):

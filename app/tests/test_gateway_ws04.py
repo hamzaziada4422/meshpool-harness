@@ -318,3 +318,19 @@ def test_a_marker_that_cannot_be_written_never_raises(env, monkeypatch, tmp_path
     with h.cond:
         h._mark_up()
     assert not h.is_down()
+
+
+def test_a_side_call_fails_at_once_on_a_down_endpoint_without_probing(env, monkeypatch, mock):
+    """Compaction, memory, classifiers (side calls) must not wait out an outage another process saw."""
+    from meshpool_harness.core.wire import SimpleLedger
+    monkeypatch.setenv("MESHPOOL_BASE_URL", mock.base)
+    monkeypatch.setenv("MESHPOOL_API_KEY", KEY)
+    monkeypatch.setenv("MH_RECOVER_MIN", "30")                              # a main call would wait up to 30 min
+    led = SimpleLedger("t")
+    with GW.health(led.base_url, led.api_key, "m").cond:
+        GW.health(led.base_url, led.api_key, "m")._mark_down()
+    t0 = time.time()
+    with pytest.raises(RuntimeError, match="marked down"):
+        led.chat(model="m", messages=[{"role": "user", "content": "hi"}], side=True)
+    assert time.time() - t0 < 2
+    assert mock.chats == 0 and mock.probes == 0
