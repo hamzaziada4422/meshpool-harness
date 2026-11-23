@@ -283,6 +283,15 @@ jobs:
           fi
           [ -x "$MAKENSIS" ] || { echo "NSIS could not be installed"; exit 1; }
           cd dist-src/app-win
+          # makensis is a 32-bit program: with the speech model, ffmpeg and pandoc the payload no longer fits in its memory
+          # ("Internal compiler error #12345: error mmapping datablock"). So the program files go into one 7z archive, made
+          # here with the 64-bit 7-Zip, and the installer unpacks it with 7-Zip's own 7z.exe and 7z.dll.
+          SEVEN="/c/Program Files/7-Zip"
+          [ -x "$SEVEN/7z.exe" ] || choco install 7zip -y --no-progress
+          [ -x "$SEVEN/7z.exe" ] || { echo "7-Zip is not installed"; exit 1; }
+          cp "$SEVEN/7z.exe" "$SEVEN/7z.dll" .
+          (cd Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -md=64m -mmt=on -bso0 -bsp0 ../payload.7z '*')
+          ls -la payload.7z
           # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
           # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
           if [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
@@ -298,6 +307,22 @@ jobs:
           fi
           cd "$GITHUB_WORKSPACE"
           mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
+      - name: Install the installer and smoke test what it installed (what a user gets)
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
+          D="$PWD/install-test"
+          W=$(cygpath -w "$D")
+          ./out/Meshpool-Setup.exe /S "/D=$W"          # silent; /D must come last
+          [ -f "$D/Meshpool.exe" ] || { echo "Meshpool.exe was not installed"; exit 1; }
+          [ -f "$D/Uninstall Meshpool.exe" ] || { echo "the uninstaller was not installed"; exit 1; }
+          want=$(find dist-src/app-win/Meshpool -type f | wc -l)
+          got=$(find "$D" -type f | wc -l)
+          echo "files in the build: $want, files installed: $got"
+          [ "$got" -ge "$want" ] || { echo "the installer unpacked fewer files than the build holds"; exit 1; }
+          "$D/runtime/python.exe" packaging/smoke.py --app "$D/app" --version "$VER"
       - name: Sign the installer
         if: env.AZURE_SIGNING_ENDPOINT != ''
         uses: azure/artifact-signing-action@v2

@@ -77,7 +77,25 @@ Section "Meshpool" SecMain
   ; disk) therefore leaves a working install instead of a half-deleted one. The user's settings live in %APPDATA%\Meshpool.
   RMDir /r "$INSTDIR.new"
   SetOutPath "$INSTDIR.new"
-  File /r "Meshpool\*.*"
+  !if /FileExists "payload.7z"
+    ; The release build packs the program files into one 7z archive (the build machine's 64-bit 7-Zip) because makensis
+    ; is a 32-bit program and cannot hold the whole payload ("error mmapping datablock"). This unpacks it with 7-Zip
+    ; (LGPL, see THIRD_PARTY_NOTICES.md). The archive is already compressed, so it goes in as it is.
+    File "/oname=$PLUGINSDIR\7z.exe" "7z.exe"
+    File "/oname=$PLUGINSDIR\7z.dll" "7z.dll"
+    File "/oname=$PLUGINSDIR\payload.7z" "payload.7z"
+    DetailPrint "Unpacking Meshpool. This takes a minute or two."
+    nsExec::ExecToLog '"$PLUGINSDIR\7z.exe" x -y -bso0 -bsp0 "-o$INSTDIR.new" "$PLUGINSDIR\payload.7z"'
+    Pop $0
+    Delete "$PLUGINSDIR\payload.7z"
+    StrCmp $0 "0" unpacked
+      RMDir /r "$INSTDIR.new"
+      MessageBox MB_OK|MB_ICONSTOP "Meshpool could not be unpacked (code $0). The disk may be full. Nothing was changed." /SD IDOK
+      Abort
+    unpacked:
+  !else
+    File /r "Meshpool\*.*"
+  !endif
   SetOutPath "$INSTDIR"
   StrCpy $R9 "0"
   !insertmacro MP_SWAP app
