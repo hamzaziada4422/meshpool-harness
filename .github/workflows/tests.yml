@@ -41,7 +41,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           # the same packages the app ships with (install.sh and the desktop builds use this file)
-          pip install -r packaging/requirements-cli.txt playwright pytest jsonschema
+          pip install -r packaging/requirements-cli.txt playwright pytest jsonschema pymupdf   # pymupdf is AGPL: test-only, never in the shipped requirements
       - name: Chromium for browser use (the app installs it with meshpool install-browser)
         run: python -m playwright install --with-deps chromium
       - name: Segoe UI's stand-in for rendering (decks are measured with the bundled Selawik, as on a user's computer)

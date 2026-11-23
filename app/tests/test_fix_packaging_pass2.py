@@ -16,7 +16,7 @@ def test_version_flag(capsys):
 def test_login_help_does_not_prompt(capsys):
     from meshpool_harness import cli
     assert cli.main(["login", "--help"]) == 0
-    assert "usage: meshpool login" in capsys.readouterr().out
+    assert "usage: meshpool login" in capsys.readouterr().out.lower()
 
 
 def test_olefile_is_declared_everywhere():

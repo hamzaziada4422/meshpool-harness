@@ -106,8 +106,21 @@ def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None
     return wait
 
 
+MAIN_PHASES = ("phase_2_build",)             # the user's own turn; every other phase is a side call
+CONNECT_BUDGET_S = 120.0                     # a main turn gives up on a dead connection or 5xx after this long
+SIDE_BUDGET_S = 15.0                         # compaction, classify, memory, summaries: two tries, then fail fast
+
+
+def _tell_retry(text: str) -> None:
+    import sys
+    print(f"[Meshpool] {text}", file=sys.stderr, flush=True)
+
+
 class LiveClient:
+    notify = None                            # optional callable(text): told once after the first failure that a retry follows
+
     def __init__(self, phase: str = "phase_2_build"):
+        self.phase = phase
         try:
             from eval.ledger import Ledger          # benchmark runs: budget ledger + accounting
             self.ledger = Ledger(phase)
@@ -140,7 +153,9 @@ class LiveClient:
             ex.setdefault("tool_choice", "auto")
         import time
         last = None
-        for attempt in range(25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
+        side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
+        t_start, told = time.time(), False
+        for attempt in range(3 if side else 25):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
             try:
                 r = self.ledger.chat(model=model, messages=messages, profile=profile, task_id=task_id,
                                      role=role, job_id=job_id, max_tokens=max_tokens, temperature=temperature,
@@ -169,11 +184,22 @@ class LiveClient:
                     continue
                 if kind == "rate_limit":                    # meshpool team token limit: wait for the window to reset
                     self._n429 = getattr(self, "_n429", 0) + 1
-                    time.sleep(rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1"))
+                    wait = rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1")
+                    if side and (wait > SIDE_BUDGET_S or time.time() - t_start + wait > SIDE_BUDGET_S):
+                        raise
+                    time.sleep(wait)
                     continue
                 if kind != "transient":
                     raise
-                time.sleep(min(30, 2 ** (attempt + 1)))
+                wait = min(30, 2 ** (attempt + 1))
+                budget = SIDE_BUDGET_S if side else CONNECT_BUDGET_S
+                if side and attempt >= 1 or time.time() - t_start + wait > budget:
+                    raise                                       # out of budget: the user sees the real error now
+                if not told and not side:
+                    told = True
+                    (self.notify or _tell_retry)(f"The model did not answer ({msg[:120]}). Retrying for up to "
+                                                 f"{int(budget)} s.")
+                time.sleep(min(wait, 2.0) if side else wait)
         raise last
 
     def spent(self) -> float | None:

@@ -903,7 +903,12 @@ def ask_key(force: bool = False) -> bool:
     if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")):
         return True
     if not sys.stdin.isatty():
-        print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})", file=sys.stderr)
+        if force:                                    # `meshpool login` itself, run without a terminal
+            print("meshpool login needs an interactive terminal to ask for the key. Without one, set "
+                  f"MESHPOOL_API_KEY=... in the environment, or add it to {C.config_path()}.", file=sys.stderr)
+        else:
+            print(f"No API key. Run: meshpool login   (or add MESHPOOL_API_KEY=... to {C.config_path()})",
+                  file=sys.stderr)
         return False
     from meshpool_harness.agent import onboard
     return onboard.key_step(Style(_enable_ansi()), header=True)

@@ -134,6 +134,22 @@ def edit_config(fn, path: Path | None = None, create: bool = True, whole: bool =
         return out
 
 
+_PLACEHOLDER_TOKEN = re.compile(r"^(x+|\*+|\.+|-+|none|null|todo|changeme|change[-_ ]?me|your[-_ ]?\w*|"
+                                r"<.*>|\$\{.*\}|\{\{.*\}\}|.*(?:proxy|placeholder|example|dummy|token[-_]here).*)$", re.I)
+
+
+def token_problem(spec: dict) -> str:
+    """Why the token in a connector's Authorization header cannot be real (empty, whitespace or a line break inside,
+    an obvious placeholder), or "" when it may be."""
+    hdr = (spec.get("headers") or {}).get("Authorization")
+    if hdr is None:
+        return ""
+    tok = re.sub(r"^bearer\s+", "", str(hdr), flags=re.I)
+    if not tok.strip() or re.search(r"\s", tok) or _PLACEHOLDER_TOKEN.match(tok.strip()):
+        return "looks invalid"
+    return ""
+
+
 def active_config(path: Path | None = None) -> dict:
     """mcp.json plus the connectors the user signed in to (GitHub, Jira, Linear, ...), with fresh credentials."""
     cfg = load_config(path)
@@ -142,6 +158,9 @@ def active_config(path: Path | None = None) -> dict:
         for name, spec in CN.servers().items():
             cur = cfg.get(name)
             if not isinstance(cur, dict) or cur.get("disabled"):
+                if token_problem(spec):          # a placeholder token only makes a red "failed" server
+                    spec = dict(spec, disabled=True, description=(
+                        f"The {name.upper()}_TOKEN looks invalid: unset it, or run meshpool connect {name}."))
                 cfg[name] = spec
     except Exception:  # noqa: BLE001  a connector problem must never block the other servers
         pass
