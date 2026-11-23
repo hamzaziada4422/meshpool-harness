@@ -139,3 +139,48 @@ def test_key_spend_probe_uses_the_header(home):
         assert f.log[-1]["headers"]["x-token"] == "k.1"
     finally:
         f.close()
+
+
+@pytest.mark.parametrize("pasted", ["Bearer sk-x.1_2=", '"sk-x.1_2="', "'Bearer sk-x.1_2='\n", "  bearer   sk-x.1_2=  "])
+def test_test_connection_and_save_clean_a_pasted_key_the_same(home, monkeypatch, pasted):
+    from meshpool_harness.ui import server as SV
+    monkeypatch.setenv("MH_STREAM", "0")
+    f = Fake(_ok_chat)
+    try:
+        r = SV.test_connection({"MESHPOOL_BASE_URL": f.url + "/v1", "MESHPOOL_API_KEY": pasted, "MH_MODEL": "m"})
+        assert r["ok"], r
+        assert f.log[-1]["headers"]["authorization"] == "Bearer sk-x.1_2="
+        SV.save_settings({"values": {"MESHPOOL_API_KEY": pasted, "MESHPOOL_BASE_URL": f.url + "/v1"}})
+        assert C.read()["MESHPOOL_API_KEY"] == "sk-x.1_2="
+    finally:
+        f.close()
+
+
+def test_messages_wire_follows_the_address_actually_used(home, monkeypatch, tmp_path):
+    """Saved address differs from the environment's, or is spelled with a trailing slash: still the Messages wire."""
+    from meshpool_harness.agent.core import Agent
+    got = {}
+
+    def h(rec):
+        got.update(rec)
+        return 200, {"id": "m", "stop_reason": "end_turn", "content": [{"type": "text", "text": "hello"}],
+                     "usage": {"input_tokens": 1, "output_tokens": 1}}
+    f = Fake(h)
+    try:
+        saved = f.url + "/v1"
+        C.write({"MESHPOOL_BASE_URL": saved, "MH_API_WIRE": "anthropic"})
+        monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/other/v1")     # the shell points elsewhere
+        monkeypatch.setenv("MH_API_WIRE", "anthropic")
+        a = Agent(str(tmp_path), mode="auto")
+        for base in (saved, saved + "/", "http://127.0.0.1:9/other/v1"):
+            got.clear()
+            if base == "http://127.0.0.1:9/other/v1":
+                continue
+            resp, streamed = a._post(base, "k-1", {"model": "c", "stream": True, "messages": [
+                {"role": "user", "content": "hi"}]}, True)
+            assert got["path"] == "/v1/messages" and got["headers"]["x-api-key"] == "k-1" and streamed is False
+        assert PV.wire_for(saved + "/") == "anthropic"
+        assert PV.wire_for("https://api.anthropic.com/v1") == "anthropic"
+        assert PV.wire_for("https://api.example.com/v1") == "openai"
+    finally:
+        f.close()

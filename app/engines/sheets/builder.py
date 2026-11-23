@@ -496,6 +496,9 @@ def dcf_block(ws, row, years, drivers, revenue=None, margin="ebitda_margin", nam
             k, prev = m.group(1), m.group(2)
             if k not in rows:
                 raise ValueError(f"dcf_block: unknown row {{{k}}} in {expr}")
+            if prev and i == 0:
+                raise ValueError(f"dcf_block: {{{k}@prev}} in {expr!r} has no prior column in the first forecast "
+                                 "year; give the driver a start value (growth/step) instead of a formula with @prev")
             return f"{cols[i - 1] if prev else cols[i]}{rows[k]}"
         return _re.sub(r"\{(\w+)(@prev)?\}", rep, expr)
 

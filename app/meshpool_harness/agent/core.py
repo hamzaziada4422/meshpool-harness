@@ -296,7 +296,7 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     from meshpool_harness import providers as _PV
-    if _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base():          # the Messages API (see Agent._post)
+    if _PV.wire_for(base) == "anthropic":          # the Messages API (see Agent._post)
         from meshpool_harness.core import anthropic_wire as AW
         body = AW.to_request(body)
         url, hdrs = _PV.chat_target(base, key, model, "messages")
@@ -2134,7 +2134,7 @@ class Agent:
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
         # (core/anthropic_wire.py), not streamed; every other endpoint speaks chat completions
-        anthropic = _PV.key_wire() == "anthropic" and base.rstrip("/") == _PV.key_base()
+        anthropic = _PV.wire_for(base) == "anthropic"
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
             stream = False

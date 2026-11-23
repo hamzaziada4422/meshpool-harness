@@ -193,9 +193,30 @@ def adapt_body(base: str, body: dict) -> dict:
 def chat_target(base: str, key_: str, model: str, path: str = "chat/completions") -> tuple[str, dict]:
     """(URL, auth headers) for a call to `base`. The saved custom header and scheme apply to the saved endpoint only:
     the local ChatGPT relay or another host gets the standard form for its kind."""
-    mine = base.rstrip("/") == key_base()
-    h = auth_headers(key_, base, key_wire() if mine else "openai", None if mine else "", None if mine else "")
+    mine = is_key_endpoint(base)
+    h = auth_headers(key_, base, wire_for(base), None if mine else "", None if mine else "")
     return chat_url(base, model, path), h
+
+
+def _norm_base(u: str) -> str:
+    return (u or "").strip().rstrip("/").lower()
+
+
+def is_key_endpoint(base: str) -> bool:
+    """Whether `base` is the key endpoint: the one in use now, or the saved or environment one (they can differ
+    when the shell overrides the saved address)."""
+    b = _norm_base(base)
+    return bool(b) and b in {_norm_base(key_base()), _norm_base(C.read().get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("OPENAI_BASE_URL", ""))}
+
+
+def wire_for(base: str) -> str:
+    """The wire to speak to `base`, decided from the address the request really goes to: the key endpoint's wire
+    for the key endpoint (whatever spelling of its address), else Anthropic for an anthropic.com host, else OpenAI."""
+    if is_key_endpoint(base):
+        return key_wire()
+    return "anthropic" if host(base).endswith("anthropic.com") else "openai"
 
 
 def key_problem(k: str | None) -> str:

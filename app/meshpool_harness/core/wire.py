@@ -179,7 +179,7 @@ class SimpleLedger:
         base_url, api_key = self.base_url, self.api_key
         # Streaming by default: a long generation keeps flowing and only a stall is cut off. A non-streamed call
         # waits up to 600 s per attempt, and a stalled upstream can sink a 20-minute engine run (seen live).
-        anthropic = PV.key_wire() == "anthropic"           # an Anthropic-style key endpoint: Messages API, not streamed
+        anthropic = PV.wire_for(base_url) == "anthropic"           # an Anthropic-style key endpoint: Messages API, not streamed
         stream = os.environ.get("MH_STREAM", "1") == "1" and wire == "chat" and not anthropic
         if stream:
             body["stream"] = True

@@ -112,3 +112,11 @@ def test_retired_shares_guard():
     from engines.sheets import builder as B
     import inspect
     assert "=IF(" in inspect.getsource(B).split('line("retired"')[1][:120]
+
+
+def test_dcf_block_prev_in_first_column_is_rejected():
+    from engines.sheets import builder as B
+    wb = B.banker_workbook("t", "p")
+    ws = wb["Calc"]
+    with pytest.raises(ValueError, match="no prior column"):
+        B.dcf_block(ws, 3, [2026, 2027, 2028], [{"key": "vol", "start": 10, "formula": "{vol@prev}*2"}])

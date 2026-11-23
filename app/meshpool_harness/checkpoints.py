@@ -382,8 +382,13 @@ class Checkpoints:
                 deleted.append(path)
             except OSError as e:
                 keep(path, f"couldn't delete it ({e.strerror or e})")
+        blocked = {k.lower(): k for k in kept} if self._case_insensitive() else {}
         for path in writes:
             p = self.root / path
+            clash = blocked.get(path.lower())
+            if clash and clash != path:           # the other-case name could not be removed and is this same file here
+                keep(path, f"{clash} still has its name on this disk (names ignore case here), so it was left as is")
+                continue
             try:
                 if not self._inside(p.parent):
                     keep(path, "it is behind a link that points outside the project, so it was left as is")
