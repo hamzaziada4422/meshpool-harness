@@ -125,8 +125,9 @@ def save_settings(body: dict) -> dict:
 
 def assistant_view() -> dict:
     from meshpool_harness import assistant as AS
-    rows = [dict(t, describe=AS.describe(t)) for t in AS.tasks()]
-    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows}
+    rows = [dict(t, describe=AS.describe(t), status=AS.status(t)) for t in AS.tasks()]
+    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows,
+            "tasks_problem": AS.tasks_problem()}
 
 
 def assistant_action(b: dict) -> dict:
@@ -141,11 +142,14 @@ def assistant_action(b: dict) -> dict:
     elif act == "task_add":
         AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                     b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
-                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")))
+                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
+                    b.get("skip_if_missed_h"))
     elif act == "task_update":
         AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
                                                                    "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change")})
+                                                                   "only_on_change", "skip_if_missed_h")})
+    elif act == "tasks_reset":
+        AS.reset_tasks()
     elif act == "task_delete":
         AS.delete_task(b.get("id", ""))
     elif act == "task_run":

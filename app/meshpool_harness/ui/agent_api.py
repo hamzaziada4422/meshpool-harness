@@ -427,6 +427,14 @@ class Session:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
             self.changed.notify_all()
+        lease = getattr(self, "_lease", None)
+        if lease and time.time() - getattr(self, "_lease_beat", 0) > 60:      # a working run keeps its task claimed
+            self._lease_beat = time.time()
+
+            def beat(tid=lease[0], tok=lease[1]):
+                from meshpool_harness import assistant as AS
+                AS.renew(tid, tok)
+            threading.Thread(target=beat, daemon=True).start()
         if ev.get("type") == "user" and not ev.get("steer"):
             self._turn_open = True                   # a turn is running until its turn_end arrives
         elif ev.get("type") == "turn_end":
@@ -570,6 +578,8 @@ class Session:
         interrupt=True stops the current work first and sends the message as a new turn."""
         if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
+        if self.scheduled and not getattr(self, "_system_send", False):           # the person has taken over: someone is here now (M18-06)
+            self.scheduled = None
         if files:                                    # saved first: if it fails, nothing was emitted or started
             text = self._save_files(text, files)
         self.touched = time.time()
@@ -810,6 +820,11 @@ class Session:
             pass
 
     def _turn_finish(self):
+        lease = getattr(self, "_lease", None)
+        if lease:                                    # the run is over: its task may run again
+            self._lease = None
+            from meshpool_harness import assistant as AS
+            AS.release(*lease)
         run = getattr(self, "_ck_run", "")
         if getattr(self, "_ck_stop", None):
             self._ck_stop.set()
@@ -2137,26 +2152,49 @@ def _notify(title: str, body: str):
 def run_scheduled(t: dict) -> str:
     """Start a new thread for a scheduled task and send its prompt. Returns the thread id."""
     from meshpool_harness import assistant as AS
-    folder = t.get("folder") or ""
-    if folder and not Path(folder).expanduser().is_dir():
-        raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
-    rf = AS.run_folder(t)                       # a repository: the run gets its own isolated copy
+    token = t.get("claim")                       # from due(); Run now takes its own
+    if not token:
+        try:
+            token = AS.claim(t["id"])
+        except KeyError:                         # the task was deleted just now: this run still goes ahead
+            token = ""
+        else:
+            if not token:
+                raise ValueError("This task is still running. Wait for it to finish, or stop its chat first.")
     try:
-        v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                    "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
-                    "worktree_id": rf.get("worktree_id") or None})
-    except BaseException:
-        if rf.get("worktree_id"):
-            from meshpool_harness import worktrees as WT
-            WT.discard(rf["worktree_id"])
+        folder = t.get("folder") or ""
+        if folder and not Path(folder).expanduser().is_dir():
+            raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
+        rf = AS.run_folder(t)                   # a repository: the run gets its own isolated copy
+        try:
+            v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                        "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
+                        "worktree_id": rf.get("worktree_id") or None})
+        except BaseException:
+            if rf.get("worktree_id"):
+                from meshpool_harness import worktrees as WT
+                WT.discard(rf["worktree_id"])
+            raise
+        s = get(v["id"])
+        s.scheduled = dict(t, claim=token)
+        s._lease = (t["id"], token) if token else None
+        late = ""
+        if t.get("late"):
+            h = float(t.get("late_s") or 0) / 3600
+            late = (f"This run was due {h:.0f} hours ago: Meshpool was closed or the computer was off. "
+                    "It ran as soon as it could.")
+            s.emit({"type": "status", "text": late})
+        write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})"
+                   + (" (late)" if late else ""), scheduled=t["id"])
+        s._system_send = True                    # the run's own prompt is not the person taking over
+        s.send(t["prompt"] + (f"\n\n\u200b({late} " if late else "\n\n\u200b(") + "This is a scheduled run. The user is not "
+               "watching: make reasonable choices, say which ones you made, and finish with a short summary.)")
+        s._system_send = False
+        AS.set_thread(t["id"], s.id)
+        return s.id
+    except BaseException as e:
+        AS.run_failed(t["id"], token, str(e))
         raise
-    s = get(v["id"])
-    s.scheduled = t
-    write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
-    s.send(t["prompt"] + ("\n\n\u200b(This is a scheduled run. The user is not watching: make reasonable choices, say "
-                          "which ones you made, and finish with a short summary.)"))
-    AS.set_thread(t["id"], s.id)
-    return s.id
 
 
 def recover_worktrees():
@@ -2191,7 +2229,7 @@ def scheduler_loop():
             for t in ([] if QUIESCING[0] else AS.due()):      # due tasks stay due and run after the restart
                 try:
                     run_scheduled(t)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001           # run_scheduled kept the reason on the task
                     _notify(f"Scheduled task could not start: {t.get('name')}", str(e)[:200])
         except Exception:  # noqa: BLE001
             pass
