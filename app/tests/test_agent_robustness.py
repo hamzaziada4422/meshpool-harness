@@ -522,11 +522,11 @@ def test_a_500_from_one_model_is_an_answer_not_an_outage(monkeypatch):
     import urllib.error
 
     def answer(code):
-        def fake(req, timeout):
+        def fake(req, timeout, *a, **k):
             raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
         return fake
     for code, want in ((500, "ok"), (429, "ok"), (401, "auth"), (502, "HTTP 502"), (503, "HTTP 503")):
-        monkeypatch.setattr(core.urllib.request, "urlopen", answer(code))
+        monkeypatch.setattr(core._mhttp, "open", answer(code))
         assert core._probe_once("http://x", "k", "m") == want
 
 

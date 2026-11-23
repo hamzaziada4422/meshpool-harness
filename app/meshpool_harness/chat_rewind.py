@@ -362,6 +362,9 @@ def _restart_outside(st: _State, pos, session) -> bool:
         return True                       # saved chat: _cut drops its session id, the agent carries the history on resume
     a = session.agent
     try:
+        if hasattr(a, "forget_session"):                 # the harness's own way to drop cut turns (keeps Pi's old files)
+            a.forget_session()
+            return True
         if hasattr(a, "acp_session"):                    # ACP: a new session; the next message carries the history
             a.acp_session = None
             a.loaded_from = None

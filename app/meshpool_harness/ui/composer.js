@@ -52,6 +52,7 @@ function plusMenu(anchor) {
     {sep: true},
     {label: "Skills", icon: ICON.skill, sub: skills.length ? skills : [{label: "No skills yet", fn: () => openSettings("skills")}]},
     {label: "Plugins", icon: ICON.plug, sub: [...conns, ...(conns.length ? [{sep: true}] : []), {label: "Manage plugins", icon: ICON.gear, fn: () => goPage("plugins")}]},
+    ...(typeof wtMenuItem === "function" ? wtMenuItem() : []),
     ...(!S.cur && S.view !== "project" ? [{sep: true}, {label: S.draft.project ? "Change folder" : "Work in a folder", icon: ICON.folder, desc: S.draft.project ? projName(S.draft.project) : "", fn: chooseDraftFolder}, ...(S.draft.project ? [{label: "Don’t use a folder", icon: ICON.x, fn: () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); }}] : [])] : []),
   ], {cls: "plusmenu", up: true});
 }
@@ -213,7 +214,7 @@ function repoSelector(anchor) {
 
 /* ================================== home ================================== */
 const CARDS = () => [
-  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your Meshpool key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
+  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + (S.settings.key_name || "Meshpool") + " key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
   {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let Meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
   {id: "project", show: !!S.settings?.ready && !S.pj.length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];

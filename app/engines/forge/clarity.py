@@ -2,8 +2,9 @@
 clear on first read. It never changes the facts: a rewrite is kept only when every number, footnote marker and the
 bold markup survive and it is no longer than the line it replaces.
 
-Model chain (first that answers wins): FORGE_CLARITY_MODEL, gpt-6-luna, gpt-6.1-terra, gpt-5.6-luna, then the main
-writing model with the same rubric. One batched call per deck (or per repaired set of slides).
+Model chain (first that answers wins): FORGE_CLARITY_MODEL, then the main writing model with the same rubric
+(core/models.py reviewer_models: never a built-in name; models the endpoint is remembered to lack are left out; none
+left: the pass is skipped with a note and nothing is called). One batched call per deck (or per repaired set of slides).
 """
 from __future__ import annotations
 
@@ -12,7 +13,6 @@ import os
 import re
 import uuid
 
-CHAIN = ["gpt-6-luna", "gpt-6.1-terra", "gpt-5.6-luna"]
 TEXT_KEYS = {"title", "title_right", "subtitle", "text", "lead", "label", "action", "detail", "intro"}
 LIST_KEYS = {"bullets", "milestones"}            # lists whose plain strings are reader-facing lines
 SKIP_KEYS = {"source", "prov", "notes", "table", "chart", "id", "node", "archetype", "icon", "tags", "exhibit_unit",
@@ -106,10 +106,11 @@ def review(slides: list[dict], client, only: set[int] | None = None, main_model:
     items = lines(slides, only)
     if not items:
         return {"model": None, "checked": 0, "changed": 0, "edits": [], "rejected": []}
-    chain = []
-    for m in [os.environ.get("FORGE_CLARITY_MODEL")] + CHAIN + [main_model]:
-        if m and m not in chain:
-            chain.append(m)
+    from meshpool_harness.core.models import reviewer_models
+    chain = reviewer_models(os.environ.get("FORGE_CLARITY_MODEL"), main_model)
+    if not chain:
+        return {"model": None, "checked": len(items), "changed": 0, "edits": [], "rejected": [], "status": "not_run",
+                "errors": ["skipped: no reviewer model on this endpoint"]}
     errors: list[str] = []
 
     def one(batch):

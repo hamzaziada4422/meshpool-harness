@@ -1,0 +1,5 @@
+{
+  "_note": "USD per 1M tokens. gpt-6-luna: OpenAI standard-tier list (app/profiles/notes.md). deepseek-v4.1-flash: DeepSeek off-peak list (0.15 / 0.003 / 0.60) times the measured Meshpool billing factor 2.2 (app/profiles/notes.md, 'Measured meshpool billing'). Models not listed here get cost = null.",
+  "gpt-6-luna": {"in": 0.10, "cached": 0.01, "out": 0.50},
+  "deepseek-v4.1-flash": {"in": 0.33, "cached": 0.0066, "out": 1.32}
+}

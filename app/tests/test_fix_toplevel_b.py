@@ -60,23 +60,25 @@ def updates(tmp_path, monkeypatch):
 
 
 def test_failed_check_keeps_a_ready_update(updates, monkeypatch):
+    AU._load()                                   # the state is persisted now: set it the way the app does
     AU._ST.update(state="ready", tag="v9")
-    monkeypatch.setattr(AU.U, "check", lambda force=True: {"ok": False, "error": "offline"})
+    AU._persist()
+    monkeypatch.setattr(AU.U, "check", lambda force=True, timeout=None: {"ok": False, "error": "offline"})
     AU.tick()
-    assert AU._ST["state"] == "ready" and AU._ST["error"] == "offline"
+    assert AU._ST["state"] == "ready" and AU._ST["check_error"] == "offline"
     AU._ST["state"] = "idle"
     AU.tick()
-    assert AU._ST["state"] == "error"
+    assert AU._ST["state"] == "idle" and AU._ST["check_error"] == "offline"     # a failed check never sets a state (M10-03)
 
 
 def test_tick_does_not_consume_the_update_result(updates, monkeypatch):
     p = AU.udir() / "result.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"ok": True, "message": "Meshpool was updated."}), encoding="utf-8")
-    monkeypatch.setattr(AU.U, "check", lambda force=True: {"ok": False, "error": "x"})
+    monkeypatch.setattr(AU.U, "check", lambda force=True, timeout=None: {"ok": False, "error": "x"})
     assert AU.tick()["last_result"]["message"] == "Meshpool was updated."
-    assert AU.status()["last_result"]["message"] == "Meshpool was updated."   # the page still sees it
-    assert AU.status()["last_result"] is None                                   # and only once
+    assert AU.status(consume=True)["last_result"]["message"] == "Meshpool was updated."   # the page still sees it
+    assert AU.status(consume=True)["last_result"] is None                                   # and only once
 
 
 def test_replace_file_keep_src(tmp_path, monkeypatch):

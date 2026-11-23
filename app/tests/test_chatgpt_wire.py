@@ -111,7 +111,7 @@ def mock(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
-    CG._MODELS.update(t=0.0, rows=[])
+    CG.forget_models()
     CG._LIMIT.clear()
     yield m
     srv.shutdown()
@@ -326,11 +326,11 @@ def test_hermes_config_points_at_the_relay(mock, tmp_path, monkeypatch):
     (tmp_path / "mh").mkdir()
     from meshpool_harness import harnesses as HR
     from meshpool_harness.core import chatgpt_relay as R
-    HR.prepare_hermes("chatgpt:gpt-6-luna")
+    m = HR.hermes_model(HR.prepare_hermes("chatgpt:gpt-6-luna"))
     cfg = yaml.safe_load((HR.hermes_home() / "config.yaml").read_text())
     url, tok = R.ensure()
-    assert cfg["model"]["base_url"] == url and cfg["model"]["api_key"] == tok
-    assert cfg["model"]["default"] == "gpt-6-luna"
+    assert m["base_url"] == url and m["api_key"] == tok
+    assert m["default"] == "gpt-6-luna"
     assert cfg["auth"]["adopt_external_logins"] is False
 
 

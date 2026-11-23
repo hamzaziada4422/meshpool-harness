@@ -45,7 +45,7 @@ def _engine(name):
 
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
-                client=None, output_format: str | None = None) -> dict:
+                client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -62,7 +62,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         raise SystemExit(f"error: no API key. Put MESHPOOL_API_KEY=... in {_config.config_path()}")
     client = client or LiveClient("phase_2_build")
     task_id = "req-" + uuid.uuid4().hex[:8]
-    r = route(request, files, output_format, workdir, client=client, engine=engine, task_id=task_id)
+    model = model or os.environ.get("MH_MODEL")      # the model the caller (or the app chat) picked
+    r = route(request, files, output_format, workdir, client=client, engine=engine, model=model, task_id=task_id)
     outdir = Path(out).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     inputs = [str(Path(f).resolve()) for f in files]
@@ -86,8 +87,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
         if name == "slides" and (researched or request.lstrip().startswith("[add to deck:")):
             kw = {"files": inputs}                   # research facts, or the user's own deck (by its real path)
-        if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
-            kw["model"] = os.environ["MH_MODEL"]
+        if model:                                # the model chosen in settings or in the chat, for every engine
+            kw["model"] = model
         saved = dict(os.environ)
         if name in ("code", "browser"):
             for k, v in ENGINE_FLAGS.items():     # explicit MH_* settings win
@@ -111,7 +112,10 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
                 inputs.append(str(rep))
                 researched = True
     spent = client.spent() if hasattr(client, "spent") else None
-    return {"task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
+    arts = list(dict.fromkeys(a for x in results for a in (x.get("artifacts") or [])))
+    bad = next((x for x in results if not x.get("ok")), None)
+    return {"answer": (results[-1].get("answer") or "") if results else "", "artifacts": arts,
+            "reason": (bad.get("reason") or "") if bad else "", "task_id": task_id, "route": {"engines": r.engines, "confidence": r.confidence, "reason": r.reason,
                                          "used_model_call": r.used_model_call},
             "ok": all(x.get("ok") for x in results) and len(results) == len(r.engines),
             "steps": [{k: v for k, v in x.items() if k in ("engine", "ok", "answer", "artifacts", "evidence", "turns",
@@ -119,7 +123,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree"}
 
 
 def _agent_parser():
@@ -137,6 +141,7 @@ def _agent_parser():
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
                "  work             fetch a task from GitHub, Jira, a URL or a file, run it, report back\n"
                "  run / route      run or preview Meshpool's task engines (decks, spreadsheets, data, code)\n"
+               "  worktree         isolated copies: list, diff, merge or discard (see --worktree)\n"
                "  ui / app         open the Meshpool web app or desktop app\n"
                "  install-browser  install the optional browser engine")
     ap.add_argument("request", nargs="?", help="first request for an interactive session")
@@ -155,7 +160,39 @@ def _agent_parser():
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
     return ap
+
+
+def _worktree_session(a, prompt) -> dict | None:
+    """--worktree: an isolated copy for this session; a.dir then points into it."""
+    if not getattr(a, "worktree", False):
+        return None
+    from meshpool_harness import worktrees as WT
+    if a.resume or a.session:
+        raise SystemExit("error: --worktree starts a new session; it cannot be combined with -c or --resume")
+    try:
+        rec = WT.create(a.dir or os.getcwd(), owner_kind="cli", owner_id=str(os.getpid()),
+                        title=(prompt or a.request or "terminal session").strip()[:80])
+    except WT.WorktreeError as e:
+        raise SystemExit(f"error: {e}")
+    print(f"Working in an isolated copy ({rec['id']}): {rec['workdir']}", file=sys.stderr)
+    a.dir = rec["workdir"]
+    return rec
+
+
+def _worktree_done(rec: dict | None) -> None:
+    if not rec:
+        return
+    from meshpool_harness import worktrees as WT
+    try:
+        n = len(WT.diff(rec["id"], max_patch=0)["files"])
+    except (WT.WorktreeError, KeyError, OSError):
+        n = -1
+    what = "No changes" if n == 0 else f"{n} file(s) changed" if n > 0 else "Changes"
+    print(f"{what} in isolated copy {rec['id']}. Review: meshpool worktree diff {rec['id']}  |  bring them in: "
+          f"meshpool worktree merge {rec['id']}  |  throw away: meshpool worktree discard {rec['id']}",
+          file=sys.stderr)
 
 
 def _stdin_has_data(explicit: bool) -> bool:
@@ -195,6 +232,8 @@ _HELP = {
     "app": "Usage: meshpool app\nOpen the desktop app.",
     "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
     "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
+    "worktree": "Usage: meshpool worktree list [--all] | diff <id> [--stat] | merge <id> | discard <id>\n"
+                "Isolated copies made by `meshpool --worktree`, chats, sub-agents and scheduled runs.",
 }
 
 
@@ -203,9 +242,18 @@ def main(argv=None):
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command
         return 0
-    if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
+    _rw = os.environ.pop("MESHPOOL_RESTART_WAIT", None)
+    if _rw:                                               # started by "Restart" after an update: let the old app close
         import time
-        time.sleep(3)
+        if _rw.isdigit() and int(_rw) > 1:                # the old app's PID: wait until it has really exited
+            try:
+                from meshpool_harness import updater as _up
+                _up.wait_for_exit(int(_rw), 120)
+            except Exception:  # noqa: BLE001
+                time.sleep(3)
+        else:
+            time.sleep(3)
+        os.environ["MESHPOOL_RESTARTED"] = "1"
     if os.name == "nt" and (sys.executable.lower().endswith("pythonw.exe") or _no_console()):
         # The Windows app runs windowless under pythonw.exe, whose children get no usable stdin/stdout. Launch child
         # Pythons (Hermes, MCP servers, engines) with python.exe; their console windows are suppressed.
@@ -255,7 +303,14 @@ def main(argv=None):
         if a.disallowed_tools:
             os.environ["MH_DENY"] = a.disallowed_tools
         fmt = a.output_format or ("json" if a.json_out else "")
-        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+        wt = _worktree_session(a, prompt)
+        try:
+            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+        finally:
+            _worktree_done(wt)
+    if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
+        from meshpool_harness import worktrees as WT
+        return WT.cli(argv[1:])
     if argv[0] == "agent":
         return main(argv[1:] or [])
     if argv[0] == "acp":
@@ -352,12 +407,14 @@ def main(argv=None):
         p.add_argument("--format", dest="output_format")
         if c == "run":
             p.add_argument("--out", default="./mh_out")
+            p.add_argument("--model", help="model id for every engine (e.g. chatgpt:gpt-6.1-sol); default: MH_MODEL / settings")
     w = sub.add_parser("work", help="fetch a task from a connector (github:, jira:, http:, file:, custom), run it, report back")
     w.add_argument("source", help="e.g. github:owner/repo#12, jira:PROJ-7, http:https://..., file:task.md")
     w.add_argument("--workdir", default=".")
     w.add_argument("--engine", default=None)
     w.add_argument("--out", default="./mh_out")
     w.add_argument("--report", action="store_true", help="post the outcome back to the source")
+    w.add_argument("--json", action="store_true", help="print the result as JSON")
     u = sub.add_parser("ui", help="open the Meshpool web app")
     u.add_argument("--port", type=int, default=int(os.environ.get("MH_UI_PORT", "8765")))
     u.add_argument("--no-browser", action="store_true")
@@ -398,24 +455,35 @@ def main(argv=None):
         res = run_request(task.text(), [], a.out, a.engine, a.workdir)
         if a.report:
             conn.report(task, res)
-        print(json.dumps({"task": task.ref, "source": task.source, **{k: res.get(k) for k in ("ok", "answer")}},
-                         indent=1, default=str))
+        if a.json:
+            print(json.dumps({"task": task.ref, "source": task.source,
+                              **{k: res.get(k) for k in ("ok", "answer", "artifacts", "reason", "out_dir")}},
+                             indent=1, default=str))
+            return 0 if res.get("ok") else 1
+        print(res.get("answer") or "")
+        if res.get("artifacts"):
+            print("\nFiles:")
+            for f in res["artifacts"]:
+                print("  " + str(f))
+        print("\nOutput folder: " + str(res.get("out_dir", "")))
+        if not res.get("ok"):
+            print("Failed: " + str(res.get("reason") or "no reason given"))
         return 0 if res.get("ok") else 1
     if a.cmd == "route":
         from meshpool_harness.router.rules import decide
         eng, conf, why = decide(a.request, a.files, a.output_format, a.workdir)
         print(json.dumps({"engines": eng, "confidence": conf, "reason": why}, indent=1))
         return 0
-    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format)
+    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format,
+                      **({"model": a.model} if getattr(a, "model", None) else {}))
     print(json.dumps(res, indent=1))
     return 0 if res["ok"] else 1
 
 
 def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
-    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet).
-    Returns {ok, detail, model, seconds, endpoint}."""
+    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
+    to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
-    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     t0 = time.time()
     led = None
     try:
@@ -424,31 +492,48 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
             led.base_url = base.rstrip("/")
         if key:
             led.api_key = key
+        m = (model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash").strip()
+        if m.partition(":")[0] == "chatgpt" and ":" in m:    # a ChatGPT model is not served by the key endpoint
+            alt = (os.environ.get("MH_MODEL") or "").strip()
+            from meshpool_harness import providers as PV
+            if alt and not alt.startswith("chatgpt:"):
+                m = alt
+            elif "meshpool" in PV.host(led.base_url):
+                m = "deepseek-v4.1-flash"
+            else:
+                return {"ok": False, "detail": "Choose a model this endpoint serves first.", "model": "",
+                        "seconds": 0.0, "endpoint": led.base_url}
+        model = m
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-                     max_tokens=5, retries=1, timeout=60)
-        txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}", "model": model,
-                "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
+                     max_tokens=16, retries=1, timeout=60, key_only=True)   # Responses endpoints need at least 16
+        msg_ = ((r.get("choices") or [{}])[0].get("message"))
+        if not isinstance(msg_, dict):
+            raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
+        txt = msg_.get("content") or ""
+        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
+                "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
         msg = str(e)
         if "401" in msg or "403" in msg:
             msg = "the endpoint rejected the API key (" + msg[:160] + ")"
-        return {"ok": False, "detail": msg[:400], "model": model, "seconds": round(time.time() - t0, 1),
-                "endpoint": led.base_url if led else (base or os.environ.get("MESHPOOL_BASE_URL", ""))}
+        return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
+                "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 
 def _check(live: bool) -> int:
     from meshpool_harness import harnesses as HR
     from meshpool_harness import providers as PV
-    key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    base, key, _src = PV.endpoint_pair()             # the key and the address it was set for, never mixed
     # A ChatGPT sign-in is enough on its own: report what is ready rather than calling the setup broken when there
     # is no Meshpool key.
     ready = {p: _safe(lambda p=p: PV.ready(p)) for p in PV.PROVIDERS}
     usable = _safe(HR.ready)
     print(f"Settings file : {_config.config_path()}")
-    print(f"Endpoint      : {os.environ.get('MESHPOOL_BASE_URL', 'https://llm.meshpool.ai/v1')}")
+    print(f"Endpoint      : {base}")
     print(f"Model         : {os.environ.get('MH_MODEL', 'deepseek-v4.1-flash')}")
-    print(f"API key       : {'set (ends ' + key[-4:] + ')' if key else 'not set'}")
+    kn = PV.key_name()
+    for_ = "" if kn == "Meshpool" else f" for {kn}"        # the key belongs to the endpoint above, not to Meshpool
+    print(f"API key       : {'set' + for_ + ' (ends ' + key[-4:] + ')' if key else 'not set' + for_}")
     names = [_safe(lambda p=p: PV.name(p), p) for p, ok in ready.items() if ok]
     print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()

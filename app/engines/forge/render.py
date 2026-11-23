@@ -2539,7 +2539,7 @@ def chart_problems(c: dict) -> list[str]:
     units = {m.group(0).lower() for cat in cats
              for m in re.finditer(r"\(([^)\d]*)\)|%|\$|thousand|million|share", re.sub(r"\([^)]*\d[^)]*\)", "", cat), re.I)}
     bad = [v for se in series for v in se.get("values") or []
-           if not isinstance(v, (int, float)) and not (v is None and c.get("kind") == "line")]
+           if not isinstance(v, (int, float)) and not (v is None and (c.get("kind") == "line" or c.get("gaps")))]
     if bad:
         out.append(f"{len(bad)} chart values are not numbers (gap markers or text); chart only the points the facts "
                    "support, or show the numbers you have as a stat stack")

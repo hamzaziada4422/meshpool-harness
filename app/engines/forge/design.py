@@ -111,12 +111,8 @@ def settings(rules: dict | None) -> dict:
 
 
 def vision_models(cfg: dict) -> list[str]:
-    from .review import chain
-    out: list[str] = []
-    for m in [os.environ.get("MH_DESIGN_VISION_MODEL")] + list(cfg.get("vision_models") or []) + chain(None):
-        if m and m not in out:
-            out.append(m)
-    return out
+    from meshpool_harness.core.models import vision_reviewer_models
+    return vision_reviewer_models(os.environ.get("MH_DESIGN_VISION_MODEL"), *cfg.get("vision_models") or [])
 
 
 def mode_from(task: str = "", options: dict | None = None) -> str | None:
@@ -469,11 +465,12 @@ def design_prompt(s: dict, direc: dict, recent: list[str], layout: str | None = 
 def _post(url: str, body: dict, timeout: float) -> tuple[int, dict]:
     """POST JSON; (status, payload). The proxy injects the gateway's key; a configured key is sent when present."""
     from meshpool_harness import providers as PV
+    from meshpool_harness.core import http as _mhttp
     key = PV.key() or "dummy"
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _mhttp.open(req, timeout) as r:
             raw, st = r.read(), r.status
     except urllib.error.HTTPError as e:
         raw, st = e.read(), e.code

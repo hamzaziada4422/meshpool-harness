@@ -10,8 +10,10 @@ build.py runs them twice:
    every issue to the step that can fix it (content and data -> the slide writer, layout -> a deterministic re-layout
    or an archetype instruction, storyline -> a re-plan of the affected slides, research -> a research step).
 
-Models: the deck review needs vision (review.chain(): MH_REVIEW_MODEL, claude-sonnet-5.5, gpt-6.1-terra, kimi-k3);
-the storyboard review a strong text model (MH_STORY_REVIEW_MODEL, then rules review.personas.text_models). A
+Models (core/models.py; never a built-in name, so only models this endpoint serves are called): the deck review
+needs vision (rules deck_models, MH_REVIEW_MODEL, then the configured model); the storyboard review a text model
+(MH_STORY_REVIEW_MODEL, rules text_models, then the configured model). A model the endpoint does not deploy is skipped
+without counting as a failed try, and with no model left the reviewer is "not run" ("skipped: ..."). A
 reviewer whose model fails tries the next model; a refused key stops the chain (every model would be refused). A
 reviewer that never ran is reported as not run, never scored.
 """
@@ -55,18 +57,13 @@ def personas_on(client, rules: dict | None) -> bool:
 
 
 def text_models(cfg: dict) -> list[str]:
-    from engines.forge.review import CHAIN
-    out: list[str] = []
-    for m in [os.environ.get("MH_STORY_REVIEW_MODEL")] + list(cfg.get("text_models") or []) + CHAIN:
-        if m and m not in out:
-            out.append(m)
-    return out
+    from meshpool_harness.core.models import reviewer_models
+    return reviewer_models(os.environ.get("MH_STORY_REVIEW_MODEL"), *cfg.get("text_models") or [])
 
 
 def deck_models(cfg: dict) -> list[str]:
-    from engines.forge.review import chain
-    out = list(cfg.get("deck_models") or [])
-    return out + [m for m in chain(None) if m not in out]
+    from meshpool_harness.core.models import vision_reviewer_models
+    return vision_reviewer_models(*cfg.get("deck_models") or [], os.environ.get("MH_REVIEW_MODEL"))
 
 
 # ------------------------------------------------------------------ calling the reviewers
@@ -78,8 +75,14 @@ def review_one(client, persona: str, target: str, material, models: list[str], *
                timeout: float = 300.0, task_id: str = "forge-panel") -> dict:
     """One reviewer, trying each model in turn until one gives a parseable review. Never raises."""
     from engines.forge.review import _with_timeout
-    errors, last = [], None
+    from meshpool_harness.core import modelcaps as MC
+    from meshpool_harness.core.client import classify_error
+    from meshpool_harness.providers import key_base
+    errors, last, skipped = [], None, 0
     for m in models:
+        if MC.is_missing(key_base(), m):        # learned from an earlier 404: not deployed here, nothing to try
+            skipped += 1
+            continue
         try:
             r = _with_timeout(lambda: P.review(client, persona, target, material, m, task_id=task_id, bar=bar),
                               timeout)
@@ -92,13 +95,16 @@ def review_one(client, persona: str, target: str, material, models: list[str], *
                 r["fallbacks"] = errors
             return r
         err = r.get("error") or ("unparseable reply: " + str(r.get("raw") or "")[:120])
+        if classify_error(err) == "model_missing":      # not deployed: skipped, not a failed try
+            skipped += 1
+            continue
         errors.append(f"{m}: {err}")
         last = r
         if _is_auth(err):                       # the gateway refuses the key: every model would be refused
             break
     out = dict(last or {"persona": persona, "target": target, "issues": [], "research_requests": [], "scores": {}},
                status="not_run", verdict=None, overall=None, errors=errors)
-    out["error"] = errors[-1] if errors else "no model to try"
+    out["error"] = errors[-1] if errors else "skipped: no reviewer model on this endpoint"
     return out
 
 

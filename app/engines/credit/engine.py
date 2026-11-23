@@ -156,7 +156,9 @@ def commentary(client, model: str, res: dict, borrower_text: str = "") -> dict:
 
 
 def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = None, client=None,
-          model: str = "deepseek-v4.1-flash", **_) -> dict:
+          model: str | None = None, **_) -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     t0 = time.time()
     wd = Path(workdir)
     wd.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,8 @@
+assumption,value,note
+covers per day,85,customers served on an open day
+average ticket,14.5,average spend per cover
+open days per month,26,
+food cost %,0.32,share of revenue
+staff cost per month,9500,
+rent per month,3200,
+other costs per month,1800,"utilities, insurance, supplies"

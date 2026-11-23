@@ -910,7 +910,7 @@ class Server:
         with self._conn:
             try:
                 from meshpool_harness import mcp_apps as CN
-                headers = CN.refresh_headers(self.name)
+                headers = CN.refresh_headers(self.name, getattr(self.t, "headers", None))
             except Exception:  # noqa: BLE001
                 return False
             if not headers or headers == getattr(self.t, "headers", None):
@@ -1101,8 +1101,10 @@ class Manager:
         return self
 
     def _with_chat(self, spec: dict) -> dict:
-        """The browser server learns which chat it serves, so the app can find its live view."""
-        if self.chat and any("browser_mcp_server" in str(a) for a in spec.get("args") or []):
+        """The browser server learns which chat it serves, so the app can find its live view; the assistant server
+        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat."""
+        if self.chat and any(x in str(a) for a in spec.get("args") or []
+                             for x in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
             return {**spec, "env": {**(spec.get("env") or {}), "MH_CHAT_ID": self.chat}}
         return spec
 

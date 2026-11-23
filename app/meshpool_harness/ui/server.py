@@ -30,7 +30,8 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/",
+                  "/api/worktree")
 
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
@@ -39,6 +40,7 @@ LAST_PING = [time.time()]
 HTTPD = [None]
 NATIVE = [False]                    # True while the interface is shown in the app's own window
 ON_SHOW: list = []                  # called when a second launch asks this instance to come forward
+BOOT = uuid.uuid4().hex                 # identifies this process: the page tells the restarted app from the old one
 ON_QUIT: list = []                  # called when the app quits (closes the native window)
 LOCK = threading.Lock()
 
@@ -46,6 +48,7 @@ LOCK = threading.Lock()
 # ---------- settings -----------------------------------------------------------------------------------------------
 
 def get_settings() -> dict:
+    from meshpool_harness import providers as PV
     vals = C.read()
     fields = []
     for key, label, default, help_ in C.FIELDS:
@@ -63,7 +66,7 @@ def get_settings() -> dict:
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
-            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
+            "has_key": bool(PV.key()), "key_name": PV.key_name(),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
@@ -95,6 +98,12 @@ def save_settings(body: dict) -> dict:
         u = urlparse(vals["MESHPOOL_BASE_URL"])
         if u.scheme not in ("http", "https") or not u.netloc:
             raise ValueError("The server address must start with http:// or https:// and name a host.")
+    from meshpool_harness import providers as PV
+    new = vals.get("MESHPOOL_BASE_URL")
+    from meshpool_harness import provider_setup as PS
+    if new and not vals.get("MESHPOOL_API_KEY") and not PS._same_endpoint(new, PV.key_base()) and PV.key() \
+            and PV.keyless_ok(new):
+        vals["MESHPOOL_API_KEY"] = ""    # a local server needs no key: the old endpoint's key goes, not to this server
     _key_follows_host(vals)
     from meshpool_harness import browser_use as BU
     BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
@@ -149,7 +158,7 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection(values: dict | None = None) -> dict:
+def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
     straight to the check: saved settings win over the environment, so setting them there would test the saved
     endpoint and send the typed key to it."""
@@ -168,7 +177,7 @@ def test_connection(values: dict | None = None) -> dict:
         base = PS.normalise_base(base_in)
     except PS.SetupError as e:
         return {"ok": False, "detail": str(e), "endpoint": base_in}
-    same = PS._same_endpoint(base, PV.key_base())
+    same = PS._same_endpoint(base, PV.key_base()) and not fresh   # fresh: nothing saved applies (onboarding)
     key = v.get("MESHPOOL_API_KEY") or (PV.key() if same else "")
     if not key and not PV.keyless_ok(base):
         return {"ok": False, "detail": f"No API key {'saved yet' if same else 'entered for ' + PV.host(base)}.",
@@ -187,10 +196,11 @@ def test_connection(values: dict | None = None) -> dict:
     t0 = time.time()
     st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
     secs = round(time.time() - t0, 1)
-    if err or st not in (200, 429):
-        why = (("No server at that address." if err == "refused" else "The server did not answer in time.") if err
+    if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
+        why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
-        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
+        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
+                "status": 0 if err else st}
     txt = ""
     if isinstance(data, dict):
         try:
@@ -199,7 +209,47 @@ def test_connection(values: dict | None = None) -> dict:
             txt = ""
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
-            "endpoint": base}
+            "endpoint": base, "wire": wire, "api_version": ver}
+
+
+def onboard(body: dict) -> dict:
+    """First-run key setup in one step: check the key (the typed address normalised, the /v1 variant tried when the
+    first answers 404), and only when it works write the key, the address, the model and the provider in ONE write."""
+    from meshpool_harness import provider_setup as PS
+    which = "custom" if body.get("provider") == "custom" else "meshpool"
+    key = C.clean_key(str(body.get("key") or ""))
+    if not key:
+        return {"ok": False, "detail": "Paste your API key first."}
+    model = str(body.get("model") or "").strip()
+    try:
+        base = (PS.normalise_base(str(body.get("base_url") or "")) if which == "custom"
+                else "https://llm.meshpool.ai/v1")
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e)}
+    if which == "custom" and not model:
+        return {"ok": False, "detail": "Enter a model the provider serves."}
+    r, used = {"ok": False, "detail": ""}, base
+    for cand in PS._candidates(base):
+        vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": cand}
+        if model:
+            vals["MH_MODEL"] = model
+        r, used = test_connection(vals, fresh=True), cand
+        if r.get("ok") or r.get("status") != 404:
+            break
+    if not r.get("ok"):
+        return {"ok": False, "detail": r.get("detail") or "The check failed.", "endpoint": used}
+    vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": used if which == "custom" else "",   # default: no saved address
+            **HR.provider_values(which)}
+    if which == "custom":
+        vals["MH_MODEL"] = model
+    from meshpool_harness import providers as PV
+    vals.update(MH_API_WIRE=r.get("wire") or "openai", MH_AUTH_HEADER="", MH_AUTH_SCHEME="",
+                MESHPOOL_AZURE_API_VERSION=r.get("api_version") or "")      # nothing of the previous endpoint stays
+    if (C.read().get("MH_SUBAGENT_MODEL") or "").strip() and not PS._same_endpoint(used, PV.key_base()):
+        vals["MH_SUBAGENT_MODEL"] = ""                   # named a model of the old endpoint
+    C.write(vals)
+    HR.apply_env(vals)
+    return {"ok": True, "base_url": used}
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -218,6 +268,22 @@ def _disposition(kind: str, name: str) -> str:
     from urllib.parse import quote
     plain = re.sub(r'[^\x20-\x7e]|["\\]', "_", name)
     return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+_RESTART_FAILED = "Meshpool was updated but could not restart itself. Quit and open it again."
+
+
+def _restart_or_recover(UP, AU) -> None:
+    """Restart into the new code. The code on disk is already new, so if the restart itself fails (it could not start the
+    new process) the app stays up: reopen the run gate and tell the user to restart it by hand."""
+    try:
+        UP.restart([A.close_all, *ON_QUIT])
+    except Exception:  # noqa: BLE001
+        A.resume()
+        try:
+            AU.install_finished(False, _RESTART_FAILED)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -339,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -367,7 +433,7 @@ class Handler(BaseHTTPRequestHandler):
                     "</h2><p>" + msg.replace("<", "&lt;") + "</p></div>")
             return self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8")
         if u.path == "/healthz":
-            return self._send(200, {"ok": True, "app": "meshpool"})
+            return self._send(200, {"ok": True, "app": "meshpool", "pid": os.getpid(), "boot": BOOT})
         if u.path == "/favicon.svg":
             return self._send(200, (HERE / "favicon.svg").read_bytes(), "image/svg+xml")
         m = re.fullmatch(r"/brand/((?:fonts/)?[\w.-]+\.(png|woff2))", u.path)
@@ -636,6 +702,9 @@ class Handler(BaseHTTPRequestHandler):
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
+                    except Exception as e:           # a test must answer, never a 500
+                        return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0, "base_url": "",
+                                                "error": f"The test could not finish: {type(e).__name__}: {e}"})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
@@ -646,6 +715,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
                 return self._send(200, get_settings())
+            if u.path == "/api/onboard":
+                return self._send(200, onboard(self._json() or {}))
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
@@ -657,7 +728,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, r)
             if u.path == "/api/update/status":
                 from meshpool_harness import autoupdate as AU
-                return self._send(200, AU.status())
+                return self._send(200, AU.status(consume=True))
             if u.path == "/api/update/settings":
                 from meshpool_harness import autoupdate as AU
                 return self._send(200, AU.save_settings(self._json() or {}))
@@ -667,21 +738,80 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True})
             if u.path == "/api/update/apply":     # "Restart to update": the helper installs it after this app quits
                 from meshpool_harness import autoupdate as AU
-                if _running():
-                    return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
-                r = AU.begin_apply()
-                self._send(200, r)
-                if r.get("ok") and r.get("mode") != "code":
-                    threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
-                return
-            if u.path == "/api/update/install":
                 from meshpool_harness import updater as UP
-                if _running():
-                    return self._send(200, {"ok": False, "error": "A task is still running. Update when it finishes."})
-                return self._send(200, UP.install())
+                gate_open = False
+                try:
+                    with UP.install_lock():
+                        if not A.quiesce():
+                            return self._send(200, {"ok": False, "error": "A task is still running. Restart when it finishes."})
+                        gate_open = True
+                        r = AU.begin_apply()
+                        if not r.get("ok"):
+                            return self._send(200, r)
+                        if r.get("mode") == "code":
+                            self._send(200, {"ok": True, "mode": "code", "restarting": True, "boot": BOOT})
+                            gate_open = False          # the gate stays closed: the process is going away
+                            threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
+                            return
+                        self._send(200, r)
+                        gate_open = False
+                        threading.Thread(target=AU.finish_quit, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                        return
+                except UP.UpdateBusy as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+                finally:
+                    if gate_open:
+                        A.resume()
+            if u.path == "/api/update/install":
+                from meshpool_harness import autoupdate as AU
+                from meshpool_harness import updater as UP
+                gate_open = False
+                marked = applied = False
+                stage = ""
+                try:
+                    with UP.install_lock():
+                        r = UP.install()
+                        if r.get("action") != "staged":
+                            return self._send(200, r)
+                        stage = r["stage"]
+                        AU.mark_installing(r["tag"], r["latest"], "code")
+                        marked = True
+                        if not A.quiesce():
+                            UP.discard_stage(stage)
+                            msg = "A task is still running. Update when it finishes."
+                            AU.install_finished(False, msg)
+                            return self._send(200, {"ok": False, "error": msg})
+                        gate_open = True
+                        r2 = UP.apply_staged(r)
+                        if not r2.get("ok"):
+                            AU.install_finished(False, r2.get("error", ""))
+                            return self._send(200, r2)        # the finally below reopens the gate
+                        applied = True
+                        self._send(200, {"ok": True, "action": "restarting", "boot": BOOT})
+                        gate_open = False                  # the gate stays closed: the process is going away
+                        threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
+                        return
+                except UP.UpdateBusy as e:
+                    return self._send(200, {"ok": False, "error": str(e)})
+                except Exception as e:  # noqa: BLE001 - after mark_installing: never leave "installing" behind
+                    if not marked:
+                        raise
+                    msg = str(e) or e.__class__.__name__
+                    if applied:
+                        msg = _RESTART_FAILED
+                    else:
+                        UP.discard_stage(stage)
+                    try:
+                        AU.install_finished(False, msg)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return self._send(200, {"ok": False, "error": msg})
+                finally:
+                    if gate_open:
+                        A.resume()
             if u.path == "/api/update/restart":
                 from meshpool_harness import updater as UP
-                self._send(200, {"ok": True})
+                self._send(200, {"ok": True, "boot": BOOT})
                 threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
                 return
             if u.path == "/api/upload":
@@ -1214,6 +1344,8 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     threading.Thread(target=A.purge_due, daemon=True).start()          # chats deleted before the last close
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
+    threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU
