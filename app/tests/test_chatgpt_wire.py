@@ -111,7 +111,7 @@ def mock(tmp_path, monkeypatch):
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
-    CG._MODELS.update(t=0.0, rows=[])
+    CG.forget_models()
     CG._LIMIT.clear()
     yield m
     srv.shutdown()

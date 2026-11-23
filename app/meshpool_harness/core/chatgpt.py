@@ -21,7 +21,7 @@ the user's own sign-in.
 from __future__ import annotations
 
 import base64
-import contextlib
+import hashlib
 import http.client
 import json
 import os
@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
-from meshpool_harness.config import replace_file
+from meshpool_harness import fsio
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
 TOKEN_URL = "https://auth.openai.com/oauth/token"
@@ -45,10 +45,21 @@ DEFAULT_MODEL = "gpt-6-luna"                      # used only when the plan's mo
 # 0.169.0); it still names itself with originator: meshpool.
 CODEX_COMPAT_VERSION = "0.169.0"
 # Pi and Hermes reach the sign-in through the local relay (chatgpt_relay.py), so this process stays its only refresher.
+LOCK_TIMEOUT_S = 60                                # longest wait for another Meshpool process that is refreshing
+REUSED_WAIT_S = 3.0                                # how long to wait for another program's rotated pair to land
+TORN_WAIT_S = 2.0                                  # how long to retry a half-written auth.json
+EXPIRED_MSG = "Your ChatGPT sign-in expired. Sign in again: Settings, Account, Runs on."
+NOT_SIGNED_MSG = "Not signed in to ChatGPT on this computer. Sign in: Settings, Account, Runs on."
+API_KEY_MSG = ("Codex on this computer is signed in with an API key, not a ChatGPT account. Sign in "
+               "with ChatGPT: Settings, Account, Runs on.")
 
 
 class NotSignedIn(RuntimeError):
     pass
+
+
+class SignInBusy(RuntimeError):
+    """The sign-in file is mid-rewrite or another program holds the refresh. Transient ("HTTP 0"): retry, not sign in."""
 
 
 class UsageLimit(RuntimeError):
@@ -58,7 +69,7 @@ class UsageLimit(RuntimeError):
         self.resets_at, self.plan = resets_at, plan
 
 
-_LIMIT: dict = {}                                  # the last usage limit seen: {"resets_at", "plan"}
+_LIMIT: dict = {}                                  # account -> {"resets_at", "plan"}: the last usage limit seen
 
 
 def _when(ts: float | None) -> str:
@@ -75,27 +86,32 @@ def _when(ts: float | None) -> str:
     return f"in {int(left // 86400)} days, on {day}"
 
 
-def limit_note() -> str:
-    """A short note for the model menu while the plan's limit is reached, else ''."""
-    ts = _LIMIT.get("resets_at")
+def _note(ent: dict | None) -> str:
+    ts = (ent or {}).get("resets_at")
     if not ts or ts <= time.time():
         return ""
-    plan = f"ChatGPT {_LIMIT['plan'].title()}" if _LIMIT.get("plan") else "your ChatGPT plan"
+    plan = f"ChatGPT {ent['plan'].title()}" if ent.get("plan") else "your ChatGPT plan"
     return f"Usage limit reached on {plan}. It resets {_when(ts)}."
 
 
-def _usage_limit(code: int, detail: str) -> UsageLimit | None:
+def limit_note() -> str:
+    """A short note for the model menu while the signed-in account's limit is reached, else ''. Per account, so
+    signing in to another account does not inherit the first one's limit."""
+    return _note(_LIMIT.get(_current_account()))
+
+
+def _usage_limit(code: int, detail: str, account: str = "") -> UsageLimit | None:
     if code != 429:
         return None
     try:
         err = (json.loads(detail) or {}).get("error") or {}
-    except ValueError:
+    except (ValueError, AttributeError):
         return None
     if err.get("type") != "usage_limit_reached":
         return None
     ts = err.get("resets_at") or (time.time() + err["resets_in_seconds"] if err.get("resets_in_seconds") else None)
-    _LIMIT.update(resets_at=ts, plan=str(err.get("plan_type") or ""))
-    return UsageLimit(limit_note() + " Pick another provider in the model menu to keep working.", ts, _LIMIT["plan"])
+    ent = _LIMIT[account] = {"resets_at": ts, "plan": str(err.get("plan_type") or "")}
+    return UsageLimit(_note(ent) + " Pick another provider in the model menu to keep working.", ts, ent["plan"])
 
 
 def base_url() -> str:
@@ -140,63 +156,106 @@ def account_headers(access_token: str, tokens: dict | None = None) -> dict:
     return out
 
 
+def _account(tokens: dict | None) -> str:
+    """The ChatGPT account a token pair belongs to ('' if it cannot tell)."""
+    tokens = tokens or {}
+    for jwt in (tokens.get("access_token"), tokens.get("id_token")):
+        acct = (_claims(jwt).get("https://api.openai.com/auth") or {}).get("chatgpt_account_id") if jwt else None
+        if acct:
+            return str(acct)
+    return str(tokens.get("account_id") or "")
+
+
+def _current_account() -> str:
+    """The account in auth.json now, '' if not signed in or unreadable (never raises, never waits)."""
+    d = _peek()
+    tok = d.get("tokens") if isinstance(d, dict) else None
+    return _account(tok) if isinstance(tok, dict) else ""
+
+
 # ---------- the sign-in in ~/.codex/auth.json ------------------------------------------------------------------
 
-def _read() -> dict:
-    p = auth_path()
+def _peek():
+    """auth.json read once, without waiting: a dict, None if the file is missing, {} if it is damaged."""
     try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise NotSignedIn("Not signed in to ChatGPT on this computer. Sign in: Settings, Account, Runs on.")
-    except (OSError, ValueError) as e:
-        raise NotSignedIn(f"Could not read the ChatGPT sign-in ({p}): {e}")
-    tokens = d.get("tokens") if isinstance(d.get("tokens"), dict) else {}
-    if not tokens.get("access_token") or not tokens.get("refresh_token"):
-        raise NotSignedIn("Codex on this computer is signed in with an API key, not a ChatGPT account. Sign in "
-                          "with ChatGPT: Settings, Account, Runs on.")
+        d = fsio.read_json(auth_path())
+    except fsio.CorruptFile:
+        return {}
+    return d if d is None or isinstance(d, dict) else {}
+
+
+def _load() -> dict:
+    """auth.json as a dict. Missing -> NotSignedIn. Half-written (Codex or another Meshpool is replacing it) ->
+    retried for TORN_WAIT_S, then SignInBusy: a transient error, never a reason to ask the user to sign in."""
+    deadline = time.monotonic() + TORN_WAIT_S
+    while True:
+        try:
+            d = fsio.read_json(auth_path())
+            if d is None:
+                raise NotSignedIn(NOT_SIGNED_MSG)
+            if isinstance(d, dict):
+                return d
+            why = "not a JSON object"
+        except fsio.CorruptFile as e:
+            why = str(e.cause)
+        if time.monotonic() >= deadline:
+            raise SignInBusy(f"chatgpt HTTP 0: the ChatGPT sign-in file could not be read ({why}). "
+                             "Try again in a moment.")
+        time.sleep(0.1)
+
+
+def _tokens(d: dict) -> dict:
+    tokens = d.get("tokens")
+    return tokens if isinstance(tokens, dict) else {}
+
+
+def _read() -> dict:
+    d = _load()
+    t = _tokens(d)
+    if not t.get("access_token") or not t.get("refresh_token"):
+        raise NotSignedIn(API_KEY_MSG)
     return d
 
 
-def _write(d: dict) -> None:
-    """Atomic write back to auth.json, owner-only, so the Codex CLI sees the new pair."""
-    p = auth_path()
-    tmp = p.with_name(p.name + f".meshpool-{os.getpid()}.tmp")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=2)
-    replace_file(tmp, p)
+def _revoked_path() -> Path:
+    return auth_path().with_name("auth.json.meshpool-revoked")
 
 
-@contextlib.contextmanager
-def _locked():
-    """One refresher at a time across Meshpool processes (a sibling lock file; auth.json itself is replaced)."""
-    p = auth_path().with_name("auth.json.meshpool.lock")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    f = open(p, "a+")
+def _fingerprint(refresh_token: str) -> str:
+    return hashlib.sha256(refresh_token.encode("utf-8")).hexdigest()[:32]
+
+
+def _mark_revoked(refresh_token: str) -> None:
+    """Remember that ChatGPT rejected this refresh token, by fingerprint only (the token itself is never written), so
+    the app can say 'sign in again' instead of showing the sign-in as ready. A new sign-in has a new token."""
     try:
-        if os.name == "nt":
-            import msvcrt
-            for _ in range(300):
-                try:
-                    msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
-                    break
-                except OSError:
-                    time.sleep(0.1)
-        else:
-            import fcntl
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
-        try:
-            if os.name == "nt":
-                import msvcrt
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except OSError:
-            pass
-        f.close()
+        fsio.atomic_write_json(_revoked_path(), {"refresh_fp": _fingerprint(refresh_token)})
+    except OSError:
+        pass
+
+
+def _is_revoked(refresh_token: str) -> bool:
+    try:
+        rec = fsio.read_json(_revoked_path())
+    except fsio.CorruptFile:
+        return False
+    return isinstance(rec, dict) and rec.get("refresh_fp") == _fingerprint(refresh_token)
+
+
+def signin_state() -> dict:
+    """{"ok", "reason"}: whether the ChatGPT sign-in can work, without refreshing or sending anything."""
+    try:
+        d = _load()
+    except NotSignedIn:
+        return {"ok": False, "reason": "not signed in"}
+    except SignInBusy:
+        return {"ok": False, "reason": "The ChatGPT sign-in file could not be read right now."}
+    t = _tokens(d)
+    if not t.get("access_token") or not t.get("refresh_token"):
+        return {"ok": False, "reason": API_KEY_MSG}
+    if _is_revoked(t["refresh_token"]):
+        return {"ok": False, "reason": EXPIRED_MSG}
+    return {"ok": True, "reason": ""}
 
 
 def _stale(d: dict) -> bool:
@@ -212,9 +271,31 @@ def _stale(d: dict) -> bool:
         return False
 
 
+def _adopt_rotated(sent: str, code: int, detail: str) -> dict:
+    """The token endpoint refused our refresh token. Another program (the Codex CLI does not take our lock) may have
+    rotated the pair just before: poll auth.json briefly and take its pair. Unchanged -> the sign-in is really dead."""
+    end = time.monotonic() + REUSED_WAIT_S
+    while True:
+        cur = _peek()
+        if cur is None:
+            raise NotSignedIn("You signed out of ChatGPT. Sign in again: Settings, Account, Runs on.")
+        t = _tokens(cur)
+        if t.get("access_token") and t.get("refresh_token") and t["refresh_token"] != sent:
+            return cur
+        if time.monotonic() >= end:
+            break
+        time.sleep(0.2)
+    _mark_revoked(sent)
+    raise NotSignedIn(f"Your ChatGPT sign-in expired or was used up by another program. Sign in again: "
+                      f"Settings, Account, Runs on. ({code}: {detail})")
+
+
 def _refresh(d: dict) -> dict:
-    tok = d["tokens"]
-    body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
+    """Refresh under the lock; d was read after taking it. Compare-and-swap: the new pair is written only if
+    auth.json still holds the refresh token we sent, so a sign-out or a sign-in to another account during the
+    request is never undone."""
+    sent = d["tokens"]["refresh_token"]
+    body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": sent,
                                    "client_id": CLIENT_ID}).encode()
     req = urllib.request.Request(token_url(), data=body, method="POST", headers={
         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
@@ -225,18 +306,37 @@ def _refresh(d: dict) -> dict:
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
         if e.code in (400, 401, 403):
-            raise NotSignedIn("Your ChatGPT sign-in expired or was used up by another program. Sign in again: "
-                              f"Settings, Account, Runs on. ({e.code}: {detail})")
-        raise RuntimeError(f"chatgpt token refresh HTTP {e.code}: {detail}")
-    if not new.get("access_token"):
-        raise RuntimeError("chatgpt token refresh returned no access token")
-    tok = dict(tok, access_token=new["access_token"])
+            return _adopt_rotated(sent, e.code, detail)
+        raise RuntimeError(f"chatgpt HTTP {e.code}: token refresh failed: {detail}")
+    except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError, OSError, ValueError) as e:
+        raise RuntimeError(f"chatgpt HTTP 0: could not reach the ChatGPT sign-in server to refresh the sign-in: {e}")
+    if not isinstance(new, dict) or not new.get("access_token"):
+        raise RuntimeError("chatgpt HTTP 0: the ChatGPT sign-in server returned no access token")
+    try:
+        cur = _read()
+    except NotSignedIn:
+        if _peek() is None:
+            raise NotSignedIn("You signed out of ChatGPT while Meshpool was refreshing it. "
+                              "Sign in again: Settings, Account, Runs on.")
+        raise
+    if cur["tokens"]["refresh_token"] != sent:
+        return cur                                      # another program or account got there first: keep theirs
+    tok = dict(cur["tokens"], access_token=new["access_token"])
     for k in ("refresh_token", "id_token"):
         if new.get(k):
             tok[k] = new[k]
-    d = dict(d, tokens=tok, last_refresh=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    _write(d)
-    return d
+    cur = dict(cur, tokens=tok, last_refresh=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
+    fsio.atomic_write_json(auth_path(), cur, indent=2)  # temp file made 0600 by mkstemp, so Codex sees the new pair
+    return cur
+
+
+def _locked_refresh(force: bool, failed: str) -> dict:
+    with fsio.file_lock(auth_path().with_name("auth.json.meshpool"), timeout=LOCK_TIMEOUT_S):
+        d = _read()                                   # someone may have refreshed while we waited
+        cur = d["tokens"]["access_token"]
+        if (force and failed and cur != failed) or (not force and not _stale(d)):
+            return d
+        return _refresh(d)
 
 
 def credentials(force: bool = False, failed: str = "") -> tuple[str, dict]:
@@ -245,12 +345,14 @@ def credentials(force: bool = False, failed: str = "") -> tuple[str, dict]:
     d = _read()
     if not force and not _stale(d):
         return d["tokens"]["access_token"], d["tokens"]
-    with _locked():
-        d = _read()                                   # someone may have refreshed while we waited
+    try:
+        d = _locked_refresh(force, failed)
+    except TimeoutError:                              # never refresh without the lock: a second refresher burns the pair
+        d = _read()
         cur = d["tokens"]["access_token"]
-        if (force and failed and cur != failed) or (not force and not _stale(d)):
-            return cur, d["tokens"]
-        d = _refresh(d)
+        if not ((force and failed and cur != failed) or (not force and not _stale(d))):
+            raise SignInBusy("chatgpt HTTP 0: another program is refreshing the ChatGPT sign-in. "
+                             "Try again in a moment.")
     return d["tokens"]["access_token"], d["tokens"]
 
 
@@ -344,15 +446,26 @@ def read_stream(lines, on_text=None) -> dict:
     return done
 
 
-_MODELS: dict = {"t": 0.0, "rows": []}
+_MODELS: dict = {}                                 # account -> {"t", "rows"}: the plan's model ids
+
+
+def forget_models() -> None:
+    _MODELS.clear()
+
+
+def _known() -> list:
+    return (_MODELS.get(_current_account()) or {}).get("rows") or []
 
 
 def models() -> list[str]:
-    """Model ids the user's ChatGPT plan offers (the Codex model list), cached for five minutes."""
-    if _MODELS["rows"] and time.time() - _MODELS["t"] < 300:
-        return _MODELS["rows"]
+    """Model ids the user's ChatGPT plan offers (the Codex model list), cached for five minutes per account."""
+    ent = _MODELS.get(_current_account())
+    if ent and ent["rows"] and time.time() - ent["t"] < 300:
+        return ent["rows"]
+    acct = ""
     try:
         tok, tokens = credentials()
+        acct = _account(tokens)
         req = urllib.request.Request(f"{base_url()}/models?client_version={CODEX_COMPAT_VERSION}", headers={
             "Authorization": f"Bearer {tok}", "originator": "meshpool", "User-Agent": f"Meshpool/{_version()}",
             **account_headers(tok, tokens)})
@@ -364,7 +477,7 @@ def models() -> list[str]:
     except Exception:  # noqa: BLE001
         ids = []
     if ids:
-        _MODELS.update(t=time.time(), rows=ids)
+        _MODELS[acct] = {"t": time.time(), "rows": ids}
     return ids
 
 
@@ -373,7 +486,7 @@ def default_model() -> str:
     from meshpool_harness import config as C
     m = (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip()
     want = m[8:] if m.startswith("chatgpt:") else (C.read().get("MH_CHATGPT_MODEL") or os.environ.get("MH_CHATGPT_MODEL") or "")
-    known = _MODELS["rows"]
+    known = _known()
     if want and (not known or want in known):
         return want.strip()
     return known[0] if known else DEFAULT_MODEL
@@ -382,7 +495,7 @@ def default_model() -> str:
 def resolve_model(model: str | None) -> str:
     """A Meshpool or other provider's model id means nothing to ChatGPT: use the ChatGPT default instead."""
     m = (model or "").strip()
-    known = _MODELS["rows"]
+    known = _known()
     if m and (m in known or (not known and m.lower().startswith(("gpt-", "o1", "o3", "o4", "codex")))):
         return m
     return default_model()
@@ -396,6 +509,7 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
     failed = ""
     for attempt in range(2):
         tok, tokens = credentials(force=bool(failed), failed=failed)
+        account = _account(tokens)
         req = urllib.request.Request(f"{base_url()}/responses", data=data, method="POST", headers={
             "Authorization": f"Bearer {tok}", "Content-Type": "application/json", "Accept": "text/event-stream",
             "originator": "meshpool", "User-Agent": f"Meshpool/{_version()}", "session_id": session,
@@ -403,10 +517,12 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 from meshpool_harness.core.wire import _first_then_idle
-                return read_stream(_first_then_idle(r, idle), on_text)
+                out = read_stream(_first_then_idle(r, idle), on_text)
+            _LIMIT.pop(account, None)                 # a call went through: the plan's limit is over
+            return out
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")[:2000]
-            lim = _usage_limit(e.code, detail)
+            lim = _usage_limit(e.code, detail, account)
             if lim:
                 raise lim
             if e.code == 401 and attempt == 0:
