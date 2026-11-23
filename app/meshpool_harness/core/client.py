@@ -49,9 +49,10 @@ _CONTEXT_RX = None
 
 def classify_error(msg: str) -> str:
     """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
-    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    'tls' (the endpoint's certificate is not trusted: retrying cannot help), 'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
     at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
-    context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
+    context), 'vision' (a 4xx about images or content types), 'bad_request' (any other 4xx not named above: 400, 405, 409,
+    415, 422 ...; the request itself is wrong, so it is not retried unchanged), 'transient' (5xx,
     connection lost, timeout) or 'fatal'."""
     global _CONTEXT_RX
     import re
@@ -61,6 +62,9 @@ def classify_error(msg: str) -> str:
                                   r"token limit", re.I),
                        re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
     m = msg or ""
+    from meshpool_harness.core import refusals as RF
+    if RF.is_tls_error(m):
+        return "tls"
     if "HTTP 401" in m or "HTTP 403" in m:
         return "auth"
     if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
@@ -81,7 +85,7 @@ def classify_error(msg: str) -> str:
         return "rate_limit"
     if "rejected as invalid" in m:
         return "gateway_reject"
-    if "HTTP 400" in m:
+    if re.search(r"HTTP 4\d\d", m):
         if _CONTEXT_RX[0].search(m):
             return "context"
         if _CONTEXT_RX[1].search(m):
@@ -225,6 +229,8 @@ class LiveClient:
             ex.pop(k, None)
         tried: set = set()
         tighten, shrinks = 1.0, 0
+        adapted: set = set()                     # refusals already answered by changing the request (once each)
+        max_tokens, temperature = self._apply_learned(model, ex, max_tokens, temperature)   # right the first time
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
@@ -262,6 +268,20 @@ class LiveClient:
                         if isinstance(m, dict):
                             m.pop("reasoning_content", None)
                     continue
+                if kind == "tls":                                  # an untrusted certificate: say how to trust it
+                    from meshpool_harness.core import refusals as RF
+                    raise RuntimeError("The endpoint's TLS certificate is not trusted. "
+                                       + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
+                if kind == "context":                              # an output-size error is not a long conversation
+                    cfix = self._adapt_refusal(msg, dict(ex, model=model, messages=messages, max_tokens=max_tokens),
+                                               model, adapted)
+                    if cfix and cfix.get("action") == "max_out":
+                        max_tokens = min(max_tokens, int(cfix["max_output"]))
+                        if "max_completion_tokens" in ex:
+                            ex["max_completion_tokens"] = max_tokens
+                        if cfix.get("context_window"):
+                            win = CTX.learn(model, int(cfix["context_window"])) if int(cfix["context_window"]) < win else win
+                        continue
                 if kind == "context":                              # too long: learn the real window, shrink, retry now
                     shrinks += 1
                     said = CTX.parse_limit(msg)
@@ -280,6 +300,28 @@ class LiveClient:
                         for m in messages):
                     MC.learn_no_vision(base_url, model)            # text-only here: image reviews skip it from now on
                     raise
+                if kind == "bad_request":                          # the endpoint named what it cannot take: fix, not resend
+                    body = dict(ex, model=model, messages=messages, max_tokens=max_tokens)
+                    if temperature is not None:
+                        body["temperature"] = temperature
+                    fix = self._adapt_refusal(msg, body, model, adapted)
+                    if fix:
+                        if fix.get("action") == "max_out":
+                            max_tokens = min(max_tokens, int(fix["max_output"]))
+                            if "max_completion_tokens" in ex:
+                                ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "max_tokens_param":
+                            ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "no_tools":
+                            ex.pop("tools", None)
+                            ex.pop("tool_choice", None)
+                        elif fix.get("action") == "drop_field":
+                            for f in fix["fields"]:
+                                if f == "temperature":
+                                    temperature = None
+                                else:
+                                    ex.pop(f, None)
+                        continue
                 if "HTTP 400" in msg:                              # a refused field: drop it and resend at once
                     sent = set(ex) | {"max_tokens"} | ({"temperature"} if temperature is not None else set()) | (
                         {"prompt_cache_key", "user"} if os.environ.get("MH_CACHE_KEY") == "1" and task_id else set())
@@ -339,6 +381,57 @@ class LiveClient:
                                                  f"{int(budget)} s.")
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last
+
+    @staticmethod
+    def _apply_learned(model, ex: dict, max_tokens, temperature):
+        """What this endpoint+model already refused (modelcaps, persisted): applied before the first request."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(PV.key_base(), model)
+            if c.source.get("max_output") == "learned" and max_tokens:
+                max_tokens = min(int(max_tokens), int(c.max_output))
+            for f in c.refused:
+                if f == "temperature":
+                    temperature = None
+                elif f not in ("model", "messages", "max_tokens"):
+                    ex.pop(f, None)
+            if c.max_tokens_param == "max_completion_tokens" or "max_tokens" in c.refused:
+                ex["max_completion_tokens"] = max_tokens
+            elif "max_completion_tokens" in ex and max_tokens:
+                ex["max_completion_tokens"] = min(int(ex["max_completion_tokens"]), int(max_tokens))
+            if c.no_tools:
+                ex.pop("tools", None)
+                ex.pop("tool_choice", None)
+        except Exception:  # noqa: BLE001 - what was learned is an optimisation
+            pass
+        return max_tokens, temperature
+
+    @staticmethod
+    def _adapt_refusal(msg: str, body: dict, model: str, adapted: set) -> dict | None:
+        """refusals.diagnose for the request-fixable actions, once per field/action in one call; what it shows is
+        remembered per endpoint+model (modelcaps.learn). None: nothing to change, fall through to the old handling."""
+        from meshpool_harness.core import modelcaps as MC
+        from meshpool_harness.core import refusals as RF
+        d = RF.diagnose(msg, body)
+        if not d or d["action"] not in ("drop_field", "max_tokens_param", "max_out", "no_tools"):
+            return None
+        if d["action"] == "drop_field":
+            d["fields"] = [f for f in d["fields"] if ("drop", f) not in adapted]
+            if not d["fields"]:
+                return None
+            adapted.update(("drop", f) for f in d["fields"])
+            d["learn"] = {"refused": list(d["fields"])}
+        else:
+            if (d["action"],) in adapted:
+                return None
+            adapted.add((d["action"],))
+        try:
+            from meshpool_harness import providers as PV
+            MC.learn(PV.key_base(), model, **d["learn"])
+        except Exception:  # noqa: BLE001
+            pass
+        return d
 
     def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
         """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far

@@ -365,6 +365,11 @@ def _urlopen(req, timeout: float, sink):
     return _mhttp.open(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
 
 
+def _is_local_base(base: str) -> bool:
+    from meshpool_harness.core import modelcaps as _MCL
+    return _MCL.is_local(base)
+
+
 def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
@@ -380,14 +385,16 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
-        t = float(os.environ.get("MH_PROBE_S", "30"))
+        from meshpool_harness.core import modelcaps as _MCP
+        t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
         with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
             ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
-        return f"HTTP 0: {_mhttp.explain(e, url)}"
+        from meshpool_harness.core import refusals as _RF
+        return ("tls: " if _RF.is_tls_error(str(e)) else "") + f"HTTP 0: {_mhttp.explain(e, url)}"
 
 
 def _image_in_newest_ask(messages: list) -> bool:
@@ -639,6 +646,21 @@ def _args_ok(call: dict) -> bool:
         return isinstance(json.loads((call.get("function") or {}).get("arguments") or "{}"), dict)
     except (ValueError, TypeError):
         return False
+
+
+def _image_part(im: dict) -> dict:
+    """An image_url part for an attached or returned image, shrunk when it is huge (OSS-23: one 12 MB photo must not
+    brick a chat). The file on disk is untouched; the chat stores the smaller one."""
+    from meshpool_harness.core import compat as _CP
+    return {"type": "image_url", "image_url": {"url": _CP.shrink_image_url(
+        f"data:{im.get('mime') or 'image/png'};base64,{im['data']}")}}
+
+
+def _shrunk(im: dict) -> dict:
+    """{"mime", "data"} of an image after shrink_image_url (the same ones when it is within limits)."""
+    url = _image_part(im)["image_url"]["url"]
+    head, _, data = url.partition(";base64,")
+    return {"mime": head[5:], "data": data}
 
 
 def _has_images(messages: list) -> bool:
@@ -1211,9 +1233,7 @@ class Agent:
                         "and the rule against creating or changing files no longer apply. Do what they asked.")})
             body = "[Added by the user while you were working] " + text
             if images:
-                parts = [{"type": "text", "text": body}] + [
-                    {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                    for im in images[:6]]
+                parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
                 self.messages.append({"role": "user", "content": parts})
             else:
                 self.messages.append({"role": "user", "content": body})
@@ -1280,9 +1300,7 @@ class Agent:
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
         if images:
-            parts = [{"type": "text", "text": body}] + [
-                {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                for im in images[:6]]
+            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
@@ -1505,6 +1523,7 @@ class Agent:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                msg = self._text_tools(msg)             # a model without tool calling asks for tools in text (W-02)
                 if not tools_off and not msg.get("tool_calls"):
                     from meshpool_harness.core import textcalls as _TC
                     try:
@@ -2107,6 +2126,7 @@ class Agent:
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
         # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
         cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        shots = [(n, {**im, **_shrunk(im)}) for n, im in shots]       # a huge screenshot is made smaller, not dropped
         big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
         shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
         if big:
@@ -2119,7 +2139,7 @@ class Agent:
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
         for _, im in shots[-2:]:
-            parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
+            parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
 
     def _model_is_blind(self) -> bool:
@@ -2231,7 +2251,15 @@ class Agent:
         model = self.current_model()
         prov = PV.split(model)[0]
         base, key = PV.endpoint(prov) if prov != "chatgpt" else ("", "")
-        return CTX.window(model, base, key)
+        win = CTX.window(model, base, key)
+        try:                                       # a window an earlier chat learned from this endpoint's replies
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(base, PV.split(model)[1])
+            if c.source.get("window") == "learned" and 512 <= c.window < win:
+                win = c.window
+        except Exception:  # noqa: BLE001
+            pass
+        return win
 
     def _fit_body(self, body: dict) -> None:
         """Keep the request inside the model's window: compact tool schemas, capped instructions, elided old output,
@@ -2264,8 +2292,10 @@ class Agent:
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
             # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
             # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
-            msgs = [dict(m) if isinstance(m.get("content"), list) else m for m in msgs]
-            _drop_images(msgs, keep=keep)
+            from meshpool_harness.core import compat as _CP
+            msgs = _CP.cap_images(msgs, keep)           # the cut moves in steps, so the cacheable prefix stays put
+        from meshpool_harness.core import compat as _CP2
+        msgs = _CP2.shrink_images(msgs)                 # an old chat holding a huge image (length check; no decoding)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         if self._model_is_blind() and _has_images(msgs):     # the history keeps the images; this model never gets them
@@ -2294,7 +2324,91 @@ class Agent:
                     body.pop(f, None)
         except Exception:  # noqa: BLE001
             pass
-        return body
+        return self._prepare(body, caps, prof)
+
+    def _prepare(self, body: dict, caps=None, prof=None) -> dict:
+        """compat.prepare with what this endpoint+model taught (refused fields, token cap, roles, tool ids, schemas)."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import compat as _CP
+            model = self.current_model()
+            caps = caps or self._caps(model, prof)
+            return _CP.prepare(body, caps, PV.endpoint(PV.split(model)[0])[0] or "")
+        except Exception:  # noqa: BLE001 - shaping is an adaptation: never stop the turn over it
+            return body
+
+    def _prompt_cut(self, resp: dict, body: dict, base: str, turn: dict) -> bool:
+        """H-02: a local server (Ollama) may cut a too-long prompt without an error. When the reply's prompt_tokens are far
+        below what was sent, learn the real window, tell the user how to raise it, and report True (resend, fitted)."""
+        try:
+            from meshpool_harness.core import context as CTX
+            from meshpool_harness.core import modelcaps as MC
+            u = resp.get("usage") or {}
+            n_in = u.get("prompt_tokens", 0) or 0
+            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
+            if not (n_in >= 512 and sent > 1500 and sent > n_in * 1.6):
+                return False
+            win = int(n_in * 1.05)
+            if win >= self._ctx_window():
+                return False
+            CTX.learn(self.current_model(), win)
+            MC.learn(base, body.get("model", ""), window=win)
+            for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
+                turn[k] += v                           # the discarded reply was paid for
+                self.usage[k] += v
+            how = ("raise the server's context size (for Ollama: set OLLAMA_CONTEXT_LENGTH, or num_ctx in a Modelfile, "
+                   "then restart Ollama)" if _is_local_base(base) else "raise the server's context size")
+            self.emit({"type": "status", "text": f"The server read only about {n_in:,} tokens of this conversation (its "
+                                                 f"real context window is about {win:,}). To use a larger window, {how}. "
+                                                 "The conversation is shortened to fit and sent again."})
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _text_tools(self, msg: dict) -> dict:
+        """On an endpoint that cannot take tools, read <tool_call> blocks in the reply as ordinary tool calls."""
+        try:
+            if msg.get("tool_calls") or not self._caps(self.current_model()).no_tools:
+                return msg
+            from meshpool_harness.core import compat as _CP
+            rest, calls = _CP.parse_text_tool_calls(msg.get("content") or "")
+            return {**msg, "content": rest, "tool_calls": calls} if calls else msg
+        except Exception:  # noqa: BLE001
+            return msg
+
+    def _tls_text(self, base: str, msg: str) -> str:
+        from meshpool_harness.core import refusals as RF
+        return (f"The connection to {base or 'the endpoint'} failed: its TLS certificate is not trusted. "
+                + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
+
+    def _diagnose(self, kind: str, msg: str, body: dict):
+        """refusals.diagnose for a 4xx the request itself caused (None for anything else or when nothing is named)."""
+        if kind not in ("bad_request", "vision", "context"):
+            return None
+        try:
+            from meshpool_harness.core import refusals as RF
+            return RF.diagnose(msg, body)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _apply_fix(self, fix: dict, fixed: set, base: str, body: dict) -> bool:
+        """Remember what a refusal taught (per endpoint+model, on disk). False when this fix was already applied in this
+        call: the same refusal came back, so the request cannot be fixed that way."""
+        from meshpool_harness.core import context as CTX
+        from meshpool_harness.core import modelcaps as MC
+        key = (fix["action"], tuple(fix.get("fields") or ()) or fix.get("max_output") or "")
+        if key in fixed:
+            return False
+        fixed.add(key)
+        model = str(body.get("model") or "")
+        MC.learn(base, model, **(fix.get("learn") or {}))
+        win = fix.get("context_window")
+        if win:
+            try:
+                CTX.learn(self.current_model(), int(win))
+            except Exception:  # noqa: BLE001
+                pass
+        return True
 
     def _keeps_reasoning(self) -> bool:
         """Whether this model passes reasoning_content back inside a tool-call turn (caps.keep_reasoning) and has not
@@ -2312,7 +2426,11 @@ class Agent:
         from meshpool_harness import providers as PV
         from meshpool_harness.core import modelcaps as MC
         prov, bare = PV.split(model)
-        return MC.resolve(PV.endpoint(prov)[0], bare, prof)
+        base, key = PV.endpoint(prov)
+        if prov != "chatgpt":
+            from meshpool_harness.core import context as CTX
+            CTX.note_models(base, key)               # /models says "no tools": known before the first request
+        return MC.resolve(base, bare, prof)
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
@@ -2338,6 +2456,8 @@ class Agent:
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
         rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
         self._first_scale = 1.0
+        fixed: set = set()                                 # (action, field) refusals already fixed in this call
+        cut_resent = False                                 # a silently cut prompt is resent once per call (H-02)
         while True:
             attempt += 1
             if attempt >= 8:                               # every attempt waited or withheld: report the last error
@@ -2378,6 +2498,13 @@ class Agent:
                 if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
                     raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
                 self._first_scale = 1.0
+                if not cut_resent and self._prompt_cut(resp, body, base, turn):
+                    cut_resent = True                  # the server cut the prompt: the reply is discarded, resend fitted
+                    if streamed:
+                        self.emit({"type": "stream_reset"})
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    continue
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -2401,6 +2528,19 @@ class Agent:
                 if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                if kind == "tls":                          # an untrusted certificate: no probe, no waiting (S-11)
+                    raise RuntimeError(self._tls_text(base, msg))
+                fix = self._diagnose(kind, msg, body)
+                if fix:
+                    if not self._apply_fix(fix, fixed, base, body):
+                        raise                              # the same refusal after its fix: report it
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    if fix["action"] == "max_out":         # W-03: only the reply was too long; never compact for it
+                        k = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+                        body[k] = min(int(body.get(k) or fix["max_output"]), fix["max_output"])
+                    self.emit({"type": "status", "text": fix["note"]})
+                    continue
                 if kind == "auth":
                     # A gateway under load answers a good key with a spurious 401 now and then. A key that worked
                     # earlier in this chat gets two short retries; any key gets one, so a bad key still fails fast.
@@ -2443,6 +2583,10 @@ class Agent:
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
                     # so a screenshot the user just attached still goes with the retry. Older steps are summarized
                     # first, so the task keeps its thread.
+                    if self._shrink_big_images(msg):
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        continue
                     self.compact_now()
                     _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
@@ -2488,10 +2632,14 @@ class Agent:
                     if cleaned:
                         raise
                     cleaned = True                         # control characters in a tool output: clean and retry
+                    changed = False
                     for m in body["messages"]:
                         if isinstance(m.get("content"), str):
-                            m["content"] = clean(m["content"])
-                    continue
+                            c = clean(m["content"])
+                            changed, m["content"] = changed or c != m["content"], c
+                    if changed:
+                        continue
+                    raise                                  # nothing to fix: a resend would fail the same way (W-04)
                 if kind == "rate_limit":
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
@@ -2545,6 +2693,10 @@ class Agent:
                         # Up for a small probe, failing for this big request: the real gateway answers an oversized
                         # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
                         shrunk = True
+                        if self._shrink_big_images("HTTP 413"):      # images first (OSS-23), then the text cuts
+                            body = self._body()
+                            body["model"] = PV.split(body["model"])[1]
+                            continue
                         _shrink_context(self.messages, 0, hard=True, keep_images=2)
                         lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
                         if len(json.dumps(self._body())) > lim:
@@ -2660,6 +2812,7 @@ class Agent:
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         _apply_refused(body)
+        body = self._prepare(body)
         resp = None
         for _ in range(3):
             try:
@@ -2750,6 +2903,25 @@ class Agent:
         except Exception:  # noqa: BLE001
             return ""
 
+    def _shrink_big_images(self, msg: str) -> bool:
+        """A 413 / too-large reply with images in the chat: text cuts cannot help, so make the images smaller first
+        (a quarter of the byte budget), then keep only the newest one. True when something changed (OSS-23)."""
+        if not _has_images(self.messages) or not (
+                re.search(r"HTTP 413|(?:entity|payload|request) too large", msg or "", re.I)):
+            return False
+        from meshpool_harness.core import compat as _CP
+        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+        before = len(json.dumps(self.messages))
+        quarter = max(50_000, int(os.environ.get("MH_IMAGE_MAX_BYTES", "1500000")) // 4)
+        self.messages[:] = _CP.shrink_images(self.messages, quarter)
+        if len(json.dumps(self._body())) > lim:
+            _drop_images(self.messages, keep=1)
+        if len(json.dumps(self.messages)) >= before:
+            return False
+        self.emit({"type": "status", "text": "The images in this chat were too big for the endpoint, so they were "
+                                             "made smaller before trying again."})
+        return True
+
     def _size_with(self, messages: list) -> int:
         """How big the request would be with these messages (the body _post sends)."""
         saved = self.messages
@@ -2836,6 +3008,11 @@ class Agent:
         # long task the same way ("The read operation timed out").
         idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
+        _bare = _PV.split(b.get("model", ""))[1]
+        first = _MC.first_byte_timeout(base, _bare, first)     # a local server loads the model first (H-06)
+        if _MC.is_local(base):
+            idle = max(idle, float(os.environ.get("MH_LOCAL_IDLE_S", "300")))
+        t_sent = time.time()
         got_text = False
         gen = getattr(self, "_gen", 0)
         live = []
@@ -2853,6 +3030,8 @@ class Agent:
             c.connect = checked_connect
         try:
             with _urlopen(req, first, sink) as r:
+                if stream or _MC.is_local(base):
+                    _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
                 thinking = []                            # one "Thinking…" status per call, before any text
 
                 def on_text(t):
