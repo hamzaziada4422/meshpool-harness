@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 
 from . import stream as ST
+from meshpool_harness.core import http as _mhttp
 
 
 def to_responses(body: dict) -> dict:
@@ -397,7 +398,8 @@ def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check
         if isinstance(whole, dict) and whole.get("error"):
             err = whole["error"]
             msg = (err.get("message") if isinstance(err, dict) else str(err)) or json.dumps(err)[:300]
-            raise RuntimeError(f"meshpool HTTP 502: {msg}")
+            raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(msg)[:200]}")   # a 200: not transient
+        raise RuntimeError("meshpool HTTP 200 but not a model reply: " + "\n".join(plain)[:200])
     if finish is None and not done:                      # closed cleanly mid-reply: do not pass a cut-off reply on
         raise RuntimeError("HTTP 0: the stream ended before the reply was complete")
     msg = {"role": "assistant", "content": "".join(content) or None}
@@ -435,7 +437,7 @@ class SimpleLedger:
         return out
 
     def _chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
-              temperature=None, extra=None, timeout=600, retries=2, **_):
+              temperature=None, extra=None, timeout=600, retries=2, key_only=False, **_):
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -452,7 +454,8 @@ class SimpleLedger:
         wire = os.environ.get("MH_WIRE", "chat")
         from meshpool_harness import providers as PV
         prov, body["model"] = PV.split(body["model"])    # the model's provider decides where the call goes
-        if prov == "chatgpt":                            # the user's ChatGPT sign-in (core/chatgpt.py)
+        if prov == "chatgpt" and not key_only:           # the user's ChatGPT sign-in (core/chatgpt.py); key_only: the check
+            #                                                tests the key endpoint, whatever the settings say
             from meshpool_harness.core import chatgpt as CG
             out = from_responses(CG.chat(body, task_id=task_id, idle=int(os.environ.get("MH_STREAM_IDLE_S", "120"))))
             log_usage_line(task_id, body["model"], out["usage"])
@@ -492,7 +495,7 @@ class SimpleLedger:
         attempt = 0
         while True:
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with _mhttp.open(req, timeout) as r:
                     status = r.status
                     sse_reply = stream and status == 200 and (
                         not anthropic or "event-stream" in (r.headers.get("Content-Type") or "").lower())
@@ -512,7 +515,7 @@ class SimpleLedger:
                 ra = ST.retry_after_seconds(getattr(e, "headers", None))
                 retry_after = f" [retry-after: {ra:g}]" if ra is not None else ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
+                raw, status = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):
@@ -526,6 +529,12 @@ class SimpleLedger:
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
             raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
+        from meshpool_harness import provider_setup as _PS
+        if not _PS._is_reply("anthropic" if anthropic else "responses" if wire == "responses" else "openai", payload):
+            txt = payload.get("raw") if isinstance(payload, dict) and "raw" in payload else _PS._not_reply_msg(payload)
+            if isinstance(payload, dict) and not payload.get("error") and "raw" not in payload:
+                txt = json.dumps(payload)[:200]
+            raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(txt)[:200]}")
         if anthropic:
             return normalize_reply(payload) if sse_reply else AW.from_response(payload)
         return from_responses(payload) if wire == "responses" else normalize_reply(payload)

@@ -166,7 +166,7 @@ def test_work_missing_file_is_a_message(capsys):
 
 def test_models_html_page_and_402(monkeypatch):
     from meshpool_harness import provider_setup as PS
-    for status, data, want in ((200, None, "not a model list"), (404, None, "not a model list"),
+    for status, data, want in ((200, None, "not like a model API"), (404, None, "not like a model API"),
                                (402, None, "payment")):
         monkeypatch.setattr(PS, "_get", lambda *a, _s=status, _d=data, **k: (_s, _d, ""))
         r = PS.test("http://x.example/v1", "key")

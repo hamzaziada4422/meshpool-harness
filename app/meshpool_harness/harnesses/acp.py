@@ -204,9 +204,13 @@ def office_server(roots: list[str]) -> dict:
            "MESHPOOL_HOME": str(C.home()), "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1",
            "PYTHONIOENCODING": "utf-8"}
     env = {**passthrough_env(), **env}                 # proxies, CA bundles, MH_* and MESHPOOL_* settings
-    for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
+    for k in ("MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
+    from meshpool_harness import providers as PV
+    base, key, _src = PV.endpoint_pair()               # a key goes only with the address it was set for
+    if key:
+        env["MESHPOOL_API_KEY"], env["MESHPOOL_BASE_URL"] = key, base
     if not os.environ.get("PYTHONPYCACHEPREFIX"):
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     return {"name": "meshpool-office", "command": sys.executable, "args": ["-m", "meshpool_harness.agent.office_mcp_server"],

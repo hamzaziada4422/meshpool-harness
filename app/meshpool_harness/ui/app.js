@@ -2224,9 +2224,8 @@ function showOnboarding() {
     }
     $("#oGo").disabled = true; res.className = "res"; res.textContent = "Checking your key…";
     try {
-      const r = await post("/api/test", {values: prov === "custom" ? values : {MESHPOOL_API_KEY: key, MESHPOOL_BASE_URL: "https://llm.meshpool.ai/v1"}});   // check first; save only a key that works
+      const r = await post("/api/onboard", {provider: prov, key, base_url: values.MESHPOOL_BASE_URL, model: values.MH_MODEL || ""});   // one request: checks the key, and only a key that works is saved, with the provider
       if (!r.ok) { res.className = "res bad"; res.textContent = connMsg(r.detail); $("#oGo").disabled = false; return; }
-      await post("/api/settings", {values}); await post("/api/provider", {provider: prov});
       store("harness_code", null); store("harness_cowork", null);
       await finish();
     } catch (e) { res.className = "res bad"; res.textContent = e.message; $("#oGo").disabled = false; }

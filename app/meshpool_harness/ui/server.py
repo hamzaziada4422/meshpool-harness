@@ -47,6 +47,7 @@ LOCK = threading.Lock()
 # ---------- settings -----------------------------------------------------------------------------------------------
 
 def get_settings() -> dict:
+    from meshpool_harness import providers as PV
     vals = C.read()
     fields = []
     for key, label, default, help_ in C.FIELDS:
@@ -64,7 +65,7 @@ def get_settings() -> dict:
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
             "default_project": str(Dk.default_project()),
             "native": NATIVE[0], "platform": sys.platform, "shells": W.shells(), "user_home": str(Path.home()),
-            "has_key": bool(vals.get("MESHPOOL_API_KEY") or os.environ.get("MESHPOOL_API_KEY")),
+            "has_key": bool(PV.key()), "key_name": PV.key_name(),
             "ready": HR.ready(), "provider": HR.provider(), "providers": HR.PROVIDER_NAMES,
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
@@ -96,6 +97,12 @@ def save_settings(body: dict) -> dict:
         u = urlparse(vals["MESHPOOL_BASE_URL"])
         if u.scheme not in ("http", "https") or not u.netloc:
             raise ValueError("The server address must start with http:// or https:// and name a host.")
+    from meshpool_harness import providers as PV
+    new = vals.get("MESHPOOL_BASE_URL")
+    from meshpool_harness import provider_setup as PS
+    if new and not vals.get("MESHPOOL_API_KEY") and not PS._same_endpoint(new, PV.key_base()) and PV.key() \
+            and PV.keyless_ok(new):
+        vals["MESHPOOL_API_KEY"] = ""    # a local server needs no key: the old endpoint's key goes, not to this server
     _key_follows_host(vals)
     from meshpool_harness import browser_use as BU
     BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
@@ -150,7 +157,7 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection(values: dict | None = None) -> dict:
+def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
     straight to the check: saved settings win over the environment, so setting them there would test the saved
     endpoint and send the typed key to it."""
@@ -169,7 +176,7 @@ def test_connection(values: dict | None = None) -> dict:
         base = PS.normalise_base(base_in)
     except PS.SetupError as e:
         return {"ok": False, "detail": str(e), "endpoint": base_in}
-    same = PS._same_endpoint(base, PV.key_base())
+    same = PS._same_endpoint(base, PV.key_base()) and not fresh   # fresh: nothing saved applies (onboarding)
     key = v.get("MESHPOOL_API_KEY") or (PV.key() if same else "")
     if not key and not PV.keyless_ok(base):
         return {"ok": False, "detail": f"No API key {'saved yet' if same else 'entered for ' + PV.host(base)}.",
@@ -188,10 +195,11 @@ def test_connection(values: dict | None = None) -> dict:
     t0 = time.time()
     st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
     secs = round(time.time() - t0, 1)
-    if err or st not in (200, 429):
-        why = (("No server at that address." if err == "refused" else "The server did not answer in time.") if err
+    if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
+        why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
                else PS.explain(st, data, base=base, model=model, version=ver))
-        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
+        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base,
+                "status": 0 if err else st}
     txt = ""
     if isinstance(data, dict):
         try:
@@ -200,7 +208,47 @@ def test_connection(values: dict | None = None) -> dict:
             txt = ""
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
-            "endpoint": base}
+            "endpoint": base, "wire": wire, "api_version": ver}
+
+
+def onboard(body: dict) -> dict:
+    """First-run key setup in one step: check the key (the typed address normalised, the /v1 variant tried when the
+    first answers 404), and only when it works write the key, the address, the model and the provider in ONE write."""
+    from meshpool_harness import provider_setup as PS
+    which = "custom" if body.get("provider") == "custom" else "meshpool"
+    key = C.clean_key(str(body.get("key") or ""))
+    if not key:
+        return {"ok": False, "detail": "Paste your API key first."}
+    model = str(body.get("model") or "").strip()
+    try:
+        base = (PS.normalise_base(str(body.get("base_url") or "")) if which == "custom"
+                else "https://llm.meshpool.ai/v1")
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e)}
+    if which == "custom" and not model:
+        return {"ok": False, "detail": "Enter a model the provider serves."}
+    r, used = {"ok": False, "detail": ""}, base
+    for cand in PS._candidates(base):
+        vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": cand}
+        if model:
+            vals["MH_MODEL"] = model
+        r, used = test_connection(vals, fresh=True), cand
+        if r.get("ok") or r.get("status") != 404:
+            break
+    if not r.get("ok"):
+        return {"ok": False, "detail": r.get("detail") or "The check failed.", "endpoint": used}
+    vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": used if which == "custom" else "",   # default: no saved address
+            **HR.provider_values(which)}
+    if which == "custom":
+        vals["MH_MODEL"] = model
+    from meshpool_harness import providers as PV
+    vals.update(MH_API_WIRE=r.get("wire") or "openai", MH_AUTH_HEADER="", MH_AUTH_SCHEME="",
+                MESHPOOL_AZURE_API_VERSION=r.get("api_version") or "")      # nothing of the previous endpoint stays
+    if (C.read().get("MH_SUBAGENT_MODEL") or "").strip() and not PS._same_endpoint(used, PV.key_base()):
+        vals["MH_SUBAGENT_MODEL"] = ""                   # named a model of the old endpoint
+    C.write(vals)
+    HR.apply_env(vals)
+    return {"ok": True, "base_url": used}
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -653,6 +701,9 @@ class Handler(BaseHTTPRequestHandler):
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
+                    except Exception as e:           # a test must answer, never a 500
+                        return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0, "base_url": "",
+                                                "error": f"The test could not finish: {type(e).__name__}: {e}"})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
@@ -663,6 +714,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
                 return self._send(200, get_settings())
+            if u.path == "/api/onboard":
+                return self._send(200, onboard(self._json() or {}))
             if u.path == "/api/test":
                 return self._send(200, test_connection((self._json() or {}).get("values")))
             if u.path == "/api/update/check":
