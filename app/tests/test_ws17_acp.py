@@ -256,7 +256,8 @@ def test_m05_05_undo_gives_the_harness_a_session_without_the_undone_turns(fake_a
     s.emit = lambda ev: s.events.append(dict(ev, i=len(s.events)))
     s._persist = lambda **kw: None
     a.emit_cb = s.emit
-    s.cp = type("CP", (), {"revert_to_before": lambda self, n: {"message_index": None}})()
+    s.cp = type("CP", (), {"revert_to_before": lambda self, n: {"message_index": None},
+                         "turns": lambda self: []})()
     assert a.send("keep this") == "fresh:keep this"
     assert a.send("undo this") == "fresh:undo this"
     s.revert(2)                                                 # Undo the second turn

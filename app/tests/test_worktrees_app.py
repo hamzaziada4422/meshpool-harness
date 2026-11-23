@@ -106,6 +106,7 @@ def test_code_chat_in_a_worktree_diff_merge_discard_and_delete(app, repo, monkey
     assert st == 200 and out["ok"] and out["diff"]["files"] == [] and not (Path(s.workdir) / "junk.py").exists()
     assert Path(s.workdir).is_dir()                       # discard keeps the copy: the chat goes on in it
     monkeypatch.setattr(A, "_saved", lambda sid: {"workdir": s.workdir})
+    monkeypatch.setenv("MH_DELETE_GRACE_S", "0")             # ws10: delete is soft with an Undo window; purge now
     A.thread_action(v["id"], {"action": "delete"})
     assert WT.listing() == [] and not Path(wt["workdir"]).exists()
     assert "meshpool/" not in git(repo, "branch", "--list")
