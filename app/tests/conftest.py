@@ -61,8 +61,9 @@ def _offline_gateway(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")
     # Never the real data folder: a saved company profile, settings or memory on the developer's machine must not
     # change what a test sees (the brief tests failed on machines with a saved company look).
-    (tmp_path / "home").mkdir(exist_ok=True)
-    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    iso = tmp_path.parent / (tmp_path.name + "_mh_home")   # beside tmp_path: tests list and create inside tmp_path
+    iso.mkdir(exist_ok=True)
+    monkeypatch.setenv("MESHPOOL_HOME", str(iso))
     monkeypatch.setenv("MH_SLOTS_DIR", str(tmp_path / "gateway-slots"))   # never the machine's real temp folder
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
