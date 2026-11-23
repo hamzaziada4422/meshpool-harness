@@ -229,7 +229,7 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
     return out
 
 
-def office_server(roots: list[str]) -> dict:
+def office_server(roots: list[str], edit_only: bool = False) -> dict:
     """Meshpool Office MCP server (PowerPoint, Excel, Word, data analysis) for ACP harnesses."""
     env = {"PYTHONPATH": str(C.APP), "MESHPOOL_PROJECT": str(Path(roots[0]).resolve()) if roots else os.getcwd(),
            "MESHPOOL_HOME": str(C.home()), "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1",
@@ -238,6 +238,8 @@ def office_server(roots: list[str]) -> dict:
     for k in ("MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
+    if edit_only:
+        env["MH_OFFICE_TOOLS"] = "edit"                # read, edit, convert and check: no engines to build a file
     from meshpool_harness import providers as PV
     base, key, _src = PV.endpoint_pair()               # a key goes only with the address it was set for
     if key:
@@ -258,6 +260,27 @@ def office_extra(workdir: str) -> dict:
     # per_call_project: one office process for the whole app; each call carries its own chat's folder
     return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330,
                            "per_call_project": True}}
+
+
+_OWN_RX = re.compile(r"meshpool_harness\.agent\.\w*_mcp_server")
+
+
+def is_own_server(spec: dict) -> bool:
+    """One of Meshpool's own stdio servers (browser, assistant, tools, web, office), as opposed to a server or
+    connector the user added."""
+    return any(_OWN_RX.search(str(a)) for a in spec.get("args") or [])
+
+
+def lean_mcp(servers: list[dict], office: bool, root: str, allowed: bool = True, edit_only: bool = False) -> list[dict]:
+    """The MCP servers an outside agent is given at session start. Each server's tool schemas ride in every request of
+    the chat (Codex: 46 tools, 5.5k tokens), so Meshpool's own servers are passed only when the chat needs them: the
+    office server for a chat that asks for an office file (`office`; `allowed` is the manifest's office switch), and
+    none otherwise. Servers and connectors the user added always go. MH_ACP_MCP=all passes everything, as before."""
+    every = os.environ.get("MH_ACP_MCP", "").lower() == "all"
+    out = list(servers) if every else [s for s in servers if not is_own_server(s)]
+    if allowed and (office or every):
+        out.append(office_server([root], edit_only and not every))
+    return out
 
 
 def _auth_failure(text: str) -> bool:
@@ -329,6 +352,9 @@ class ACPAgent:
         self.mcp = None
         self.acp_session = None
         self.loaded_from = None                # ACP session id to load on first send (resume)
+        self.office_on = False                 # the chat asked for an office file: the office server goes with the session
+        self.office_edit = False               # ... only to change a file the user has (a smaller set of office tools)
+        self._session_office = False           # whether the live session was opened with the office server (and how)
         self.agent_info = {}
         self.capabilities = {}
         self.model: str | None = None          # chosen in the app; applied with session/set_model
@@ -739,15 +765,29 @@ class ACPAgent:
                 pass
 
     def _ensure_session(self):
+        if self.acp_session and self.office_on and self._session_office != self._office_kind() \
+                and self.manifest.get("office", True) \
+                and self._p and self._p.poll() is None:
+            # The chat started without the office server and has now asked for an office file: open the same session
+            # again with the server (a harness that cannot load it starts a new one, which carries the history).
+            self.loaded_from, self.acp_session = self.acp_session, None
+            if not self.capabilities.get("loadSession"):
+                self.loaded_from = None
         if self._start() and self.acp_session:
             # The process exited and a new one started: its session is not in the new process. Load it (or start
             # a new one), as after a hard restart.
             self.loaded_from, self.acp_session = self.acp_session, None
         if self.acp_session:
             return
+        allowed = bool(self.manifest.get("office", True))
+        office = bool(self.office_on and allowed)
         mcp = mcp_servers_for_acp([str(self.root)], self.id) if self.manifest.get("share_mcp", True) else []
-        if self.manifest.get("office", True):
+        if self.manifest.get("lean"):          # Codex: only what the chat needs (see lean_mcp)
+            mcp = lean_mcp(mcp, office, str(self.root), allowed, bool(self.office_edit))
+        elif allowed:
             mcp.append(office_server([str(self.root)]))
+            office = True
+        self._session_office = self._office_kind() if office else ""
         if self.loaded_from and self.capabilities.get("loadSession"):
             try:
                 self._replaying = True
@@ -774,9 +814,27 @@ class ACPAgent:
         self._ask_mode(r.get("modes") or {})
         self._models_from(r)
         self._apply_model()
+        self._set_title()
         # A fresh session for a chat that already has a history (the harness lost or cannot load its old session,
         # e.g. a chat from weeks ago): it would start with no memory of the chat. Carry the history in the prompt.
         self._carry = any(e.get("type") in ("user", "assistant") for e in self._before_turn())
+
+    def _office_kind(self) -> str:
+        return "edit" if self.office_edit else "all"
+
+    def _set_title(self):
+        """Give the session Meshpool's own title. codex-acp starts a second Codex session (about 12k tokens, on its own
+        title model) to write a title for a session that has none; once a title is set explicitly it does not. An agent
+        that does not know the method refuses it, and that is fine."""
+        title = (self.title or "").strip()
+        if not (title and self.acp_session and self.manifest.get("lean")) or os.environ.get("MH_ACP_TITLE", "1") == "0":
+            return
+        if getattr(self, "_title_refused", False):
+            return
+        try:
+            self._request("session/set_title", {"sessionId": self.acp_session, "title": title[:80]}, timeout=30)
+        except Exception:  # noqa: BLE001 - ACPError or a timeout: the agent titles the chat itself, as before
+            self._title_refused = True
 
     def _models_from(self, r: dict):
         ms = r.get("models") or {}

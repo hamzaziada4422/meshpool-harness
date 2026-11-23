@@ -12,19 +12,18 @@ from __future__ import annotations
 
 # Every agent gets this, whatever it runs on: the built-in agents in their instructions, Pi, Hermes, Codex and
 # OpenCode in the first message of each chat, and the deck and workbook writers in their prompts.
-HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you do not know, or the files and sources "
-           "do not say, write \"I don't know\" (in a table, model or slide: N/A) and say what would answer it. Do not "
-           "guess or interpolate numbers, dates, names, quotes, sources or results and present them as fact; if an "
-           "estimate genuinely helps, label it as an estimate and show how you got it. Never say something was done, "
-           "checked or tested when it was not.")
+HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you or the sources do not know, write "
+           "\"I don't know\" (in a table, model or slide: N/A) and say what would answer it. Do not guess or "
+           "interpolate numbers, dates, names, quotes, sources or results and present them as fact; label an estimate "
+           "and show how you got it. Never say something was done, checked or tested when it was not.")
 
 # Every agent, whichever harness runs it: slides and workbooks come from the Meshpool engines, which carry the
 # consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
-ENGINES = ("Every slide and every spreadsheet goes through the Meshpool office tools: make_deck for a deck, add_slides "
-           "to add slides to a deck the user has, make_spreadsheet (or office_task) for a workbook or model. Never "
-           "write a .pptx or .xlsx by hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs. Decks come out in a "
-           "top strategy firm's style without being asked; pass the user's facts and files in the request. To change a file the user already has (.docx, .xlsx, .pptx), "
-           "use edit_office_file: it keeps their formatting and formulas.")
+ENGINES = ("Slides and workbooks come from the Meshpool office tools: make_deck for a deck, add_slides to add to a deck "
+           "the user has, make_spreadsheet (or office_task) for a workbook or model. Never write a .pptx or .xlsx by "
+           "hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs; pass the user's facts and files in the request. "
+           "To change a file the user already has (.docx, .xlsx, .pptx), use edit_office_file: it keeps their "
+           "formatting and formulas.")
 
 import contextlib
 import difflib
@@ -43,15 +42,13 @@ from meshpool_harness import fsio
 
 # House writing rule for every agent and every file Meshpool writes: it reads as written by a careful professional,
 # never as machine output (the user's standing request: no AI look anywhere in the harness).
-PLAIN = ("Write in plain sentences. Never use an em dash or an en dash as punctuation; use a comma, a colon, "
-         "brackets or a full stop instead. Write like a senior colleague, not a chatbot: the answer first, no "
-         "preamble (\"Great question\", \"Certainly\", \"I'd be happy to\") and no closing offers or summaries of "
-         "what you just said. Avoid the words that mark machine text: delve, leverage, robust, seamless, crucial, "
-         "pivotal, tapestry, landscape, realm, embark, elevate, unlock, streamline, game-changer, cutting-edge, "
-         "\"in today's fast-paced world\", \"it's important to note\". No emoji. Use headings, bold and bullet lists "
-         "only where they help the reader; prose is the default and one idea per paragraph. Files you make (documents, "
-         "slides, sheets) look like a professional's work: one consistent style, restrained colour, no decoration, "
-         "no filler.")
+PLAIN = ("Write plainly, like a senior colleague, not a chatbot: the answer first, no preamble (\"Great question\", "
+         "\"Certainly\") and no closing offers or summary of what you just said. Never use an em dash or an en dash as "
+         "punctuation; use a comma, a colon, brackets or a full stop. No emoji, and none of the words that mark "
+         "machine text: delve, leverage, robust, seamless, crucial, pivotal, tapestry, landscape, realm, embark, "
+         "elevate, unlock, streamline, game-changer, cutting-edge, \"in today's fast-paced world\", \"it's important "
+         "to note\". Prose by default, one idea per paragraph; headings, bold and bullets only where they help. Files "
+         "you make look like a professional's work: one consistent style, restrained colour, no filler.")
 
 
 def dashless(text: str) -> str:
@@ -385,17 +382,44 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = True, lookup: bool = True) -> str:
+                  exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
+                  office: bool = True) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
-    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup)["text"]
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
+
+
+def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
+    """The "Notes from Meshpool" paragraph: only the tools the agent has are named."""
+    if tools == "none":
+        return "Notes from Meshpool: cite sources with links." + ((" " + ENGINES) if office else "")
+    deferred = tools == "deferred"
+    t = ("Notes from Meshpool: " + ("the web, memory, schedule, browser and office tools load through tool_search. "
+                                   if deferred else "")
+         + "look things up with the web search, research and fetch tools, not the browser, and cite sources with "
+         "links. Check anything visual (a web page, app screen or slide) with view_output or ui_audit, and fix what "
+         "they show before you say it is done; for a page or screen use the build-ui skill. ")
+    if mem_on:
+        t += ("If the user asks you to remember something or states a lasting fact or preference, save it with "
+              "memory_save (never tasks, to-dos, bugs or plans); a durable fact about this project, such as how to "
+              "run its tests, goes in project_note. ")
+    if incognito:
+        t += "This chat is incognito: do not call memory_save or project_note. "
+    t += ("Use schedule_task for work that should happen later or on a schedule, and delegate_task (or run_subtasks) "
+          "to run independent parts of a large job in parallel. ")
+    return t + ENGINES
 
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = False, lookup: bool = True) -> dict:
-    """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray."""
+                  exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
+                  office: bool = True) -> dict:
+    """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
+    `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
+    leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
+    (found through tool_search) or "none" (an outside agent started without Meshpool's servers); `office`: it has the
+    office tools."""
     st = settings()
     mem_on = st["memory_on"] and not incognito
     MS = _MS()
@@ -408,7 +432,7 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
     now = datetime.now().astimezone()
     sections = []
     parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", HONESTY, PLAIN]
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", *([HONESTY, PLAIN] if rules else [])]
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -448,19 +472,7 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         pf = MS.project_facts(project_id, exclude) if (project_id and mem_on) else []
         sections.append({"title": "This project (instructions, notes, files)", "text": pb, "ids": [f["id"] for f in pf]})
         ids += [f["id"] for f in pf]
-    parts.append("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser. "
-                 "Cite sources with links. When you build anything visual, a web page, app screen or slide, check it with the view_output or ui_audit tool and fix what they show before you say it is done; for a page or screen, use the build-ui skill. "
-                 + ("If the user asks you to remember something, or states a lasting fact or preference about "
-                    "themselves or their work, save it with memory_save (facts about the user, never tasks, "
-                    "to-dos, bugs, feature requests or plans). When you learn something durable about this project "
-                    "that would save the next chat time (the command that runs its tests, a convention, where a "
-                    "thing lives), save it with project_note. " if mem_on else "")
-                 + ("This chat is incognito: nothing from it is saved to memory, so do not call memory_save or "
-                    "project_note. " if incognito else "")
-                 + "If the user asks for something to happen later or on a schedule, use schedule_task. "
-                 "For a large job with independent parts (research many companies, review many files), hand the "
-                 "parts to sub-agents with delegate_task (or run_subtasks where delegate_task is not available) "
-                 "so they run in parallel. " + ENGINES)
+    parts.append(_notes(tools, office, mem_on, incognito))
     text = "\n\n".join(parts)
     if record and chat_id and ids and not incognito:
         MS.record_given(chat_id, 0, ids, text)

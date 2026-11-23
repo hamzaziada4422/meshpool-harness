@@ -45,7 +45,7 @@ Each agent ran on the same model (DeepSeek V4.1 Flash), on the same tasks with t
 | Agent | Best at | Result |
 |---|---|---|
 | **Meshpool Code** | Coding in your project | SWE-bench Verified: 18 of 20 solved at $0.0079 per solved task. Codex CLI solved 17 at $0.0101. |
-| **Meshpool Work** | Word, Excel, PowerPoint and PDF work | Practical office run: all 7 tasks passed (proposal, live-formula workbook, chart deck, contract edit in place, invoices to Excel, PDF, letters). The Word proposal took 42 s; Hermes took 64 s. |
+| **Meshpool Work** | Word, Excel, PowerPoint and PDF work | Seven office tasks, same model as Codex and Pi: 6 of 7 passed, but it cost more and took longer than both (Pi: $0.006 and 35 s per task, Codex: $0.011 and 45 s). Not cheaper than Codex or Pi on office work yet; see [BENCHMARKS.md](docs/BENCHMARKS.md). |
 | **Meshpool's agent loop, browser use** | Web forms and web apps | MiniWoB++: 97 of 102 at $0.0027 and 17 s per solved task. In a same-time round, $0.0009 per solved task against $0.0025 for Codex CLI. |
 
 ## Install

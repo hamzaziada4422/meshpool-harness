@@ -249,34 +249,20 @@ def slide_layouts(message: str, kind: str = "all", show_references: bool | None 
 
 S = {"type": "string"}
 TOOLS = {
-    "check_deck": (check_deck, "Check a PowerPoint deck (.pptx) against Meshpool's 20 consulting-quality rules: opens "
-                   "in PowerPoint without a repair prompt (every XML part against the Office schemas), native "
-                   "charts and tables, theme fonts and colours, text fit, grid, density, action titles, storyline, "
-                   "sourced numbers, text matching the charts, archetypes, slide count, editability, alt text. Returns "
-                   "each failure as a fix instruction (e.g. 'Slide 4, Body 2: text overflows by 3 lines at 14pt; cut "
-                   "to 45 words'). `slide_count` is the count the brief asked for. With `data_files` (the .csv/.xlsx the "
-                   "deck is about) and `request` (what the deck was asked to show, e.g. 'revenue by quarter for each "
-                   "region') it also runs P22: some native chart must hold the categories, series and values the "
-                   "request asks of those files; a missing series or category is named.",
+    "check_deck": (check_deck, "Check a .pptx against Meshpool's deck rules (opens without repair, native charts, text "
+                   "fit, density, action titles, sourced numbers, alt text). Returns each failure as a fix "
+                   "instruction. `data_files` and `request` also check the charts against the data.",
                    {"path": S, "slide_count": {"type": "integer"}, "data_files": {"type": "array", "items": S},
                     "request": S}, ["path"]),
-    "check_workbook": (check_workbook, "Check an Excel workbook (.xlsx) against Meshpool's 14 financial-model rules "
-                       "after recalculating it: opens in Excel without a repair prompt, no hardcoded numbers in calculations, no numbers buried in formulas, no "
-                       "balancing plugs, historicals tie, no #REF!/#NAME? errors, no circular references, consistent "
-                       "formulas across periods, formatting conventions, a checks sheet with a master flag, no external "
-                       "links or macros.", {"path": S}, ["path"]),
-    "check_document": (check_document, "Check that a Word, PowerPoint or Excel file (.docx/.pptx/.xlsx) opens in "
-                       "Microsoft Office without the 'found a problem with content ... repair' prompt: every XML part "
-                       "against the Office schemas, relationships, content types and shape ids. Returns each problem "
-                       "with the part it is in.", {"path": S}, ["path"]),
-    "measure_office_file": (measure_office_file, "Measure how a .pptx, .xlsx or .pdf deck is built: generator, masters "
-                            "and layouts, theme colours vs hardcoded colours, fonts and type scale, grid, native charts "
-                            "and tables, text density, title style, source lines (decks); formulas vs constants, links, "
-                            "names, cycles, checks (workbooks). Use it to reverse-engineer a reference file.",
+    "check_workbook": (check_workbook, "Check an .xlsx after recalculating it against Meshpool's financial-model rules "
+                       "(opens without repair, no hardcodes or plugs, no errors or circular references, consistent "
+                       "formulas, checks sheet).", {"path": S}, ["path"]),
+    "check_document": (check_document, "Check that a .docx, .pptx or .xlsx opens in Office without a repair prompt; "
+                       "returns each problem with its part.", {"path": S}, ["path"]),
+    "measure_office_file": (measure_office_file, "Measure how a .pptx, .xlsx or .pdf is built (masters, theme, fonts, "
+                            "grid, charts, density; formulas vs constants) to reverse-engineer a reference file.",
                             {"path": S, "pages": S}, ["path"]),
-    "slide_layouts": (slide_layouts, "Which slide layouts prove a message, and what strong slides of that kind measure "
-                      "in 130 published consulting and financial services decks (title and body words, empty space, "
-                      "type sizes). Give the slide's message (its action title). Read-only; use it while planning a "
-                      "deck's storyline or when a slide's layout does not fit its point. `kind`: all, consulting or "
-                      "financial_services.", {"message": S, "kind": S}, ["message"]),
+    "slide_layouts": (slide_layouts, "Which slide layouts prove a message, with what strong consulting slides of that "
+                      "kind measure. Give the slide's action title; `kind`: all, consulting or financial_services.",
+                      {"message": S, "kind": S}, ["message"]),
 }

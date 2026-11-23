@@ -54,7 +54,7 @@ def test_two_numbered_lists_restart_numbering(tmp_path, monkeypatch):
     monkeypatch.setenv("MH_CLARITY", "0")
     msg, failed = O.make_document("1. a\n2. b\n\ntext\n\n1. c\n2. d\n", "n.docx", _clarity=False)
     assert not failed
-    d = docx.Document(str(next((tmp_path / "Meshpool outputs").glob("*.docx"))))
+    d = docx.Document(str(next(tmp_path.rglob("n.docx"))))
     ids = [p._p.pPr.numPr.numId.val for p in d.paragraphs if p.style.name == "List Number"]
     assert len(ids) == 4 and ids[0] == ids[1] and ids[2] == ids[3] and ids[0] != ids[2]
 
