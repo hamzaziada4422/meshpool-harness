@@ -526,3 +526,11 @@ def test_small_job_on_any_lane_skips_the_review_but_decks_and_long_jobs_keep_it(
     w.ws.edits = 1
     w.ws.commands = [{"cmd": "python check.py", "code": 2, "after_edit": 1, "kind": "run"}]
     assert not w._small_job(base)                                             # a failing check keeps it
+
+
+def test_lite_work_tools_switch_is_off_by_default_and_cuts_schemas_when_on(tmp_path, monkeypatch):
+    base = {t["function"]["name"] for t in _agent(tmp_path, "work").tool_schemas()}
+    monkeypatch.setenv("MH_LITE_WORK_TOOLS", "1")
+    lite = {t["function"]["name"] for t in _agent(tmp_path, "work").tool_schemas()}
+    assert "delegate_task" in base and "bash_start" in base
+    assert "delegate_task" not in lite and {"office_task", "read_file", "edit", "bash", "ask_user"} <= lite

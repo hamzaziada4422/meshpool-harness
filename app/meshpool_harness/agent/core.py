@@ -1054,6 +1054,10 @@ class Agent:
             # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
             # prompt prefix does not flip back and forth.
             names = [n for n in names if n in _CHAT_TOOLS]
+        elif self.profile == "work" and os.environ.get("MH_LITE_WORK_TOOLS", "0") == "1":
+            # MH_LITE_WORK_TOOLS=1 (off by default, unmeasured): a Work chat carries the 14 tools a document or data job
+            # uses, not the 20 of a long coding job (background shells, notebooks, sub-agents): 1.5k tokens a call.
+            names = [n for n in names if n in _CHAT_TOOLS | {"ask_user", "todo_write", "use_skill", "find_skill"}]
         else:
             self._tools_full = True
             if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
