@@ -7,8 +7,6 @@ InstallDir "$LOCALAPPDATA\Programs\Meshpool"
 InstallDirRegKey HKCU "Software\Meshpool" "InstallDir"
 RequestExecutionLevel user
 SetCompressor /SOLID lzma
-SetCompressorDictSize 16
-; 16 MB, not 64: makensis is a 32-bit program, and a 64 MB dictionary plus the larger payload (ffmpeg, pandoc, speech model) ran it out of memory ("error mmapping datablock").
 
 ; The version placeholders are filled in by packaging/build_all.py from app/meshpool_harness/__init__.py.
 BrandingText "Meshpool @VERSION@@BETA@"
@@ -77,18 +75,18 @@ Section "Meshpool" SecMain
   ; disk) therefore leaves a working install instead of a half-deleted one. The user's settings live in %APPDATA%\Meshpool.
   RMDir /r "$INSTDIR.new"
   SetOutPath "$INSTDIR.new"
-  !if /FileExists "payload.7z"
-    ; The release build packs the program files into one 7z archive (the build machine's 64-bit 7-Zip) because makensis
-    ; is a 32-bit program and cannot hold the whole payload ("error mmapping datablock"). This unpacks it with 7-Zip
-    ; (LGPL, see THIRD_PARTY_NOTICES.md). The archive is already compressed, so it goes in as it is.
-    File "/oname=$PLUGINSDIR\7z.exe" "7z.exe"
-    File "/oname=$PLUGINSDIR\7z.dll" "7z.dll"
-    File "/oname=$PLUGINSDIR\payload.7z" "payload.7z"
+  !if /FileExists "7zr.exe"
+    ; The release build appends the program files, as one 7z archive, to the end of this installer file (the NSIS
+    ; stub reads only its own part: "you can tack stuff on the end and it'll still work"). They are not inside
+    ; NSIS's data block: a 700 MB block made NSIS hang (solid compression decompresses it to a temp file) and
+    ; makensis run out of memory. 7-Zip's 7zr.exe (LGPL, see THIRD_PARTY_NOTICES.md) unpacks them straight from
+    ; this file, so nothing is copied to a temporary folder first.
+    File "/oname=$PLUGINSDIR\7zr.exe" "7zr.exe"
     DetailPrint "Unpacking Meshpool. This takes a minute or two."
-    nsExec::ExecToLog '"$PLUGINSDIR\7z.exe" x -y -bso0 -bsp0 "-o$INSTDIR.new" "$PLUGINSDIR\payload.7z"'
+    nsExec::ExecToLog '"$PLUGINSDIR\7zr.exe" x -y -bso0 -bsp0 -t7z "-o$INSTDIR.new" "$EXEPATH"'
     Pop $0
-    Delete "$PLUGINSDIR\payload.7z"
     StrCmp $0 "0" unpacked
+    StrCmp $0 "1" unpacked        ; 1 is a warning only, for example the signature a signed installer carries after the archive
       RMDir /r "$INSTDIR.new"
       MessageBox MB_OK|MB_ICONSTOP "Meshpool could not be unpacked (code $0). The disk may be full. Nothing was changed." /SD IDOK
       Abort

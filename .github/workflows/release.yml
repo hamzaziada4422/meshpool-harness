@@ -59,11 +59,13 @@ jobs:
                   f.write(("meshpool %d\n" % i) * 20)
           PY
           SEVEN="/c/Program Files/7-Zip"
-          cp "$SEVEN/7z.exe" "$SEVEN/7z.dll" $T/
           (cd $T/Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -md=64m -mmt=on -bso0 -bsp0 ../payload.7z '*')
           ls -la $T/payload.7z
+          curl -fsSL --retry 4 -o $T/7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
+          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  $T/7zr.exe" | sha256sum -c -
           choco install nsis -y --no-progress
           (cd $T && "/c/Program Files (x86)/NSIS/makensis.exe" -V2 installer.nsi && ls -la "Meshpool Setup.exe")
+          (cd $T && cat "Meshpool Setup.exe" payload.7z > full.exe && "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 full.exe && mv -f full.exe "Meshpool Setup.exe" && ls -la "Meshpool Setup.exe")
       - name: Install it silently and watch
         timeout-minutes: 25
         shell: bash
@@ -362,9 +364,11 @@ jobs:
           SEVEN="/c/Program Files/7-Zip"
           [ -x "$SEVEN/7z.exe" ] || choco install 7zip -y --no-progress
           [ -x "$SEVEN/7z.exe" ] || { echo "7-Zip is not installed"; exit 1; }
-          cp "$SEVEN/7z.exe" "$SEVEN/7z.dll" .
           (cd Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -md=64m -mmt=on -bso0 -bsp0 ../payload.7z '*')
           ls -la payload.7z
+          # 7zr.exe (7-Zip 25.01, LGPL) goes inside the installer to unpack the archive that is appended to it afterwards
+          curl -fsSL --retry 4 -o 7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
+          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  7zr.exe" | sha256sum -c -
           # The uninstaller is written on the user's machine by WriteUninstaller, which leaves no chance to sign it.
           # So write it here first (uninstaller.nsi), sign it, and ship the signed copy with File instead.
           if [ -n "${AZURE_SIGNING_ENDPOINT:-}" ]; then
@@ -378,6 +382,13 @@ jobs:
           else
             "$MAKENSIS" -V2 installer.nsi
           fi
+          # The installer file is the NSIS stub with the archive appended (the stub stays under 1 MB: 7-Zip finds an archive
+          # after a stub only within the first few megabytes).
+          ls -la "Meshpool Setup.exe"
+          [ "$(stat -c %s "Meshpool Setup.exe")" -lt 3000000 ] || { echo "the installer stub is larger than 3 MB"; exit 1; }
+          cat "Meshpool Setup.exe" payload.7z > "Meshpool Setup.full.exe"
+          "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 "Meshpool Setup.full.exe" || { echo "7-Zip cannot read the archive inside the installer"; exit 1; }
+          mv -f "Meshpool Setup.full.exe" "Meshpool Setup.exe"
           cd "$GITHUB_WORKSPACE"
           mkdir -p out && cp "dist-src/app-win/Meshpool Setup.exe" out/Meshpool-Setup.exe
       - name: Install the installer and smoke test what it installed (what a user gets)
