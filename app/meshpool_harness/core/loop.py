@@ -257,6 +257,9 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         keep = {"role": "assistant", "content": msg.get("content") or ""}
         if calls and os.environ.get("MH_SANITIZE_CALLS", "1") == "1":
             calls = _sanitize_calls(calls)
+        # an accepted finish/need_context returns at once, so they must run after every other call in the reply
+        calls = [c for c in calls if (c.get("function") or {}).get("name") not in ("finish", "need_context")] + \
+                [c for c in calls if (c.get("function") or {}).get("name") in ("finish", "need_context")]
         if calls:
             keep["tool_calls"] = calls
         messages.append(keep)
