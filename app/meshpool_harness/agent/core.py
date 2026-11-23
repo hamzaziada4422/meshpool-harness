@@ -392,11 +392,12 @@ def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | Non
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
         from meshpool_harness.core import modelcaps as _MCP
-        t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
+        body_s = float(os.environ.get("MH_PROBE_S", "30"))
+        t = _MCP.probe_timeout(base, body_s)            # a local server may be loading a model: a longer first-byte wait
         if timeout:
             t = min(t, float(timeout))                  # a caller with a shorter first-byte wait (core/wire.py)
         with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
-            ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
+            ST.read_body(r, min(t, body_s))             # a total deadline (not stretched for local loading): a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"

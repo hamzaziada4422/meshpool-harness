@@ -45,8 +45,10 @@ def test_listing_sees_a_rename_at_once(chats):
 
 
 def test_search_text_is_cached(chats):
-    assert A.search("zzzz") == []
+    # P-07 skips (and does not cache) a chat whose raw text cannot contain the words, so cache via a matching search
+    assert len(A.search("hello")) == 50
     assert len(A._RAW) == 300
+    assert A.search("zzzz") == []
     t = time.perf_counter()
     A.search("zzzz")
     assert time.perf_counter() - t < 0.5
