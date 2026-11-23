@@ -336,6 +336,10 @@ def chatgpt_login() -> dict:
     if not (tok.get("access_token") and tok.get("refresh_token")):
         out["note"] = "Codex is signed in with an API key, not a ChatGPT account. Sign in with ChatGPT instead."
         return out
+    st = CG.signin_state()
+    if not st["ok"]:
+        out["note"] = st["reason"]              # e.g. ChatGPT refused the refresh token: sign in again
+        return out
     out["usable"] = True
     idc = _claims(tok.get("id_token", ""))
     acc = _claims(tok.get("access_token", ""))
