@@ -296,7 +296,7 @@ def find_mcp() -> list[dict]:
     return out
 
 
-def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
+def import_mcp(name: str, spec: dict, description: str | None = None, needs_test: bool = True) -> str:
     """Add a server to Meshpool's mcp.json under a free name (an identical entry keeps its name); returns the name."""
     from meshpool_harness.agent import mcp as M
     base = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "server"
@@ -306,7 +306,7 @@ def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
         while n in servers and json.dumps(norm_existing(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
             n, i = f"{base}-{i}", i + 1
         servers[n] = dict(spec, description=description or f"Imported from another app ({name}).",
-                          disabled=True, needs_test=True)   # another app's command: it starts once before it can be on
+                          disabled=True, **({"needs_test": True} if needs_test else {}))   # another app's command: it starts once before it can be on
         return n
     try:
         return M.edit_config(add)

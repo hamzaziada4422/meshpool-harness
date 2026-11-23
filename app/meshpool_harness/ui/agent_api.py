@@ -254,6 +254,7 @@ def _last_reply(agent) -> str:
     return ""
 
 class Session:
+    scheduled = None           # class default: the scheduled task that started this thread
     incognito = False          # class defaults: tests and old callers build a Session without __init__
     _ck_run, _ck_n, _ck_stop = "", 0, None
 

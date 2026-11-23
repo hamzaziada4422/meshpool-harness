@@ -37,6 +37,11 @@ def _disabled() -> set:
         return set()
 
 
+def _save_disabled(s: set) -> None:
+    """Replace the whole disabled list (for callers that worked it out themselves), atomically under the lock."""
+    _edit_disabled(lambda cur: (cur.clear(), cur.update(s)))
+
+
 def _edit_disabled(fn) -> None:
     """Change the disabled list under the cross-process lock (the app, `meshpool` and the agent's tools all toggle
     skills); a damaged list is set aside and started again, since it only holds on/off switches (M17-01)."""
