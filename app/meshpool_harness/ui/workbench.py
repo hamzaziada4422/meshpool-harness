@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.core import http as _mhttp
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -173,7 +174,7 @@ def models(refresh: bool = False) -> dict:
             from meshpool_harness import providers as _PV
             url, auth = _PV.chat_target(base, key, "", "models")     # Azure: /openai/models?api-version=, api-key
             req = urllib.request.Request(url, headers={**auth, "User-Agent": "Meshpool"})
-            with urllib.request.urlopen(req, timeout=20) as r:
+            with _mhttp.open(req, 20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
             for it in items or []:
@@ -197,9 +198,9 @@ def models(refresh: bool = False) -> dict:
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
             err = f"The endpoint answered HTTP {e.code} when listing models." + (
-                " Check your API key." if e.code in (401, 403) else "")
+                " Check your API key." if e.code in (401, 403) else (" " + str(e.msg)) if 300 <= e.code < 400 else "")
         except Exception as e:  # noqa: BLE001
-            err = f"Could not list models: {e}"
+            err = f"Could not list models: {_mhttp.explain(e, base)}"
     from meshpool_harness import providers as PV
     dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}

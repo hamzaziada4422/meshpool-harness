@@ -29,6 +29,7 @@ from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
+from meshpool_harness.core import http as _mhttp
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -357,7 +358,7 @@ class _EndpointDown(RuntimeError):
 
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
-    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
+    return _mhttp.open(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
 
 
 def _probe_once(base: str, key: str, model: str, sink=None) -> str:
@@ -376,13 +377,13 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
-        with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
+        with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
             r.read()
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
-        return f"HTTP 0: {e}"
+        return f"HTTP 0: {_mhttp.explain(e, url)}"
 
 
 def _image_in_newest_ask(messages: list) -> bool:
@@ -2625,7 +2626,7 @@ class Agent:
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
-            raise RuntimeError(f"HTTP 0: connection problem ({e})")
+            raise RuntimeError(f"HTTP 0: connection problem ({_mhttp.explain(e, url)})")
         finally:
             if live and getattr(self, "_live", None) is live[-1]:   # never clear a newer call's handle
                 self._live = None

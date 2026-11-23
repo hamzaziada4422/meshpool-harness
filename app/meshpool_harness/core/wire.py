@@ -12,6 +12,8 @@ import time
 import urllib.error
 import urllib.request
 
+from meshpool_harness.core import http as _mhttp
+
 
 def to_responses(body: dict) -> dict:
     """Chat-completions request -> Responses API request (same content, same order: the prefix stays byte-stable).
@@ -429,7 +431,7 @@ class SimpleLedger:
         attempt = 0
         while True:
             try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
+                with _mhttp.open(req, timeout) as r:
                     status = r.status
                     raw = (json.dumps(sse_to_chat(_first_then_idle(r, idle))).encode() if stream and status == 200
                            else r.read())
@@ -441,7 +443,7 @@ class SimpleLedger:
                 except ValueError:
                     retry_after = ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
+                raw, status = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):

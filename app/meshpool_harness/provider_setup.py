@@ -27,6 +27,7 @@ from urllib.parse import urlparse, urlunparse
 from meshpool_harness import config as C
 from meshpool_harness import providers as PV
 from meshpool_harness.core import anthropic_wire as AW
+from meshpool_harness.core import http as _mhttp
 
 ANTHROPIC_BASE = "https://api.anthropic.com/v1"
 OPENAI_BASE = "https://api.openai.com/v1"
@@ -83,14 +84,6 @@ def _candidates(base: str) -> list[str]:
     return [base] if p.path else [base, base + "/v1"]
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *a, **k):      # a redirect would carry the key to another host
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect)
-
-
 def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = None):
     """(status, parsed JSON or None, error kind). error kind: "" | "refused" | "timeout". With `body`: a JSON POST."""
     hdr = {"User-Agent": "Meshpool", "Accept": "application/json", **headers}
@@ -99,7 +92,7 @@ def _get(url: str, headers: dict, timeout: float = 15.0, body: dict | None = Non
     req = urllib.request.Request(url, headers=hdr, data=json.dumps(body).encode("utf-8") if body is not None else None,
                                  method="POST" if body is not None else "GET")
     try:
-        with _OPENER.open(req, timeout=timeout) as r:
+        with _mhttp.open(req, timeout, refuse_redirects=True) as r:
             raw = r.read(4_000_000)
             status = r.status
     except urllib.error.HTTPError as e:

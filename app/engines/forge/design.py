@@ -469,11 +469,12 @@ def design_prompt(s: dict, direc: dict, recent: list[str], layout: str | None = 
 def _post(url: str, body: dict, timeout: float) -> tuple[int, dict]:
     """POST JSON; (status, payload). The proxy injects the gateway's key; a configured key is sent when present."""
     from meshpool_harness import providers as PV
+    from meshpool_harness.core import http as _mhttp
     key = PV.key() or "dummy"
     req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
                                  headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _mhttp.open(req, timeout) as r:
             raw, st = r.read(), r.status
     except urllib.error.HTTPError as e:
         raw, st = e.read(), e.code
