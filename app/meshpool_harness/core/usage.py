@@ -806,6 +806,20 @@ def bind(task: Task | None, source: str = "chat") -> Iterator[None]:
         _CUR.reset(tok)
 
 
+def over_budget(task) -> "BudgetExceeded | None":
+    """The first task on the chain at or over its limit, as the BudgetExceeded to report; None when within it. For
+    callers that cannot refuse a call up front (outside agents that make their own calls): check before a turn and
+    stop the agent after the call that crosses."""
+    if isinstance(task, str):
+        task = get_task(task)
+    for t in task.chain() if task is not None else []:
+        if t.budget > 0:
+            spent = t.spent()
+            if spent >= t.budget:
+                return BudgetExceeded(t.id, t.budget, spent)
+    return None
+
+
 def child_env(task: Task, source: str) -> dict:
     return {"MH_USAGE_TASK": task.id, "MH_USAGE_SOURCE": source, "MESHPOOL_HOME": str(C.home())}
 

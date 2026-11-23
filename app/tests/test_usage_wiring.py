@@ -75,6 +75,7 @@ class Srv:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    monkeypatch.delenv("MH_API_WIRE", raising=False)   # another test file can leave an injected "anthropic"
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "none.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", KEY)
     monkeypatch.delenv("MH_MAX_INFLIGHT", raising=False)

@@ -271,6 +271,7 @@ def earlier_context(events: list, limit: int = 40000) -> str:
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
     usage_task = None          # the session's usage task (core/usage.py): the harness's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
     _usage_recorded = False        # set once the current prompt response is in the ledger (any code path)
     _cost_now = _cost_seen = 0.0   # session cost the harness reported (usage_update), and the part already recorded
 
@@ -764,10 +765,21 @@ class ACPAgent:
                          (r.get("usage") if isinstance(r, dict) else None) or None, source=f"external:{hid}",
                          task=self.usage_task or None, extra=extra, request_chars=len(prompt_text),
                          reply_chars=len(final_text))
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
         except Exception:  # noqa: BLE001 - accounting never breaks a turn
             pass
 
     def send(self, text: str, images: list | None = None) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         kt = getattr(self, "_kill_timer", None)
         if kt:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands

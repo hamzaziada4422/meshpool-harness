@@ -211,6 +211,7 @@ def _before_turn(agent) -> list:
 class PiAgent:
     """One Pi process serving one Meshpool thread. Same surface as ACPAgent."""
     usage_task = None          # the session's usage task (core/usage.py): Pi's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -364,6 +365,11 @@ class PiAgent:
             text = "".join(str(c.get("text") or "") for c in msg.get("content") or [] if isinstance(c, dict))
             USAGE.record(str(msg.get("model") or self.model or "pi"), u or None, source="external:pi",
                          task=self.usage_task or None, reply_chars=len(text), extra=extra)
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
         except Exception:  # noqa: BLE001 - accounting never breaks a turn
             pass
 
@@ -547,6 +553,12 @@ class PiAgent:
 
     # ---------- turns ------------------------------------------------------------------------------------------
     def send(self, text: str, images: list | None = None) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         self._stop = False
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only

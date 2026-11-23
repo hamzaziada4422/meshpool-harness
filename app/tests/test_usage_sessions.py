@@ -78,6 +78,7 @@ def _call(n):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    monkeypatch.delenv("MH_API_WIRE", raising=False)   # another test file can leave an injected "anthropic"
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "none.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", KEY)
     monkeypatch.setenv("MH_MODEL", MODEL)
@@ -134,8 +135,8 @@ def test_a_chat_message_stops_on_the_limit(serve, monkeypatch, tmp_path):
     s = _session(tmp_path)
     s.send("look around")
     _idle(s)
-    assert srv.chats <= 2
-    assert any(t.startswith("Spending limit") for t in _errors(s))
+    assert srv.chats <= 2, (srv.chats, _errors(s))
+    assert any(t.startswith("Spending limit") for t in _errors(s)), (srv.chats, _errors(s), [e.get("type") for e in s.events][-15:])
     assert s.agent.budget_stopped is True
 
 
@@ -250,15 +251,25 @@ def test_codex_exec_turn_completed_usage_normalizes():
 
 
 # ---------- the relay, image calls and test calls are counted ------------------------------------------------------
-def test_the_chatgpt_relay_records_each_reply(env):
+def test_the_chatgpt_relay_does_not_count_calls_its_agents_already_count(env, monkeypatch):
+    """Every client of the relay is an agent Meshpool started (Pi, OpenCode, Hermes, Codex over ACP) that records its
+    own calls against its chat; the relay recording them too counted each call twice."""
+    import urllib.request
+    from meshpool_harness.core import chatgpt as CG
     from meshpool_harness.core import chatgpt_relay as R
+    monkeypatch.setattr(CG, "chat", lambda body, **kw: {"output": [{"type": "message", "content": [
+        {"type": "output_text", "text": "hello"}]}], "usage": {"input_tokens": 70, "output_tokens": 5}})
     task = usage.start_task(chat="relay")
-    out = {"choices": [{"message": {"role": "assistant", "content": "hello"}}],
-           "usage": {"prompt_tokens": 70, "completion_tokens": 5}}
+    url, tok = R.ensure()
+    req = urllib.request.Request(url.rstrip("/") + "/chat/completions", method="POST",
+                                 data=json.dumps({"model": "gpt-5", "messages": [{"role": "user", "content": "hi"}]}).encode(),
+                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
     with usage.bind(task, "chat"):
-        R._account("gpt-5", out, {"messages": [{"role": "user", "content": "hi"}]})
-    (r,) = _records(task)
-    assert r["source"] == "external:chatgpt-relay" and r["in"] == 70 and r["out"] == 5
+        with urllib.request.urlopen(req, timeout=20) as r:
+            assert r.status == 200
+    usage.flush()
+    assert task.totals()["calls"] == 0
+    assert not any(r.get("source") == "external:chatgpt-relay" for r in usage.read_records())
 
 
 def test_a_forge_image_call_is_counted(env):
@@ -299,3 +310,27 @@ def test_a_429_on_the_chat_call_lowers_the_gate(serve, tmp_path):
     assert before >= 2
     a.send("hello")
     assert srv.chats == 2 and g.limit == before // 2
+
+
+def test_an_outside_agent_is_stopped_after_the_call_that_crosses_the_limit(env, tmp_path):
+    p = PiAgent({"id": "pi", "name": "Pi"}, str(tmp_path))
+    p.usage_task = usage.start_task(chat=p.id, budget_usd=0.10)
+    events, stopped = [], []
+    p._emit = events.append
+    p.stop = lambda: stopped.append(1)
+    p._on({"type": "message_end", "message": {"role": "assistant", "model": "claude-opus-5-5", "content": [],
+                                               "usage": {"input": 100000, "output": 2000}}})   # $0.44: over $0.10
+    assert stopped and p.budget_stopped
+    assert any(e.get("type") == "error" and "Spending limit" in e.get("text", "") for e in events)
+
+
+def test_an_outside_agent_turn_does_not_start_over_the_limit(env, tmp_path):
+    a = ACPAgent({"id": "codex", "name": "Codex"}, str(tmp_path))
+    a.usage_task = usage.start_task(chat=a.id, budget_usd=0.10)
+    usage.record("claude-opus-5-5", {"prompt_tokens": 100000, "completion_tokens": 2000}, task=a.usage_task)
+    events = []
+    a._emit = events.append
+    a._request = lambda *x, **k: (_ for _ in ()).throw(AssertionError("no request may be sent"))
+    assert a.send("hello") == ""
+    assert a.budget_stopped
+    assert any(e.get("type") == "error" and "Spending limit" in e.get("text", "") for e in events)
