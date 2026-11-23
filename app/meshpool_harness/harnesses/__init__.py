@@ -429,7 +429,19 @@ def default_for(mode: str) -> str:
         return want
     # Meshpool's own harnesses are the defaults: they passed every task in the practical check (13 Nov 2026) and
     # need nothing else installed. Hermes and the others stay one click away in the harness picker.
+    return builtin_for(mode)
+
+
+def builtin_for(mode: str) -> str:
+    """The mode's own agent: the one place that names it (Auto's way back and default_for read it)."""
     return "meshpool-code" if mode == "code" else "meshpool-work"
+
+
+def own_for(mode: str) -> str:
+    """The agent a chat in this mode goes back to from an Auto pick: the user's default, or the mode's own agent when
+    that default is Auto itself."""
+    hid = default_for(mode)
+    return builtin_for(mode) if hid == AUTO["id"] else hid
 
 
 def add(text: str) -> dict:

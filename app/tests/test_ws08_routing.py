@@ -102,6 +102,18 @@ def test_a_non_default_pick_carries_a_way_back_to_the_modes_agent(chat, monkeypa
     assert using["back"] == {"harness": "meshpool-code", "name": HR.get("meshpool-code")["name"]}
 
 
+def test_the_way_back_is_never_auto_itself(chat, monkeypatch):
+    """Auto is the user's default for Code chats: the way back is the mode's own agent, not "Use Meshpool Auto"."""
+    A, proj, made = chat
+    monkeypatch.setenv("MH_HARNESS_CODE", "meshpool-auto")
+    monkeypatch.setattr(HRT, "route", lambda text, kind, **k: {"harness": "meshpool-work", "name": "Meshpool Work",
+                                                               "category": "data", "reason": "because"})
+    v = A.create({"kind": "code", "task": "fix the bug", "workdir": str(proj)})
+    made.append(v["id"])
+    using = next(e for e in v["events"] if e.get("using"))
+    assert using["back"]["harness"] == "meshpool-code"
+
+
 # ---- M29-02 -------------------------------------------------------------------------------------------------------
 
 def test_health_records_expires_and_clears(home):
