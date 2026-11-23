@@ -35,12 +35,13 @@ from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
 from meshpool_harness.core.wire import sse_to_chat
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
+from meshpool_harness.agent import mcp_assist as MA
 
 SESSIONS = C.runs_dir() / "sessions"
 DEFAULT_MODEL = "deepseek-v4.1-flash"
 
 READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url", "office_task", "web_search", "web_research", "todo_write", "use_skill",
-             "ask_user", "diagnostics", "find_skill", "update_plan"}
+             "ask_user", "diagnostics", "find_skill", "update_plan", "mcp_find_tools"}
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
@@ -143,6 +144,32 @@ is the slowest way to work.
 mark items completed as you go. Before you end your turn, every item should be completed, or say why it is not."""
 
 
+# ---- E2E-AUTONOMY (0.0.12): finishing the whole job, MCP use, errors, verification. MH_E2E=0 turns it off. ----
+E2E_RULES = """
+
+Finishing the job
+- Finish the whole task yourself, in this turn. Do not stop to ask permission for the next step, and do not end \
+your reply with a promise ("I will now...", "Next I would..."): do the next step with a tool call instead. A reply \
+without a tool call ends the turn, so only send one when the work is done or you are truly blocked.
+- Ask the user (ask_user) only when you are truly blocked: a secret or access only they have, an action you cannot \
+undo that they did not ask for, or two readings that lead to very different results which no file or tool can \
+settle. For everything else pick the sensible default, go on, and say what you assumed in your final reply.
+- A failed tool call is information, not the end. Read the whole message, fix what it names (a wrong or missing \
+argument, a format, a step to do first) and call again. Retry a temporary failure (timeout, 5xx, rate limit) up to \
+three times. Try a different tool or approach before you report something as impossible. A result that says \
+ok false, error or failed is a failure even when the call itself did not error.
+- Connected-app tools (names starting mcp__): find the right tool by reading the tool list (or mcp_find_tools when \
+it is offered); look ids up with a search or list tool instead of guessing them; follow every next page \
+(next_cursor, page, offset) until none is left; join data from several tools by id; and then do the write steps \
+the user asked for. A summary is not the job when they asked for a change.
+- To check your work, only look: read the file, run the tests, call a read-only tool. Never test by doing extra \
+real things in a live system (booking, sending, creating, updating or deleting something just to see if it \
+works). If an effect cannot be read back, say it was accepted by the tool but is not independently confirmed.
+- Before you finish, go through every requirement in the request one by one against the real result. Say plainly \
+what failed or was not done; never write "done" for something that errored."""
+E2E = os.environ.get("MH_E2E", "1") != "0"
+
+
 T.SCHEMAS["web_search"] = T._fn(
     "web_search", "Search the web and get the top results (title, link, snippet). Then read pages with fetch_url, or "
     "use web_research to search and read in one step.",
@@ -217,10 +244,10 @@ when it helps the user follow along.
 Asking the user (ask_user)
 The user wants the result they had in mind, not a good guess. ask_user shows them clickable options; they can also \
 type their own answer.
-- Before you build a large deliverable (deck, workbook, long document, report), make ONE ask_user call only if \
-choices that change the result most are still open after reading the request and files: at most 3 questions. If the \
-request already says what it wants, or it is small, build it now with your recommendations and list them in one \
-line at the end. Waiting on questions costs the user time; ask only what you cannot reasonably choose. Typical ones: \
+- E2E-AUTONOMY: build now with sensible choices. Make ONE ask_user call before a large deliverable (deck, workbook, \
+long document, report) only if a choice that would waste the whole job when wrong is open and nothing in the \
+request, the files or the connected apps settles it: at most 3 questions. A vague request ("a plan for X") is not a \
+reason to ask: choose audience, length and format yourself and list them in one line at the end. Waiting on questions costs the user time; ask only what you cannot reasonably choose. Typical ones: \
 audience and purpose; density, with the options "present" (visual, few words, to present live), "balanced" and \
 "read" (a dense pre-read); length (e.g. number of slides or pages); look or theme (navy, ocean, forest, burgundy, \
 graphite, mono); sources to use or leave out. Give every question 2 to 5 short options, mark the one you recommend \
@@ -230,7 +257,7 @@ asking for them. A quick question or a small, clear task needs no questions.
 - While you work, ask a short follow-up whenever something material is ambiguous (two readings of the data, a \
 missing number, a choice the user would care about). Never make two ask_user calls in a row without doing work in \
 between.
-- Before you finish, confirm anything important you assumed, with one short ask_user call if it could change the result.
+- E2E-AUTONOMY: do not ask at the end to confirm what you assumed; list the assumptions in your reply.
 - Pass the answers on to the engines in plain words: put them in the make_deck, make_spreadsheet, make_document or \
 office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides", "audience: the board").
 - If the result says no one answered, go ahead with your recommendations and list them as assumptions in your reply.
@@ -658,6 +685,26 @@ def _apply_refused(body: dict) -> dict:
     return body
 
 
+_PROMISE = re.compile(
+    r"(?:\b(?:I'll|I will|I am going to|I'm going to|let me|now I(?:'ll| will)|next,? I(?:'ll| will)|next up)\b"
+    r"|\b(?:shall|should) I (?:proceed|continue|go ahead|start|begin)\b"
+    r"|\b(?:want|like) me to (?:proceed|continue|go ahead|start|begin|keep going)\b"
+    r"|\bdo you want me to (?:proceed|continue|go ahead|keep going)\b)", re.I)
+
+
+def _stopped_early(final: str) -> bool:
+    """True when a reply that ended the turn ends with a promise of more work ("Now I'll run the tests.") or asks
+    leave to carry on ("Shall I proceed?"): the model stopped in the middle of the job (E2E-AUTONOMY)."""
+    tail = [p for p in re.split(r"\n\s*\n", str(final or "").strip()) if p.strip()]
+    if not tail:
+        return False
+    last = " ".join(tail[-1].split())[-400:]
+    if re.search(r"let me know|I'll need|I will need|I'll wait|I can't|I cannot|I'm unable|I am unable", last, re.I):
+        return False
+    last_sentence = re.split(r"(?<=[.!?])\s+", last)[-1]
+    return bool(_PROMISE.search(last_sentence))
+
+
 _DESTRUCTIVE = re.compile(
     r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
     r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
@@ -784,6 +831,8 @@ class Agent:
             if "todo_write" in self._dropped():     # a focused harness: no todo list, so no rule about one
                 rules = rules.split("\n- For any request with more than one step")[0]
             text += rules
+        if E2E:
+            text += E2E_RULES
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
@@ -852,10 +901,23 @@ class Agent:
         drop = self._dropped()
         if drop:
             names = [n for n in names if n not in drop]
-        return T.schemas(names) + ([x for x in self.mcp.schemas()
-                                    if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
-                                    and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
-                                   if self.mcp else [])
+        ms = ([x for x in self.mcp.schemas()
+               if not x["function"]["name"].replace("-", "_").startswith("mcp__meshpool_web__")
+               and not x["function"]["name"].endswith("run_subtasks")]   # delegate_task instead
+              if self.mcp else [])
+        return T.schemas(names) + self._lazy_apply(ms)
+
+    def _lazy_apply(self, ms: list) -> list:
+        """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
+        lz = getattr(self, "_lazy", None)
+        if lz is None:
+            lz = self._lazy = MA.LazyTools()
+        self._lazy_all, self._lazy_hidden = ms, []
+        if not ms or not MA.LazyTools.wanted(ms):
+            return ms
+        shown, hidden = lz.split(ms)
+        self._lazy_hidden = [h["function"]["name"] for h in hidden]
+        return shown + ([lz.find_schema(hidden)] if hidden else [])
 
     def _tool_names(self) -> list:
         if self._codex():
@@ -1180,6 +1242,15 @@ class Agent:
                         continue
                     if self.has_steers():           # added while the checks above ran
                         continue
+                    if (E2E and not self.plan and not cx and g.get("promise_n", 0) < 2
+                            and _stopped_early(final) and self._tool_msgs_since(g["msg0"])):
+                        g["promise_n"] = g.get("promise_n", 0) + 1   # E2E-AUTONOMY: a promise or a permission question
+                        self.messages.append({"role": "user", "content": (     # mid-task is not a finished turn
+                            "[Meshpool] Your reply ends with what you will do next, or asks whether to go on, but "
+                            "no tool call came with it, so the turn ended. Do the next step now with a tool call; do "
+                            "not ask permission for work you were given. If you are truly finished or truly blocked, "
+                            "say so plainly, without promising more.")})
+                        continue
                     again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
                     if again:
                         continue
@@ -1270,6 +1341,9 @@ class Agent:
         return final
 
     # ---------- independent grader (agent/grader.py) -----------------------------------------------------------
+    def _tool_msgs_since(self, start: int) -> int:
+        return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
+
     def _grade_info(self, g: dict, final: str) -> dict:
         from meshpool_harness.agent import grader as GR
         msgs = self.messages
@@ -2405,6 +2479,8 @@ class Agent:
                             "incomplete and it was not run. Split the content into smaller pieces: write_file the "
                             "first part, then write_file with append=true for each further part, or make several "
                             "smaller edits.")
+        elif name == MA.FIND and not self.plan:
+            pass                                       # connected-tool lookup (mcp_assist): no schema to validate
         elif not is_mcp:
             try:
                 args = validate(name, raw, self._tool_names() + (
@@ -2439,10 +2515,16 @@ class Agent:
                 out, err = self._run_subtasks(name, args)
                 ok = not err
                 out = self.ws._cap(str(out), "mcp")
+            elif name == MA.FIND:
+                lz = getattr(self, "_lazy", None) or MA.LazyTools()
+                self._lazy = lz
+                out = lz.search(getattr(self, "_lazy_all", []), str(args.get("query") or ""), args.get("names"))
+            elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:
+                out = self._lazy.stub(name, getattr(self, "_lazy_all", [])) or "tool not loaded"
             elif is_mcp:
                 out, err = self._wait(self.mcp.call, name, args)
-                ok = not err
-                out = self.ws._cap(str(out), "mcp")    # head and tail; the full output goes to a file
+                pre, post, ok = MA.classify(str(out), bool(err))
+                out = pre + self.ws._cap(str(out), "mcp") + post    # head and tail; the full output goes to a file
             elif name == "fetch_url":
                 out = self._wait(self._fetch, args["url"], args.get("start", 0), args.get("max_chars", 15000),
                                  bool(args.get("links")))
