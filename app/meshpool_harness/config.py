@@ -74,7 +74,14 @@ FIELDS = [
     ("SERPER_API_KEY", "Serper API key", "", "Optional. Google results through serper.dev."),
     ("SEARXNG_URL", "SearXNG address", "", "Optional. Your own SearXNG search server, for example http://localhost:8888."),
     ("INSTANTLY_API_KEY", "Instantly API key", "", "Set from Settings, Connectors."),
-    ("MH_SANDBOX", "Sandbox for commands", "", "Optional. 1 = commands can write only in the project and temporary folders (Linux needs bubblewrap; macOS has it built in)."),
+    ("MH_SANDBOX", "Sandbox for commands", "", "On by default where available (Linux needs bubblewrap; macOS has it built in; "
+     "not available on Windows) except in Full access. 1 = always on, 0 = off. Commands can write only in the project and temporary folders."),
+    ("MH_SANDBOX_NETWORK", "Network for sandboxed commands", "", "Empty or 1 = commands may use the network. 0 = no network inside the sandbox."),
+    ("MH_SHELL_ENV_ALLOW", "Secrets the agent's commands may see", "", "Optional. Comma-separated variable names (for example OPENAI_API_KEY) kept in the "
+     "environment of the agent's commands. Everything named like a key, token, secret, password or credential is removed otherwise."),
+    ("MH_AUTO_CHECK", "Check after edits", "off", "off, lint, test or both: after a Code chat edits files, run the project's linter and/or the tests "
+     "for the touched files, and give failures back to the agent once."),
+    ("MH_ACP_IDLE_S", "Agent idle limit (seconds)", "300", "A connected coding agent that sends nothing for this long during a turn is stopped and restarted."),
 ]
 SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY",
           "INSTANTLY_API_KEY"}
@@ -425,13 +432,71 @@ ENDPOINT_NAMES = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_API_WIRE", "MH_AU
 SHELL: dict = {k: os.environ[k].strip() for k in ENDPOINT_NAMES if os.environ.get(k, "").strip()}
 
 
+# S-06/G-03: names whose value is a credential. Like Codex's shell_environment_policy (openai/codex, Apache-2.0), every
+# variable matching one of these is dropped from what the agent's commands start with, unless MH_SHELL_ENV_ALLOW lists it.
+_SECRET_WORDS = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.I)
+_PROVIDER_ENV = frozenset({
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
+    "MISTRAL_API_KEY", "DEEPSEEK_API_KEY", "XAI_API_KEY", "TOGETHER_API_KEY", "COHERE_API_KEY", "PERPLEXITY_API_KEY",
+    "HF_TOKEN", "HUGGINGFACE_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "GITLAB_TOKEN", "NPM_TOKEN", "PYPI_TOKEN",
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AZURE_OPENAI_API_KEY", "DATABASE_URL",
+    "SLACK_BOT_TOKEN", "STRIPE_SECRET_KEY", "SENTRY_AUTH_TOKEN", "NETLIFY_AUTH_TOKEN", "VERCEL_TOKEN"})
+_SAFE_NAMES = frozenset({"SSH_AUTH_SOCK", "GPG_AGENT_INFO", "XAUTHORITY", "KEYBOARD", "TERM_SESSION_ID",
+                         "SSH_AGENT_PID", "DBUS_SESSION_BUS_ADDRESS", "XDG_SESSION_ID"})
+
+
+_SAFE_RX = re.compile(r"^(GIT_CONFIG_(KEY|VALUE)_\d+|GIT_(AUTHOR|COMMITTER)_\w+|\w*_TOKENS|\w*PUBLIC_?KEY\w*|\w*KEYBOARD\w*)$", re.I)
+
+
+def is_secret_name(name: str) -> bool:
+    n = str(name)
+    if n.upper() in _PROVIDER_ENV:
+        return True
+    return n.upper() not in _SAFE_NAMES and not _SAFE_RX.match(n) and bool(_SECRET_WORDS.search(n))
+
+
+def _shell_allow() -> set:
+    raw = os.environ.get("MH_SHELL_ENV_ALLOW", "")
+    if not raw:
+        try:
+            raw = str(read().get("MH_SHELL_ENV_ALLOW", ""))
+        except Exception:  # noqa: BLE001
+            raw = ""
+    return {x.strip().upper() for x in re.split(r"[,\s;]+", raw) if x.strip()}
+
+
 def scrub_env(env: dict) -> dict:
-    """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
-    writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
+    """The environment for a command the agent runs: without any variable whose name looks like a credential (KEY,
+    TOKEN, SECRET, PASSWORD, CREDENTIAL, AUTH, or a known provider's key), so `env` or a script the model writes cannot
+    read them and send them to the model provider or into a log. MH_SHELL_ENV_ALLOW (comma separated names) lists the
+    ones to keep (S-06, G-03). MCP servers do not pass through here: they get what their own config gives them."""
+    allow = _shell_allow()
     for k in list(env):
-        if k == "MESHPOOL_API_KEY" or (k in _INJECTED and (k in SECRET or _SECRET_NAME.search(k))):
+        if k.upper() in allow:
+            continue
+        if k == "MESHPOOL_API_KEY" or is_secret_name(k) or (k in _INJECTED and (k in SECRET or _SECRET_NAME.search(k))):
             env.pop(k, None)
     return env
+
+
+_KEY_SHAPES = re.compile(r"\b(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|"
+                         r"xox[abprs]-[A-Za-z0-9\-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{30,}|"
+                         r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,})")
+_SECRET_ASSIGN = re.compile(r"\b([A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)[A-Za-z0-9_]*)"
+                            r"(\s*[=:]\s*)(?!\[redacted\])([A-Za-z0-9_\-+/=]{8,})(?![\w(\[])")
+
+
+def redact_key_shapes(text):
+    """Only the well-known key shapes (sk-..., ghp_..., AKIA...): safe to run over a whole JSON document."""
+    return _KEY_SHAPES.sub("[redacted]", text) if isinstance(text, str) and len(text) >= 20 else text
+
+
+def redact_secrets(text):
+    """OSS-29: secret-looking values replaced by [redacted] before text is stored in a session file or a log."""
+    if not isinstance(text, str) or len(text) < 8:
+        return text
+    text = _KEY_SHAPES.sub("[redacted]", text)
+    return _SECRET_ASSIGN.sub(lambda m: m.group(1) + m.group(2) + "[redacted]", text)
 
 
 # Names that belong to the running process, not to the settings: a line in the file must never replace them (C-09).

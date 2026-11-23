@@ -39,7 +39,8 @@ _GENS_GUARD = threading.Lock()
 
 
 def _dumps(obj, **kw) -> str:
-    return json.dumps(obj, ensure_ascii=False, default=str, **kw)
+    from meshpool_harness import config as _C           # OSS-29: no key-shaped value reaches a session file
+    return _C.redact_key_shapes(json.dumps(obj, ensure_ascii=False, default=str, **kw))
 
 
 def _looks_complete(p: Path) -> bool:

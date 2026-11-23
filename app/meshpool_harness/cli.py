@@ -151,6 +151,8 @@ def _agent_parser():
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
     ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (default), accept-edits (accept file changes), full-access (everything), plan (read only, then a plan). Old names (edits, auto, manual, supervised) still work")
+    ap.add_argument("--sandbox", action="store_true", help="run the agent's commands in the sandbox (on by default except in Full access): they can write only in the project and temporary folders")
+    ap.add_argument("--no-network", dest="no_network", action="store_true", help="also cut the network for sandboxed commands")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
     ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
                     help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
@@ -371,6 +373,11 @@ def _main(argv=None):
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if getattr(a, "sandbox", False):
+            os.environ["MH_SANDBOX"] = "1"
+        if getattr(a, "no_network", False):
+            os.environ["MH_SANDBOX"] = "1"
+            os.environ["MH_SANDBOX_NETWORK"] = "0"
         if a.permission_mode:
             os.environ["MH_PERMISSION_MODE"] = a.permission_mode
             if a.permission_mode == "auto":
