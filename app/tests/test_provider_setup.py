@@ -320,7 +320,7 @@ def test_anthropic_wire_round_trip():
             "tools": [{"type": "function", "function": {"name": "ls", "description": "d",
                                                         "parameters": {"type": "object", "properties": {}}}}]}
     r = AW.to_request(body)
-    assert r["system"] == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
+    assert r["system"][0]["text"] == "be brief" and r["max_tokens"] == 100 and r["tools"][0]["name"] == "ls"
     assert [m["role"] for m in r["messages"]] == ["user", "assistant", "user"]
     assert r["messages"][1]["content"][0] == {"type": "tool_use", "id": "t1", "name": "ls", "input": {"p": "."}}
     assert [b["type"] for b in r["messages"][2]["content"]] == ["tool_result", "text"]
@@ -406,5 +406,5 @@ def test_the_chat_agent_speaks_the_messages_wire_to_an_anthropic_style_endpoint(
     srv.shutdown()
     assert got["path"] == "/v1/messages" and got["hdr"]["x-api-key"] == "sk-good-key-1234"
     assert "authorization" not in got["hdr"] and "stream" not in got["body"]
-    assert got["body"]["system"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
+    assert got["body"]["system"][0]["text"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
     assert resp["choices"][0]["message"]["content"] == "hello" and streamed is False
