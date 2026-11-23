@@ -145,7 +145,13 @@ in this workstream's engines, each keeping the checks that gate quality:
    identify call, then up to 6 brief questions researched on the web, and a dossier the model then reads). It now
    runs only when the identify step finds a company the request is about (`build_dossier(require_company=True)` from
    sheets), and is skipped outright for edits of an attached workbook.
-2. Further cuts follow from the measured trace (turns spent, tokens per turn) and are recorded in the ledger with
-   before/after numbers; ws20 measures against Codex and Pi.
+2. Baseline (deepseek-v4.1-flash, practical "sales_xlsx", 0.0.12 base): 42 turns, 188 s, ~705k input tokens. The
+   trace shows the root cause of the extra turns: `python -m engines.sheets.check` (the command the prompt tells the
+   model to run) runs only workbook QA and prints PASS, while the finish gate also runs the Checks tab, the forge
+   workbook rules (X2 literals in formulas, X10 input styling), input sources and model completeness. The model saw
+   PASS, called finish, was rejected, rebuilt, and repeated. Fix: the check CLI runs the engine's finish gate
+   (`finish_check`) and prints every issue the gate would raise, so one checker run shows everything finish needs.
+   Before/after numbers go in the ledger; ws20 measures against Codex and Pi.
 
-Test: a sheets run on a CSV report task makes no dossier research calls (identify only, or none for edits).
+Tests: the check CLI fails on a workbook that qa passes but the forge rules reject (and passes exactly when
+finish_check passes); a sheets run on a CSV report task makes no dossier research calls (identify only, or none for edits).
