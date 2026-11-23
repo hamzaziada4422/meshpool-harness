@@ -584,3 +584,9 @@ def test_light_grader_is_one_call_without_tools_when_switched_on(tmp_path, monke
     monkeypatch.delenv("MH_GRADER_LIGHT", raising=False)       # on by default
     GR.run(a, info, [])
     assert 1 <= len(seen) <= 2 and all(b.get("tool_choice") == "none" for b in seen)   # a verdict (plus one repair at most), no tool loop
+
+
+def test_output_rules_are_opt_in(monkeypatch):
+    assert "Keep output small" not in core._codex_prompt()
+    monkeypatch.setenv("MH_OUTPUT_RULES", "1")
+    assert "Keep output small" in core._codex_prompt()

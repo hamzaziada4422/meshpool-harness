@@ -84,6 +84,10 @@ def _codex_prompt() -> str:
     text = _trim_codex(text)
     if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
+    if os.environ.get("MH_OUTPUT_RULES", "0") == "1":      # MH_OUTPUT_RULES=1: fewer output tokens (patches and scripts are most of them)
+        text = text.rstrip() + ("\n\nKeep output small: change existing files with apply_patch, never by rewriting them; "
+                               "a throwaway check is at most a few lines, and the project's own tests come first; do not "
+                               "restate the plan or repeat code you already wrote.\n")
     if os.environ.get("MH_SCAN_RULE", "0") == "1":         # MH_SCAN_RULE=1: no whole-file-system scans, no sandbox copies
         text = text.rstrip() + ("\n\nTest with the project's own tests or a short script in the project; do not scan the "
                                "file system (`find /`) or copy the project elsewhere to test it.\n")
