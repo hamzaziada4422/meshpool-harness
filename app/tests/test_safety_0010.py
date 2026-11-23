@@ -54,6 +54,7 @@ def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, mon
 def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     from meshpool_harness.agent import core
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MH_TRUST_PROJECT", "1")          # a project's own allow rules apply once the folder is trusted
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps(
         {"allow": ["bash:npm test*", "mcp__browser__*"], "deny": ["bash:git push*", "web_search"]}), encoding="utf-8")

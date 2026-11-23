@@ -42,14 +42,20 @@ def _read(p: Path) -> str:
         return ""
 
 
-def _imports(text: str, base: Path, seen: set, depth: int = 0) -> str:
-    """Lines that are only `@relative/path.md` are replaced by that file's text (up to three levels)."""
+def _imports(text: str, base: Path, seen: set, depth: int = 0, fence: Path | None = None) -> str:
+    """Lines that are only `@relative/path.md` are replaced by that file's text (up to three levels). With a `fence`
+    (a project's instruction file) only files inside that folder are imported."""
     def sub(m):
         t = (base / m.group(1)).resolve()
         if depth >= 3 or t in seen or not t.is_file():
             return m.group(0)
+        if fence is not None:
+            try:
+                t.relative_to(fence)
+            except ValueError:
+                return m.group(0)
         seen.add(t)
-        return _imports(_read(t), t.parent, seen, depth + 1)
+        return _imports(_read(t), t.parent, seen, depth + 1, fence)
     return re.sub(r"^@(\S+\.(?:md|txt))\s*$", sub, text, flags=re.M)
 
 
@@ -77,7 +83,12 @@ def instruction_files(root: Path) -> list[tuple[str, Path]]:
 def instruction_text(root: Path) -> str:
     parts, total = [], 0
     for where, f in instruction_files(root):
-        body = _imports(_read(f), f.parent, {f.resolve()}).strip()
+        try:
+            f.resolve().relative_to(C.home().resolve())
+            fence = None                                    # the user's own file may import from anywhere
+        except (ValueError, OSError):
+            fence = _git_root(f.parent).resolve()           # a project's file stays inside the project
+        body = _imports(_read(f), f.parent, {f.resolve()}, fence=fence).strip()
         if not body or total + len(body) > MAX_ALL:
             continue
         total += len(body)
@@ -86,12 +97,60 @@ def instruction_text(root: Path) -> str:
 
 
 # ---------------------------------------------------------------- hooks
+def _trust_file() -> Path:
+    return C.home() / "trusted_projects.json"
+
+
+def _norm(root) -> str:
+    try:
+        return str(Path(root).expanduser().resolve())
+    except OSError:
+        return str(root)
+
+
+def project_trusted(root) -> bool:
+    """A project's own .meshpool/permissions.json "allow" rules and hooks.json commands (which run shell commands)
+    are honoured only after the user trusted the folder (/trust, or MH_TRUST_PROJECT=1)."""
+    if os.environ.get("MH_TRUST_PROJECT") == "1":
+        return True
+    try:
+        d = json.loads(_trust_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(d, list) and _norm(root) in d
+
+
+def trust_project(root) -> None:
+    try:
+        d = json.loads(_trust_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = []
+    d = [x for x in d if isinstance(x, str)] if isinstance(d, list) else []
+    if _norm(root) not in d:
+        d.append(_norm(root))
+    f = _trust_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    os.replace(tmp, f)
+
+
+def untrusted_config(root) -> list[str]:
+    """Project files that would add allow rules or hooks but are ignored until the folder is trusted."""
+    if project_trusted(root):
+        return []
+    return [n for n in ("permissions.json", "hooks.json") if (Path(root) / ".meshpool" / n).is_file()]
+
+
 def hooks(root: Path) -> dict:
     out: dict = {e: [] for e in EVENTS}
-    for f in (C.home() / "hooks.json", Path(root) / ".meshpool" / "hooks.json"):
+    files = [C.home() / "hooks.json"] + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else [])
+    for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
             continue
         for e in EVENTS:
             for h in (d.get(e) or []):
@@ -128,13 +187,20 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
     for h in hs:
         if event in ("PreToolUse", "PostToolUse") and not _tool_matches(h.get("matcher", ""), tool, args or {}):
             continue
+        can_block = event in ("PreToolUse", "UserPromptSubmit")
+        try:
+            secs = float(str(h.get("timeout") or timeout).strip().rstrip("sS") or timeout)
+        except ValueError:
+            secs = timeout
         try:
             r = subprocess.run(h["command"], shell=True, cwd=str(root), input=data, capture_output=True, text=True,
-                               timeout=int(h.get("timeout") or timeout), env=C.scrub_env(dict(os.environ)))
+                               timeout=secs, env=C.scrub_env(dict(os.environ)))
         except (subprocess.TimeoutExpired, OSError) as e:
+            if can_block:                                 # a check that did not finish is not a pass
+                out.update(blocked=True, message=f"The hook {h['command'][:40]} failed ({e}), so this was stopped.")
+                return out
             notes.append(f"[hook {h['command'][:40]} failed: {e}]")
             continue
-        can_block = event in ("PreToolUse", "UserPromptSubmit")
         if r.returncode == 2 and can_block:
             out.update(blocked=True, message=(r.stderr or r.stdout).strip() or "A hook blocked this.")
             return out
@@ -223,11 +289,13 @@ def expand_mentions(text: str, root: Path, limit: int = 60000) -> str:
             parts.append(f"[@{rel}] folder contents: " + ", ".join(names))
         else:
             try:
-                data = p.read_bytes()
+                size = p.stat().st_size
+                with open(p, "rb") as fh:
+                    data = fh.read(100000)                  # never the whole of a multi-GB log
             except OSError:
                 continue
             if b"\0" in data[:2000]:
-                parts.append(f"[@{rel}] binary file, {len(data)} bytes (use a tool to read it)")
+                parts.append(f"[@{rel}] binary file, {size} bytes (use a tool to read it)")
                 continue
             body = data.decode("utf-8", errors="replace")
             body = body[:max(0, min(20000, limit - used))]

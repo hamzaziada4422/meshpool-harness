@@ -120,6 +120,7 @@ def test_memory_loads_the_masterclass_and_learns_new_lessons(tmp_path, monkeypat
     import json as _j
     from engines.review import memory as M
     monkeypatch.setattr(M, "HERE", tmp_path)
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))     # lessons are user data, written under the home
     (tmp_path / "masterclass_slides.md").write_text("# Masterclass\n- Every bridge foots.\n")
     assert "Every bridge foots" in M.load("slides") and "MASTERCLASS" in M.load("slides")
 

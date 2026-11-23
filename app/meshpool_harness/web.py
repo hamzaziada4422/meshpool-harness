@@ -133,6 +133,8 @@ def _get(url: str, data: bytes | None = None, headers: dict | None = None, timeo
         except (OSError, http.client.HTTPException):
             body = b""
         hdr, final, status = {k.lower(): v for k, v in (e.headers or {}).items()}, url, e.code
+        if 300 <= status < 400:                                # a redirect loop surfaces as HTTPError 3xx
+            raise WebError(f"too many redirects from {urllib.parse.urlparse(url).netloc or url}")
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException) as e:
         raise WebError(f"could not reach {urllib.parse.urlparse(url).netloc or url}: {getattr(e, 'reason', e)}")
     enc = hdr.get("content-encoding", "")
@@ -483,7 +485,7 @@ def _lxml_text(page: str, base: str, links: bool) -> tuple[str, list] | None:
     except ImportError:
         return None
     try:
-        doc = lxml.html.document_fromstring(page.encode("utf-8", "replace"))
+        doc = lxml.html.document_fromstring(page.encode("utf-8", "replace"), parser=lxml.html.HTMLParser(encoding="utf-8"))
     except Exception:                                          # noqa: BLE001 - fall back to the regex reader
         return None
     for el in doc.xpath("//script|//style|//noscript|//svg|//template|//iframe|//canvas|//form|//button|//select|"

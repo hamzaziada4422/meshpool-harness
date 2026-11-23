@@ -37,6 +37,7 @@ function closeSettings() { $(".scrim:not(.dlg-scrim):not(.srch-scrim)")?.remove(
 function openSettings(sec = "profile") {
   closePop(); closeCtx(); closeSearch?.();
   $(".scrim:not(.dlg-scrim)")?.remove();
+  if (!SECTIONS.some(x => x[0] === sec)) sec = groupOfSection(sec)[2].find(k => SECTIONS.some(x => x[0] === k)) || "profile";     // a group id (#settings/privacy) opens its first page
   const g0 = groupOfSection(sec);
   const sc = document.createElement("div"); sc.className = "scrim";
   const item = ([k, lb, ic, subs]) => `<button data-g="${k}" data-first="${subs[0]}" data-l="${esc((lb + " " + subs.map(setName).join(" ")).toLowerCase())}" aria-selected="${k === g0[0]}">${ICON[ic] || ""}<span>${lb}</span></button>`;
@@ -52,6 +53,7 @@ function openSettings(sec = "profile") {
   $$(".mnav [data-g]", sc).forEach(b => b.onclick = () => renderSection(b.dataset.first));
   $("#apiKeys", sc).onclick = () => openExternal(S.acct?.keys_url || "https://meshpool.ai");
   $("#mnavq", sc).oninput = e => { const q = e.target.value.trim().toLowerCase(); $$(".mnav [data-g]", sc).forEach(b => b.hidden = !!q && !b.dataset.l.includes(q)); $$(".mgrp", sc).forEach(g => g.hidden = !$("[data-g]:not([hidden])", g)); };
+  $("#mnavq", sc).addEventListener("input", e => { const nav = $(".mnav", sc); let n = $("#mnavNone", nav); const none = !!e.target.value.trim() && !$(".mnav [data-g]:not([hidden])", sc); if (none && !n) { n = document.createElement("p"); n.id = "mnavNone"; n.className = "muted"; n.style.padding = "8px 12px"; n.textContent = "No settings match."; $(".mgrp", nav).before(n); } else if (!none) n?.remove(); });
   $("#mnavq", sc).onkeydown = e => { if (e.key === "Enter") { const first = $(".mnav [data-g]:not([hidden])", sc); if (first) first.click(); } };
   $("#quitApp")?.addEventListener("click", () => post("/api/quit").then(() => document.body.innerHTML = `<div class="onb"><div class="onb-card"><h1>Meshpool has stopped</h1><p>You can close this window.</p></div></div>`));
   renderSection(sec);
@@ -99,7 +101,7 @@ async function providerPage(b, close) {
   let cur, lg;
   try { [cur, lg] = await Promise.all([api("/api/provider"), api("/api/provider/logins").catch(() => ({logins: []})), loadSettings()]); }
   catch (e) { b.innerHTML = `${close}<h3>Models and providers</h3><div class="res bad">${esc(e.message)}</div>`; return; }
-  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false};
+  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", header: cur.auth_header || "", scheme: cur.auth_scheme || "", ver: cur.api_version || "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false};
   const logins = (lg.logins || []);
   const row = (title, text, btn, id, badge) => `<li><span class="tg"><b>${title}</b><small>${text}</small></span>${badge ? `<span class="badge added">${badge}</span>` : ""}${btn ? `<button class="btn ${badge ? "" : "primary"}" id="${id}">${btn}</button>` : ""}</li>`;
   const found = [];
@@ -118,6 +120,11 @@ async function providerPage(b, close) {
     <div class="provnow">${cur.provider === "chatgpt" ? "Using your ChatGPT sign-in." : cur.default_model ? `Using <b>${esc(cur.default_model)}</b> on ${esc(cur.host || PV_host(cur.base_url))}.` : "No default model chosen yet."}</div>
     <label class="field"><span>Base URL</span><input id="pvBase" spellcheck="false" autocomplete="off" value="${esc(st.base)}" placeholder="https://api.example.com/v1"><small>The address of your model service. It usually ends in /v1.</small></label>
     <div class="field"><span>API key</span><span class="keyrow" id="pvKeyRow">${st.changeKey ? `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="pvShow" type="button">Show</button>` : `<input id="pvMask" value="${esc(keyHint)}" readonly aria-label="Saved key"><button class="btn" id="pvChange" type="button">Change</button>`}</span></div>
+    <details class="pvadv"${st.header || st.scheme || st.ver ? " open" : ""}><summary>Key header and Azure options</summary>
+      <label class="field"><span>Key header</span><input id="pvHeader" spellcheck="false" autocomplete="off" value="${esc(st.header)}" placeholder="automatic (api-key for Azure, otherwise Authorization)"><small>Only if your service wants the key in another header, for example api-key or x-api-key.</small></label>
+      <label class="field"><span>Key scheme</span><select id="pvScheme"><option value="">Automatic</option>${["bearer", "basic", "token", "raw"].map(x => `<option value="${x}"${st.scheme === x ? " selected" : ""}>${{bearer: "Bearer key", basic: "Basic user:password", token: "Token key", raw: "The key alone"}[x]}</option>`).join("")}</select></label>
+      <label class="field"><span>Azure api-version</span><input id="pvVer" spellcheck="false" autocomplete="off" value="${esc(st.ver)}" placeholder="automatic (2024-10-21)"><small>For Azure OpenAI addresses (https://NAME.openai.azure.com). The model is your deployment name.</small></label>
+    </details>
     <div class="pvact"><button class="btn primary" id="pvTest">Test connection</button><span class="pvres" id="pvRes" role="status"></span></div>
     <div id="pvModels" hidden></div>
     <div class="pvact"><button class="btn primary" id="pvSave" disabled>Save</button><span class="pvres" id="pvSaveRes" role="status"></span></div>`;
@@ -138,7 +145,13 @@ async function providerPage(b, close) {
   const gate = () => { $("#pvSave", b).disabled = !(st.ok && (st.models?.length ? st.picked : st.typed)); };
   const touched = () => { st.ok = false; st.models = null; st.picked = ""; $("#pvModels", b).hidden = true; $("#pvRes", b).textContent = ""; gate(); };
   $("#pvBase", b).oninput = e => { st.base = e.target.value.trim(); st.env = ""; touched(); };
-  b.addEventListener("input", e => { if (e.target.id === "pvKey") touched(); });
+  b.addEventListener("input", e => {
+    if (e.target.id === "pvKey") touched();
+    if (e.target.id === "pvHeader") { st.header = e.target.value.trim(); touched(); }
+    if (e.target.id === "pvVer") { st.ver = e.target.value.trim(); touched(); }
+  });
+  b.addEventListener("change", e => { if (e.target.id === "pvScheme") { st.scheme = e.target.value; touched(); } });
+  const adv = () => ({auth_header: st.header, auth_scheme: st.scheme, api_version: st.ver});
   b.addEventListener("click", e => {
     if (e.target.closest("#pvChange")) { st.changeKey = true; $("#pvKeyRow", b).innerHTML = `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the new key"><button class="btn" id="pvShow" type="button">Show</button>`; $("#pvKey", b).focus(); touched(); }
     if (e.target.closest("#pvShow")) { const i = $("#pvKey", b); i.type = i.type === "password" ? "text" : "password"; $("#pvShow", b).textContent = i.type === "password" ? "Show" : "Hide"; }
@@ -147,12 +160,12 @@ async function providerPage(b, close) {
     if (!st.base) { $("#pvBase", b).focus(); return say("pvRes", "bad", "Enter the base URL first."); }
     const btn = $("#pvTest", b); btn.disabled = true; say("pvRes", "", "Testing…");
     try {
-      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, ...(st.env ? {env: st.env} : {})});
+      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, model: st.typed || cur.default_model || "", ...adv(), ...(st.env ? {env: st.env} : {})});
       if (!r.ok) { st.ok = false; st.models = null; drawModels(); say("pvRes", "bad", r.error || "That didn't work."); }
       else {
         st.ok = true; st.base = r.base_url || st.base; st.wire = r.wire || st.wire; st.models = r.models || []; $("#pvBase", b).value = st.base;
         if (st.picked && !st.models.some(m => m.id === st.picked)) st.picked = "";
-        say("pvRes", "ok", `Connected in ${r.latency_ms} ms.${st.models.length ? ` ${st.models.length} models available.` : ""}`);
+        say("pvRes", "ok", `Connected in ${r.latency_ms} ms.${st.models.length ? ` ${st.models.length} model${st.models.length === 1 ? "" : "s"} available.` : ""}${r.error ? " " + r.error : ""}`);
         drawModels();
       }
     } catch (err) { say("pvRes", "bad", err.message); }
@@ -164,7 +177,11 @@ async function providerPage(b, close) {
     if (st.env) { if (!await ask({title: `Use ${st.env} from your environment?`, text: `Meshpool saves this key in its settings on this computer, and sends it only to ${PV_host(st.base)}.`, ok: "Use this key"})) return; confirm_env = true; }
     const btn = $("#pvSave", b); btn.disabled = true; say("pvSaveRes", "", "Saving…");
     try {
-      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length, ...(st.env ? {env: st.env, confirm_env} : {})});
+      if (!st.models?.length) {   // a typed model or deployment name: check it with a real call before saving
+        const t = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, model, ...adv(), ...(st.env ? {env: st.env} : {})});
+        if (!t.ok) { say("pvSaveRes", "bad", t.error || "That didn't work."); btn.disabled = false; return; }
+      }
+      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length, ...adv(), ...(st.env ? {env: st.env, confirm_env} : {})});
       await loadSettings(); await loadModels(true); await loadHarnesses(); S.draft.model = S.models.default; store("model", S.draft.model); renderBar(); renderHero?.();
       toast("Saved. New chats use " + model + "."); providerPage(b, close);
     } catch (err) { say("pvSaveRes", "bad", err.message); btn.disabled = false; }

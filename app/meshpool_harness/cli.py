@@ -23,6 +23,7 @@ import shutil
 import sys
 import time
 import uuid
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -184,8 +185,24 @@ def _no_console() -> bool:
         return False
 
 
+_HELP = {
+    "login": "Usage: meshpool login\nAsk for your API key and save it.",
+    "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
+    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
+    "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
+    "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
+    "mcp": "Usage: meshpool mcp\nStart the configured MCP servers and show their status.",
+    "app": "Usage: meshpool app\nOpen the desktop app.",
+    "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
+    "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
+}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
+        print(_HELP[argv[0]])                              # help never runs the command
+        return 0
     if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
         import time
         time.sleep(3)
@@ -208,6 +225,10 @@ def main(argv=None):
         _bundled_tools()             # the shell, Git and browser engine that ship inside the app
     except Exception:
         pass
+    if argv and argv[0] in ("--version", "-V"):
+        from meshpool_harness import __version__
+        print(f"meshpool {__version__}")
+        return 0
     if not argv or argv[0] not in COMMANDS:
         if argv and argv[0] == "agent":
             argv = argv[1:]
@@ -264,10 +285,18 @@ def main(argv=None):
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
         os._exit(0)                              # agent helper threads and servers must not keep a background job alive
-    if argv[0] == "scheduler" and len(argv) > 1 and argv[1] in ("install", "uninstall"):
+    if argv[0] == "scheduler":
         from meshpool_harness import scheduler_os as SO
+        sub_cmd = argv[1] if len(argv) > 1 else ""
+        if sub_cmd == "status":
+            print("Installed: scheduled tasks also run while Meshpool is closed." if SO.installed()
+                  else "Not installed: scheduled tasks run only while Meshpool is open.")
+            return 0
+        if sub_cmd not in ("install", "uninstall"):
+            print("Usage: meshpool scheduler install | uninstall | status")
+            return 0 if sub_cmd in ("", "help", "-h", "--help") else 1
         try:
-            print(SO.install() if argv[1] == "install" else SO.uninstall())
+            print(SO.install() if sub_cmd == "install" else SO.uninstall())
         except RuntimeError as e:
             print(str(e))
             return 1
@@ -286,13 +315,20 @@ def main(argv=None):
                 r = CI.import_local([what])
                 print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
                 return 0
-            r = CI.import_export(os.path.expanduser(what))
+            try:
+                r = CI.import_export(os.path.expanduser(what))
+            except (OSError, ValueError, zipfile.BadZipFile) as e:
+                print(f"Could not import {what}: {e}")
+                return 1
             print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
                   f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
     if argv[0] == "login":
+        if any(x in ("-h", "--help") for x in argv[1:]):
+            print("usage: meshpool login\n\nAsk for your Meshpool API key and save it in the settings file.")
+            return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
     if argv[0] == "mcp":
@@ -309,7 +345,7 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="cmd", required=True)
     for c in ("route", "run"):
         p = sub.add_parser(c)
-        p.add_argument("request")
+        p.add_argument("request", nargs="?")
         p.add_argument("--files", nargs="*", default=[])
         p.add_argument("--engine")
         p.add_argument("--workdir")
@@ -329,6 +365,11 @@ def main(argv=None):
     ck.add_argument("--live", action="store_true")
     sub.add_parser("install-browser", help="install Playwright and Chromium for the browser engine")
     a = ap.parse_args(argv)
+    if a.cmd in ("route", "run"):
+        if not a.request and a.files:                 # `--files a.csv "request"`: --files took the request too
+            a.request = a.files.pop()
+        if not a.request:
+            ap.error(f"{a.cmd}: the request is required")
     if a.cmd == "ui":
         from meshpool_harness.ui.server import serve
         return serve(a.port, open_browser=not a.no_browser)
@@ -348,8 +389,12 @@ def main(argv=None):
         return r.returncode
     if a.cmd == "work":
         from meshpool_harness.connectors import get
-        conn, ref = get(a.source)
-        task = conn.fetch(ref)
+        try:
+            conn, ref = get(a.source)
+            task = conn.fetch(ref)
+        except (OSError, ValueError) as e:
+            print(f"Could not fetch {a.source}: {e}")
+            return 1
         res = run_request(task.text(), [], a.out, a.engine, a.workdir)
         if a.report:
             conn.report(task, res)
@@ -408,7 +453,13 @@ def _check(live: bool) -> int:
     print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()
     for row in _config.system_check():
-        print(f"  [{'ok' if row['ok'] else '--'}] {row['name']:<15} {row['detail']}")
+        detail = row["detail"]
+        if row["name"] == "LibreOffice" and not row["ok"]:
+            from meshpool_harness import office_runtime
+            if not office_runtime.is_packaged():
+                detail = ("not included in this terminal install. Decks are not rendered for review and workbook "
+                          "formulas are not recalculated; the Meshpool desktop app (or the Linux download) has it.")
+        print(f"  [{'ok' if row['ok'] else '--'}] {row['name']:<15} {detail}")
         if not row["ok"]:
             print(f"       {row['fix']}")
     if live:

@@ -21,8 +21,11 @@ from . import signals as S
 from .packs import PACKS
 from .specs import SPECS, get
 
+_SMALLTALK = re.compile(r"^\s*(?:hi|hello|hey|yo|thanks?(?: you)?(?: so much)?|thx|ty|ok(?:ay)?|cool|great|nice|"
+                        r"awesome|perfect|got it|sounds good|lgtm|good (?:morning|afternoon|evening))\W*$", re.I)
 PRIORITY = ["docs", "data", "browser", "automation", "research", "code", "writing"]   # tie-break between families
 CONFIDENT = 0.6
+MAX_CLASSIFY_CHARS = 8000
 
 
 @dataclass
@@ -74,6 +77,7 @@ class Route:
 
 
 def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Route:
+    text = S.cap_text(text)
     files = files or []
     err = S.pasted_error(text)
     langs = S.languages_in(text, files)
@@ -88,13 +92,18 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
         fam, why, conf = "code", f"a pasted {err} error", 0.95
     elif kind != "code" and not files and S.snippet_request(text):
         fam, why, conf, lane = "chat", "a request for a short snippet", 0.85, "chat"
+    elif _SMALLTALK.match(text or "") and not files:
+        fam, why, conf, lane = "chat", "a greeting or thanks", 0.9, "chat"
     elif kind == "code":
         other = {k: v for k, v in fams.items() if k not in ("code", "research")}
         if repo or langs or any(S.EXT_LANG.get(Path(f).suffix) for f in files):
             other.pop("docs", None)        # "the sales report is wrong" in a code project is code, not a document
             other.pop("automation", None)  # "the daily job runs at the wrong time": the code's domain, not a schedule
         top = max(other, key=other.get) if other else ""
-        if top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
+        no_code = not (repo or langs or fams.get("code") or any(S.EXT_LANG.get(Path(f).suffix) for f in files))
+        if top and no_code and (top == "writing" or (top == "docs" and re.search(r"\battached\b", text or "", re.I))):             # translate / draft / summarise in a Code chat, with nothing about code
+            fam, why, conf = top, f"{top} words, no code in the request", 0.7
+        elif top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
             fam, why, conf = top, f"{top} words in a Code chat", 0.7
         else:
             fam, why, conf = "code", "Code mode", 0.8 if (fams.get("code") or langs or repo) else 0.6
@@ -168,6 +177,9 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
     """The route for a new task. force: a spec id the user picked (e.g. from /debug or the route chip)."""
     t0 = time.perf_counter()
     files = files or []
+    if text and len(text) > MAX_CLASSIFY_CHARS:    # a huge paste: the start and the end say what is asked
+        h = MAX_CLASSIFY_CHARS // 2
+        text = text[:h] + "\n" + text[-h:]
     if force and force in SPECS:
         r = _decide(text, files, workdir, kind)
         sp = get(force)
@@ -181,11 +193,20 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
             r.used_model_call = True
             if got and got[1] >= 0.5:
                 sid, c = got
-                if sid != r.spec:
+                changed = sid != r.spec
+                if changed:
                     r.reason = f"model classification (rules said {r.spec})"
                 r.spec, r.confidence, r.base = sid, round(c, 2), get(sid).base
                 r.family = sid.split(".")[0]
                 r.sub = sid.split(".", 1)[1] if "." in sid else ""
+                if changed:                       # the rules' variant, language and lane described the old spec
+                    r.variant = S.variant(r.sub, text) if r.family == "code" and r.sub else ""
+                    if r.family != "code":
+                        r.language = ""
+                    if sid == "chat":
+                        r.lane = "chat"
+                    elif r.lane == "chat" and sid != "chat":
+                        r.lane = "task"
     r.profile, r.settings = PROF.resolve(r)
     if os.environ.get("MH_HARNESS_ROUTER") == "1" and not force:
         try:                                    # which agent harness runs it; never fails a task

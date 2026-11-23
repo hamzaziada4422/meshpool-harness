@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -86,11 +87,14 @@ def save_settings(body: dict) -> dict:
             continue
         v = re.sub(r"[\r\n]", "", str(v)).strip()
         if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
-            v = re.sub(r"^(?:bearer\s+)", "", v.strip("'\" "), flags=re.I)
-            v = re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", v)   # a pasted zero-width space broke every call
+            v = C.clean_key(v)           # quotes, "Bearer ", line breaks, a pasted zero-width space
         if k in C.SECRET and v == "":
             continue                     # blank key field = keep the saved key
         vals[k] = v
+    if vals.get("MESHPOOL_BASE_URL"):
+        u = urlparse(vals["MESHPOOL_BASE_URL"])
+        if u.scheme not in ("http", "https") or not u.netloc:
+            raise ValueError("The server address must start with http:// or https:// and name a host.")
     _key_follows_host(vals)
     from meshpool_harness import browser_use as BU
     BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
@@ -151,21 +155,51 @@ def test_connection(values: dict | None = None) -> dict:
     endpoint and send the typed key to it."""
     C.load_into_env(override=True)
     from meshpool_harness import providers as PV
-    from meshpool_harness.cli import ping
     v = {k: str(x).strip() for k, x in (values or {}).items() if str(x or "").strip()}
     if v.get("MESHPOOL_API_KEY"):
-        v["MESHPOOL_API_KEY"] = re.sub(r"^(?:bearer\s+)", "", re.sub(r"[\s\u200b-\u200f\u2060\ufeff'\"]", "",
-                                                                     v["MESHPOOL_API_KEY"]), flags=re.I)
+        v["MESHPOOL_API_KEY"] = C.clean_key(v["MESHPOOL_API_KEY"])
     try:
         _key_follows_host(v)
     except ValueError as e:
         return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
-    key = v.get("MESHPOOL_API_KEY") or PV.key()
-    if not key:
-        return {"ok": False, "detail": "No API key saved yet."}
+    from meshpool_harness import provider_setup as PS
+    base_in = v.get("MESHPOOL_BASE_URL") or PV.key_base()
+    try:
+        base = PS.normalise_base(base_in)
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e), "endpoint": base_in}
+    same = PS._same_endpoint(base, PV.key_base())
+    key = v.get("MESHPOOL_API_KEY") or (PV.key() if same else "")
+    if not key and not PV.keyless_ok(base):
+        return {"ok": False, "detail": f"No API key {'saved yet' if same else 'entered for ' + PV.host(base)}.",
+                "endpoint": base}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    return ping(v.get("MH_MODEL"), base=v.get("MESHPOOL_BASE_URL") or PV.key_base(), key=key)
+    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1] or PV.azure_deployment(base)
+    hdr = v.get("MH_AUTH_HEADER", PV._cfg("MH_AUTH_HEADER") if same else "")
+    sch = v.get("MH_AUTH_SCHEME", PV._cfg("MH_AUTH_SCHEME") if same else "").lower()
+    ver = v.get("MESHPOOL_AZURE_API_VERSION", PV._cfg("MESHPOOL_AZURE_API_VERSION") if same else "")
+    if "api-version=" in base_in and not ver:
+        ver = PV.azure_version(base_in)
+    wire = (v.get("MH_API_WIRE") or (PV.key_wire() if same else "")).lower()
+    if wire not in ("openai", "anthropic"):
+        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else "openai"
+    t0 = time.time()
+    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
+    secs = round(time.time() - t0, 1)
+    if err or st not in (200, 429):
+        why = (("No server at that address." if err == "refused" else "The server did not answer in time.") if err
+               else PS.explain(st, data, base=base, model=model, version=ver))
+        return {"ok": False, "detail": why[:400], "model": model, "seconds": secs, "endpoint": base}
+    txt = ""
+    if isinstance(data, dict):
+        try:
+            txt = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+        except (AttributeError, IndexError, TypeError):
+            txt = ""
+    return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
+            ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
+            "endpoint": base}
 
 
 def save_upload(name: str, data: bytes) -> dict:
@@ -210,20 +244,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def _body(self) -> bytes:
         n = int(self.headers.get("Content-Length") or 0)
+        if n < 0:
+            raise ValueError("Bad request.")
         if n > 260 * 1024 * 1024:
-            raise ValueError("File is larger than 150 MB.")
+            raise ValueError("File is larger than 260 MB.")
         return self.rfile.read(n) if n else b""
 
     def _json(self) -> dict:
         raw = self._body()
-        return json.loads(raw.decode("utf-8")) if raw else {}
+        d = json.loads(raw.decode("utf-8")) if raw else {}
+        if not isinstance(d, dict):
+            raise ValueError("The request must be a JSON object.")
+        return d
 
     def _extra(self, u):
         from meshpool_harness.ui import routes_extra as RX
         try:
             return self._send(*RX.handle(self.command, u, self._body() if self.command == "POST" else b""))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e).strip("'\"")})
+        except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
+            return self._send(400, {"error": _client_error(e)})
         except (BrokenPipeError, ConnectionResetError):
             return None
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
@@ -233,8 +272,8 @@ class Handler(BaseHTTPRequestHandler):
         from meshpool_harness.ui import company_api as CO
         try:
             return self._send(*CO.handle(self.command, u, self._body() if self.command == "POST" else b""))
-        except (ValueError, KeyError) as e:
-            return self._send(400, {"error": str(e).strip("'\"")})
+        except (ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile) as e:
+            return self._send(400, {"error": _client_error(e)})
         except Exception as e:  # noqa: BLE001 - keep the app alive, show the cause
             return self._send(500, {"error": f"{type(e).__name__}: {e}"})
 
@@ -284,7 +323,10 @@ class Handler(BaseHTTPRequestHandler):
                 if idle_since and time.time() - idle_since > 0.4:
                     put("event: end\ndata: {}\n\n")
                     return
-                time.sleep(0.03)
+                with s.lock:                      # wake the moment an event arrives; 0.25 s at most for a state change
+                    if len(s.events) <= cursor and s.state == last_state:
+                        s.changed.wait(0.25)
+                time.sleep(0.01)                  # let a burst of text_delta pile up into one frame
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
@@ -363,7 +405,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
             disp = "inline" if ctype.startswith(("image/", "text/")) or ctype == "application/pdf" else "attachment"
-            return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition(disp, p.name)})
+            hdr = {"Content-Disposition": _disposition(disp, p.name)}
+            if ctype in ("text/html", "image/svg+xml", "application/xhtml+xml"):
+                hdr["Content-Security-Policy"] = "sandbox"       # a page an agent wrote must not reach the app's token
+            return self._send(200, p.read_bytes(), ctype, hdr)
         m = re.fullmatch(r"/api/agent/([\w-]+)/events", u.path)
         if m:                                         # a chat's events pushed as they happen (EventSource cannot set headers)
             q = parse_qs(u.query)
@@ -567,6 +612,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path == "/show":                  # a second launch of the app asks this one to come to the front
+            if "json" not in (self.headers.get("Content-Type") or "").lower():
+                return self._send(403, {"error": "forbidden"})     # a web page cannot send this without a preflight
             shown = any(fn() for fn in list(ON_SHOW))
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:
@@ -584,14 +631,17 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path.endswith("/test"):
                     try:
                         return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
-                                                       j.get("env", "")))
+                                                       j.get("env", ""), j.get("model", ""), j.get("auth_header", ""),
+                                                       j.get("auth_scheme", ""), j.get("api_version", "")))
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
                 if u.path.endswith("/save"):
                     return self._send(200, dict(PS.save(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
-                                                        j.get("env", ""), bool(j.get("confirm_env"))), ok=True))
+                                                        j.get("env", ""), bool(j.get("confirm_env")),
+                                                        j.get("auth_header"), j.get("auth_scheme"),
+                                                        j.get("api_version")), ok=True))
                 return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
@@ -667,8 +717,12 @@ class Handler(BaseHTTPRequestHandler):
                 if b.get("file"):
                     import base64
                     import tempfile
+                    try:
+                        raw = base64.b64decode(b["file"].get("data", ""))
+                    except ValueError:
+                        raise ValueError("That file could not be read.") from None
                     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-                        tf.write(base64.b64decode(b["file"].get("data", "")))
+                        tf.write(raw)
                     try:
                         return self._send(200, IM.import_export(tf.name))
                     finally:
@@ -681,17 +735,25 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import chat_import as CI
                 import tempfile
                 n = int(self.headers.get("Content-Length") or 0)
-                if n > 8 * 1024 ** 3:
+                if n < 0 or n > 8 * 1024 ** 3:
                     raise ValueError("That file is larger than 8 GB.")
                 q = parse_qs(u.query)
-                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tf:
-                    left = n
-                    while left > 0:
-                        chunk = self.rfile.read(min(left, 1 << 20))
-                        if not chunk:
-                            break
-                        tf.write(chunk)
-                        left -= len(chunk)
+                tf = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
+                try:
+                    with tf:
+                        left = n
+                        while left > 0:
+                            chunk = self.rfile.read(min(left, 1 << 20))
+                            if not chunk:
+                                break
+                            tf.write(chunk)
+                            left -= len(chunk)
+                except BaseException:                 # the upload was cut off: do not leave the partial file
+                    try:
+                        os.unlink(tf.name)
+                    except OSError:
+                        pass
+                    raise
                 want_ctx = q.get("context", ["1"])[0] != "0"
                 try:
                     r = CI.import_export(tf.name, chats=q.get("chats", ["1"])[0] != "0", context=False)
@@ -1021,10 +1083,18 @@ class Handler(BaseHTTPRequestHandler):
                     s.set_mode(b.get("mode", "ask"))
                 return self._send(200, s.view(int(b.get("since", 10**9))))
         except KeyError as e:
-            msg = str(e).strip("'")
-            return self._send(404, {"error": msg if msg and msg != "None" else "Not found."})
+            msg = str(e).strip("'\"")
+            if not msg or msg == "None":
+                msg = "Not found."
+            elif " " not in msg:                  # a bare id or field name: say what it was
+                msg = f"Not found: {msg}."
+            return self._send(404, {"error": msg})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
+        except zipfile.BadZipFile:
+            return self._send(400, {"error": "That file is not a valid zip file."})
+        except (TypeError, AttributeError) as e:      # a field of the wrong type in the request body
+            return self._send(400, {"error": f"The request has a missing or wrong value ({e})."})
         except (BrokenPipeError, ConnectionResetError):
             return None                    # the page went away mid-answer; nothing left to tell it
         except Exception as e:  # keep the app alive, show the cause
@@ -1034,7 +1104,9 @@ class Handler(BaseHTTPRequestHandler):
 
 # Files the operating system runs rather than shows when "opened"
 RUNNABLE = {".py", ".pyw", ".js", ".jse", ".vbs", ".vbe", ".wsf", ".wsh", ".bat", ".cmd", ".ps1", ".exe", ".msi",
-            ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool"}
+            ".com", ".scr", ".sh", ".command", ".app", ".jar", ".lnk", ".reg", ".hta", ".cpl", ".url", ".tool",
+            ".pif", ".msc", ".msp", ".inf", ".scf", ".application", ".appref-ms", ".gadget", ".ws", ".sct",
+            ".terminal", ".workflow", ".action", ".pkg", ".mpkg", ".dmg", ".desktop", ".appimage", ".run"}
 
 
 def _open_web(url: str) -> bool:
@@ -1052,6 +1124,14 @@ def _open_web(url: str) -> bool:
         print(f"  The in-app browser could not start ({e}); opening the sign-in page in the system browser.")
     webbrowser.open(url)
     return False
+
+
+def _client_error(e: Exception) -> str:
+    if isinstance(e, zipfile.BadZipFile):
+        return "That file is not a valid zip file."
+    if isinstance(e, (TypeError, AttributeError)):
+        return f"The request has a missing or wrong value ({e})."
+    return str(e).strip("'\"")
 
 
 class _Server(ThreadingHTTPServer):

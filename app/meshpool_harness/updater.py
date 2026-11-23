@@ -91,7 +91,10 @@ def check(force: bool = False) -> dict:
         with _get(API) as r:
             rel = json.loads(r.read())
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "current": cur, "error": f"Could not reach GitHub to check for updates ({type(e).__name__})."}
+        code = getattr(e, "code", None)
+        why = ("GitHub is limiting update checks right now (rate limit); try again later" if code in (403, 429)
+               else f"GitHub answered {code}" if code else f"Could not reach GitHub ({type(e).__name__})")
+        return {"ok": False, "current": cur, "error": f"Could not check for updates: {why}."}
     rel = _pick(rel if isinstance(rel, list) else [rel], cur)
     if not rel:
         v = {"ok": True, "current": cur, "latest": cur, "tag": "", "newer": False, "notes": "", "kind": kind(),
@@ -233,9 +236,10 @@ def _installer(v: dict, why: str) -> dict:
             return {"ok": False, "error": f"The download of {a['name']} did not match the release's checksum, so it "
                                           "was deleted. The release may have been updating on GitHub while it "
                                           "downloaded: try again in a few minutes.", "url": v["url"]}
-        C.replace_file(part, p)
+        C.replace_file(part, p, keep_src=True)
     except OSError as e:
-        part.unlink(missing_ok=True)
+        if not isinstance(e, PermissionError):
+            part.unlink(missing_ok=True)       # a locked finished download is kept for the next try
         return {"ok": False, "error": f"Could not download {a['name']} ({type(e).__name__}). Try again.",
                 "url": v["url"]}
     _open(p)

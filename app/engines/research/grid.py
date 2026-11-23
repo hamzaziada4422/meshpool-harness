@@ -102,8 +102,7 @@ def grid(corpus: Corpus, rows: dict[str, list[str]] | list[str], questions: list
     def run(ij):
         i, j = ij
         allowed = set(rows[labels[i]])
-        hits = [p for p in corpus.find(questions[j], k=k * 4, per_source=k, include_duplicates=True)
-                if p.source_id in allowed][:k]
+        hits = corpus.find(questions[j], k=k, per_source=k, include_duplicates=True, source_ids=allowed)[:k]
         return ij, _cell(client, model, questions[j], hits)
     with ThreadPoolExecutor(max(1, workers)) as ex:
         for ij, cell in ex.map(run, [(i, j) for i in range(len(labels)) for j in range(len(questions))]):

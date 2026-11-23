@@ -186,3 +186,24 @@ def test_undo_of_a_case_only_rename_on_a_case_insensitive_disk(tmp_path, monkeyp
     r = cp.revert_to_before(1)            # removal first, then the write: the restored file is never deleted
     assert (root / "calc.py").read_text() == "v1\n" and not (root / "Calc.py").exists()
     assert r["restored"] == ["calc.py"] and r["deleted"] == ["Calc.py"]
+
+
+def test_case_only_rename_undo_never_writes_over_an_unremovable_other_case_name(tmp_path, monkeypatch):
+    """Case-insensitive disk (simulated): if Calc.py cannot be removed, calc.py must not be written (it would
+    overwrite Calc.py on such a disk); with the removal done first, both steps run in order (previous test)."""
+    root, cp = _cp(tmp_path)
+    monkeypatch.setattr(cp, "_case_insensitive", lambda: True)
+    cp.begin_turn("agent renames")
+    (root / "calc.py").rename(root / "Calc.py")
+    cp.end_turn()
+    from pathlib import Path
+    real = Path.unlink
+
+    def deny(self, *a, **k):
+        if self.name == "Calc.py":
+            raise PermissionError(13, "denied")
+        return real(self, *a, **k)
+    monkeypatch.setattr(Path, "unlink", deny)
+    r = cp.revert_to_before(1)
+    assert r["restored"] == [] and "Calc.py" in r["kept"] and "calc.py" in r["kept"]
+    assert (root / "Calc.py").exists()

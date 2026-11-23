@@ -60,7 +60,7 @@ def udir() -> Path:
 
 def _write_json(p: Path, data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp")   # unique per writer
     tmp.write_text(json.dumps(data), encoding="utf-8")
     C.replace_file(tmp, p)
 
@@ -91,17 +91,19 @@ def _set(**kw) -> None:
         _ST.update(kw)
 
 
-def status() -> dict:
+def status(mark_seen: bool = True) -> dict:
+    """The state for the page. The one-shot result of the last update is marked seen only when the page asks (the
+    background check passes mark_seen=False, so a slow-starting window still gets to show it)."""
     with _LOCK:
         s = dict(_ST)
     s["settings"] = settings()
     s["kind"] = U.kind()
     s["current"] = MH.__version__
-    s["last_result"] = _last_result()
+    s["last_result"] = _last_result(mark_seen)
     return s
 
 
-def _last_result() -> dict | None:
+def _last_result(mark_seen: bool = True) -> dict | None:
     """What the helper reported on its last run, once: shown to the user after the app comes back."""
     p = udir() / "result.json"
     try:
@@ -110,11 +112,12 @@ def _last_result() -> dict | None:
         return None
     if r.get("seen"):
         return None
-    r["seen"] = True
-    try:
-        _write_json(p, r)
-    except OSError:
-        pass
+    if mark_seen:
+        r["seen"] = True
+        try:
+            _write_json(p, r)
+        except OSError:
+            pass
     return r
 
 
@@ -164,7 +167,9 @@ def download_resumable(url: str, dst: Path, expected_size: int | None = None, pr
                         done += len(chunk)
                         if progress:
                             progress(done)
-    C.replace_file(part, dst)
+    if expected_size and part.exists() and part.stat().st_size < expected_size:
+        raise UpdateError("The download was interrupted; it will continue where it stopped.")   # .part is kept
+    C.replace_file(part, dst, keep_src=True)    # keep the finished download if antivirus holds it: retry later
     return dst
 
 
@@ -519,23 +524,26 @@ def _code_update(v: dict, base: dict) -> None:
 def tick(force: bool = True) -> dict:
     """One check, and the download when the setting allows it."""
     if os.environ.get("MESHPOOL_NO_UPDATE"):
-        return status()
+        return status(False)
     _set(state="checking") if _ST.get("state") in ("idle", "uptodate", "error") else None
     v = U.check(force=force)
     if not v.get("ok"):
-        _set(state="error", error=v.get("error", ""))
-        return status()
+        if _ST.get("state") == "ready":
+            _set(error=v.get("error", ""))          # a staged update survives a failed check
+        else:
+            _set(state="error", error=v.get("error", ""))
+        return status(False)
     if not v["newer"]:
         if _ST.get("state") != "ready":
             _set(state="uptodate", error="", tag="", latest=v["latest"])
-        return status()
+        return status(False)
     if _ST.get("state") == "ready" and _ST.get("tag") == v["tag"]:
-        return status()
+        return status(False)
     if v["kind"] == "dev":
         _set(state="available", tag=v["tag"], latest=v["latest"], url=v.get("url", ""))
-        return status()
+        return status(False)
     pipeline(v, download=settings()["auto_download"])
-    return status()
+    return status(False)
 
 
 def kick(manual: bool = False) -> None:
@@ -685,6 +693,7 @@ def start_background(busy=None, first_delay: float = 15.0) -> None:
             try:
                 tick()
             except Exception:  # noqa: BLE001
-                _set(state="error", error="The update check failed.")
+                if _ST.get("state") != "ready":
+                    _set(state="error", error="The update check failed.")
             time.sleep((RETRY if _ST.get("state") == "error" else INTERVAL) + random.randint(0, 300))
     threading.Thread(target=loop, daemon=True, name="meshpool-updates").start()

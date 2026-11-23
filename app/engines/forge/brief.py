@@ -44,7 +44,9 @@ AUDIENCES = [
 _AUDIENCE_SAID = re.compile(r"(?i)\baudience\s*[:=]|\bfor (?:the|my|our|a|an) [\w-]+ (?:meeting|review|audience)\b|"
                             r"\bpresent(?:ing|ed)? (?:it )?to\b|\bpurpose\s*[:=]|\bconference\b|\bstakeholders?\b|"
                             r"\bpartners?\b|\bregulators?\b|\bboss\b|\bmanager\b")
-_SLIDES = re.compile(r"(?i)\b(\d{1,2})\s*[- ]?\s*(?:slides?|pages?)\b|\bslides?\s*[:=]\s*(\d{1,2})\b")
+_SLIDES = re.compile(r"(?i)(?<!\d)(\d{1,3})\s*[- ]?\s*(?:(?:slides?|pages?|folien|seiten|diapositiv\w*|p[aá]ginas?)\b|"
+                     "\u5e7b\u706f\u7247|\u9875|\u9801|\u30b9\u30e9\u30a4\u30c9|\uc7a5)|\\bslides?\\s*[:=]\\s*(\\d{1,3})\\b")
+_PAGES_ONLY = re.compile(r"(?i)(?:pages?|seiten|p[aá]ginas?|\u9875|\u9801)$")
 _THEME_SAID = re.compile(r"(?i)\b(?:theme|palette|colou?rs?|look|brand(?:ing)?|template|style)\s*[:=]|"
                          r"\b(?:our|my|the company'?s?|corporate) (?:brand|template|colou?rs?)\b|"
                          r"\b(?:" + "|".join(THEMES) + r")\b\s*(?:theme|palette|colou?rs?|look)|"
@@ -60,9 +62,12 @@ def slide_count(text: str) -> int | None:
     apply() writes wins over the request's own wording. None when it says none. The engine parses with this too."""
     brief = re.search(r"\n\nBrief: ([^\n]*)\s*$", text or "")
     for part in ([brief.group(1)] if brief else []) + [text or ""]:
-        m = _SLIDES.search(part)
-        if m:
-            return int(m.group(1) or m.group(2))
+        found = [m for m in _SLIDES.finditer(part)]
+        # a figure tied to "slides" is the deck; "80-page report" is only the source's size, so "pages" count
+        # only when no "slides" figure is present
+        found.sort(key=lambda m: bool(m.group(1)) and bool(_PAGES_ONLY.search(m.group(0).strip())))
+        if found:
+            return min(int(found[0].group(1) or found[0].group(2)), 60)
     return None
 
 

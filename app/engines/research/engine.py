@@ -101,7 +101,7 @@ def finish_check(answer, artifacts, ws):
     corpus = Corpus(str(Path(p).parent))
     if not corpus.sources:
         return "ENGINE CHECK: no sources.json next to the report; collect sources with the research library first."
-    probs = check(Path(p).read_text(), corpus)
+    probs = check(Path(p).read_text(encoding="utf-8"), corpus)
     from engines.research.verify import citations_in
     if not citations_in(answer or ""):
         probs.insert(0, {"check": "R0 answer", "where": "final answer",

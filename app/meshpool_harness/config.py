@@ -6,6 +6,7 @@ The config file is plain KEY=VALUE lines. Values already set in the shell enviro
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -17,6 +18,11 @@ FIELDS = [
     ("MESHPOOL_API_KEY", "API key", "", "Your Meshpool key (or any OpenAI-compatible key)."),
     ("MESHPOOL_BASE_URL", "Endpoint", "https://llm.meshpool.ai/v1", "OpenAI-compatible base URL."),
     ("MH_MODEL", "Model", "deepseek-v4.1-flash", "Any model id the endpoint serves."),
+    ("MH_AUTH_HEADER", "Key header", "", "Optional. The header that carries the key when it is not Authorization: "
+     "Bearer: api-key (Azure OpenAI), x-api-key, Authorization. Empty picks the right one for the endpoint."),
+    ("MH_AUTH_SCHEME", "Key scheme", "", "Optional. How the key is sent: bearer, basic, token or raw (the key alone)."),
+    ("MESHPOOL_AZURE_API_VERSION", "Azure api-version", "", "Optional. The api-version sent to an Azure OpenAI "
+     "endpoint. Empty uses the current GA version."),
     ("MH_PROVIDER", "Provider", "meshpool", "What the models run on: meshpool (your Meshpool key), custom (another "
      "OpenAI-compatible key) or chatgpt (your ChatGPT sign-in)."),
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
@@ -72,20 +78,23 @@ SECRET = {"MESHPOOL_API_KEY", "GITHUB_TOKEN", "BRAVE_SEARCH_API_KEY", "TAVILY_AP
           "INSTANTLY_API_KEY"}
 
 
-def replace_file(src, dst) -> None:
+def replace_file(src, dst, keep_src: bool = False) -> None:
     """os.replace that survives Windows: a reader, the search indexer or antivirus holding the target or the fresh
-    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up."""
+    file for a moment makes the rename fail with PermissionError, so try again briefly before giving up. A temp file
+    the caller just wrote is removed on failure; `keep_src` keeps it (a finished download worth retrying later)."""
     import time
-    for i in range(20 if os.name == "nt" else 1):
+    n = (100 if keep_src else 20) if os.name == "nt" else 1
+    for i in range(n):
         try:
             os.replace(src, dst)
             return
         except PermissionError:
-            if i == (19 if os.name == "nt" else 0):
-                try:
-                    os.unlink(src)
-                except OSError:
-                    pass
+            if i == n - 1:
+                if not keep_src:
+                    try:
+                        os.unlink(src)
+                    except OSError:
+                        pass
                 raise
             time.sleep(0.05)
 
@@ -202,6 +211,18 @@ def read(path: Path | None = None) -> dict:
     return out
 
 
+def clean_key(k) -> str:
+    """A key the way people paste it: in quotes, with a header name or "Bearer " in front, or with line breaks and
+    zero-width characters in it. Nothing else is touched: dashes, dots, =, _ and any prefix (or none) stay."""
+    k = str(k or "").strip()
+    for _ in range(3):
+        if len(k) >= 2 and (k[0], k[-1]) in {('"', '"'), ("'", "'"), ("`", "`"), ("\u201c", "\u201d"), ("\u2018", "\u2019")}:
+            k = k[1:-1].strip()
+    k = re.sub(r"^(?:(?:authorization|api-key|x-api-key|ocp-apim-subscription-key)\s*[:=]\s*)", "", k, flags=re.I)
+    k = re.sub(r"^(?:bearer|token)\s+", "", k, flags=re.I)
+    return re.sub(r"[\s\u200b-\u200f\u2060\ufeff]", "", k)
+
+
 _WRITE_LOCK = __import__("threading").Lock()
 
 
@@ -209,8 +230,46 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
         return _write(values, path)
+
+
+@__import__("contextlib").contextmanager
+def _file_lock(lock: Path):
+    """An exclusive lock across processes for one read-modify-write (the app, `meshpool login`, MCP servers)."""
+    import time
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock, "a+b")
+    except OSError:
+        yield                                             # no lock file possible: same as before
+        return
+    with fh:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
 
 
 def _write(values: dict, path: Path) -> Path:
@@ -227,7 +286,7 @@ def _write(values: dict, path: Path) -> Path:
         if k not in done:
             lines.append(f"{k}={v}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{__import__('threading').get_ident()}.tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         os.chmod(tmp, 0o600)                     # it holds API keys: readable by this user only
@@ -237,6 +296,7 @@ def _write(values: dict, path: Path) -> Path:
     return path
 
 
+_SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)
 _INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
 
 
@@ -244,7 +304,7 @@ def scrub_env(env: dict) -> dict:
     """The environment for a command the agent runs: without the keys Meshpool saved, so `env` or a script the model
     writes cannot read them and send them to the model provider or into a log. Keys the user set in their own shell stay."""
     for k in list(env):
-        if k == "MESHPOOL_API_KEY" or (k in SECRET and k in _INJECTED):
+        if k == "MESHPOOL_API_KEY" or (k in _INJECTED and (k in SECRET or _SECRET_NAME.search(k))):
             env.pop(k, None)
     return env
 
@@ -350,6 +410,12 @@ def system_check() -> list[dict]:
     rows.extend(_bundled_program_rows(bundled))
     rows.append({"name": "Slide icons", "optional": True, "ok": True, "detail": "built in",
                  "fix": "Not needed: icons ship pre-rendered with Meshpool."})
+    try:                                    # the model's context window and where that number came from
+        from meshpool_harness.core import context as _ctx
+        rows.append({"name": "Context window", "optional": True, "ok": True, "detail": _ctx.describe(),
+                     "fix": "Set MESHPOOL_CONTEXT_WINDOW (tokens) if this is wrong for your model."})
+    except Exception:  # noqa: BLE001 - a check must report, not crash
+        pass
     return rows
 
 

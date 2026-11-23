@@ -298,6 +298,9 @@ def configure(eid: str, values: dict, enable: bool = True) -> dict:
     vals = {k: str(v).strip() for k, v in (values or {}).items() if k in names and str(v).strip()}
     if any("\n" in v for v in vals.values()):
         raise ValueError("A setting cannot span several lines.")
+    if vals.get("ALPHAVANTAGE_API_KEY"):          # it goes into a URL query: & # % must not break the address
+        from urllib.parse import quote
+        vals["ALPHAVANTAGE_API_KEY"] = quote(vals["ALPHAVANTAGE_API_KEY"], safe="")
     if vals:
         C.write(vals)
         C.load_into_env(override=True)

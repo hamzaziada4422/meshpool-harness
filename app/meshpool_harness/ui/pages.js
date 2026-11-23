@@ -19,7 +19,7 @@ const gBtn = (id, ic, tip, on) => `<button class="iconbtn gbtn ${on ? "on" : ""}
 function bindHead(name, redraw) {
   $$("[data-gtab]").forEach(b => b.onclick = () => { G.tab[name] = b.dataset.gtab; redraw(); });
   $("#gSearch")?.addEventListener("click", () => { G.find[name] = !G.find[name]; $("#gfind").hidden = !G.find[name]; if (G.find[name]) $("#gq").focus(); else { G.q[name] = ""; redraw(); } });
-  $("#gq")?.addEventListener("input", e => { G.q[name] = e.target.value; clearTimeout(G.qT); G.qT = setTimeout(() => redraw(true), 120); });
+  $("#gq")?.addEventListener("input", e => { G.q[name] = e.target.value; const inp = e.target; clearTimeout(G.qT); G.qT = setTimeout(() => { const pos = inp.selectionStart; redraw(true); const nq = $("#gq"); if (nq && pos != null) { nq.focus({preventScroll: true}); try { nq.setSelectionRange(pos, pos); } catch {} } }, 120); });
   if (G.find[name]) { const q = $("#gq"); if (q && document.activeElement !== q && !G.noFocus) q.focus({preventScroll: true}); }
 }
 function drawPage(name) {
@@ -106,6 +106,8 @@ function taskDialog(t = {}) {
       <label class="switchrow"><input type="checkbox" id="tkChange" ${t.only_on_change ? "checked" : ""}> Only tell me when something changed</label>
       <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">${t.id ? "Save task" : "Create task"}</button></div></div>`;
     document.body.appendChild(sc);
+    const touched = new Set();
+    for (const [k, id] of [["time", "tkTime"], ["day", "tkDay"], ["minutes", "tkMin"], ["at", "tkAt"], ["only_on_change", "tkChange"]]) $("#" + id, sc).addEventListener("change", () => touched.add(k));
     const show = () => { const w = $("#tkWhen", sc).value; $("#tkDayF", sc).hidden = w !== "weekly"; $("#tkTimeF", sc).hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tkMinF", sc).hidden = w !== "every"; $("#tkAtF", sc).hidden = w !== "once"; };
     $("#tkWhen", sc).onchange = show; show();
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
@@ -115,6 +117,15 @@ function taskDialog(t = {}) {
     $("[data-a='0']", sc).onclick = () => done(null);
     $("[data-a='1']", sc).onclick = () => {
       const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value, only_on_change: $("#tkChange", sc).checked};
+      if (t.id) {                                  // editing: send only what the person changed, never the dialog's defaults
+        const init = {when: t.when || "daily", time: t.time || "09:00", day: t.day || "mon", minutes: t.minutes || 60, at: t.at || "", only_on_change: !!t.only_on_change};
+        if (v.when === init.when) for (const k of ["time", "day", "minutes", "at"]) if (v[k] === init[k] && !touched.has(k)) delete v[k];
+        if (v.only_on_change === init.only_on_change && !touched.has("only_on_change")) delete v.only_on_change;
+        if (v.when === init.when && t.when === undefined) delete v.when;
+      } else {
+        if (t.kind) v.kind = t.kind;
+        if (t.folder) v.folder = t.folder;
+      }
       if (!v.prompt) { $("#tkPrompt", sc).focus(); return; }
       done(v);
     };
@@ -169,7 +180,7 @@ async function pagePlugins() {
   const draw = () => {
     const {conns, skills, plugins} = G.plg, tab = G.tab.plugins || "all", q = (G.q.plugins || "").toLowerCase();
     const mine = [
-      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? new URL(c.url || "https://custom.local").host : "Meshpool directory", on: c.enabled, desc: c.description})) : []),
+      ...(tab !== "skills" ? conns.filter(c => c.connected).map(c => ({kind: "connector", id: c.id, name: c.name, by: c.custom ? (() => { try { return new URL(c.url || "https://custom.local").host; } catch { return c.name || "Custom"; } })() : "Meshpool directory", on: c.enabled, desc: c.description})) : []),
       ...(tab !== "connectors" ? skills.filter(s => s.enabled).map(s => ({kind: "skill", id: s.id, name: s.name, by: "On this computer", on: true, desc: s.description})) : []),
       ...(tab === "all" ? plugins.map(p => ({kind: "plugin", id: p.name, name: p.name, by: p.version ? "v" + p.version : "Installed", on: p.enabled, desc: p.description || ""})) : []),
     ].filter(x => !q || (x.name + x.desc).toLowerCase().includes(q));

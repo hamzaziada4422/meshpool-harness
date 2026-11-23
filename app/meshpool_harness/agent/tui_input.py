@@ -46,6 +46,15 @@ def parse_keys(data: str) -> list:
             elif data[i + 1] in "\r\n":
                 out.append("alt_enter")
                 i += 2
+            elif data[i + 1] in "\x7f\x08":                 # Alt+Backspace (macOS Terminal, iTerm): delete a word
+                out.append("ctrl_w")
+                i += 2
+            elif data[i + 1] in "bf":                        # Alt+b / Alt+f: a word left / right
+                out.append("word_left" if data[i + 1] == "b" else "word_right")
+                i += 2
+            elif data[i + 1] != "\x1b" and data[i + 1] >= " ":   # any other Alt+key: not "esc" plus a letter
+                out.append("unknown")
+                i += 2
             else:
                 out.append("esc")
                 i += 1
@@ -86,6 +95,8 @@ class RawKeys:
         self.pending: list = []
         self.saved = None
         self.win = os.name == "nt"
+        import codecs
+        self._dec = codecs.getincrementaldecoder("utf-8")(errors="replace")   # a character split across reads
 
     def __enter__(self):
         if self.win:
@@ -124,12 +135,12 @@ class RawKeys:
             data = os.read(self.fd, 4096)
             if not data:
                 raise EOFError
-            text = data.decode("utf-8", "replace")
+            text = self._dec.decode(data)
             while text.startswith("\x1b[200~") and "\x1b[201~" not in text:     # a paste split across reads
                 more = os.read(self.fd, 65536)
                 if not more:
                     break
-                text += more.decode("utf-8", "replace")
+                text += self._dec.decode(more)
             keys = parse_keys(text)
         if not keys:
             return None
@@ -143,7 +154,16 @@ class RawKeys:
             code = msvcrt.getwch()
             return [{"H": "up", "P": "down", "K": "left", "M": "right", "G": "home", "O": "end", "S": "delete",
                      "\x0f": "shift_tab"}.get(code, "unknown")]
-        return parse_keys(c)
+        text = c
+        while msvcrt.kbhit():                       # a paste arrives as a burst: read it all, not one key at a time
+            nxt = msvcrt.getwch()
+            if nxt in ("\x00", "\xe0"):
+                msvcrt.getwch()
+                continue
+            text += nxt
+        if len(text) > 1 and ("\r" in text or "\n" in text):
+            return [("paste", text.replace("\r\n", "\n").replace("\r", "\n"))]
+        return parse_keys(text)
 
 
 def raw_available() -> bool:

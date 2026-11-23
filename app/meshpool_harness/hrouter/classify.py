@@ -129,6 +129,8 @@ def category_of(route, text: str = "") -> tuple[str, float]:
 def stage1(text: str, files=None, workdir: str | None = None, kind: str = "code"):
     """(category, confidence, Route) from the free signals."""
     from .route import _decide
+    from .signals import cap_text
+    text = cap_text(text)
     r = _decide(text, list(files or []), workdir, kind)
     cat, conf = category_of(r, text)
     return cat, conf, r

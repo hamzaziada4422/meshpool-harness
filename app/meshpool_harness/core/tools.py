@@ -14,6 +14,36 @@ import time
 from pathlib import Path
 
 
+OUTPUT_HEAD, OUTPUT_TAIL, OUTPUT_KILL_CHARS = 200_000, 200_000, 64_000_000
+
+
+class _Capped:
+    """A command's output kept as its first and last characters only, so a runaway producer cannot fill memory."""
+
+    def __init__(self):
+        self.head, self.tail, self.total, self.dropped = [], "", 0, 0
+        self._hn = 0
+
+    def add(self, chunk: str):
+        self.total += len(chunk)
+        if self._hn < OUTPUT_HEAD:
+            take = chunk[:OUTPUT_HEAD - self._hn]
+            self.head.append(take)
+            self._hn += len(take)
+            chunk = chunk[len(take):]
+        if chunk:
+            self.tail += chunk
+            if len(self.tail) > 2 * OUTPUT_TAIL:
+                self.dropped += len(self.tail) - OUTPUT_TAIL
+                self.tail = self.tail[-OUTPUT_TAIL:]
+
+    def text(self) -> str:
+        head = "".join(self.head)
+        if not self.dropped:
+            return head + self.tail
+        return head + f"\n... [{self.dropped} characters of output dropped] ...\n" + self.tail
+
+
 def _bash():
     from meshpool_harness.config import find_bash
     return find_bash()
@@ -32,12 +62,59 @@ _RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-pa
            "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
 
 
+def _brace_expand(pat: str) -> list[str]:
+    m = re.search(r"\{([^{}]*)\}", pat)
+    if not m:
+        return [pat]
+    return [x for alt in m.group(1).split(",") for x in _brace_expand(pat[:m.start()] + alt + pat[m.end():])]
+
+
+def _glob_rx(pat: str):
+    out, i = "", 0
+    while i < len(pat):
+        c = pat[i]
+        if pat.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+            continue
+        if pat.startswith("**", i):
+            out += ".*"
+            i += 2
+            continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile(out + r"\Z", re.S)
+
+
+def glob_match(rel: str, glob: str) -> bool:
+    """ripgrep-like file filter: comma-less braces ({py,txt}), ** across folders (also none), a leading ! to exclude,
+    a pattern without / matches the file name at any depth, one with / matches the path from the project root."""
+    rel = rel.replace("\\", "/")
+    name = rel.rsplit("/", 1)[-1]
+    pos, neg = [], []
+    for g in re.split(r"\s+", glob.strip()):
+        if not g:
+            continue
+        (neg if g.startswith("!") else pos).append(g.lstrip("!"))
+
+    def one(p: str) -> bool:
+        for q in _brace_expand(p):
+            q = q[2:] if q.startswith("./") else q
+            if "/" not in q:
+                if fnmatch.fnmatch(name, q):
+                    return True
+            elif _glob_rx(q.lstrip("/")).match(rel):
+                return True
+        return False
+    return (not pos or any(one(p) for p in pos)) and not any(one(n) for n in neg)
+
+
 def read_only(cmd: str) -> bool:
     """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
     import re
     import shlex
     s = re.sub(r"\d?>\s*/dev/null|2>&1|>&2", " ", cmd)
-    if re.search(r"[>`]|\$\(|<<|\bxargs\b|-exec\b|-delete\b|\bsudo\b", s):
+    if re.search(r"[>`]|\$\(|<\(|<<|\bxargs\b|-exec\b|-execdir\b|-ok\b|-delete\b|\bsudo\b", s):
         return False
     for seg in re.split(r"\|\|?|&&|;|\n", s):
         try:
@@ -53,10 +130,35 @@ def read_only(cmd: str) -> bool:
             return False
         if prog == "sed" and any(a.startswith("-i") or a == "--in-place" for a in rest):
             return False
-        if prog == "awk" and "system" in seg:
+        if prog == "awk" and ("system" in seg or "getline" in seg):
             return False
-        if prog == "git" and not (rest and rest[0] in _RO_GIT):
+        if prog == "sort" and any(a == "-o" or a.startswith(("--output", "-o")) for a in rest):
             return False
+        if prog == "find" and any(a in ("-fprint", "-fprint0", "-fprintf", "-fls") for a in rest):
+            return False
+        if prog == "sed" and any(re.search(r"(^|[;\s{])[wWeE]\s*\S|^s(.).*?\1.*?\1[gIpm0-9]*[we]", a)
+                                 for a in rest if not a.startswith("-")):
+            return False
+        if prog in ("rg", "grep", "egrep", "fgrep") and any(a in ("-z", "--search-zip", "--pre") or a.startswith("--pre=")
+                                                           for a in rest):
+            return False
+        if prog == "git":
+            if not (rest and rest[0] in _RO_GIT):
+                return False
+            if any(a.startswith(("--output", "--ext-diff", "--textconv", "-O", "--open-files-in-pager")) for a in rest):
+                return False
+            if rest[0] in ("branch", "tag", "remote"):
+                pos = [a for a in rest[1:] if not a.startswith("-")]
+                bad = {"-d", "-D", "-m", "-M", "-c", "-C", "-u", "-f", "-a", "--delete", "--move", "--copy", "--force",
+                       "--set-upstream-to", "--unset-upstream", "--edit-description", "-s", "-S", "-F", "-e"}
+                if rest[0] == "remote":
+                    if pos and pos[0] not in ("show", "get-url"):
+                        return False
+                elif pos and not any(a in ("-l", "--list", "--contains", "--merged", "--no-merged", "--points-at")
+                                     for a in rest[1:]):
+                    return False                     # `git branch x` / `git tag v1` create refs
+                if any(a.split("=")[0] in bad - {"-a"} for a in rest[1:]):
+                    return False
         if prog in ("pip", "pip3") and not (rest and rest[0] in ("show", "list", "freeze", "--version", "-V")):
             return False
         if prog in ("python", "python3", "node", "npm", "cargo", "go", "java", "gcc", "rustc") and not (
@@ -274,6 +376,8 @@ class ToolError(Exception):
 def validate(name: str, raw_args, allowed: list[str]) -> dict:
     if name not in allowed:
         raise ToolError(f"unknown tool '{name}'. Available: {', '.join(allowed)}")
+    if isinstance(raw_args, str) and raw_args.strip() in ("", "null"):
+        raw_args = "{}"                          # some models/gateways send "" for a no-argument call
     try:
         args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args or {})
     except json.JSONDecodeError as e:
@@ -281,6 +385,9 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
                         f"Send a single JSON object.")
     if not isinstance(args, dict):
         raise ToolError(f"arguments for {name} must be a JSON object")
+    if args.get("__truncated__") is True:
+        raise ToolError(f"your {name} call was cut off before its arguments were complete (the reply hit the output "
+                        f"limit). Send it again with shorter arguments.")
     if (name == "write_file" and isinstance(args.get("content"), (dict, list))
             and str(args.get("path", "")).lower().endswith(".json")):
         args["content"] = json.dumps(args["content"], indent=2, ensure_ascii=False) + "\n"   # models often send JSON as an object
@@ -420,21 +527,28 @@ class Workspace:
         # line endings and a BOM do not count: read_file/edit see \\n text, apply_patch sees the raw text
         return hashlib.sha1(text.lstrip("\ufeff").replace("\r\n", "\n").encode("utf-8", "replace")).hexdigest()
 
+    max_tool_chars = MAX_TOOL_CHARS          # lowered for a small context window (core/context.py)
+
     def _cap(self, text: str, label: str) -> str:
         text = clean(text)
-        if len(text) <= MAX_TOOL_CHARS:
+        cap = self.max_tool_chars
+        if len(text) <= cap:
             return text
+        head = tail = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+        more = {"read": " Read the rest with read_file start/end.", "grep": " Narrow the pattern or the path.",
+                "glob": " Use a narrower pattern."}.get(label, "") if cap < MAX_TOOL_CHARS else ""
         with _CAP_LOCK:                          # bash_many may run commands in threads (MH_PARALLEL_MANY)
             self._n += 1
             n = self._n
         f = self.run_dir / f"out_{n:03d}_{label}.txt"
+        cut = len(text) - head - tail
         try:                                     # the task may delete .run (e.g. git clean): recreate it
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(text)
+            f.write_text(text, encoding="utf-8", errors="replace")
         except OSError:
-            return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
-        return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
-                + text[-TAIL:])
+            return text[:head] + f"\n... [{cut} chars truncated{"." + more if more else ""}] ...\n" + text[-tail:]
+        return (text[:head] + f"\n... [{cut} chars truncated; full output in {f}{"." + more if more else ""}] ...\n"
+                + text[-tail:])
 
     # -- container (unmounted) file access
     def _cpath(self, p: str) -> str:
@@ -477,12 +591,17 @@ class Workspace:
         if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
+        with p.open("rb") as _f:
+            if b"\0" in _f.read(8192):
+                raise ToolError(f"{path} is a binary file ({p.stat().st_size} bytes); read_file shows text only")
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
         lines = shown(text).splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
+        if s > len(lines) and lines:
+            return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
@@ -520,13 +639,15 @@ class Workspace:
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
+        if not base.exists():
+            raise ToolError(f"path not found: {path}")
         files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
         out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
             if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
                 continue
-            if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
+            if glob and not glob_match(str(rel), glob):
                 continue
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
@@ -536,13 +657,21 @@ class Workspace:
                 continue
             lines = text.splitlines()
             hits: list[int] = []                                   # 1-based line numbers that start a match
+            need = head - len(out) + 1                             # enough to know the list is full; no more
             if multiline:
                 for m in rx.finditer(text):
                     hits.append(text.count("\n", 0, m.start()) + 1)
+                    if output_mode != "count" and len(hits) >= need:
+                        break
             else:
-                hits = [i for i, line in enumerate(lines, 1) if rx.search(line)]
+                for i, line in enumerate(lines, 1):
+                    if rx.search(line):
+                        hits.append(i)
+                        if output_mode != "count" and len(hits) >= need:
+                            break
             if not hits:
                 continue
+            hitset = set(hits)
             matched += 1
             if output_mode == "files_with_matches":
                 out.append(str(rel))
@@ -552,6 +681,8 @@ class Workspace:
                 shown: set[int] = set()
                 last = 0
                 for h in hits:
+                    if len(out) > head:
+                        break
                     lo, hi = max(1, h - before), min(len(lines), h + after)
                     if (before or after) and last and lo > last + 1:
                         out.append("--")
@@ -559,7 +690,8 @@ class Workspace:
                         if n in shown:
                             continue
                         shown.add(n)
-                        out.append(f"{rel}{':' if n in hits else '-'}{n}{':' if n in hits else '-'}{lines[n - 1][:300]}")
+                        sep = ":" if n in hitset else "-"
+                        out.append(f"{rel}{sep}{n}{sep}{lines[n - 1][:300]}")
                     last = max(last, hi)
             if len(out) >= head:
                 truncated = True
@@ -576,9 +708,14 @@ class Workspace:
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
-        res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts
-                     and (not inside_only or self._inside(p)))
+        if os.path.isabs(pattern) or re.match(r"^[A-Za-z]:", pattern) or ".." in Path(pattern).parts:
+            raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
+        try:
+            res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
+                         if ".git" not in p.parts and "node_modules" not in p.parts
+                         and (not inside_only or self._inside(p)))
+        except (NotImplementedError, ValueError) as e:
+            raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
 
     @staticmethod
@@ -784,7 +921,7 @@ class Workspace:
                 raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
                                 f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
             if isinstance(old, AllStr) and text.count(old) > 1:        # replace_all: every occurrence, counted
-                notes.append(f"replaced {text.count(old)} occurrences")
+                notes.append(f" (replaced {text.count(old)} occurrences)")
                 text = text.replace(str(old), new)
                 continue
             try:
@@ -801,6 +938,8 @@ class Workspace:
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         text, eol, bom = read_src(p)
         return str(p), text, p, (eol, bom)
 
@@ -917,6 +1056,8 @@ class Workspace:
             self.turn_files.add(self._cpath(path))
             return f"wrote {path} ({len(content)} chars{', appended' if append else ''}) in the container"
         p = self._path(path, write=True)
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
         if not p.exists():
             self.created.add(str(p))
@@ -948,9 +1089,40 @@ class Workspace:
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
         box: dict = {}
+        bufs = {"out": _Capped(), "err": _Capped()}
+        over = threading.Event()
+
+        def drain(stream, buf):
+            try:
+                while True:
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        break
+                    buf.add(chunk)
+                    if bufs["out"].total + bufs["err"].total > OUTPUT_KILL_CHARS:
+                        over.set()                       # an endless producer: end it, keep head and tail
+                        break
+            except (OSError, ValueError):
+                pass
 
         def pump():
-            box["out"], box["err"] = p.communicate()
+            ts = [threading.Thread(target=drain, args=(p.stdout, bufs["out"]), daemon=True),
+                  threading.Thread(target=drain, args=(p.stderr, bufs["err"]), daemon=True)]
+            for t in ts:
+                t.start()
+            while any(t.is_alive() for t in ts) and not over.is_set():
+                for t in ts:
+                    t.join(0.1)
+            if over.is_set():
+                try:
+                    os.killpg(p.pid, 9) if os.name != "nt" else p.kill()
+                except Exception:  # noqa: BLE001
+                    p.kill()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            box["out"], box["err"] = bufs["out"].text(), bufs["err"].text()
         th = threading.Thread(target=pump, daemon=True)
         th.start()
         end = time.time() + timeout_s
@@ -976,6 +1148,8 @@ class Workspace:
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
         rc = 130 if why == "stopped" else p.returncode
+        if over.is_set():
+            err = (err + f"\n[output stopped after {OUTPUT_KILL_CHARS // 1_000_000} million characters]").lstrip()
         if why == "stopped":
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
@@ -1004,7 +1178,7 @@ class Workspace:
                     r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
                     from meshpool_harness.core import sandbox as _SB
-                    r = self._proc(_SB.wrap([bash, "-c", command], self.root), env, timeout_s, cwd=cwd)
+                    r = self._proc(_SB.wrap([bash, "-c", command], self.root, cwd=cwd), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
@@ -1021,7 +1195,7 @@ class Workspace:
                               "secs": round(time.time() - t0, 1), "tail": out[-600:]})
         try:                                     # full outputs: evidence for number tracing; the task may have
             self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
-            with (self.run_dir / "commands.log").open("a") as f:
+            with (self.run_dir / "commands.log").open("a", encoding="utf-8", errors="replace") as f:
                 f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
         except OSError:
             pass
@@ -1061,6 +1235,9 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         if bash:
             args, shell = [bash, "-c", command], False
+            if os.name != "nt":
+                from meshpool_harness.core import sandbox as _SB
+                args = _SB.wrap(args, self.root)
         elif os.name == "nt":
             args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
         else:
