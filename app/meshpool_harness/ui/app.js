@@ -1193,7 +1193,13 @@ function applyEv(ev) {
     case "receipt": { closeGroup(); const t = String(ev.text || ""), first = t.split("\n").map(x => x.replace(/^[#*\s-]+|[*]+/g, "").trim()).find(Boolean) || "Reviewed";
       add(`<details><summary>${ICON.check2}<span>${esc(clip(first.replace(/:$/, ""), 80))}</span></summary><div class="rcbody">${md(t)}</div></details>`, "note receipt"); sessionSoon(); break; }   // details: here when opened, and in the Session panel
     case "status": {
-      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto; add(`<span>${esc(ev.text)}</span>`, "note using"); sessionSoon(); break; }   // one neutral line; the reason is in the Session panel
+      if (ev.using) { cur.using = ev.text; if (ev.auto) cur.auto = ev.auto;
+        const why = ev.auto && ev.auto.reason ? ` <small class="why">${esc(ev.auto.reason)}</small>` : "";
+        const un = add(`<span>${esc(ev.text)}</span>${why}` + (ev.back ? ` <button class="linkbtn" data-back="1">Use ${esc(ev.back.name)} instead</button>` : ""), "note using");
+        $("[data-back]", un)?.addEventListener("click", async () => {   // one click back to the mode's own agent, history kept
+          try { const v = await post(`/api/agent/${cur.id}/harness`, {harness: ev.back.harness, since: 1e9}); cur.view.harness = v.harness || harness(ev.back.harness); $("[data-back]", un)?.remove(); renderBar(); }
+          catch (e) { toast(e.message); } });
+        sessionSoon(); break; }   // one short line; the reason also stays in the Session panel
       // Housekeeping stays out of the transcript: which agent was picked and why, connector start-up, "ready". It is in the Session panel.
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }

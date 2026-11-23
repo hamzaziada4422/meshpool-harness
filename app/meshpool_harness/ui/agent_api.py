@@ -668,6 +668,25 @@ class Session:
         self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
                    "handoff": {"harness": hid, "reason": why}})
 
+    def _start_failed_handoff(self, text: str) -> bool:
+        """The first turn of an Auto-routed chat ended because its agent could not start (the agent recorded it in
+        hrouter/health.py, so Auto no longer offers it): move the chat to the agent Auto picks now and say so. True
+        when the chat moved and the caller should send the message again. Once per chat; never raises."""
+        try:
+            err = getattr(self.agent, "start_error", None)
+            if (not err or getattr(self, "_start_retry_done", False) or not read_meta(self.id).get("routed")
+                    or any(e.get("type") == "assistant" for e in self.events)):
+                return False
+            self._start_retry_done = True
+            from meshpool_harness import harness_router as HRT
+            nxt = HRT.route(text, self.kind).get("harness")
+            if not nxt or nxt == self.harness.get("id"):
+                return False
+            self.handoff(nxt, f"{self.harness.get('name', 'The first agent')} could not start")
+            return True
+        except Exception:  # noqa: BLE001 - the failed turn already told the user; nothing new may break it
+            return False
+
     # ---- 0.0.10: checks, receipts, memory tracking, learning and insights around a turn. None of it may slow or
     # fail a turn: the slow parts run on a thread, every call is guarded.
     def _turn_begin(self):
@@ -910,6 +929,11 @@ class Session:
                     self.agent.send(body, images=images)
                 else:
                     self.agent.send(body)
+                if self._start_failed_handoff(text):        # M29-02: the agent Auto picked could not start
+                    if images:
+                        self.agent.send(body, images=images)
+                    else:
+                        self.agent.send(body)
                 try:
                     from meshpool_harness.hrouter import outcomes as OUT
                     OUT.log_turn(self, getattr(self, "_turn_route", None), u0, ev0=ev0,
@@ -1329,8 +1353,15 @@ def create(body: dict) -> dict:
             pass
     if routed:
         # The chat shows a short neutral label; why Auto picked it travels with the event for the Session panel.
-        s.emit({"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
-                "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}})
+        using_ev = {"type": "status", "using": True, "text": f"Using {_short_harness(routed['name'])}",
+              "auto": {"harness": routed["harness"], "category": routed.get("category"), "reason": routed.get("reason")}}
+        try:                                        # S-04: Auto picked something other than the mode's own agent: one click back
+            back = HR.default_for(kind)
+            if back and back != routed["harness"]:
+                using_ev["back"] = {"harness": back, "name": HR.get(back)["name"]}
+        except Exception:  # noqa: BLE001
+            pass
+        s.emit(using_ev)
         write_meta(s.id, routed=routed["harness"])
     else:
         try:
