@@ -6,10 +6,10 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..providers import configured_model
 from .rules import decide
 
 ENGINES = ["research", "credit", "code", "data", "sheets", "slides", "general"]
-DEFAULT_MODEL = os.environ.get("MH_MODEL", "deepseek-v4.1-flash")   # any OpenAI-compatible model id
 
 
 @dataclass
@@ -28,7 +28,7 @@ def _classify(request: str, files: list[str], client, model: str | None = None) 
               f"Request: {request}\nAttached files: {', '.join(Path(f).name for f in files) or 'none'}")
     from ..core.client import LiveClient
     kw = {"attempts": 2} if isinstance(client, LiveClient) else {}      # a hint is optional: do not retry for minutes
-    resp = client.chat(model=model or DEFAULT_MODEL, messages=[{"role": "user", "content": prompt}], max_tokens=60,
+    resp = client.chat(model=model or configured_model(), messages=[{"role": "user", "content": prompt}], max_tokens=60,
                        temperature=0.0, task_id="router", role="router",
                        extra={"response_format": {"type": "json_object"}}, **kw)
     txt = resp["choices"][0]["message"].get("content") or "{}"

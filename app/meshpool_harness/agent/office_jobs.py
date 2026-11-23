@@ -73,12 +73,14 @@ def _python_m() -> list[str]:
     return cmd[:len(cmd) - (len(sys.argv) - 1)] if len(sys.argv) > 1 else cmd
 
 
-def new_job(engine: str, request: str, paths: list[str], root: Path) -> str:
+def new_job(engine: str, request: str, paths: list[str], root: Path, model: str | None = None) -> str:
     """Register a job (its output folder, command and build number) and return its id; run() runs it."""
     jid = uuid.uuid4().hex[:8]
     out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
     out.mkdir(parents=True, exist_ok=True)
     cmd = _python_m() + ["run", request, "--engine", engine, "--out", str(out)]
+    if model:
+        cmd += ["--model", model]
     if paths:
         cmd += ["--files", *paths]
     now = time.time()
