@@ -1,6 +1,6 @@
 # ws08-routing plan: routing, modes, Work output location
 
-Base: `claude/sleepy-faraday-tkjcox` (0.0.12). Every item below was re-checked against 0.0.12 code; all still reproduce
+Base: `claude/sleepy-faraday-tkjcox` (0.0.12; rebased later on 370427e3, where every item still reproduced). Every item below was re-checked against 0.0.12 code; all still reproduce
 (M29-04 partly: thumbs and Try again now call `outcomes.mark()`, Undo still does not, and `refit()` applies a mark to
 every earlier turn of the chat).
 
