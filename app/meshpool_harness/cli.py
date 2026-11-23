@@ -46,6 +46,13 @@ def _engine(name):
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
+    from meshpool_harness import telemetry
+    with telemetry.span("meshpool.run", {"meshpool.engine": engine or ""}):
+        return _run_request(request, files, out, engine, workdir, client, output_format, model)
+
+
+def _run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
+                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -123,7 +130,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions", "chats", "projects", "memory", "skills", "plugins",
+            "schedule", "agents", "models", "usage", "settings", "help"}
 
 
 def _agent_parser():
@@ -161,6 +169,8 @@ def _agent_parser():
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
+    ap.add_argument("--effort", choices=["off", "low", "medium", "high", "xhigh"],
+                    help="how hard the model thinks (setting MH_REASONING_EFFORT; /effort in a session)")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--mode", choices=["code", "work", "auto"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps; auto: pick the agent for the request")
     ap.add_argument("--profile", choices=["code", "work"], help=argparse.SUPPRESS)      # the old name of --mode
@@ -231,19 +241,7 @@ def _no_console() -> bool:
         return False
 
 
-_HELP = {
-    "login": "Usage: meshpool login\nAsk for your API key and save it.",
-    "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
-    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
-    "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
-    "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
-    "mcp": "Usage: meshpool mcp\nStart the configured MCP servers and show their status.",
-    "app": "Usage: meshpool app\nOpen the desktop app.",
-    "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
-    "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
-    "worktree": "Usage: meshpool worktree list [--all] | diff <id> [--stat] | merge <id> | discard <id>\n"
-                "Isolated copies made by `meshpool --worktree`, chats, sub-agents and scheduled runs.",
-}
+from meshpool_harness.cli_app import HELP as _HELP, NEW as _APP_COMMANDS  # noqa: E402  (one table for help)
 
 
 def _permissions_cmd(argv) -> int:
@@ -341,6 +339,8 @@ def _main(argv=None):
     if argv[:1] == ["app"]:              # the desktop app (Meshpool.app / Meshpool.exe)
         from meshpool_harness.ui.desktop import run as run_app
         return run_app()
+    from meshpool_harness.agent import tui_render as _R
+    _R.prepare_streams()             # OSS-30: a cp1252 console or a redirected stdout must not crash on glyphs
     _config.ensure_home()
     _config.load_into_env()          # before any engine import: engines read MH_* at import time
     try:
@@ -358,6 +358,10 @@ def _main(argv=None):
         a = _agent_parser().parse_args(argv)
         if a.model:
             os.environ["MH_MODEL"] = a.model
+        if os.environ.get("MH_EFFORT") and not os.environ.get("MH_REASONING_EFFORT"):
+            os.environ["MH_REASONING_EFFORT"] = os.environ["MH_EFFORT"]      # the old name, kept as an alias
+        if getattr(a, "effort", None):
+            os.environ["MH_REASONING_EFFORT"] = a.effort
         from meshpool_harness.agent.tui import main as agent_main
         prompt = a.prompt
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
@@ -392,10 +396,13 @@ def _main(argv=None):
             return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request,
                               json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
                               agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
-                              output_last_message=a.output_last_message,
+                              output_last_message=a.output_last_message, effort=getattr(a, "effort", None),
                               **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
+    if argv[0] in _APP_COMMANDS and not (argv[0] == "mcp" and len(argv) == 1):   # the app's features as commands
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
     if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
         from meshpool_harness import worktrees as WT
         return WT.cli(argv[1:])
@@ -476,6 +483,9 @@ def _main(argv=None):
             return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
+    if argv[0] == "mcp" and len(argv) > 1:
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
     if argv[0] == "mcp":
         from meshpool_harness.agent.mcp import Manager, config_file
         from meshpool_harness.agent.tui import Terminal, _mcp_status

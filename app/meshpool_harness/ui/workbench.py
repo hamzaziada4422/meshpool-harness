@@ -213,6 +213,12 @@ def models(refresh: bool = False) -> dict:
             "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
+def set_default_model(mid: str) -> dict:
+    C.write({"MH_MODEL": str(mid or "").strip()})   # may carry a provider prefix
+    C.load_into_env(override=True)
+    return models()
+
+
 def set_favorite(mid: str, on: bool) -> dict:
     def change(vals):
         fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]

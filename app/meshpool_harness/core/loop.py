@@ -58,6 +58,20 @@ def _compact(messages: list, keep_recent: int) -> list:
     return messages
 
 
+def _with_effort(client, model: str, extra):
+    """The engine path takes the same reasoning effort as the app's agent: MH_REASONING_EFFORT, through the model's
+    own capabilities (nothing is sent to a model that takes none)."""
+    try:
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import modelcaps as MC
+        eff = MC.resolve(getattr(client, "base_url", "") or "", PV.split(model)[1]).effort("task")
+    except Exception:  # noqa: BLE001
+        return extra
+    if eff and "reasoning_effort" not in (extra or {}):
+        return {**(extra or {}), "reasoning_effort": eff}
+    return extra
+
+
 def _keep_reasoning(ledger, model: str) -> bool:
     """Whether this model, on this endpoint, wants reasoning_content passed back inside a tool-call turn."""
     try:
@@ -240,7 +254,7 @@ def _run_loop(task_text: str, *, client, model: str, profile, ws: Workspace, ctx
             resp = client.chat(model=model, messages=messages, tools=tools, task_id=ctx.get("task_id", ""),
                                job_id=ctx.get("job_id", ""), role=ctx.get("role", "worker"),
                                profile=ctx.get("profile", "deepseek"), max_tokens=caps.max_output_tokens,
-                               temperature=temperature, extra=extra)
+                               temperature=temperature, extra=_with_effort(client, model, extra))
         except usage.BudgetExceeded as e:
             res.reason = str(e)
             log_failure(ctx, "budget_cap", False, res.reason)

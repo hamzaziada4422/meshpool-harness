@@ -658,3 +658,28 @@ def migrate(extra_paths=()) -> list[dict]:
             made.append(proj)
         _write(_migrated_file(), json.dumps({"version": 1, "paths": seen}, indent=1))
         return made
+
+
+def api_action(pid: str, b: dict) -> dict:
+    """The /api/pj/<id> POST body (app and `meshpool projects`): update, delete, memory and knowledge actions."""
+    act = b.get("action", "update")
+    if act == "update":
+        kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
+        return update(pid, **kw)
+    if act == "delete":
+        delete(pid)
+        return {"ok": True}
+    if act == "memory_set":
+        memory_set(pid, b.get("text", ""))
+    elif act == "memory_add":
+        memory_add(pid, b.get("text", ""))
+    elif act == "memory_clear":
+        memory_clear(pid)
+    elif act == "knowledge_add":
+        import base64
+        knowledge_add(pid, b.get("name", ""), base64.b64decode(b.get("data", "")))
+    elif act == "knowledge_remove":
+        knowledge_remove(pid, b.get("name", ""))
+    else:
+        raise ValueError("Unknown project action.")
+    return detail(pid)

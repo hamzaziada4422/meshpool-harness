@@ -49,16 +49,29 @@ COMMANDS = [
     ("rewind", "[turn]", "undo to a turn and edit its message"),
     ("attach", "PATH...", "send files or pictures with your next message"),
     ("resume", "[search]", "switch to another chat"),
-    ("mcp", "", "MCP servers and their tools"),
+    ("mcp", "[list|on NAME|off NAME|test NAME]", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
-    ("tokens", "", "tokens used in this session"),
+    ("usage", "[days]", "usage and cost: this chat and the ledger (/tokens, /cost)"),
+    ("receipt", "", "what the last turn cost and which model ran it"),
+    ("effort", "[low|medium|high|xhigh|off]", "how hard the model thinks, for this chat"),
+    ("fork", "[turn]", "start a new chat from this one, up to a turn"),
+    ("chats", "[search]", "list or search your chats"),
+    ("rename", "TITLE", "rename this chat"),
+    ("delete", "", "delete this chat"),
+    ("project", "[list|use ID|show ID|memory ID ...]", "projects: list, move this chat into one, memory"),
+    ("memory", "[list|add TEXT|forget ID|search Q]", "what Meshpool remembers about you"),
+    ("skills", "[list|show ID|enable ID|disable ID]", "your skills"),
+    ("schedule", "[list|run ID|enable ID|disable ID|delete ID]", "scheduled tasks"),
+    ("settings", "[KEY [VALUE]]", "show or change a setting"),
+    ("checks", "", "what the checks found on the last piece of work"),
+    ("worktree", "[list|diff ID|merge ID|discard ID]", "isolated copies of this folder"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
     ("setup", "", "first-run walkthrough: key, folder, skills"),
     ("exit", "", "quit"),
 ]
-ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "tokens"}
+ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "usage", "tokens": "usage"}
 MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
@@ -135,7 +148,7 @@ class Terminal:
         self._branch_v = ""
         self.model = ""
         self.provider = ""
-        self.effort = os.environ.get("MH_EFFORT") or os.environ.get("MH_REASONING_EFFORT") or ""
+        self.effort = os.environ.get("MH_REASONING_EFFORT") or ""
         self.mode = "ask"
         self.modes = MODES
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -157,7 +170,7 @@ class Terminal:
         return max(20, shutil.get_terminal_size((100, 24)).columns)
 
     def _write(self, s: str, to=None):
-        (to or self.out).write(s)
+        (to or self.out).write(R.safe(s))
         (to or self.out).flush()
 
     def p(self, s="", end="\n", to=None):
@@ -747,7 +760,7 @@ class Terminal:
         lines = []
         while True:
             try:
-                line = input("❯ " if sys.stdin.isatty() and not lines else "")
+                line = input(R.safe("❯ ") if sys.stdin.isatty() and not lines else "")
             except EOFError:
                 return "\n".join(lines).strip() if lines else None
             if line.endswith("\\"):
@@ -1174,13 +1187,11 @@ class Session(SharedCommands):
         EX.trust_project(root)
         t.p(st.green(f"  Trusted {root}: its .meshpool hooks and allow rules now apply."))
 
-    def cmd_tokens(self, arg):
-        u = self.agent.usage
-        pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
-        self.term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
-                    f"{u['out']:,} output tokens.")
-
     def cmd_mcp(self, arg):
+        sub = arg.split(None, 1)
+        if sub and sub[0] in ("list", "on", "off", "test", "enable", "disable", "library"):
+            word = {"on": "enable", "off": "disable"}.get(sub[0], sub[0])
+            return self._cli(["mcp", word] + (sub[1].split() if len(sub) > 1 else []))
         _mcp_status(self.term, self.mcp)
 
     def cmd_init(self, arg):
@@ -1383,7 +1394,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
          json_out: bool = False, mode: str | None = None, agent: str | None = None, project: str | None = None,
          incognito: bool = False, attach: list | None = None, output_last_message: str | None = None,
-         model: str | None = None, worktree_id: str | None = None) -> int:
+         model: str | None = None, worktree_id: str | None = None, effort: str | None = None) -> int:
     """The terminal. A chat is the app's chat (meshpool_harness.chats, the same Session the web page uses): this only
     draws it, answers its questions at the prompt, and reports the outcome. Exit codes: 0 done, 1 failed, 3 done but
     something was not allowed (-p cannot ask)."""
@@ -1415,7 +1426,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
             "plan": True if pm == "plan" else None, "incognito": incognito, "project_id": project or "",
-            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or ""}
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
     elif agent:

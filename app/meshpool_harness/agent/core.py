@@ -974,6 +974,8 @@ class Agent:
         self._trace_lock = threading.Lock()
         self._open_calls: dict = {}                    # tool_start sent, tool_end not yet: id -> name
         self.route = None                      # hrouter.Route: the specialised harness this chat runs as
+        self.effort = ""                       # this chat's reasoning effort (/effort, --effort); "" = the setting
+        self._effort_noted = ""
         self.lane = "task"                     # per message: chat (answer fast, fast model if set), task, deep
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.title = ""
@@ -2390,7 +2392,11 @@ class Agent:
             msgs = _blind_copy(msgs)
         body["messages"] = ST.prepare_messages(msgs)       # reasoning_content only inside the tool loop in progress
         caps = self._caps(model, prof)
-        eff = caps.effort(getattr(self, "lane", "task"), str(prof.get("reasoning_effort") or ""))
+        asked = (self.effort or "").strip().lower()
+        eff = caps.effort(getattr(self, "lane", "task"), asked or str(prof.get("reasoning_effort") or ""))
+        if asked and asked not in ("off", "none", "default") and eff != asked and self._effort_noted != asked + model:
+            self._effort_noted = asked + model            # said once per level and model, and never sent
+            self.emit({"type": "status", "text": f"{model} does not take effort '{asked}'; using its default."})
         if eff and "reasoning_effort" not in body:
             body["reasoning_effort"] = eff            # never the provider's default (high): hidden tokens cost money
         try:

@@ -366,20 +366,6 @@ class SharedCommands:
             self.s.revert(n)
             self._rebind()
 
-    def cmd_rewind(self, arg):
-        """Undo to a turn and put that turn's message back in the box to edit and send again."""
-        if not self._need_shared():
-            return
-        n = self._turn_pick(arg, "Rewind to which turn?")
-        if n is None:
-            return
-        with self.s.lock:
-            users = [e for e in self.s.events if e.get("type") == "user" and not e.get("steer")]
-        text = users[n - 1].get("text", "") if 0 < n <= len(users) else ""
-        self.s.revert(n)
-        self._rebind()
-        self.term.prefill = text
-
     def cmd_grade(self, arg):
         if not self._need_shared():
             return
@@ -432,3 +418,107 @@ class SharedCommands:
         self.front.rebind(new)
         self._rebind()
         t.p(st.dim(f"  Resumed: {new.agent.title or 'chat'} ({len(getattr(new.agent, 'messages', [])) - 1} messages)."))
+
+    # -- the app's features, through the same handlers `meshpool chats|projects|...` use (cli_app) ---------------------
+    def _cli(self, argv: list):
+        from meshpool_harness import cli_app
+        rc, text = cli_app.run_text(argv)
+        st = self.term.st
+        self.term.scroll([""] + [("  " + x) if rc == 0 else "  " + st.amber(x) for x in (text or "(nothing)").splitlines()])
+
+    def cmd_chats(self, arg):
+        self._cli(["chats", "search", arg] if arg else ["chats", "list"])
+
+    def cmd_rename(self, arg):
+        if not self._need_shared():
+            return
+        if not arg:
+            return self.term.p(self.term.st.dim("  /rename NEW TITLE"))
+        self._cli(["chats", "rename", self.s.id, arg])
+
+    def cmd_fork(self, arg):
+        """A new chat from this one, up to a turn (default: all of it); /resume ID goes there."""
+        if not self._need_shared():
+            return
+        self._cli(["chats", "fork", self.s.id] + (["--turn", arg] if arg.isdigit() else []))
+
+    def cmd_delete(self, arg):
+        if not self._need_shared():
+            return
+        t = self.term
+        if t.choose("Delete this chat?", [], ["Keep it", "Delete it"]) != 1:
+            return t.p(t.st.dim("  Kept."))
+        self._cli(["chats", "delete", self.s.id])
+
+    def cmd_receipt(self, arg):
+        if self._need_shared():
+            self._cli(["chats", "receipt", self.s.id])
+
+    def cmd_usage(self, arg):
+        self._cli(["usage"] + (["--days", arg] if arg.isdigit() else []))
+        if getattr(self, "s", None) is not None:
+            self._cli(["chats", "receipt", self.s.id])
+
+    def cmd_project(self, arg):
+        if arg.startswith("use ") and self._need_shared():          # move this chat into a project
+            return self._cli(["chats", "move", self.s.id, arg[4:].strip()])
+        self._cli(["projects"] + (arg.split() if arg else ["list"]))
+
+    def cmd_memory(self, arg):
+        self._cli(["memory"] + (arg.split(None, 1) if arg else ["list"]))
+
+    def cmd_skills(self, arg):
+        self._cli(["skills"] + (arg.split() if arg else ["list"]))
+
+    def cmd_schedule(self, arg):
+        self._cli(["schedule"] + (arg.split() if arg else ["list"]))
+
+    def cmd_settings(self, arg):
+        parts = arg.split(None, 1)
+        if len(parts) == 2:
+            self._cli(["settings", "set", f"{parts[0]}={parts[1]}"])
+        else:
+            self._cli(["settings", "get"] + parts)
+
+    def cmd_checks(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import checks
+        run = f"{self.s.id}:{int(self.s.t_turn)}" if getattr(self.s, "t_turn", None) else ""
+        r = checks.summary(run) if run else {}
+        self.term.p(self.term.st.dim("  " + (str(r.get("line") or r.get("text") or "") or "No checks ran in this chat.")))
+
+    def cmd_worktree(self, arg):
+        import io
+        from meshpool_harness import worktrees as WT
+        buf = io.StringIO()
+        WT.cli(arg.split() or ["list"], out=buf)
+        self.term.scroll([""] + ["  " + x for x in buf.getvalue().rstrip().splitlines()])
+
+    def cmd_effort(self, arg):
+        if not self._need_shared():
+            return
+        from meshpool_harness import chats
+        v = chats.session_action(self.s.id, "effort", {"effort": arg}) if arg else chats.view(self.s.id, 10 ** 9)
+        self.term.effort = v.get("effort") or ""
+        self.term.p(self.term.st.dim(f"  Effort: {v.get('effort') or 'the model default'}. "
+                                     "/effort low|medium|high|xhigh|off sets it for this chat."))
+
+    def cmd_rewind(self, arg):
+        """Back to a turn: the files and the conversation (chat_rewind, the app's Rewind), and that turn's message
+        comes back in the box to edit and send again."""
+        if not self._need_shared():
+            return
+        from meshpool_harness import chat_rewind as CR
+        n = self._turn_pick(arg, "Rewind to which turn?")
+        if n is None:
+            return
+        p = next((x for x in CR.points(self.s.id) if x.get("turn") == n), None)
+        if not p:
+            return self.term.p(self.term.st.dim(f"  No turn {n} in this chat."))
+        r = CR.rewind(self.s.id, p["message_index"], session=self.s)
+        if r.get("forked"):
+            return self.term.p(self.term.st.dim(f"  This agent cannot rewind in place; the earlier state is chat {r['forked']} "
+                                                "(/resume it)."))
+        self._rebind()
+        self.term.prefill = r.get("text", "")
