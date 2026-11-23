@@ -92,24 +92,27 @@ def test_M17_02_removing_a_skill_prunes_the_disabled_list(home):
 
 def test_M17_03_default_install_is_whole_or_absent(home, monkeypatch):
     shutil.rmtree(SK.folder(), ignore_errors=True)
-    real = shutil.copytree
-    calls = []
+    real = shutil.copyfile
+    n = []
 
-    def boom(src, dst, *a, **k):
-        calls.append(dst)
-        real(src, dst, *a, **k)
-        if len(calls) == 2:                           # crash after the folder was copied once
+    def dying_copy(src, dst, *a, **k):
+        n.append(1)
+        if len(n) == 2:                               # the disk goes away in the middle of the install
             raise OSError("disk went away")
-    monkeypatch.setattr(shutil, "copytree", boom)
+        return real(src, dst, *a, **k)
+    monkeypatch.setattr(shutil, "copyfile", dying_copy)
     with pytest.raises(OSError):
         SK.ensure_defaults()
-    monkeypatch.setattr(shutil, "copytree", real)
+    monkeypatch.setattr(shutil, "copyfile", real)
     SK._DEFAULTS_SEEN.clear()
     SK.ensure_defaults()
     shipped = [d.name for d in (C.APP / "defaults" / "skills").iterdir() if d.is_dir()]
     assert shipped
     for n in shipped:
-        assert (SK.folder() / n / "SKILL.md").is_file(), f"{n} is missing or half installed"
+        src = C.APP / "defaults" / "skills" / n
+        want = sorted(str(p.relative_to(src)) for p in src.rglob("*") if p.is_file())
+        have = sorted(str(p.relative_to(SK.folder() / n)) for p in (SK.folder() / n).rglob("*") if p.is_file())
+        assert have == want, f"{n} is missing or half installed"
     assert not [p for p in SK.folder().iterdir() if p.name.startswith(".") and p.is_dir()]
     marker = json.loads((SK.folder() / ".defaults-installed").read_text())
     assert set(shipped) <= set(marker)
