@@ -184,6 +184,42 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | xmhuffman | 0.3.2 | MIT License |
 | xpress8 | 0.1.1 | MIT License |
 | xpress9 | 0.3.9 | MIT License |
+| asttokens | 3.0.2 | Apache 2.0 |
+| beautifulsoup4 | 4.15.0 | MIT License |
+| bleach | 6.4.0 | Apache Software License |
+| comm | 0.2.3 | BSD License |
+| cycler | 0.12.1 | BSD License |
+| ddgs | 9.16.1 | MIT |
+| duckdb | 2.0.1 | MIT License |
+| executing | 2.3.0 | MIT |
+| fastjsonschema | 2.22.3 | BSD-3-Clause |
+| filelock | 4.3.0 | MIT |
+| fsspec | 2026.9.0 | BSD-3-Clause |
+| hf-xet | 1.8.0 | Apache-2.0 |
+| huggingface_hub | 2.4.0 | Apache-2.0 |
+| ipython | 9.19.1 | BSD-3-Clause |
+| ipython_pygments_lexers | 1.1.1 | BSD License |
+| jedi | 0.20.1 | MIT |
+| jupyter_client | 8.10.0 | BSD License |
+| jupyter_core | 5.9.1 | BSD-3-Clause |
+| jupyterlab_pygments | 0.3.0 | BSD License |
+| matplotlib-inline | 0.2.2 | BSD-3-Clause |
+| mistune | 3.4.0 | BSD-3-Clause |
+| nest-asyncio2 | 1.7.4 | BSD |
+| pandocfilters | 1.5.1 | BSD-3-Clause |
+| parso | 0.8.7 | MIT |
+| pexpect | 4.9.0 | ISC license |
+| platformdirs | 4.14.8 | MIT |
+| primp | 2.0.1 | MIT License |
+| pure_eval | 0.2.4 | MIT |
+| pyparsing | 3.3.3 | MIT |
+| pyzmq | 27.3.0 | BSD-3-Clause |
+| ruff | 0.17.6 | MIT |
+| soupsieve | 4.1.3 | MIT |
+| stack-data | 0.6.3 | MIT |
+| tokenizers | 0.23.3 | Apache Software License |
+| tornado | 6.6.1 | Apache-2.0 |
+| traitlets | 5.16.1 | BSD License |
 
 ## Node packages (Pi)
 

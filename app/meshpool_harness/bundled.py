@@ -91,12 +91,11 @@ def use_bundled_tools() -> None:
     cur = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p not in front]
     os.environ["PATH"] = os.pathsep.join(front + cur)
     # The agents' shell finds Meshpool's own Python first on PATH; these name the rest. The speech model is a folder
-    # faster-whisper loads directly, and the model hub client is told never to go online, so a model name that is not
-    # in the app fails at once instead of starting a download.
+    # faster-whisper loads directly (the skill's transcribe.py also tells the model hub client never to go online; that is
+    # not set here, because the agent's shell is also the customer's own and their Hugging Face work must keep working).
     model = whisper_model_dir()
     if model:
         os.environ.setdefault("MESHPOOL_WHISPER_MODEL", str(model))
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
     if sys.executable:
         os.environ.setdefault("MESHPOOL_PYTHON", sys.executable)
 

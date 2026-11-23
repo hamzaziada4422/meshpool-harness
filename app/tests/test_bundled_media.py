@@ -145,7 +145,9 @@ def test_ffmpeg_and_pandoc_are_found_by_name_and_the_model_by_variable(app, monk
     bundled.use_bundled_tools()
     parts = os.environ["PATH"].split(os.pathsep)
     assert str(ff.parent) in parts and str(pd.parent) in parts and parts[-1] == "/usr/bin"
-    assert os.environ["MESHPOOL_WHISPER_MODEL"] == str(model) and os.environ["HF_HUB_OFFLINE"] == "1"
+    assert os.environ["MESHPOOL_WHISPER_MODEL"] == str(model)
+    assert "HF_HUB_OFFLINE" not in os.environ                      # the customer's own Hugging Face work in the shell stays online
+    assert 'os.environ.setdefault("HF_HUB_OFFLINE", "1")' in (SKILLS / "transcribe-audio" / "transcribe.py").read_text()
     assert os.environ["MESHPOOL_PYTHON"]
 
 
@@ -154,7 +156,7 @@ def test_a_source_checkout_leaves_ffmpeg_alone(app, monkeypatch):
     _exe(app / "vendor" / "ffmpeg" / "ffmpeg")
     monkeypatch.setenv("PATH", "/usr/bin")
     bundled.use_bundled_tools()
-    assert os.environ["PATH"] == "/usr/bin" and "HF_HUB_OFFLINE" not in os.environ
+    assert os.environ["PATH"] == "/usr/bin"
 
 
 def test_apple_silicon_ffmpeg_says_it_needs_macos_12_and_stays_off_path(app, monkeypatch):
@@ -237,6 +239,7 @@ def test_the_skills_that_used_to_install_things_now_name_what_ships():
          ("transcribe-audio", "convert-files", "pdf-tools", "image-tools", "notebooks", "query-database", "make-chart")}
     assert "transcribe.py" in t["transcribe-audio"] and "never leaves it" in t["transcribe-audio"]
     assert "not available" in t["transcribe-audio"] and "text transcript" in t["transcribe-audio"]
+    assert "bash_start" in t["transcribe-audio"] and "Do not cd" in t["transcribe-audio"]
     assert "`pandoc`" in t["convert-files"] and "`ffmpeg`" in t["convert-files"] and "macOS 12" in t["convert-files"]
     assert "Ghostscript" not in t["pdf-tools"] and "pypdf" in t["pdf-tools"]
     assert "register_heif_opener" in t["image-tools"]

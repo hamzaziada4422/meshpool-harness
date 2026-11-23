@@ -33,6 +33,7 @@ def main() -> int:
         print("Speech to text is not available here: the speech model is not set up (MESHPOOL_WHISPER_MODEL). "
               "The Meshpool desktop app includes it. Ask the user for a text transcript instead.", file=sys.stderr)
         return 3
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")        # the model is a local folder: never let anything start a download
     try:
         from faster_whisper import WhisperModel
     except ImportError as e:
