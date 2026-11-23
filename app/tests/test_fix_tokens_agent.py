@@ -121,3 +121,21 @@ def test_anthropic_cache_markers_can_be_turned_off(monkeypatch):
     out = AW.to_request({"model": "m", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
                          "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}]})
     assert "cache_control" not in json.dumps(out)
+
+
+def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_path):
+    a = _agent(tmp_path)
+    a.ws.root  # noqa: B018
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "same output"
+    g = {}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    outs = [a._repeat_guard(call, g) for _ in range(6)]
+    assert len(runs) == 3 and all("Not run" in o for o in outs[3:])
+    # a different call in between resets the chain, so a rerun after an edit is never refused
+    g = {}
+    other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
+    for _ in range(5):
+        a._repeat_guard(call, g)
+        a._repeat_guard(other, g)
+    assert len(runs) == 3 + 10

@@ -1470,7 +1470,7 @@ class Agent:
             if any(e["p"].poll() is None for e in list(bg.values())) or not self._inspection(name, args):
                 # a background command is running (its output changes with no edit), or the call is not a read-only
                 # look: a flaky check or an MCP call can rightly repeat with no edit
-                return self._run_tool(c, cut=cut)
+                return self._repeat_guard(c, g, cut)
             exact = name + ":" + args[:2000]
             # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
             # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
@@ -1491,7 +1491,25 @@ class Agent:
                 book.setdefault(key, []).append(edits)
         except Exception:  # noqa: BLE001 - the guard must never break a turn
             pass
-        return self._run_tool(c, cut=cut)
+        return self._repeat_guard(c, g, cut)
+
+    def _repeat_guard(self, c: dict, g: dict, cut: bool = False) -> str:
+        """Run a tool call, unless the same call (same name and arguments) has just run three times in a row with
+        the same result: a fourth time cannot tell the model anything new. One such loop (a command run 50 times)
+        cost more than ten ordinary tasks."""
+        f = c.get("function", {})
+        key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
+        runs = g.setdefault("same", [])
+        if len(runs) >= 3 and all(r[0] == key for r in runs[-3:]) and len({r[1] for r in runs[-3:]}) == 1:
+            g["refused"] = g.get("refused", 0) + 1
+            return ("[Meshpool] Not run: this exact call has run three times in a row with the same result. Running it "
+                    "again changes nothing. Change the command or the files first, or finish and tell the user what "
+                    "is blocking you.")
+        out = self._run_tool(c, cut=cut)
+        import hashlib
+        runs.append((key, hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()))
+        del runs[:-6]
+        return out
 
     @staticmethod
     def _inspection(name: str, args: str) -> bool:

@@ -1,0 +1,37 @@
+{
+ "_doc": "Scripted tasks replayed by small_offline.py: the fake server answers steps 1-5 with a shell call and step 6 with the final text, so only the prompt, tool schema and growing context are measured.",
+ "steps": [
+  "ls -la",
+  "cat notes.txt",
+  "head -n 20 notes.txt",
+  "grep -n alpha notes.txt",
+  "wc -l notes.txt"
+ ],
+ "final": "Done. The change is made and the check passes; notes.txt has 30 lines.",
+ "files": {
+  "notes.txt": "line 01: alpha beta gamma delta 7 epsilon zeta eta theta\nline 02: alpha beta gamma delta 1 epsilon zeta eta theta\nline 03: alpha beta gamma delta 8 epsilon zeta eta theta\nline 04: alpha beta gamma delta 2 epsilon zeta eta theta\nline 05: alpha beta gamma delta 9 epsilon zeta eta theta\nline 06: alpha beta gamma delta 3 epsilon zeta eta theta\nline 07: alpha beta gamma delta 10 epsilon zeta eta theta\nline 08: alpha beta gamma delta 4 epsilon zeta eta theta\nline 09: alpha beta gamma delta 11 epsilon zeta eta theta\nline 10: alpha beta gamma delta 5 epsilon zeta eta theta\nline 11: alpha beta gamma delta 12 epsilon zeta eta theta\nline 12: alpha beta gamma delta 6 epsilon zeta eta theta\nline 13: alpha beta gamma delta 0 epsilon zeta eta theta\nline 14: alpha beta gamma delta 7 epsilon zeta eta theta\nline 15: alpha beta gamma delta 1 epsilon zeta eta theta\nline 16: alpha beta gamma delta 8 epsilon zeta eta theta\nline 17: alpha beta gamma delta 2 epsilon zeta eta theta\nline 18: alpha beta gamma delta 9 epsilon zeta eta theta\nline 19: alpha beta gamma delta 3 epsilon zeta eta theta\nline 20: alpha beta gamma delta 10 epsilon zeta eta theta\nline 21: alpha beta gamma delta 4 epsilon zeta eta theta\nline 22: alpha beta gamma delta 11 epsilon zeta eta theta\nline 23: alpha beta gamma delta 5 epsilon zeta eta theta\nline 24: alpha beta gamma delta 12 epsilon zeta eta theta\nline 25: alpha beta gamma delta 6 epsilon zeta eta theta\nline 26: alpha beta gamma delta 0 epsilon zeta eta theta\nline 27: alpha beta gamma delta 7 epsilon zeta eta theta\nline 28: alpha beta gamma delta 1 epsilon zeta eta theta\nline 29: alpha beta gamma delta 8 epsilon zeta eta theta\nline 30: alpha beta gamma delta 2 epsilon zeta eta theta\n",
+  "a.py": "def parse(line):\n    parts = line.split(',')\n    return parts[:-1]\n",
+  "sales.csv": "region,units,price\nR1,4,16.5\nR2,7,27.5\nR3,10,15.5\nR0,13,26.5\nR1,16,14.5\nR2,2,25.5\nR3,5,13.5\nR0,8,24.5\nR1,11,12.5\nR2,14,23.5\nR3,17,11.5\nR0,3,22.5\nR1,6,10.5\nR2,9,21.5\nR3,12,9.5\nR0,15,20.5\nR1,1,8.5\nR2,4,19.5\nR3,7,7.5\nR0,10,18.5\nR1,13,6.5\nR2,16,17.5\nR3,2,5.5\nR0,5,16.5\n"
+ },
+ "lanes": {
+  "code": {
+   "engine": "agent",
+   "prompt": "Fix parse() in a.py: it drops the last field. Check it and tell me when it works."
+  },
+  "work": {
+   "engine": "agent-work",
+   "prompt": "Write a one-page Word document that summarizes the plan in notes.txt for the team."
+  },
+  "chat": {
+   "engine": "agent-work",
+   "prompt": "What is a mutex? Explain it in two sentences."
+  },
+  "data": {
+   "engine": "agent-work",
+   "prompt": "Analyze sales.csv: total units per region and which rows look like outliers."
+  }
+ },
+ "codex": {
+  "prompt": "Fix parse() in a.py: it drops the last field. Check it and tell me when it works."
+ }
+}
