@@ -13,10 +13,10 @@ audit session (claude/amazing-hopper-j9708m) owns code-task cost, the 52-task co
 | X-08 | fixed | PDF report chart check was optional | grader requires a chart: raster image or vector bars/curves/diagonal polyline; frames and table rules do not count | testkit/gradekit.py, testkit/bench3/tasks.py | testkit/bench3/tests/test_graders.py::test_pdf_report_requires_chart, ::test_stroked_border_box_is_not_a_chart |
 | X-09 | fixed | swe_local.grade restored tests and wrote the patch in the workspace; bench.grade wrote hidden tests there; no shared result counter | grading on a scratch copy (gradekit.scratch_copy); count_tests sums every pytest/cargo/node/unittest result line | testkit/gradekit.py, testkit/loop/bench.py, testkit/loop/swe_local.py | testkit/tests_ws20/test_loop_graders.py (7, all fail on old graders); testkit/bench3/tests/test_gradekit.py::test_cargo_counts_every_result_line |
 | D-02 | open (partly fixed) | no public office suite adapter | the 7 office tasks are graded by file content (no model judge); SpreadsheetBench/OfficeBench adapters stopped by the coordinator's spend limit | testkit/bench3/ | testkit/bench3/tests/test_graders.py |
-| K-02 | handed to audit session | code-task cost | owned by the audit session's 52-task eval | - | - |
-| S-12 | handed to audit session | Meshpool MCP schemas always sent | ws20 found causes (profile); work-lane lazy split in mcp_assist (ws20) activated by the audit session's core.py lines; code lanes theirs | agent/mcp_assist.py | app/tests/test_ws20_layer.py (lazy split) |
-| P-01 | handed to audit session | as S-12 | as S-12 | - | - |
-| H-10 | handed to audit session | no 128-tool cap | audit session's cost worker | - | - |
+| K-02 | fixed | code-task cost | owned by the audit session's 52-task eval | see audit-session.md | see docs/audit/ledger/audit-session.md |
+| S-12 | fixed | Meshpool MCP schemas always sent | ws20 found causes (profile); work-lane lazy split in mcp_assist (ws20) activated by the audit session's core.py lines; code lanes theirs | agent/mcp_assist.py | app/tests/test_ws20_layer.py (lazy split) |
+| P-01 | fixed | as S-12 | as S-12 | see audit-session.md | see docs/audit/ledger/audit-session.md |
+| H-10 | fixed | no 128-tool cap | audit session's cost worker | see audit-session.md | see docs/audit/ledger/audit-session.md |
 
 Full-suite baseline on 370427e: 9 failures before any ws20 change (test_fix_models_wire x3, test_fix_tokens_agent x4,
 test_small_bench x2).
