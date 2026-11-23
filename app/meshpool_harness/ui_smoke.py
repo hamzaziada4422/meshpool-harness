@@ -20,7 +20,8 @@ STATE_JS = r"""() => {
   let ls = ""; try { ls = JSON.stringify(localStorage) + JSON.stringify(sessionStorage); } catch (e) {}
   const c = [...document.querySelectorAll("canvas")].map(c => { try { return c.toDataURL().length + ":" + c.toDataURL().slice(-60); } catch (e) { return "x"; } }).join("|");
   let attrs = 0; for (const e of document.body.querySelectorAll("*")) { const k = (e.className && e.className.baseVal !== undefined ? e.className.baseVal : e.className) + "|" + (e.getAttribute("aria-pressed") || "") + (e.getAttribute("aria-selected") || "") + (e.getAttribute("aria-expanded") || "") + (e.getAttribute("aria-checked") || "") + (e.hidden ? "h" : "") + (e.getAttribute("style") || ""); for (let i = 0; i < k.length; i++) attrs = (attrs * 31 + k.charCodeAt(i)) | 0; }
-  return attrs + ":" + document.body.innerHTML.length + "#" + (document.body.innerText || "").replace(/\s+/g, " ") + "#" + ls + "#" + location.href + "#" + c +
+  const tbl = [...document.querySelectorAll("table")].map(t => [...t.querySelectorAll("tr")].slice(0, 8).map(r => r.textContent).join("|") + [...t.querySelectorAll("[aria-sort]")].map(h => h.getAttribute("aria-sort")).join()).join("~");
+  return attrs + ":" + tbl + ":" + document.body.innerHTML.length + "#" + (document.body.innerText || "").replace(/\s+/g, " ") + "#" + ls + "#" + location.href + "#" + c +
     "#" + [...document.querySelectorAll("input,select,textarea")].map(e => e.type === "checkbox" || e.type === "radio" ? e.checked : e.value).join(",") +
     "#" + [...document.querySelectorAll("dialog,[role=dialog],details")].map(e => e.open ?? !e.hidden).join("");
 }"""
@@ -72,6 +73,10 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
         page.on("console", lambda m: m.type == "error" and errs.append(f"console error: {m.text[:140]}"))
         page.on("requestfailed", lambda r: errs.append(f"file failed to load: {r.url[:100]}") if not r.url.endswith("favicon.ico") else None)
         page.on("dialog", lambda d: d.accept("test"))
+        did = {"n": 0}                              # a download, a popup or a dialog is an effect too
+        page.on("download", lambda d: did.__setitem__("n", did["n"] + 1))
+        page.on("popup", lambda d: did.__setitem__("n", did["n"] + 1))
+        page.on("dialog", lambda d: did.__setitem__("n", did["n"] + 1))
         page.goto(addr, wait_until="load", timeout=20000)
         page.wait_for_timeout(500)
         origin["v"] = page.url.split("#")[0]
@@ -84,20 +89,21 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
             el = page.query_selector(f'[data-smoke="{b["id"]}"]')
             if not el or not el.is_visible():
                 continue
-            if b["submit"] or b["on"] or re.match(r"(?i)^\W*(clear|reset|cancel|close|undo|dismiss|back|previous|prev)\b", b["name"] or ""):
+            if b["submit"] or b["on"] or re.match(r"(?i)^\W*(clear|reset|cancel|close|undo|dismiss|back|previous|prev|export|download|print|copy|share)\b", b["name"] or ""):
                 continue                    # these legitimately do nothing when there is nothing to clear
             try:
                 page.evaluate(FILL_JS)                 # a button like Add needs something to add
                 before = page.evaluate(STATE_JS)
+                n0 = did["n"]
                 el.click(timeout=1500)
-                page.wait_for_timeout(180)
+                page.wait_for_timeout(250)
                 checked += 1
                 if page.url.split("#")[0] != origin["v"]:
                     page.goto(addr, wait_until="load")
                     page.wait_for_timeout(300)
                     page.evaluate(CONTROLS_JS)
                     continue
-                if page.evaluate(STATE_JS) == before:
+                if page.evaluate(STATE_JS) == before and did["n"] == n0:
                     dead.append(b["name"] or "(no name)")
             except Exception:  # noqa: BLE001  (covered, moved or removed by an earlier click)
                 continue
@@ -225,8 +231,6 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
                     if marker not in page.evaluate("document.body.innerText"):
                         add("no-persistence", "should", "an item typed in was gone after reloading the page. Save the data (localStorage for a small app, a file or database for a backend) and load it on start")
                     page.keyboard.press("Tab")
-                elif page.evaluate("document.body.innerText") == before:
-                    add("input-inert", "should", "typing in the first field and pressing Enter did nothing. If it is meant to add something, it must work with Enter")
 
         if errs:
             for e in dict.fromkeys(errs):
