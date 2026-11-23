@@ -1250,6 +1250,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
+                "worktree": meta.get("worktree") or None,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1332,13 +1333,23 @@ def create(body: dict) -> dict:
             plan = SV2.profile()["plan_first"]
         except Exception:  # noqa: BLE001
             plan = False
+    wt, made_wt = _chat_worktree(body, wd, kind, scratch, task)
+    if wt:
+        wd = wt["workdir"]                          # the chat works in its own isolated copy of the folder
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
                     kind=kind, model=model, plan=bool(plan))
     except BaseException:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
+        if made_wt:
+            from meshpool_harness import worktrees as WT
+            WT.discard(wt["id"])
         raise
+    if wt:
+        from meshpool_harness import worktrees as WT
+        WT.set_owner(wt["id"], "chat", s.id)
+        write_meta(s.id, worktree=WT.summary(wt))
     if hr is not None:
         try:
             from meshpool_harness.hrouter.route import addon
@@ -1383,10 +1394,40 @@ def create(body: dict) -> dict:
     if not scratch and not pid:
         try:
             from meshpool_harness.ui import workbench as W
-            W.add_project(s.workdir)
+            W.add_project(wt["source"] if wt else s.workdir)
         except Exception:  # noqa: BLE001
             pass
     return s.view(0)
+
+
+def _chat_worktree(body: dict, wd: str, kind: str, scratch: bool, task: str) -> tuple:
+    """(record, made here) of the isolated copy a new chat works in, or (None, False). ``worktree_id``: a copy made
+    for it already (a scheduled run); ``worktree: true``: a Code chat asked for one ("Work in an isolated copy")."""
+    from meshpool_harness import worktrees as WT
+    if body.get("worktree_id"):
+        return WT.get(str(body["worktree_id"])), False
+    if body.get("worktree") and not scratch and wd:
+        if kind != "code":
+            raise ValueError("Isolated copies are for Code chats.")
+        return WT.create(wd, owner_kind="chat", title=(task or "").strip()[:80]), True
+    return None, False
+
+
+def worktree_users(folder: str, exclude: str = "") -> list:
+    """Open chats that work directly in ``folder`` (not in an isolated copy of it): a new chat there is offered one."""
+    from meshpool_harness import worktrees as WT
+    want = WT._norm(folder)
+    with LOCK:
+        live = list(LIVE.values())
+    out = []
+    for s in live:
+        if s.id == exclude or getattr(s, "deleted", False) or not s.workdir:
+            continue
+        m = read_meta(s.id)
+        if WT._norm(s.workdir) == want and not m.get("worktree"):
+            out.append({"id": s.id, "title": m.get("title") or nice_title(s.agent.title or "New chat"),
+                        "state": s.state})
+    return out
 
 
 def _short_harness(name: str) -> str:
@@ -1516,6 +1557,9 @@ def _decorate(r: dict, m: dict, legacy: dict, live_pids: set) -> dict:
     r["_m"] = m                                   # kept for the cached rows: projects are re-resolved on every call
     r["scratch"] = bool(m.get("scratch"))
     r["kind"] = m.get("kind") or r.get("kind") or "code"
+    if m.get("worktree"):                         # a chat in an isolated copy is listed under the folder it came from
+        r["worktree"] = m["worktree"].get("id")
+        r["workdir"] = m["worktree"].get("source") or r.get("workdir")
     return r
 
 
@@ -1652,6 +1696,11 @@ def thread_action(sid: str, body: dict) -> dict:
         if scratch_dir:                               # the chat's private folder goes with it
             from meshpool_harness import project_store as PS
             PS.remove_scratch(scratch_dir)
+        try:                                          # and its isolated copy (unmerged work stays on its branch)
+            from meshpool_harness import worktrees as WT
+            WT.prune_owner("chat", sid)
+        except Exception:  # noqa: BLE001
+            pass
     else:
         raise ValueError("Unknown chat action.")
     return {"ok": True}
@@ -1792,8 +1841,16 @@ def run_scheduled(t: dict) -> str:
     folder = t.get("folder") or ""
     if folder and not Path(folder).expanduser().is_dir():
         raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
-    v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
+    rf = AS.run_folder(t)                       # a repository: the run gets its own isolated copy
+    try:
+        v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                    "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
+                    "worktree_id": rf.get("worktree_id") or None})
+    except BaseException:
+        if rf.get("worktree_id"):
+            from meshpool_harness import worktrees as WT
+            WT.discard(rf["worktree_id"])
+        raise
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
@@ -1801,6 +1858,21 @@ def run_scheduled(t: dict) -> str:
                           "which ones you made, and finish with a short summary.)"))
     AS.set_thread(t["id"], s.id)
     return s.id
+
+
+def recover_worktrees():
+    """At app start: remove isolated copies whose creation never finished, whose chat was deleted, or whose
+    sub-agent's process is gone. Copies of chats that still exist are kept."""
+    try:
+        from meshpool_harness import worktrees as WT
+
+        def alive(kind, oid, rec):
+            if kind == "chat":                      # no id yet: a chat being made right now
+                return exists(oid) if oid else time.time() - float(rec.get("created") or 0) < 600
+            return WT._default_alive(kind, oid, rec)
+        return WT.recover(alive)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def probe_mcp():

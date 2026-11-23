@@ -38,7 +38,7 @@ IDENT = {"GIT_AUTHOR_NAME": "Meshpool", "GIT_AUTHOR_EMAIL": "meshpool@localhost"
          "GIT_COMMITTER_NAME": "Meshpool", "GIT_COMMITTER_EMAIL": "meshpool@localhost"}
 
 
-class WorktreeError(Exception):
+class WorktreeError(ValueError):
     """An isolated copy could not be made, found or changed. The message is for the user."""
 
 
@@ -278,7 +278,7 @@ def _after_add(rec: dict) -> None:
 
 
 def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = "", base: str = "head",
-           mode: str | None = None) -> dict:
+           mode: str | None = None, max_bytes: int = MAX_COPY_BYTES) -> dict:
     """Make an isolated copy of ``source``. ``base="head"``: from the folder's HEAD (uncommitted changes stay in the
     folder); ``base="worktree"``: from its working tree as it is now, unsaved edits included (sub-agents).
     Returns the record; work in ``rec["workdir"]``."""
@@ -307,7 +307,7 @@ def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = 
             if top:
                 _create_git(rec, top, src, base)
             else:
-                _create_copy(rec, src)
+                _create_copy(rec, src, max_bytes)
             _after_add(rec)
             rec["state"] = "ready"
             _put(rec)
@@ -358,21 +358,23 @@ def _walk(base) -> dict:
 
 
 def _copy_files(files: dict, dst: Path) -> None:
+    Path(_long(dst)).mkdir(parents=True, exist_ok=True)    # an empty folder still gets its (empty) copy
     for rel, full in files.items():
         t = Path(_long(dst / rel))
         t.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(full, t)
 
 
-def _create_copy(rec: dict, src: Path) -> None:
+def _create_copy(rec: dict, src: Path, max_bytes: int = MAX_COPY_BYTES) -> None:
     from meshpool_harness.checkpoints import MAX_FILES
     files = _walk(src)
     if len(files) > MAX_FILES:
         raise WorktreeError(f"This folder has more than {MAX_FILES} files: too big for an isolated copy without git. "
                             "Make it a git repository (git init, then commit) to work in an isolated copy.")
     size = sum(os.path.getsize(f) for f in files.values())
-    if size > MAX_COPY_BYTES:
-        raise WorktreeError("This folder is over 500 MB: too big for an isolated copy without git.")
+    if size > max_bytes:
+        raise WorktreeError(f"This folder is over {max_bytes // (1024 * 1024)} MB: too big for an isolated copy "
+                            "without git.")
     p = Path(rec["path"])
     _copy_files(files, p / "work")
     _copy_files(files, p / "base")

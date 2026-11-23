@@ -858,3 +858,21 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     head = f"{len(rows)} parts finished." if not halted["why"] else \
         f"{len(rows)} parts; the sub-agents were stopped by {halted['why']}, so some parts are incomplete."
     return head + "\n\n" + "\n\n".join(res)
+
+
+def run_folder(t: dict) -> dict:
+    """The folder a scheduled run works in: {"workdir", "worktree_id"}. A task on a git repository gets its own
+    isolated copy (a worktree off the folder's HEAD) unless it says ``worktree: false``, so a run never edits the
+    folder under an open chat or a previous run; the run's chat shows the changes with Merge and Discard."""
+    folder = t.get("folder") or ""
+    plain = {"workdir": folder, "worktree_id": ""}
+    if not folder or t.get("worktree") is False or not Path(folder).expanduser().is_dir():
+        return plain
+    from meshpool_harness import worktrees as WT
+    if not WT.is_git(folder):
+        return plain
+    try:
+        rec = WT.create(folder, owner_kind="schedule", owner_id=str(t.get("id") or ""), title=t.get("name") or "")
+    except (WT.WorktreeError, OSError, TimeoutError):
+        return plain
+    return {"workdir": rec["workdir"], "worktree_id": rec["id"]}
