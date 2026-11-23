@@ -35,6 +35,11 @@ def _say(text):
 def home(monkeypatch, tmp_path):
     monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-key-123456")
     monkeypatch.setenv("MH_RUNS_DIR", str(tmp_path / "runs"))
+    sessions = tmp_path / "runs" / "sessions"                 # SESSIONS is fixed at import: point every holder here
+    from meshpool_harness.agent import core as _core
+    monkeypatch.setattr(_core, "SESSIONS", sessions)
+    monkeypatch.setattr(A, "SESSIONS", sessions)
+    monkeypatch.setattr(chats, "SESSIONS", sessions)
     monkeypatch.delenv("MESHPOOL_FRONTEND", raising=False)
     monkeypatch.delenv("MH_PERMISSION_MODE", raising=False)
     monkeypatch.delenv("MH_AGENT_PROFILE", raising=False)
@@ -89,8 +94,7 @@ def test_cli_chat_is_an_app_chat(monkeypatch, proj, capfd):
     assert row["kind"] == "code" and row["workdir"] == str(proj.resolve())
     meta = chats.read_meta(sid)
     assert meta["kind"] == "code" and meta["mode"] == "ask"
-    tr = json.loads((chats.SESSIONS / sid / "transcript.json").read_text())
-    kinds = [e["type"] for e in tr["events"]]
+    kinds = [e["type"] for e in chats.view(sid, 0)["events"]]   # read through the store (transcript.jsonl)
     assert "user" in kinds and "assistant" in kinds and "turn_end" in kinds
     A.LIVE.clear()                                          # the app opens it fresh from disk
     evs = chats.view(sid, 0)["events"]
