@@ -18,7 +18,7 @@ from meshpool_harness.agent import brand as B
 
 # ---------- colors -------------------------------------------------------------------------------------------------
 FILL = (38, 94, 23)            # tool block fill (#265e17)
-POOL = B.POOL                  # MeshPool blue (#1670E8)
+POOL = B.POOL                  # Meshpool blue (#1670E8)
 SKY = B.SKY                    # lighter blue, readable on a dark terminal (#5EA8FF)
 CODE = (198, 120, 221)         # inline code (#c678dd)
 CMD = (140, 190, 255)          # /commands
@@ -285,6 +285,15 @@ def collapse(lines: list[str], limit: int) -> tuple[list[str], int]:
     return lines, 0
 
 
+def guard(fn, st: Style, *a, **k):
+    """OSS-12: a renderer that throws must not end the session: show a small placeholder instead."""
+    try:
+        return fn(*a, **k)
+    except Exception:  # noqa: BLE001
+        msg = ["  " + st.dim("Could not show this item.")]
+        return (msg, 0) if fn is shell_block else msg
+
+
 def shell_block(command: str, output: str, took: float | None, st: Style, width: int, meta: str = "",
                 limit: int = 10, ok: bool = True) -> tuple[list[str], int]:
     """A shell call as a full-width block: bold `$ command` (with dim metadata at the end of the last line), a blank
@@ -381,7 +390,7 @@ def tool_line(name: str, summary: str, output: str, ok: bool, took: float | None
 # ---------- screen furniture ---------------------------------------------------------------------------------------
 
 def logo(depth: int) -> list[str]:
-    """The MeshPool mark in three terminal rows (six pixel rows, 11 columns): the blue ribbon M of brand/mark.png,
+    """The Meshpool mark in three terminal rows (six pixel rows, 11 columns): the blue ribbon M of brand/mark.png,
     sampled down and drawn with half blocks."""
     src = B.MARK
     cols, prow = 11, 6
@@ -419,7 +428,7 @@ def logo(depth: int) -> list[str]:
 
 def header(st: Style, width: int, version: str, model: str, provider: str, cwd: str) -> list[str]:
     """Mark on the left, three lines of text beside it: name and version, model and provider, folder."""
-    text = [st.bold("MeshPool") + " " + st.dim("v" + version), st.dim(f"{model} · {provider}"), st.dim(cwd)]
+    text = [st.bold("Meshpool") + " " + st.dim("v" + version), st.dim(f"{model} · {provider}"), st.dim(cwd)]
     if width < 40:
         return [clip(t, width) for t in text]
     mark = logo(st.depth)

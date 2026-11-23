@@ -1797,8 +1797,8 @@ def worktree_users(folder: str, exclude: str = "") -> list:
 
 
 def _short_harness(name: str) -> str:
-    """'Meshpool Work' and 'Meshpool Code' read as MeshPool; Codex, Pi, OpenCode and Hermes keep their names."""
-    return "MeshPool" if str(name).lower().startswith("meshpool") else str(name)
+    """'Meshpool Work' and 'Meshpool Code' read as Meshpool; Codex, Pi, OpenCode and Hermes keep their names."""
+    return "Meshpool" if str(name).lower().startswith("meshpool") else str(name)
 
 
 _REAPER: list = []
@@ -2395,14 +2395,22 @@ def mcp_test(body: dict) -> dict:
 
 
 def close_all():
-    with LOCK:
-        for s in LIVE.values():
-            s.close()
-    try:
+    try:                                          # M26-01: first, and whatever a chat's close() does: no command outlives the app
         from meshpool_harness.ui import workbench as W
         W.term_stop_all()
     except Exception:  # noqa: BLE001
         pass
+    try:
+        from engines.forge.common import kill_all_soffice      # P-04: nor a LibreOffice preview run
+        kill_all_soffice()
+    except Exception:  # noqa: BLE001
+        pass
+    with LOCK:
+        for s in list(LIVE.values()):
+            try:
+                s.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _notify(title: str, body: str):

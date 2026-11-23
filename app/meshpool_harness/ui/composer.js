@@ -79,7 +79,7 @@ function styleMenu(anchor) {
 // The default for new chats is kept on this computer; a chat keeps the harness it started with.
 const modeHarness = () => store("harness_default") || "meshpool-auto";
 const harnessChoices = () => S.harnesses.filter(h => !h.error && h.available !== false && h.id !== "meshpool-auto");
-function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "MeshPool" : harness(c).name); }
+function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "Meshpool" : harness(c).name); }
 function pickHarness(id) {
   if (S.cur) { if (id === S.cur.view.harness?.id || (id === "meshpool-auto" && S.cur.auto)) return; toast("An agent can’t change mid-chat, so this started a new chat with " + (id === "meshpool-auto" ? "Auto" : harness(id).name) + "."); newThread(); }
   S.draft.harness = id; renderBar(); renderHero();
@@ -113,7 +113,7 @@ function modelMenu(anchor) {
     {head: S.cur ? "Model · this chat" : "Model · new chats"},
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
-    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "MeshPool") : harnessShort(), sub: harnessMenuItems()},
+    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "Meshpool") : harnessShort(), sub: harnessMenuItems()},
     {label: "Effort", note: "Auto", sub: [{head: "Effort"}, {label: "Auto", desc: "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps.", checked: true, fn: () => {}}]},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
   ], {cls: "modelmenu", up: true});

@@ -130,7 +130,7 @@ def scheduled() -> dict:
 
 
 def account() -> dict:
-    """What the account menu and the sidebar footer show. MeshPool keeps no remote profile: the name is the one in
+    """What the account menu and the sidebar footer show. Meshpool keeps no remote profile: the name is the one in
     Settings, the plan is the state of the key, and 'this computer' is the one device."""
     p = SV.profile()
     name = (p["address"] or p["name"]).strip()
@@ -139,8 +139,8 @@ def account() -> dict:
     rows = A.listing()
     code = [r for r in rows if is_code_session(r) and not r.get("archived")]
     return {"name": name, "first_name": first, "initial": (first or "M")[:1].upper(), "full_name": p["name"],
-            "plan": "MeshPool key" if key else "No key yet", "key_set": key,
-            "email": "Signed in with a MeshPool key" if key else "Not signed in",
+            "plan": "Meshpool key" if key else "No key yet", "key_set": key,
+            "email": "Signed in with a Meshpool key" if key else "Not signed in",
             "device": {"name": platform.node() or "This computer", "connected": True, "os": platform.system()},
             "billing_url": SV.BILLING_URL, "keys_url": SV.BILLING_URL,
             "code_waiting": len([r for r in code if r.get("state") == "waiting"]),

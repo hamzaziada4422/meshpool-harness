@@ -60,7 +60,7 @@ function shell() {
         <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs" role="tablist"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
@@ -488,7 +488,7 @@ function renderTop() {
     ${folderChat ? `<button class="chip" id="projChip" data-tip="${esc(isMgd(root) ? projName(root) : root)}" data-tip-pos="below">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${v && curMode() !== "cowork" && !v.scratch ? (S.branchHTML || {})[root] || "" : ""}</span>
     <span class="sp"></span>
-    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
+    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-label="${open ? "Hide" : "Show"} progress" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" aria-label="Export chat" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
@@ -604,7 +604,17 @@ function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.
   const FOC = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
   const top = () => { const all = document.querySelectorAll("body > .scrim"); return all[all.length - 1] || null; };
   const openers = new WeakMap();
+  // B9: while a modal is open the page behind it is inert: no focus, no clicks, hidden from screen readers.
+  const syncInert = () => {
+    const app = document.getElementById("app"); if (!app) return;
+    const modal = top();
+    if (modal) {
+      app.inert = true;
+      if (!modal.contains(document.activeElement)) { const t = modal.querySelector('[autofocus],.modal,[role=dialog]'); if (t) { if (!t.hasAttribute("tabindex") && !/^(BUTTON|INPUT|A)$/.test(t.tagName)) t.setAttribute("tabindex", "-1"); t.focus?.({preventScroll: true}); } }
+    } else app.inert = false;
+  };
   new MutationObserver(ms => {
+    syncInert();
     for (const m of ms) {
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) openers.set(n, m.target === document.body ? lastFocus : null);
       for (const n of m.removedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) { const o = openers.get(n); if (o && o.isConnected && !top()) setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) o.focus?.({preventScroll: true}); }, 0); }

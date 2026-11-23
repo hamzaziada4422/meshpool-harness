@@ -1,4 +1,4 @@
-"""Terminal screenshots of the MeshPool CLI (CLI v2): the startup screen and a working session, drawn from scripted
+"""Terminal screenshots of the Meshpool CLI (CLI v2): the startup screen and a working session, drawn from scripted
 events (no model calls) into the testkit terminal emulator, then to HTML, then to PNG with Playwright.
 
   python testkit/cli_v2_shots.py OUT_DIR       writes OUT_DIR/cli-v2-startup.png and cli-v2-session.png
@@ -34,7 +34,7 @@ def make_terminal(width: int = COLS, depth: int = 24, **kw) -> tuple[T.Terminal,
     out = FakeTTY()
     clk = [0.0]
     t = T.Terminal(out=out, width=width, depth=depth, interactive=True, clock=lambda: clk[0], **kw)
-    t.version, t.model, t.provider = "0.0.7", "deepseek-v4.1-flash", "MeshPool API"
+    t.version, t.model, t.provider = "0.0.7", "deepseek-v4.1-flash", "Meshpool API"
     t.cwd = t.cwd_label = "~/projects/demo"
     t.branch = "main"
     t.mode = "auto"
@@ -56,7 +56,7 @@ def idle(t: T.Terminal, out: io.StringIO, *keys, cols: int = COLS) -> vt.Screen:
 
 def startup_scene(width: int = COLS, depth: int = 24, notices: bool = True):
     t, out, _ = make_terminal(width, depth)
-    t.notices = ["MeshPool v0.0.8 is out with faster searches. Switch models with /model.",
+    t.notices = ["Meshpool v0.0.8 is out with faster searches. Switch models with /model.",
                  "Connect Notion, Gmail or Slack with /connect."] if notices else []
     t.status_fn = lambda: [("err", "Not logged in"), ("err", "Run /login"), ("ok", "✔ Update installed"),
                            ("ok", "Restart to update")]

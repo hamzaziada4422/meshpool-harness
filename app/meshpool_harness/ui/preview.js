@@ -1,5 +1,5 @@
 /* In-app previews: the viewer pane beside the chat, the file cards under a reply, and the Preview button on code blocks.
-   Server side: ui/previews.py (GET /api/preview). Loaded after app.js; uses its helpers ($, esc, md, api, post, toast, ICON).
+   Server side: ui/previews.py (GET /api/preview). Loaded before app.js (its helpers are only called later); uses app.js helpers ($, esc, md, api, post, toast, ICON).
    Page images and tables come from the server; HTML runs in a sandboxed frame (scripts yes, same origin no);
    SVG is only ever an <img> from a blob, never markup in the page. */
 const PVX = {open: false, id: 0, root: "", path: "", m: null, page: 0, code: false, sheet: 0, urls: [], opener: null, snippet: null, poll: 0, back: null, backNext: null};
@@ -164,6 +164,17 @@ function pvBody() {
     return;
   }
   if (m.kind === "text") return pvCode(m.text);
+  if (m.kind === "audio" || m.kind === "video") {           // B3: played straight from /raw; the file manager is one button away
+    const wrap = document.createElement("div"); wrap.className = "pv-img pv-media";
+    const el = document.createElement(m.kind); el.controls = true; el.preload = "metadata";
+    el.setAttribute("aria-label", m.name || m.kind);
+    el.src = `/raw?t=${encodeURIComponent(MP.token)}&${pvQuery(PVX.root, PVX.path)}`;
+    el.onerror = () => { if (id === PVX.id) { const n = document.createElement("div"); n.className = "pv-more"; n.textContent = "This file could not be played here. Open it in its own app."; wrap.appendChild(n); } };
+    wrap.appendChild(el);
+    const b = document.createElement("button"); b.type = "button"; b.className = "btn"; b.textContent = "Show in folder";
+    b.setAttribute("data-reveal", "1"); b.onclick = () => edReveal(PVX.root, PVX.path);
+    wrap.appendChild(b); st.appendChild(wrap); return;
+  }
   pvNote(m.note || "Meshpool cannot show this kind of file yet.");
 }
 function pvCode(text) {
