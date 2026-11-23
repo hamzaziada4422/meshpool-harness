@@ -106,6 +106,7 @@ jobs:
           }
           PS
           run_one() {   # name, install folder; runs NAME.exe /S [/D=...] and reports
+            export MSYS2_ARG_CONV_EXCL="*"   # Git Bash would rewrite /S and /D=... as paths, and the installer would open its window
             local n=$1 dir=$2 args=("/S")
             [ -n "$dir" ] && args+=("/D=$(cygpath -w "$dir")")
             echo "=================== $n"
@@ -429,6 +430,7 @@ jobs:
           # The archive itself first: a damaged archive must not look like a hung installer.
           "/c/Program Files/7-Zip/7z.exe" t -bso0 -bsp0 dist-src/app-win/payload.7z && echo "payload.7z tests clean"
           # Silent install in the background, so a hang shows what it is waiting on instead of timing the step out.
+          export MSYS2_ARG_CONV_EXCL="*"   # Git Bash would rewrite /S and /D=... as paths, and the installer would open its window
           ./out/Meshpool-Setup.exe /S "/D=$W" &
           PID=$!
           for i in $(seq 1 60); do
