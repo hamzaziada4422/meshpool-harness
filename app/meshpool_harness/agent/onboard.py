@@ -106,13 +106,24 @@ def _check_model(custom: bool) -> str:
     return m or "deepseek-v4.1-flash"
 
 
+def _key_title(custom: bool) -> str:
+    return "Connect your provider" if custom else "Connect your Meshpool account"
+
+
+def _checking_text(base: str, custom: bool) -> str:
+    """The key is checked against the endpoint it was typed for: name that host when it is not Meshpool."""
+    from urllib.parse import urlparse
+    h = (urlparse(base).hostname or "").lower()
+    return f"    Checking your key with {h}..." if custom and h and "meshpool" not in h else "    Checking your key..."
+
+
 def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
     from meshpool_harness.cli import ping
     if header:
         _p()
         for row in B.banner(st.depth):
             _p(row)
-    title = "Connect your provider" if custom else "Connect your Meshpool account"
+    title = _key_title(custom)
     where = "Your key stays on this computer, in " + _short(C.config_path())
     if n:
         _step(st, n, title, where)
@@ -132,7 +143,13 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
                     else "https://api.openai.com/v1")
         if not base:
             return False
-        os.environ["MESHPOOL_BASE_URL"] = base.rstrip("/")
+        from meshpool_harness import provider_setup as PS
+        try:
+            base = PS.normalise_base(base)               # "localhost:11434", a pasted .../chat/completions
+        except PS.SetupError as e:
+            _p(st.red("    " + str(e)))
+            return False
+        os.environ["MESHPOOL_BASE_URL"] = base
         model = _ask(st, "Model id", os.environ.get("MH_MODEL") if not (os.environ.get("MH_MODEL") or "").startswith(
             "deepseek-v4") else "gpt-4.1-mini")
         if not model:
@@ -167,9 +184,17 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
                 _p(st.dim(f"    Open {KEY_URL} in your browser, copy your key, then paste it here."))
             continue
         os.environ["MESHPOOL_API_KEY"] = key
-        _p(st.dim("    Checking your key..."))
+        _p(st.dim(_checking_text(os.environ["MESHPOOL_BASE_URL"], custom)))
         # the typed endpoint and key, not the saved ones (those win over the environment and went to the new host)
         r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key)
+        if custom and not r["ok"] and "HTTP 404" in r["detail"]:     # a server that serves /v1 only
+            from meshpool_harness import provider_setup as PS
+            for cand in PS._candidates(os.environ["MESHPOOL_BASE_URL"])[1:]:
+                r2 = ping(_check_model(custom), base=cand, key=key)
+                if r2["ok"] or "HTTP 404" not in r2["detail"]:
+                    r = r2
+                    os.environ["MESHPOOL_BASE_URL"] = cand
+                    break
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"])

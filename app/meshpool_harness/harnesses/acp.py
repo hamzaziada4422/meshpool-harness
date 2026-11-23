@@ -69,6 +69,22 @@ def _kill_tree(proc) -> None:
             pass
 
 
+def stop_file(chat: str) -> Path:
+    """A chat's Stop stamp: Meshpool's MCP servers started for an outside harness read it (MESHPOOL_STOP_FILE), so Stop
+    reaches their sub-agents even when the harness does not forward notifications/cancelled."""
+    return C.runs_dir() / "sessions" / chat / "stop"
+
+
+def stamp_stop(chat: str) -> None:
+    if not chat:
+        return
+    try:
+        from meshpool_harness import fsio
+        fsio.atomic_write_text(stop_file(chat), repr(time.time()), fsync=False)
+    except OSError:
+        pass
+
+
 class ACPError(Exception):
     pass
 
@@ -171,7 +187,17 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
         if M.recently_failed(name, spec) is not None:
             continue                                 # a broken server would make the harness wait and retry it
         spec = M._expand(spec)
-        if spec.get("url"):
+        if spec.get("url") and spec.get("connector") and spec.get("headers"):
+            # A signed-in connector: through Meshpool's bridge, which refreshes the token (it lasts about an hour). A
+            # harness given the header itself keeps it until it restarts and then gets 401 on every call.
+            env = {**passthrough_env(), "PYTHONPATH": str(C.APP), "MESHPOOL_HOME": str(C.home()),
+                   "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+            if not os.environ.get("PYTHONPYCACHEPREFIX"):
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+            out.append({"name": name, "command": sys.executable,
+                        "args": ["-m", "meshpool_harness.agent.connector_bridge", name],
+                        "env": [{"name": k, "value": str(v)} for k, v in env.items()]})
+        elif spec.get("url"):
             out.append({"type": "http", "name": name, "url": spec["url"],
                         "headers": [{"name": k, "value": str(v)} for k, v in (spec.get("headers") or {}).items()]})
         elif spec.get("command"):
@@ -188,6 +214,8 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
                 if chat and any(k in str(x) for x in spec.get("args", [])
                                 for k in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
                     env["MH_CHAT_ID"] = chat                  # browser view; scheduled tasks keep the mode; office builds per chat
+                if chat:
+                    env["MESHPOOL_STOP_FILE"] = str(stop_file(chat))   # the chat's Stop reaches its sub-agents
                 if os.environ.get("PYTHONPYCACHEPREFIX"):        # never write caches inside the signed app
                     env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
                 else:
@@ -204,9 +232,13 @@ def office_server(roots: list[str]) -> dict:
            "MESHPOOL_HOME": str(C.home()), "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1",
            "PYTHONIOENCODING": "utf-8"}
     env = {**passthrough_env(), **env}                 # proxies, CA bundles, MH_* and MESHPOOL_* settings
-    for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
+    for k in ("MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
+    from meshpool_harness import providers as PV
+    base, key, _src = PV.endpoint_pair()               # a key goes only with the address it was set for
+    if key:
+        env["MESHPOOL_API_KEY"], env["MESHPOOL_BASE_URL"] = key, base
     if not os.environ.get("PYTHONPYCACHEPREFIX"):
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     return {"name": "meshpool-office", "command": sys.executable, "args": ["-m", "meshpool_harness.agent.office_mcp_server"],
@@ -305,6 +337,7 @@ class ACPAgent:
         self._replaying = False
         self._tools: dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._in_turn = False                  # Stop ends only requests made for a running turn
 
     # ---------- process + JSON-RPC ----------------------------------------------------------------------------
     def _emit(self, ev: dict):
@@ -322,16 +355,16 @@ class ACPAgent:
         from meshpool_harness.harnesses import unsupported
         if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode: not part of the packaged app
             raise ACPError(unsupported(m["id"]))
+        extra = {}                             # this chat's own provider settings: never a file another chat rewrites
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
-            prepare_hermes(self.model)
+            extra = prepare_hermes(self.model) or {}
         elif m.get("prepare") == "codex":
             from meshpool_harness.harnesses import prepare_codex
-            prepare_codex(self.model)
-        extra = {}
-        if m.get("prepare") == "opencode":
+            extra = prepare_codex(self.model, self.id) or {}
+        elif m.get("prepare") == "opencode":
             from meshpool_harness.harnesses import prepare_opencode
-            extra = prepare_opencode(self.model)
+            extra = prepare_opencode(self.model, self.id) or {}
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -428,8 +461,10 @@ class ACPAgent:
                                    f"See runs/harness-logs/{self.manifest.get('id', 'acp')}.log")
                 if end and time.time() > end:
                     raise ACPError(f"No reply to {method} within {int(timeout)} s.")
-                if method.startswith("session/") and self._stop and time.time() - getattr(self, "_stop_t", 1e18) > 3:
-                    break                                # the harness ignored the cancel: stop it hard below
+                if self._stop and self._in_turn and (method != "session/prompt" or time.time() - getattr(self, "_stop_t", 1e18) > 3):
+                    # session/prompt: the harness ignored the cancel. Anything else (initialize, authenticate,
+                    # session/new ...) is start-up, which no cancel reaches: give up now, not at its timeout.
+                    break
                 self._cv.wait(0.3)
             else:
                 msg = self._pending.pop(rid)
@@ -714,11 +749,16 @@ class ACPAgent:
         bare = PV.split(self.model)[1] if self.model else ""
         if not (bare and bare != "default" and self.acp_session):
             return                             # "default": the harness's own account picks the model
-        if bare == getattr(self, "model_now", None):
+        now = getattr(self, "model_now", None) or ""
+        if bare == now or now.startswith((bare + "[", bare + "/")):
             return                             # already on it; switching anyway makes Hermes rebuild its agent
+        # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
+        ids = [m["id"] for m in self.available_models or [] if m.get("id")]
+        want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
+                                                        bare)
         try:
-            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": bare}, timeout=60)
-            self.model_now = bare
+            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": want}, timeout=60)
+            self.model_now = want
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
 
@@ -778,10 +818,14 @@ class ACPAgent:
         self._text = []
         final = ""
         self.usage["calls"] += 1
+        self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._in_turn = True
         try:
             self._emit({"type": "model_start"})
             self._turn_tools = 0
             self._ensure_session_tracked()
+            if self._stop:                               # Stop pressed while the harness was starting
+                raise ACPStopped("stopped")
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False
@@ -797,22 +841,22 @@ class ACPAgent:
                 else:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name')} does not take images; "
                                                           "they were left out."})
-            r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
-            if r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text:
+            r = self._prompt(prompt)
+            if (r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text
+                    and not self._stop):                 # a refusal to a stopped prompt is just the stop
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
                 self._ensure_session()
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
                     prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+                r = self._prompt(prompt)
             self._reloaded = False
             final = "".join(self._text)
             if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
                     and getattr(self, "_turn_tools", 0) == 0):
                 # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
                 self._text = []
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": [
-                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}]})
+                r = self._prompt([{"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
                 final = "".join(self._text)
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
@@ -839,14 +883,41 @@ class ACPAgent:
             else:
                 self._emit({"type": "error", "text": str(e)})
         finally:
-            self._emit({"type": "turn_end", "turn": {"in": 0, "cached": 0, "out": 0, "calls": 0},
-                        "session": dict(self.usage), "context": self.context})
+            self._in_turn = False
+            self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),
+                        "context": self.context})
             self.save()
         return final
+
+    def _prompt(self, prompt: list) -> dict:
+        """One session/prompt. The token usage a harness reports with its answer (ACP PromptResponse.usage, e.g.
+        Codex) goes into the turn's and the chat's usage, so the usage ledger counts outside harnesses too."""
+        r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+        u = r.get("usage") if isinstance(r, dict) else None
+        if isinstance(u, dict):
+            def n(*keys):
+                for k in keys:
+                    try:
+                        return max(0, int(u.get(k) or 0))
+                    except (TypeError, ValueError):
+                        continue
+                return 0
+            cached = n("cachedReadTokens", "cached_read_tokens")
+            # ACP counts cached input apart (Codex: inputTokens 200 + cachedReadTokens 1000 for a 1,200-token
+            # prompt); Meshpool's "in" is the whole prompt, cached part included, as for Pi and the built-in agents
+            add = {"in": n("inputTokens", "input_tokens") + cached + n("cachedWriteTokens", "cached_write_tokens"),
+                   "cached": cached, "out": n("outputTokens", "output_tokens") + n("thoughtTokens", "thought_tokens"),
+                   "calls": 1}
+            for k, v in add.items():
+                self._turn[k] += v
+                if k != "calls":                         # calls: counted once per message in send()
+                    self.usage[k] += v
+        return r
 
     def stop(self):
         self._stop = True
         self._stop_t = time.time()
+        stamp_stop(self.id)                              # sub-agents in this chat's Meshpool MCP servers stop too
         if self.acp_session and self._p and self._p.poll() is None:
             try:
                 self._write({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.acp_session}})
@@ -858,6 +929,12 @@ class ACPAgent:
                 t = threading.Timer(1.0, self._kill_new_children, args=(before,))
                 self._kill_timer = t                     # cancelled if a new turn starts first (see send)
                 t.start()
+
+    def forget_session(self):
+        """Undo cut the chat: the harness's own session still holds the undone turns. The next message opens a new
+        session, which gets the chat as it now is (see _carry in _ensure_session)."""
+        self.acp_session = None
+        self.loaded_from = None
 
     def reset(self):
         self.acp_session = None

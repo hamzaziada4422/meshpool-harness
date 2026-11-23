@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import queue
 import re
 import os
 import shutil
@@ -38,6 +39,9 @@ LABEL = {"read": "Read", "write": "Wrote", "edit": "Edited", "bash": "Ran", "pow
          "find": "Listed", "ls": "Listed", "tool_search": "Found tools", "codemode": "Ran a script"}
 
 
+_ADDED = "[Added by the user while you were working] "
+
+
 class PiError(Exception):
     pass
 
@@ -54,6 +58,23 @@ def pi_cli() -> Path | None:
         if p.is_file():
             return p
     return None
+
+
+_FLAGS: dict[str, bool] = {}
+
+
+def _takes_no_approve(node: str, cli: Path) -> bool:
+    """Whether this Pi build has --no-approve (the bundled build does; upstream Pi has no approval prompts of its own
+    and refuses the unknown option). Asked once per Pi build."""
+    k = str(cli)
+    if k not in _FLAGS:
+        try:
+            r = subprocess.run([node, k, "--help"], capture_output=True, text=True, timeout=30,
+                               **({"creationflags": 0x08000000} if os.name == "nt" else {}))
+            _FLAGS[k] = "--no-approve" in (r.stdout + r.stderr) or r.returncode != 0
+        except (OSError, subprocess.SubprocessError):
+            _FLAGS[k] = True                       # cannot tell: the bundled build's flag, as before
+    return _FLAGS[k]
 
 
 def available() -> bool:
@@ -84,10 +105,10 @@ def _models() -> list[dict]:
     return out
 
 
-def _mcp_for_pi(root: Path) -> dict:
+def _mcp_for_pi(root: Path, chat: str = "") -> dict:
     from meshpool_harness.harnesses.acp import mcp_servers_for_acp, office_server
     servers = {}
-    rows = mcp_servers_for_acp([str(root)]) + [office_server([str(root)])]
+    rows = mcp_servers_for_acp([str(root)], chat) + [office_server([str(root)])]
     for s in rows:
         name = s["name"]
         if s.get("url"):
@@ -113,51 +134,64 @@ def _pi_model(model: str | None) -> tuple[str, str]:
     return "meshpool", (bare if prov == "key" and bare else "deepseek-v4.1-flash")
 
 
-def prepare(root: Path) -> Path:
-    """Write Pi's config folder for this launch. Returns the folder."""
-    h = pi_home()
-    (h / "sessions").mkdir(parents=True, exist_ok=True)
+def prepare(root: Path, chat: str = "") -> Path:
+    """Write Pi's config folder for this launch and return it. Each chat has its own folder (pi/chats/<chat>), so two
+    chats starting at once never read each other's project, MCP servers or model (a shared one was rewritten in place
+    at every launch); the user's skills stay in one shared folder that every chat's settings list."""
+    from meshpool_harness import fsio
+    shared = pi_home()
+    h = shared / "chats" / re.sub(r"[^\w.-]", "_", chat) if chat else shared
+    h.mkdir(parents=True, exist_ok=True)
     from meshpool_harness import providers as PV
+    node, cli = node_exe(), pi_cli()
+    # The key comes from Pi's environment: the bundled build reads "$NAME", upstream Pi reads a bare NAME.
+    ref = (lambda name: "$" + name) if not (node and cli) or _takes_no_approve(node, cli) else (lambda name: name)
     base = PV.key_base()
     if PV.key_wire() == "anthropic":           # an Anthropic Messages endpoint: Pi's own Anthropic client, whose SDK
         key_provider = {"baseUrl": re.sub(r"/v1/?$", "", base),        # adds /v1/messages itself
-                        "api": "anthropic-messages", "apiKey": "$MESHPOOL_API_KEY", "models": _models()}
+                        "api": "anthropic-messages", "apiKey": ref("MESHPOOL_API_KEY"), "models": _models()}
     else:
-        key_provider = {"baseUrl": base, "api": "openai-completions", "apiKey": "$MESHPOOL_API_KEY",
+        key_provider = {"baseUrl": base, "api": "openai-completions", "apiKey": ref("MESHPOOL_API_KEY"),
                         "compat": {"supportsDeveloperRole": False}, "models": _models()}
     models = {"providers": {"meshpool": key_provider}}
     for prov, env in (("chatgpt", "MESHPOOL_CHATGPT_RELAY_KEY"),):
         if PV.ready(prov):                     # the other providers Pi can use, keys from its environment
             ids, _ = PV.list_models(prov)      # ChatGPT: the local relay, which holds the sign-in
             models["providers"][prov] = {
-                "baseUrl": PV.endpoint(prov)[0], "api": "openai-completions", "apiKey": "$" + env,
+                "baseUrl": PV.endpoint(prov)[0], "api": "openai-completions", "apiKey": ref(env),
                 "compat": {"supportsDeveloperRole": False},
                 "models": [{"id": i, "name": i, "reasoning": False, "input": ["text", "image"],
                             "contextWindow": 200000, "maxTokens": 16384,
                             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}} for i in ids]}
-    (h / "models.json").write_text(json.dumps(models, indent=1), encoding="utf-8")
+    fsio.atomic_write_text(h / "models.json", json.dumps(models, indent=1), fsync=False)
     try:
-        mcp = _mcp_for_pi(root)
+        mcp = _mcp_for_pi(root, chat)
     except Exception:  # noqa: BLE001
         mcp = {"mcpServers": {}}
     from meshpool_harness.harnesses import write_private
     write_private(h / "mcp.json", json.dumps(mcp, indent=1))     # carries connector tokens
     sp = h / "settings.json"
+    base_sp = sp if sp.exists() else shared / "settings.json"      # a chat's first launch starts from the shared one
     try:
-        settings = json.loads(sp.read_text(encoding="utf-8")) if sp.exists() else {}
-    except ValueError:
+        settings = json.loads(base_sp.read_text(encoding="utf-8")) if base_sp.exists() else {}
+    except (ValueError, OSError):
         settings = {}
+    settings = settings if isinstance(settings, dict) else {}
     dp, dm = _pi_model(os.environ.get("MH_MODEL"))
     settings.update({"defaultProvider": dp, "defaultModel": dm,
                      "defaultTools": ["read", "bash", "edit", "write", "grep", "find", "ls"]})
     if os.name == "nt" and os.environ.get("MH_BASH"):
         settings["shellPath"] = os.environ["MH_BASH"]
-    sp.write_text(json.dumps(settings, indent=1), encoding="utf-8")
+    skills = shared / "skills" / "meshpool"
     try:
         from meshpool_harness import skills as SK
-        SK.sync_to(h / "skills" / "meshpool")
+        with fsio.file_lock(shared / "skills"):          # two launches must not copy over each other
+            SK.sync_to(skills)
     except Exception:  # noqa: BLE001
         pass
+    if h != shared:
+        settings["skills"] = [str(skills)]
+    fsio.atomic_write_text(sp, json.dumps(settings, indent=1), fsync=False)
     return h
 
 
@@ -247,6 +281,11 @@ class PiAgent:
         self._denied: set[str] = set()
         self._lock = threading.Lock()
         self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._exited = threading.Event()   # set once the process's last event has been handled (a crash, not _done)
+        self._sl = threading.Lock()        # _up and _held change together
+        self._up = False                   # Pi runs and answers: a message added now goes to it as steering
+        self._held: list = []              # messages added while Pi was starting: handed over once it runs
+        self._pi_steering: list = []       # Pi's own queue of steering messages not yet read (queue_update)
 
     # ---------- process ----------------------------------------------------------------------------------------
     def _emit(self, ev: dict):
@@ -280,10 +319,11 @@ class PiAgent:
         node, cli = node_exe(), pi_cli()
         if not (node and cli):
             raise PiError("Pi is not included in this copy of Meshpool. Reinstall Meshpool to get it back.")
-        home = prepare(self.root)
+        home = prepare(self.root, self.id)
         sess = self.dir / "pi"
         sess.mkdir(parents=True, exist_ok=True)
-        args = [node, str(cli), "--mode", "rpc", "--session-dir", str(sess), "--no-approve",
+        args = [node, str(cli), "--mode", "rpc", "--session-dir", str(sess),
+                *(["--no-approve"] if _takes_no_approve(node, cli) else []),
                 "-e", str(Path(__file__).with_name("pi_gate.js"))]
         if any(sess.glob("*.jsonl")):             # also after a crash: Pi's own session files hold the tool history
             args.append("--continue")
@@ -309,7 +349,13 @@ class PiAgent:
         self._p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err,
                                    cwd=str(self.root), env=env, **kw)
         self._alive = True
-        threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
+        self._exited.clear()
+        with self._sl:                     # messages an earlier Pi had queued but not read: the new one gets them
+            self._held += [(t.removeprefix(_ADDED), None) for t in self._pi_steering]
+        self._pi_steering = []
+        evq: queue.Queue = queue.Queue()
+        threading.Thread(target=self._reader, args=(self._p, evq), daemon=True).start()
+        threading.Thread(target=self._dispatch, args=(self._p, evq), daemon=True).start()
         st = self._request({"type": "get_state"}, timeout=120)
         try:
             ms = self._request({"type": "get_available_models"}, timeout=30).get("models") or []
@@ -318,8 +364,16 @@ class PiAgent:
         except PiError:
             pass
         self._apply_model(initial=(st.get("model") or {}).get("id"))
+        with self._sl:
+            self._up = True
+            held, self._held = self._held, []
+        for text, images in held:          # added while Pi started: Pi reads them with the prompt that follows
+            self._steer_cmd(text, images)
 
-    def _reader(self, proc):
+    def _reader(self, proc, evq):
+        """Only reads. Replies and queue updates are handled here; every other event goes to the dispatcher, so a
+        reply is never stuck behind an event whose emit waits (the chat's lock, held by whoever waits for that
+        reply: adding a message while Pi streamed froze the chat 30 s and lost the message)."""
         buf = b""
         while True:
             chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(65536)
@@ -335,16 +389,37 @@ class PiAgent:
                     msg = json.loads(line.decode("utf-8", "replace"))
                 except ValueError:
                     continue
-                try:
-                    self._on(msg)
-                except Exception as e:  # noqa: BLE001  a bad event must not stop the reader
-                    print(f"Pi event error: {e}", file=sys.stderr)
+                if not isinstance(msg, dict):
+                    continue
+                t = msg.get("type")
+                if t == "response":
+                    if msg.get("id"):
+                        with self._cv:
+                            self._replies[msg["id"]] = msg
+                            self._cv.notify_all()
+                elif t == "queue_update":
+                    self._pi_steering = list(msg.get("steering") or [])
+                else:
+                    evq.put(msg)
         with self._cv:
-            if self._p is not proc:                # a late EOF from an earlier process must not end the new one
-                return
-            self._alive = False
+            if self._p is proc:                    # a late EOF from an earlier process must not end the new one
+                self._alive = False
             self._cv.notify_all()
-        self._done.set()
+        evq.put(None)
+
+    def _dispatch(self, proc, evq):
+        while True:
+            msg = evq.get()
+            if msg is None:
+                break
+            try:
+                self._on(msg)
+            except Exception as e:  # noqa: BLE001  a bad event must not stop the events
+                print(f"Pi event error: {e}", file=sys.stderr)
+        if self._p is proc:
+            with self._sl:
+                self._up = False
+            self._exited.set()                     # after every earlier event: the crash comes after the half reply
 
     def _write(self, obj: dict):
         try:
@@ -550,15 +625,16 @@ class PiAgent:
         return PV.join("key" if prov == "meshpool" else prov, m)
 
     # ---------- turns ------------------------------------------------------------------------------------------
-    def send(self, text: str, images: list | None = None) -> str:
+    def send(self, text: str, images: list | None = None, _show: bool = True) -> str:
         self._stop = False
         self.start_error = None                          # set when this turn's agent could not start (Session hands off)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
         shown = text.split("\n\n\u200b")[0]          # attached skill text and image OCR go to the agent only
         self._turn_at = len(self.events)                 # the chat before this turn (earlier_context)
-        self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
-                    "plan": self.plan})
+        if _show:
+            self._emit({"type": "user", "text": shown, "images": [im.get("name", "image") for im in images or []],
+                        "plan": self.plan})
         self.save()                                       # the thread survives a restart mid-turn
         body = text
         if self.plan:
@@ -572,6 +648,8 @@ class PiAgent:
         try:
             self._emit({"type": "model_start"})
             self._start_tracked()
+            if self._stop:                               # Stop pressed while Pi was starting: send nothing
+                raise PiError("stopped")
             if getattr(self, "_carry", False):
                 self._carry = False
                 from meshpool_harness.harnesses.acp import earlier_context
@@ -584,11 +662,32 @@ class PiAgent:
                 cmd["images"] = [{"type": "image", "data": im["data"], "mimeType": im.get("mime") or "image/png"}
                                  for im in images[:6]]
             self._request(cmd, timeout=120)
+            restarted = False
             while not self._done.wait(0.3):
-                if not self._alive:
+                if self._exited.is_set():
                     if self._stop:
                         break
-                    raise PiError("Pi exited during the turn. See runs/harness-logs/pi.log.")
+                    if restarted:
+                        raise PiError("Pi exited again during the turn. See runs/harness-logs/pi.log.")
+                    # Pi crashed mid-turn. What it did so far is in its own session files: start it again on that
+                    # session and let it carry on, once, rather than show the half reply as the answer.
+                    restarted = True
+                    self._flush_text()
+                    self._emit({"type": "status", "text": "Pi stopped unexpectedly in the middle of this task. "
+                                                          "Restarting it to carry on..."})
+                    try:
+                        self._p.wait(timeout=5)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    self.resume = True
+                    self._start()
+                    if self._stop:                       # Stop pressed while it restarted
+                        break
+                    self._done.clear()
+                    self._request({"type": "prompt", "message": (
+                        "[Meshpool] Your process stopped unexpectedly in the middle of this task. Carry on from "
+                        "where you left off; do not redo steps that are already done.")}, timeout=120)
+                    continue
                 if self._stop and time.time() - getattr(self, "_stop_t", 1e18) > 3:
                     # Pi ignored the abort (a tool that does not stop): end it and what it started. The next message
                     # restarts Pi and continues the same session.
@@ -612,7 +711,10 @@ class PiAgent:
                 pass
         except PiError as e:
             self._flush_text()
-            self._emit({"type": "error", "text": str(e)})
+            if self._stop:                               # an error while stopping is just the stop
+                self._emit({"type": "interrupted", "text": "Stopped. Send a message to continue."})
+            else:
+                self._emit({"type": "error", "text": str(e)})
         finally:
             for k in self.usage:
                 self.usage[k] += self._turn[k]
@@ -621,24 +723,72 @@ class PiAgent:
             self.save()
         return final
 
-    def steer(self, text: str, images: list | None = None):
-        """Add to the request while Pi works: Pi reads it after the current tool calls (RPC steer)."""
-        cmd = {"type": "steer", "message": "[Added by the user while you were working] " + text}
+    def _steer_cmd(self, text: str, images: list | None = None):
+        cmd = {"type": "steer", "message": _ADDED + text}
         if images:
             cmd["images"] = [{"type": "image", "data": im["data"], "mimeType": im.get("mime") or "image/png"}
                              for im in images[:6]]
         self._request(cmd, timeout=30)
+
+    def steer(self, text: str, images: list | None = None):
+        """Add to the request while Pi works: Pi reads it after the current tool calls (RPC steer). While Pi is still
+        starting, the message is held and handed over as soon as Pi runs (it was refused with "Pi stopped")."""
+        with self._sl:
+            up = self._up and self._p is not None and self._p.poll() is None
+            if not up:
+                self._held.append((text, images))
+        if up:
+            self._steer_cmd(text, images)
         self._emit({"type": "user", "text": text.split("\n\n\u200b")[0],
                     "images": [im.get("name", "image") for im in images or []], "plan": self.plan, "steer": True})
+
+    def has_steers(self) -> bool:
+        """A message added that Pi has not read: held while it started, or queued by Pi after its run ended."""
+        return bool(self._held or self._pi_steering)
+
+    def resume_steers(self):
+        """Answer the messages has_steers() reports, as a turn of their own (they are in the chat already)."""
+        with self._sl:
+            if not (self._p and self._p.poll() is None):   # the Pi that queued them is gone: send them ourselves
+                self._held += [(t.removeprefix(_ADDED), None) for t in self._pi_steering]
+                self._pi_steering = []
+            held, self._held = self._held, []
+        queued, self._pi_steering = self._pi_steering, []
+        if not held and not queued:
+            return
+        if held:
+            body = _ADDED + "\n\n".join(t for t, _ in held)
+        else:                                  # Pi holds them and reads them with the next prompt
+            body = "[Meshpool] Answer the message I added while you were working."
+        self.send(body, [im for _, ims in held for im in (ims or [])] or None, _show=False)
 
     def stop(self):
         self._stop = True
         self._stop_t = time.time()
+        from meshpool_harness.harnesses.acp import stamp_stop
+        stamp_stop(self.id)                           # sub-agents in this chat's Meshpool MCP servers stop too
         if self._p and self._p.poll() is None:
             try:
                 self._write({"type": "abort"})
             except PiError:
                 pass
+
+    def forget_session(self):
+        """Undo cut the chat: Pi's own session still holds the undone turns. Set it aside (kept, not deleted) and
+        restart Pi, which then gets the chat as it now is (see _carry in _start)."""
+        self.close()
+        self._p = None
+        sess = self.dir / "pi"
+        if sess.is_dir() and any(sess.glob("*.jsonl")):
+            try:
+                sess.rename(self.dir / f"pi-undone-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}")
+            except OSError:
+                for f in sess.glob("*.jsonl"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+        self.resume = False
 
     def reset(self):
         self.events = []

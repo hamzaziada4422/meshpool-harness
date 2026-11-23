@@ -207,9 +207,18 @@ def main(argv=None):
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command
         return 0
-    if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
+    _rw = os.environ.pop("MESHPOOL_RESTART_WAIT", None)
+    if _rw:                                               # started by "Restart" after an update: let the old app close
         import time
-        time.sleep(3)
+        if _rw.isdigit() and int(_rw) > 1:                # the old app's PID: wait until it has really exited
+            try:
+                from meshpool_harness import updater as _up
+                _up.wait_for_exit(int(_rw), 120)
+            except Exception:  # noqa: BLE001
+                time.sleep(3)
+        else:
+            time.sleep(3)
+        os.environ["MESHPOOL_RESTARTED"] = "1"
     if os.name == "nt" and (sys.executable.lower().endswith("pythonw.exe") or _no_console()):
         # The Windows app runs windowless under pythonw.exe, whose children get no usable stdin/stdout. Launch child
         # Pythons (Hermes, MCP servers, engines) with python.exe; their console windows are suppressed.
@@ -430,10 +439,9 @@ def main(argv=None):
 
 
 def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
-    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet).
-    Returns {ok, detail, model, seconds, endpoint}."""
+    """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
+    to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
-    model = model or os.environ.get("MH_MODEL", "deepseek-v4.1-flash")
     t0 = time.time()
     led = None
     try:
@@ -442,31 +450,48 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
             led.base_url = base.rstrip("/")
         if key:
             led.api_key = key
+        m = (model or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash").strip()
+        if m.partition(":")[0] == "chatgpt" and ":" in m:    # a ChatGPT model is not served by the key endpoint
+            alt = (os.environ.get("MH_MODEL") or "").strip()
+            from meshpool_harness import providers as PV
+            if alt and not alt.startswith("chatgpt:"):
+                m = alt
+            elif "meshpool" in PV.host(led.base_url):
+                m = "deepseek-v4.1-flash"
+            else:
+                return {"ok": False, "detail": "Choose a model this endpoint serves first.", "model": "",
+                        "seconds": 0.0, "endpoint": led.base_url}
+        model = m
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
-                     max_tokens=5, retries=1, timeout=60)
-        txt = ((r.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}", "model": model,
-                "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
+                     max_tokens=16, retries=1, timeout=60, key_only=True)   # Responses endpoints need at least 16
+        msg_ = ((r.get("choices") or [{}])[0].get("message"))
+        if not isinstance(msg_, dict):
+            raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
+        txt = msg_.get("content") or ""
+        return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
+                "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
         msg = str(e)
         if "401" in msg or "403" in msg:
             msg = "the endpoint rejected the API key (" + msg[:160] + ")"
-        return {"ok": False, "detail": msg[:400], "model": model, "seconds": round(time.time() - t0, 1),
-                "endpoint": led.base_url if led else (base or os.environ.get("MESHPOOL_BASE_URL", ""))}
+        return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
+                "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 
 def _check(live: bool) -> int:
     from meshpool_harness import harnesses as HR
     from meshpool_harness import providers as PV
-    key = os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or ""
+    base, key, _src = PV.endpoint_pair()             # the key and the address it was set for, never mixed
     # A ChatGPT sign-in is enough on its own: report what is ready rather than calling the setup broken when there
     # is no Meshpool key.
     ready = {p: _safe(lambda p=p: PV.ready(p)) for p in PV.PROVIDERS}
     usable = _safe(HR.ready)
     print(f"Settings file : {_config.config_path()}")
-    print(f"Endpoint      : {os.environ.get('MESHPOOL_BASE_URL', 'https://llm.meshpool.ai/v1')}")
+    print(f"Endpoint      : {base}")
     print(f"Model         : {os.environ.get('MH_MODEL', 'deepseek-v4.1-flash')}")
-    print(f"API key       : {'set (ends ' + key[-4:] + ')' if key else 'not set'}")
+    kn = PV.key_name()
+    for_ = "" if kn == "Meshpool" else f" for {kn}"        # the key belongs to the endpoint above, not to Meshpool
+    print(f"API key       : {'set' + for_ + ' (ends ' + key[-4:] + ')' if key else 'not set' + for_}")
     names = [_safe(lambda p=p: PV.name(p), p) for p, ok in ready.items() if ok]
     print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()

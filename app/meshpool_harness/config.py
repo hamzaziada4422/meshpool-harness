@@ -230,6 +230,9 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
+    for k in values:
+        if k in ENDPOINT_NAMES:
+            SHELL.pop(k, None)           # an explicit save replaces what the shell once gave for this name
     with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
         return _write(values, path)
 
@@ -298,6 +301,11 @@ def _write(values: dict, path: Path) -> Path:
 
 _SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)
 _INJECTED: set = set()          # names Meshpool itself copied into the environment from its saved settings
+# The endpoint names exactly as the user's own shell had them, kept apart from what load_into_env copies in from the file,
+# so a key and the address it was set for can be told from a key and an address that came from different places.
+ENDPOINT_NAMES = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_API_WIRE", "MH_AUTH_HEADER", "MH_AUTH_SCHEME",
+                  "MESHPOOL_AZURE_API_VERSION", "OPENAI_API_KEY", "OPENAI_BASE_URL")
+SHELL: dict = {k: os.environ[k].strip() for k in ENDPOINT_NAMES if os.environ.get(k, "").strip()}
 
 
 def scrub_env(env: dict) -> dict:
@@ -315,11 +323,18 @@ def load_into_env(override: bool = False) -> dict:
     for k, v in vals.items():
         if v == "":
             continue
+        if override and k in ENDPOINT_NAMES and os.environ.get(k) and k not in _INJECTED:
+            SHELL[k] = os.environ[k].strip()           # the shell's own value, before the file's replaces it
         if override or k not in os.environ:
             os.environ[k] = v
             _INJECTED.add(k)
     from meshpool_harness import bundled
     bundled.use_bundled_tools()               # packaged app: its own Node and Git come first on PATH (idempotent)
+    try:
+        from meshpool_harness.core import http as _h
+        _h.install_tls()                      # CA trust fallback (python.org macOS, a company proxy's CA)
+    except Exception:  # noqa: BLE001 - never block start-up
+        pass
     return vals
 
 

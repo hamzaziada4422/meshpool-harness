@@ -29,6 +29,7 @@ from meshpool_harness import pace as PACE
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
+from meshpool_harness.core import http as _mhttp
 from meshpool_harness.core import tools as T
 from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait, stated_wait
 from meshpool_harness.core.loop import _compact, _sanitize_calls
@@ -358,7 +359,7 @@ class _EndpointDown(RuntimeError):
 
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
-    return urllib.request.build_opener(_TrackHTTP(sink), _TrackHTTPS(sink)).open(req, timeout=timeout)
+    return _mhttp.open(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
 
 
 def _probe_once(base: str, key: str, model: str, sink=None) -> str:
@@ -377,13 +378,13 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
         t = float(os.environ.get("MH_PROBE_S", "30"))
-        with (_urlopen(req, t, sink) if sink else urllib.request.urlopen(req, timeout=t)) as r:
+        with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
             ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
-        return f"HTTP 0: {e}"
+        return f"HTTP 0: {_mhttp.explain(e, url)}"
 
 
 def _image_in_newest_ask(messages: list) -> bool:
@@ -1592,6 +1593,18 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _small_job(self, info: dict) -> bool:
+        """Any lane: under 10 tool calls, one or two files that are not a deck, workbook or web page, a short final
+        answer and no failing command after the last edit. A reviewer loop on a one-page document cost 30 to 60
+        percent more than the job. Decks, workbooks, pages, multi-file builds and long jobs keep the review."""
+        files = [str(f) for f in info.get("files") or []]
+        if info.get("calls", 99) >= 10 or not files or len(files) > 2 or len(info.get("final") or "") >= 1500:
+            return False
+        if any(f.lower().endswith((".pptx", ".xlsx", ".xlsm", ".html", ".htm", ".pbix")) for f in files):
+            return False
+        after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        return not after or after[-1].get("code") == 0
+
     def _small_code_verified(self) -> bool:
         """A code task (not a document, deck or app) where the agent ran something after its last edit and the last
         such run succeeded. The independent grader on these cost 2 to 4 times the task itself (measured: $0.0086 against
@@ -1624,8 +1637,9 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
-            if why.startswith("files made") and self._small_code_verified() and os.environ.get("MH_GRADER_SMALL", "0") != "1":
-                return False, final        # a small code change whose own checks passed: no second model loop (MH_GRADER_SMALL=1 keeps it)
+            if why.startswith("files made") and os.environ.get("MH_GRADER_SMALL", "0") != "1" and (
+                    self._small_code_verified() or self._small_job(info)):
+                return False, final        # a small job, or a code change whose own checks passed: no second model loop
             rounds = g.get("grade_rounds", 0)
             self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
                        + (f" (round {rounds + 1})" if rounds else "") + "..."})
@@ -2680,6 +2694,11 @@ class Agent:
                 raw_body = ST.read_body(r, first)
                 try:
                     data = json.loads(raw_body.decode("utf-8", "replace"))
+                    from meshpool_harness import provider_setup as _PS
+                    if not _PS._is_reply("anthropic" if anthropic else "openai", data):   # W-06: a 200 that is no reply
+                        e = data.get("error") if isinstance(data, dict) else None
+                        e = (e.get("message") if isinstance(e, dict) else e) or raw_body[:200].decode("utf-8", "replace")
+                        raise RuntimeError(f"HTTP 200: the endpoint answered without a model reply: {str(e)[:200]}")
                     return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
                 except ValueError:                       # a gateway that streams anyway, or sends an error page
                     if raw_body.lstrip().startswith(b"data:"):
@@ -2696,7 +2715,7 @@ class Agent:
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, http.client.HTTPException) as e:
             if got_text:                             # HTTPException: e.g. IncompleteRead, the stream dropped mid-reply
                 self.emit({"type": "stream_reset"})
-            raise RuntimeError(f"HTTP 0: connection problem ({e})")
+            raise RuntimeError(f"HTTP 0: connection problem ({_mhttp.explain(e, url)})")
         finally:
             if live and getattr(self, "_live", None) is live[-1]:   # never clear a newer call's handle
                 self._live = None
