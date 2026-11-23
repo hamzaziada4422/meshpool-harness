@@ -40,7 +40,13 @@ def treasury_yield(tenor: str = "10Y", year: int | None = None, text: str | None
     fetched = text is None
     text = text if text is not None else _get(url)
     tag = TENORS[tenor]
-    rows = re.findall(r"<d:NEW_DATE[^>]*>(\d{4}-\d{2}-\d{2})T[^<]*<.*?<d:" + tag + r"[^>]*>([\d.]+)<", text, re.S)
+    rows = []
+    for ent in re.split(r"<(?:\w+:)?properties[^>]*>", text)[1:]:       # one feed entry at a time: a null tenor
+        ent = re.split(r"</(?:\w+:)?properties>", ent, maxsplit=1)[0]
+        d = re.search(r"<d:NEW_DATE[^>]*>(\d{4}-\d{2}-\d{2})T", ent)
+        v = re.search(r"<d:" + tag + r"(?![^>]*null=\"true\")[^>]*>([\d.]+)<", ent)
+        if d and v:
+            rows.append((d.group(1), v.group(1)))
     if not rows:
         if fetched and this_year:
             return treasury_yield(tenor, year - 1)

@@ -22,4 +22,4 @@ Any agent that speaks the Agent Client Protocol (ACP) works:
 
 - `mode` is `code` or `cowork`: the tab the harness appears in.
 - `share_mcp` (default true) passes the MCP servers from Meshpool's `mcp.json` to the harness.
-- The `examples` folder has ready-made files for Goose and Codex.
+- The `examples` folder has a ready-made file for Goose (Codex is built in).

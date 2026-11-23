@@ -54,6 +54,7 @@ MODES = ("code", "cowork")
 # OpenCode: the open-source coding agent, over ACP (`opencode acp`). It runs on the same providers as Meshpool's own
 # agents: its config in the Meshpool data folder points it at the key endpoint or at the local ChatGPT relay.
 OPENCODE_PKG = "opencode-ai@1.19.5"
+CODEX_CLI = "@openai/codex@latest"          # only its `login` is used
 OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp", "models": "meshpool",
             "command": "npx", "args": ["-y", OPENCODE_PKG, "acp"], "share_mcp": True, "install": NODE_NOTE,
             "tagline": "The open-source coding agent, with its own tools and plans",
@@ -375,9 +376,15 @@ def login(which: str) -> dict:
                          "API key or another API key, or sign in once with `codex login` from a terminal "
                          "(npm install -g @openai/codex): Meshpool then uses that sign-in.")
     if which == "codex":
-        cmd = [npx(), "-y", "@openai/codex@latest", "login"]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
-                         **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
+        if not shutil.which("npx"):
+            raise ValueError("Signing in with ChatGPT needs Node.js (npx), which was not found. Install Node.js, or use "
+                             "an API key instead.")
+        cmd = [npx(), "-y", CODEX_CLI, "login"]
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
+                             **({"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}))
+        except OSError as e:
+            raise ValueError(f"Could not start the sign-in: {e}")
         return {"ok": True, "message": "Your browser opens for the ChatGPT sign-in. Come back here when it says you "
                                        "are signed in."}
     raise ValueError("Unknown sign-in.")

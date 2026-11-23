@@ -22,7 +22,8 @@ def test_cron_entry_is_added_once_and_removed():
     assert "backup" in left and "meshpool" not in left
 
 
-def test_windows_and_mac_registration(tmp_path):
+def test_windows_and_mac_registration(tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "data"))
     calls = []
     SO.install(run=_fake(calls), platform="win32")
     assert calls[0][0][0] == "schtasks" and "/MO" in calls[0][0]

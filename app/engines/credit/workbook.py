@@ -34,8 +34,11 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
     book.section("Proposed loan")
     src_t, src_p = "Loan request / term sheet", "Bank credit policy (defaults; replace with the bank's own)"
     book.add(f"Loan amount ({u})", loan.amount, "num", "loan_amount", src_t, loan.purpose or "Requested amount")
-    book.add("Interest rate (% per year)", loan.rate, "pct", "loan_rate", src_t, "Requested pricing")
-    book.add("Amortisation (years, level payments)", loan.amort_years, "num", "loan_amort", src_t, "Requested terms")
+    src_a = "Assumption: not stated in the request (replace with the term sheet)"
+    book.add("Interest rate (% per year)", loan.rate, "pct", "loan_rate",
+             src_a if "rate" in loan.defaulted else src_t, "Requested pricing")
+    book.add("Amortisation (years, level payments)", loan.amort_years, "num", "loan_amort",
+             src_a if "amort_years" in loan.defaulted else src_t, "Requested terms")
     book.add("Refinance existing funded debt (1 = yes, 0 = no)", 1 if loan.refinance_existing else 0, "int",
              "refinance", src_t, "Use of proceeds")
     book.section("Credit policy")
@@ -206,11 +209,12 @@ def build(fin: Financials, loan: Loan, pol: Policy, path: str, date: str = "") -
              "x")
         B._f(K, f"D{r}", f'=IF(B{r}<=0,"NM",{n["pf_debt"]}/B{r})', "x")
         r += 1
-    K.cell(row=r, column=1, value="Rate stress on the new loan")
-    B._f(K, f"B{r}", f"={cf('ebitda')}", "num")
-    B._f(K, f"C{r}", f'=IF({n["exist_ds"]}+PMT(loan_rate+rate_stress,loan_amort,-loan_amount)=0,"NM",'
-         f'{cf("cads")}/({n["exist_ds"]}+IF(loan_amount=0,0,PMT(loan_rate+rate_stress,loan_amort,-loan_amount))))', "x")
-    B._f(K, f"D{r}", f"={n['pf_lev']}", "x")
+    if loan.floating and loan.amount:                      # analysis.py omits the rate stress for a fixed / zero loan
+        K.cell(row=r, column=1, value="Rate stress on the new loan")
+        B._f(K, f"B{r}", f"={cf('ebitda')}", "num")
+        B._f(K, f"C{r}", f'=IF({n["exist_ds"]}+PMT(loan_rate+rate_stress,loan_amort,-loan_amount)=0,"NM",'
+             f'{cf("cads")}/({n["exist_ds"]}+IF(loan_amount=0,0,PMT(loan_rate+rate_stress,loan_amort,-loan_amount))))', "x")
+        B._f(K, f"D{r}", f"={n['pf_lev']}", "x")
     K.column_dimensions["A"].width = 52
     for c in "BCDE":
         K.column_dimensions[c].width = 16

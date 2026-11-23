@@ -198,6 +198,7 @@ jobs:
           sums=$(retry "${CURL[@]}" https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt)
           NODE=$(printf '%s\n' "$sums" | grep -oE 'node-v22\.[0-9.]+-darwin-arm64\.tar\.gz' | head -1 | sed 's/-darwin-arm64.tar.gz//')
           retry "${CURL[@]}" -o node.tar.gz "https://nodejs.org/dist/latest-v22.x/$NODE-darwin-${{ matrix.arch }}.tar.gz"
+          echo "$(printf '%s\n' "$sums" | grep " $NODE-darwin-${{ matrix.arch }}.tar.gz\$" | cut -d' ' -f1)  node.tar.gz" | shasum -a 256 -c -
           mkdir -p "node-mac-${{ matrix.arch }}" && tar -xzf node.tar.gz -C "node-mac-${{ matrix.arch }}" --strip-components=1 && rm node.tar.gz
           mkdir -p pi && retry npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
       - name: Build the app tree
@@ -308,6 +309,7 @@ jobs:
           sums=$(retry "${CURL[@]}" https://nodejs.org/dist/latest-v22.x/SHASUMS256.txt)
           NODE=$(printf '%s\n' "$sums" | grep -oE 'node-v22\.[0-9.]+-win-x64\.zip' | head -1)
           retry "${CURL[@]}" -o node.zip "https://nodejs.org/dist/latest-v22.x/$NODE"
+          echo "$(printf '%s\n' "$sums" | grep " $NODE\$" | cut -d' ' -f1)  node.zip" | sha256sum -c -
           python -m zipfile -e node.zip . && mv "${NODE%.zip}" node-win && rm node.zip
           # MinGit: build_all.py fetches the pinned, checksum-verified zip (packaging/bundled_tools.py)
           mkdir -p pi && retry npm install --prefix pi --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
@@ -586,6 +588,9 @@ jobs:
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           TAG="v$VER"
+          if [ "${{ github.event_name }}" = release ] && [ "${{ github.event.release.tag_name }}" != "$TAG" ]; then
+            echo "::error::the published release is ${{ github.event.release.tag_name }} but __version__ says $VER"; exit 1
+          fi
           gh release view "$TAG" --json isDraft -q .isDraft | grep -qx false || { echo "::error::$TAG is not a public release"; exit 1; }
           (cd built && sha256sum -c Meshpool-Linux-x64.tar.gz.sha256)
           gh release upload "$TAG" built/Meshpool-Linux-x64.tar.gz built/Meshpool-Linux-x64.tar.gz.sha256 --clobber
@@ -635,6 +640,9 @@ jobs:
           set -euo pipefail
           VER=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' app/meshpool_harness/__init__.py)
           TAG="v$VER"
+          if [ "${{ github.event_name }}" = release ] && [ "${{ github.event.release.tag_name }}" != "$TAG" ]; then
+            echo "::error::the published release is ${{ github.event.release.tag_name }} but __version__ says $VER"; exit 1
+          fi
           # the in-app code update installs this archive, checked against SHA256SUMS.txt
           git archive --format=tar.gz --prefix=meshpool-harness/ -o dist/Meshpool-src.tar.gz HEAD
           # update-manifest.json (docs/plan/AUTO_UPDATE.md): runtime_changed is true when a bundled program changed (the
@@ -642,7 +650,7 @@ jobs:
           # patch, the LibreOffice, Chromium and Git pins in bundled_tools.py, the LibreOffice prune list), so the app
           # then uses the full installer instead of the in-place code update. Node and Pi are versioned in this workflow:
           # if you change them, also change one of the listed files.
-          gh release download "$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName')" \
+          gh release download "$(gh release list --exclude-pre-releases --exclude-drafts --limit 3 --json tagName -q '[.[] | select(.tagName != "'"v$VER"'")][0].tagName')" \
             --pattern update-manifest.json --dir prev 2>/dev/null || true
           python3 packaging/updater/make_manifest.py --version "$VER" \
             --runtime-file packaging/requirements-pinned.txt --runtime-file packaging/requirements-runtime.txt \

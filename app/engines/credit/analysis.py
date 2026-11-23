@@ -39,7 +39,9 @@ LABELS = {
     "sga": ["sg&a", "selling general and administrative", "operating expenses", "opex", "overheads"],
     "operating_income": ["operating income", "operating profit", "ebit", "income from operations"],
     "interest_expense": ["interest expense", "interest", "finance costs", "interest paid"],
-    "pretax_income": ["pre-tax income", "pretax income", "income before taxes", "profit before tax", "ebt"],
+    "pretax_income": ["pre-tax income", "pretax income", "income before taxes", "profit before tax", "ebt",
+                      "income before income taxes", "earnings before income taxes", "profit before income taxes",
+                      "income before provision for income taxes", "earnings before tax"],
     "income_tax": ["income tax", "income taxes", "tax expense", "taxes", "provision for income taxes"],
     "net_income": ["net income", "net profit", "profit after tax", "net earnings"],
     "da": ["depreciation and amortisation", "depreciation and amortization", "d&a", "depreciation"],
@@ -50,13 +52,16 @@ LABELS = {
     "dividends": ["dividends", "dividends paid", "distributions", "owner distributions", "drawings"],
     "buybacks": ["share repurchases", "buybacks", "repurchase of shares"],
     "cfo": ["cash from operating activities", "operating cash flow", "cash from operations",
-            "net cash provided by operating activities"],
+            "net cash provided by operating activities", "cash flow from operations",
+            "cash flow from operating activities", "cash flows from operating activities",
+            "net cash from operating activities", "cash generated from operations"],
     "cash": ["cash", "cash and cash equivalents", "cash and equivalents"],
     "receivables": ["accounts receivable", "receivables", "trade receivables", "debtors"],
     "inventory": ["inventory", "inventories", "stock"],
     "current_assets": ["total current assets", "current assets"],
     "ppe": ["pp&e", "property plant and equipment", "fixed assets", "net fixed assets",
-            "property, plant and equipment, net"],
+            "property, plant and equipment, net", "property and equipment", "property and equipment net",
+            "property plant and equipment net", "plant and equipment"],
     "goodwill": ["goodwill"],
     "intangibles": ["intangible assets", "intangibles", "other intangibles"],
     "total_assets": ["total assets"],
@@ -96,6 +101,7 @@ class Loan:
     floating: bool = True                     # rate stress applies
     refinance_existing: bool = False          # proceeds repay existing funded debt
     purpose: str = ""
+    defaulted: tuple = ()                     # fields the request did not state (rate, amort_years): assumptions
 
 
 @dataclass
@@ -139,6 +145,8 @@ def _div(a, b):
 
 def ebitda(fin: Financials, y: str) -> float | None:
     da = _mag(fin.v(y, "da"))
+    if da is None:
+        da = 0.0                              # no D&A row: EBITDA = operating income (the workbook does the same)
     oi = fin.v(y, "operating_income")
     if oi is None:
         pt, ie = fin.v(y, "pretax_income"), _mag(fin.v(y, "interest_expense"))
@@ -332,7 +340,8 @@ EXCLUDE = {
     "operating_income": re.compile(rf"\b(other|{_BALANCE_WORDS})"),
     "interest_expense": re.compile(rf"^(?!.*\bexpense).*\b(income|earned)\b|\b(capitalized|capitalised|{_BALANCE_WORDS})"),
     "pretax_income": re.compile(rf"\b({_BALANCE_WORDS})"),
-    "income_tax": re.compile(rf"\b({_BALANCE_WORDS})"),
+    "income_tax": re.compile(rf"\b(before|{_BALANCE_WORDS})"),
+    "cash": re.compile(r"\b(flow|flows|operating|investing|financing|operations|activities)\b"),
     "net_income": re.compile(rf"\b({_BALANCE_WORDS})"),
     "da": re.compile(rf"\b({_BALANCE_WORDS})"),
     "sbc": re.compile(rf"\b({_BALANCE_WORDS})"),
@@ -362,54 +371,139 @@ def match_label(label: str) -> str | None:
     return best
 
 
+def _parse_cell(x):
+    """(value, ok). Handles 1,234.5 and 1.234,5 / 12,5 (decimal comma), (123) negatives and $; text such as
+    '12%', 'n/a' or '1.2M' is not a number here (ok False) and is reported, not guessed."""
+    if x is None or (isinstance(x, str) and x.strip() in ("", "-", "--")):
+        return None, True
+    if isinstance(x, bool):
+        return None, False
+    if isinstance(x, (int, float)):
+        return float(x), True
+    t = str(x).strip().replace("$", "").replace("\u2212", "-").replace(" ", "")
+    neg = t.startswith("(") and t.endswith(")")
+    t = t.strip("()")
+    if not re.fullmatch(r"[-+]?[\d.,]+", t):
+        return None, False
+    if "," in t and "." in t:
+        dec = "," if t.rfind(",") > t.rfind(".") else "."
+        t = t.replace("." if dec == "," else ",", "").replace(dec, ".")
+    elif "," in t:
+        if re.fullmatch(r"[-+]?\d{1,3}(,\d{3})+", t):
+            t = t.replace(",", "")                     # 1,234 / 1,234,567: thousands
+        elif t.count(",") == 1:
+            t = t.replace(",", ".")                    # 12,5: decimal comma
+        else:
+            return None, False
+    elif t.count(".") > 1:
+        if re.fullmatch(r"[-+]?\d{1,3}(\.\d{3})+", t):
+            t = t.replace(".", "")                     # 1.234.567: European thousands
+        else:
+            return None, False
+    try:
+        v = float(t)
+    except ValueError:
+        return None, False
+    return (-v if neg else v), True
+
+
+_UNIT_SCALE = [(re.compile(r"(?i)in\s+billions?|\$\s*bn\b|\(\s*bn\s*\)"), 1000.0, "billions"),
+               (re.compile(r"(?i)in\s+thousands?|\$\s*000|\$\s*k\b|\(\s*000s?\s*\)|000s\b"), 0.001, "thousands"),
+               (re.compile(r"(?i)in\s+millions?|\$\s*m\b|\(\s*mm?\s*\)"), 1.0, "millions")]
+
+
+def _unit_scale(rows: list, hdr_i: int):
+    """(factor to $m, note). Looks for 'in thousands' / 'in millions' in the title rows and the header's first cell."""
+    text = " ".join(str(c) for r in rows[:hdr_i + 1] for c in r[:1] + (r[1:2] if r is not rows[hdr_i] else [])
+                    if c not in (None, ""))
+    for rx, f, nm in _UNIT_SCALE:
+        if rx.search(text):
+            return f, (f"unit: table is in {nm}; converted to $m" if f != 1.0 else None)
+    return 1.0, None
+
+
 def from_table(path: str, name: str | None = None, sheet: str | None = None) -> Financials:
     """A borrower spread from CSV or Excel: first column line labels, a header row of years, values in one unit.
     Labels are mapped to standard keys by synonyms; costs may be positive or negative (they are normalised).
     Unmapped rows are returned in .sources['_unmapped'] for review."""
     p = Path(path)
-    rows: list[list] = []
+    blocks: list[tuple[str, list[list]]] = []             # (sheet name, rows); a CSV is one block
     if p.suffix.lower() in (".xlsx", ".xlsm"):
         from openpyxl import load_workbook
         wb = load_workbook(p, data_only=True)
-        ws = wb[sheet] if sheet else wb.worksheets[0]
-        rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        sheets = [wb[sheet]] if sheet else wb.worksheets   # statements often sit on separate tabs (IS, BS, CF)
+        blocks = [(ws.title, [list(r) for r in ws.iter_rows(values_only=True)]) for ws in sheets]
     else:
-        with p.open(newline="") as f:
-            rows = [r for r in csv.reader(f)]
-    hdr_i = next(i for i, r in enumerate(rows) if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1)
-    hdr = rows[hdr_i]
-    cols = [(j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()) for j, c in enumerate(hdr)
-            if j > 0 and c is not None and re.search(r"(19|20)\d{2}", str(c))]
-    cols.sort(key=lambda jc: int(re.search(r"(19|20)\d{2}", jc[1]).group(0)))   # oldest first, whatever the order
-    years = [y if y.upper().startswith("FY") else f"FY{y}" for _, y in cols]
-    vals = {y: {} for y in years}
-    srcs: dict = {y: {} for y in years}
-    unmapped = []
+        try:
+            with p.open(newline="", encoding="utf-8-sig") as f:
+                blocks = [("", [r for r in csv.reader(f)])]
+        except UnicodeDecodeError:                       # an Excel "CSV" saved in the Windows code page
+            with p.open(newline="", encoding="cp1252", errors="replace") as f:
+                blocks = [("", [r for r in csv.reader(f)])]
+
+    def _yr(c):
+        m = re.search(r"(19|20)\d{2}", str(c))
+        return int(m.group(0)) if m else None
+
+    vals: dict = {}
+    srcs: dict = {}
+    unmapped: list = []
     seen: dict[str, str] = {}
-    for r in rows[hdr_i + 1:]:
-        if not r or r[0] in (None, ""):
-            continue
-        k = match_label(r[0])
-        if k is None:
-            if not re.search(r"liabilities (and|&) ", _norm_label(r[0])):   # the L&E total is a check line
-                unmapped.append(str(r[0]))
-            continue
-        if k in seen:                                    # the first row for a key is used; say which one was not
-            unmapped.append(f"{r[0]} (also maps to {k}; used '{seen[k]}')")
-            continue
-        seen[k] = str(r[0])
-        benefit = k == "income_tax" and re.search(r"\bbenefit\b", _norm_label(r[0])) and \
-            not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
-        for (j, _), y in zip(cols, years):
-            x = r[j] if j < len(r) else None
-            try:
-                v = float(str(x).replace(",", "").replace("(", "-").replace(")", "").replace("$", "")) \
-                    if x not in (None, "", "-") else None
-            except ValueError:
-                v = None
-            if v is None or k in vals[y]:
+    notes: list = []
+    used = 0
+    for sname, rows in blocks:
+        hdr_i = next((i for i, r in enumerate(rows)
+                      if sum(bool(re.search(r"(19|20)\d{2}", str(c or ""))) for c in r[1:]) >= 1), None)
+        if hdr_i is None:
+            continue                                      # a cover or notes tab
+        used += 1
+        where = f"{p.name}{' / ' + sname if sname and len(blocks) > 1 else ''}"
+        scale, unit_note = _unit_scale(rows, hdr_i)
+        if unit_note and unit_note not in notes:
+            notes.append(unit_note)
+        hdr = rows[hdr_i]
+        cols, taken = [], set()
+        for j, c in enumerate(hdr):
+            if j > 0 and c is not None and _yr(c) is not None:
+                if _yr(c) in taken:                       # FY2023 Actual / FY2023 Budget: first column wins
+                    unmapped.append(f"column {c!r} repeats year {_yr(c)} and was ignored")
+                    continue
+                taken.add(_yr(c))
+                cols.append((j, re.search(r"(?:FY)?\s*((19|20)\d{2})", str(c)).group(0).strip()))
+        cols.sort(key=lambda jc: int(re.search(r"(19|20)\d{2}", jc[1]).group(0)))   # oldest first
+        ys = [y if y.upper().startswith("FY") else f"FY{y}" for _, y in cols]
+        for y in ys:
+            vals.setdefault(y, {})
+            srcs.setdefault(y, {})
+        for r in rows[hdr_i + 1:]:
+            if not r or r[0] in (None, ""):
                 continue
-            vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
-            srcs[y][k] = f"{p.name}, row '{r[0]}', column {hdr[j]}"
+            k = match_label(r[0])
+            if k is None:
+                if not re.search(r"liabilities (and|&) ", _norm_label(r[0])):   # the L&E total is a check line
+                    unmapped.append(str(r[0]))
+                continue
+            if k in seen:                                # the first row for a key is used; say which one was not
+                unmapped.append(f"{r[0]} (also maps to {k}; used '{seen[k]}')")
+                continue
+            seen[k] = str(r[0])
+            benefit = k == "income_tax" and re.search(r"\bbenefit\b", _norm_label(r[0])) and \
+                not re.search(r"\b(expense|provision)\b", _norm_label(r[0]))
+            for (j, _), y in zip(cols, ys):
+                x = r[j] if j < len(r) else None
+                v, ok = _parse_cell(x)
+                if not ok:
+                    unmapped.append(f"{r[0]} / {hdr[j]}: cell {x!r} is not a plain number and was skipped")
+                if v is None or k in vals[y]:
+                    continue
+                v *= scale
+                vals[y][k] = abs(v) if benefit else -abs(v) if k in NEGATIVE else v
+                srcs[y][k] = f"{where}, row '{r[0]}', column {hdr[j]}"
+    if not used:
+        raise ValueError(f"{p.name}: no header row with years such as FY2024 (years must be in columns after the "
+                         "line labels)")
+    years = sorted(vals, key=lambda y: int(re.search(r"(19|20)\d{2}", y).group(0)))
+    vals = {y: vals[y] for y in years}
+    unmapped += notes
     srcs["_unmapped"] = unmapped
     return Financials(name or p.stem, years, vals, srcs)

@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -127,10 +128,21 @@ def _render(pdf: Path, page: int, width: int) -> bytes:
 
 # ------------------------------------------------------------------ Office -> PDF (background, one at a time)
 def _convert_job(src: Path, key: str) -> None:
+    if sys.platform.startswith("linux"):          # background work: the chat and the page come first (this thread's
+        try:                                      # priority, inherited by LibreOffice)
+            os.nice(10)
+        except OSError:
+            pass
     out = _dir() / key
     try:
         with _CONVERT:
             if (out / "doc.pdf").exists():
+                if not (out / "meta.json").exists():          # a crash between the two writes: finish the job
+                    part = out / f"meta.{os.getpid()}.{threading.get_ident()}.tmp"
+                    part.write_text(json.dumps({"total": _pdf_pages(out / "doc.pdf")}))
+                    os.replace(part, out / "meta.json")
+                with _JOBS_LOCK:
+                    _JOBS.pop(key, None)
                 return
             from engines.forge.common import soffice_convert
             tmp = _dir() / (key + ".tmp")
@@ -237,12 +249,16 @@ def _csv_sheet(p: Path) -> list[dict]:
             delim = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|").delimiter
         except csv.Error:
             pass
+    try:                                          # a cell over 128 KB must not fail the whole preview
+        csv.field_size_limit(max(csv.field_size_limit(), min(len(text) + 1, 2 ** 31 - 1)))
+    except (OverflowError, ValueError):
+        pass
     rows, cols, more = [], 0, False
     for i, row in enumerate(csv.reader(io.StringIO(text), delimiter=delim)):
         if i >= MAX_ROWS:
             more = True
             break
-        rows.append(row[:MAX_COLS])
+        rows.append([c[:2000] for c in row[:MAX_COLS]])
         cols = max(cols, len(rows[-1]))
     return [{"name": p.stem, "rows": [r + [""] * (cols - len(r)) for r in rows], "cols": cols, "more": more, "wide": False}]
 
@@ -255,7 +271,10 @@ def meta(root: str, rel: str) -> dict:
     base = {"name": p.name, "path": rel, "ext": p.suffix.lower().lstrip("."), "size": st.st_size, "mtime": st.st_mtime,
             "kind": k}
     if k == "pdf":
-        n = _pdf_pages(p)
+        try:
+            n = _pdf_pages(p)
+        except Exception:  # noqa: BLE001
+            raise ValueError("This PDF is damaged or protected, so it cannot be previewed here. Open it in its app.") from None
         return base | {"kind": "pages", "state": "ready", "pages": min(n, MAX_PAGES), "total": n}
     if k == "office":
         return base | {"kind": "pages"} | _office_state(p)
@@ -266,6 +285,9 @@ def meta(root: str, rel: str) -> dict:
             try:
                 return base | {"state": "ready", "sheets": _xlsx_sheets(p)}
             except Exception:  # noqa: BLE001 - a workbook openpyxl cannot read: let LibreOffice draw it
+                import zipfile
+                if not zipfile.is_zipfile(p):
+                    raise ValueError("This workbook is damaged, so it cannot be previewed. Open it in its app.") from None
                 return base | {"kind": "pages"} | _office_state(p)
         return base | {"state": "ready", "sheets": _csv_sheet(p)}
     if k == "image":

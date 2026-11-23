@@ -28,6 +28,11 @@ def numbers_in(text: str) -> list[tuple[str, float, bool]]:
     return out
 
 
+_SCALE = re.compile(r"\s*(thousand|million|billion|trillion|bn|mn|k|m|b)\b", re.I)
+_SCALES = {"thousand": 1e3, "k": 1e3, "million": 1e6, "mn": 1e6, "m": 1e6, "billion": 1e9, "bn": 1e9, "b": 1e9,
+           "trillion": 1e12}
+
+
 def _year(tok: str) -> bool:
     """A plain year such as 2024; '$2,045', '2045%' or '2045.0' are amounts, not years."""
     return re.fullmatch(r"(19|20)\d\d|2100", tok) is not None
@@ -43,12 +48,26 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
     (allowing rounding, and percent <-> fraction). Returns untraced numbers."""
     logged = [v for _, v, _ in numbers_in(code_output)]
     missing = []
-    for tok, v, pct in numbers_in(answer):
+    for m in NUM.finditer(answer):
+        tok = m.group()
+        v, pct = _num(tok)
+        if v is None:
+            continue
+        if not pct and re.match(r"\s*(?:percent|per cent|pct)\b", answer[m.end():], re.I):
+            pct = True                                 # "45 percent" is 45%
+        i0 = m.start()
+        if (tok[0] in "-−" and i0 > 0 and answer[i0 - 1].isalnum()) or \
+                (tok[0] not in "-−" and i0 > 1 and answer[i0 - 1] in "-−" and answer[i0 - 2].isalpha()):
+            continue                                   # "COVID-19", "Top-20": a hyphen, not a minus sign
         if v in TRIVIAL or _year(tok):
             continue
         d = _decimals(tok)
         # (candidate, decimals it is written to): percent <-> fraction moves the decimal point two places
         cands = [(v, d), (v / 100, d + 2)] if pct else [(v, d), (v * 100, d - 2)]
+        sc = _SCALE.match(answer, m.end()) if not pct else None
+        if sc:                                         # "1.2 million" against a printed 1200000
+            cands.append((v * _SCALES[sc.group(1).lower()], 0))
+        cands += [(-c, nd) for c, nd in cands]   # "fell 5.2%" against a printed -5.2 (and back)
         ok = False
         for c, nd in cands:
             for l in logged:
@@ -80,6 +99,9 @@ def check_quotes(answer: str, sources: dict[str, str]) -> list[dict]:
         q = re.sub(r"\s*\.\.\.\s*|\s*…\s*", "\u0000", q)  # ellipsis: each fragment must match, in order
         parts = [p for p in q.split("\u0000") if p]
         hit = None
+        if not parts:                                  # only ellipses: nothing to verify, so not verified
+            bad.append({"check": "fabricated_quote", "detail": m.group(1)[:120]})
+            continue
         for k, src in normed.items():
             pos, ok = 0, True
             for p in parts:

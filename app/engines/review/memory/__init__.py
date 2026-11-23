@@ -14,6 +14,13 @@ HERE = Path(__file__).resolve().parent
 MAX_LESSONS = 60
 
 
+def _lessons_path(kind: str) -> Path:
+    """Lessons are user data: they live under the Meshpool home, never inside the (possibly read-only or signed)
+    installed package."""
+    from meshpool_harness.config import home
+    return home() / "memory" / f"lessons_{kind}.md"
+
+
 def _on() -> bool:
     return os.environ.get("MH_MEMORY", "1") != "0"
 
@@ -22,7 +29,12 @@ def load(kind: str) -> str:
     """The masterclass and the lessons learned since, as one block for a writer prompt ("" when off or missing)."""
     if not _on():
         return ""
-    parts = [p.read_text().strip() for p in (HERE / f"masterclass_{kind}.md", HERE / f"lessons_{kind}.md") if p.exists()]
+    try:
+        user = _lessons_path(kind)
+    except Exception:  # noqa: BLE001 - no resolvable home: the shipped files only
+        user = HERE / f"lessons_{kind}.md"
+    files = (HERE / f"masterclass_{kind}.md", HERE / f"lessons_{kind}.md", user)
+    parts = [p.read_text(encoding="utf-8").strip() for p in dict.fromkeys(files) if p.exists()]
     if not parts:
         return ""
     return ("MASTERCLASS from the senior partner and the MD who will review this work. Follow it; it is how they "
@@ -62,11 +74,18 @@ def learn(kind: str, reviews: list[dict], client, model: str, task_id: str = "me
         return []
     if not new:
         return []
-    path = HERE / f"lessons_{kind}.md"
-    old = path.read_text().splitlines() if path.exists() else [f"# Lessons added after later reviews ({kind})", ""]
-    key = lambda x: re.sub(r"[^a-z]+", " ", x.lower()).strip()[:60]    # noqa: E731
-    seen = {key(x) for x in old}
-    added = [x for x in new if key(x) not in seen]
-    body = [x for x in old[2:] if x.startswith("- ")] + [f"- {x} ({_dt.date.today().isoformat()})" for x in added]
-    path.write_text("\n".join(old[:2] + body[-MAX_LESSONS:]) + "\n")
+    try:
+        path = _lessons_path(kind)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        old = path.read_text(encoding="utf-8").splitlines() if path.exists() else \
+            [f"# Lessons added after later reviews ({kind})", ""]
+        key = lambda x: re.sub(r"[^a-z]+", " ", x.lower()).strip()[:60]    # noqa: E731
+        seen = {key(x) for x in old}
+        added = [x for x in new if key(x) not in seen]
+        body = [x for x in old[2:] if x.startswith("- ")] + [f"- {x} ({_dt.date.today().isoformat()})" for x in added]
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text("\n".join(old[:2] + body[-MAX_LESSONS:]) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:  # noqa: BLE001 - memory is best effort and never raises
+        return []
     return added

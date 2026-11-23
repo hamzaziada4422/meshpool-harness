@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import shutil
 import time
 from pathlib import Path
@@ -69,19 +70,24 @@ def scan(folder: str, limit: int = 300) -> dict:
     if p is None:
         return {"files": 0, "starters": []}
     files: list[dict] = []
-    depth0 = len(p.parts)
-    for f in p.rglob("*"):
-        if len(files) >= limit or len(f.parts) - depth0 > 3:
-            break
-        if any(part in SKIP_DIRS or part.startswith(".") for part in f.relative_to(p).parts):
-            continue
-        kind = KINDS.get(f.suffix.lower())
-        if kind and f.is_file():
+    for dirpath, dirnames, filenames in os.walk(p):
+        rel = Path(dirpath).relative_to(p).parts
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")] if len(rel) < 2 else []
+        for n in filenames:
+            if len(files) >= limit:
+                break
+            kind = KINDS.get(Path(n).suffix.lower())
+            if not kind or n.startswith("."):
+                continue
+            f = Path(dirpath) / n
             try:
                 st = f.stat()
             except OSError:
                 continue
-            files.append({"name": f.name, "path": str(f), "kind": kind, "size": st.st_size, "mtime": st.st_mtime})
+            if f.is_file():
+                files.append({"name": n, "path": str(f), "kind": kind, "size": st.st_size, "mtime": st.st_mtime})
+        if len(files) >= limit:
+            break
     return {"files": len(files), "starters": starters_for(files), "folder": str(p)}
 
 

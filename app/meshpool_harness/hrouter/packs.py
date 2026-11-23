@@ -71,7 +71,23 @@ for f in sys.argv[1:]:
     try:
         text = open(f, encoding="utf-8").read()
         if f.endswith(".json"):
-            json.loads(text)
+            try:
+                json.loads(text)
+            except json.JSONDecodeError:
+                # JSONC (tsconfig, .vscode/*, devcontainer, eslintrc): comments and trailing commas are legal there
+                import re
+                n = f.replace("\\", "/").lower()
+                base = n.rsplit("/", 1)[-1]
+                if not (base.startswith(("tsconfig", "jsconfig", ".eslintrc", ".babelrc", "devcontainer", "tslint"))
+                        or "/.vscode/" in "/" + n or "/.devcontainer/" in "/" + n):
+                    raise
+                t = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
+                           lambda m: m.group(0) if m.group(0).startswith('"') else " ", text, flags=re.S)
+                t = re.sub(r',(\s*[}\]])', r'\1', t)
+                try:
+                    json.loads(t)
+                except json.JSONDecodeError:
+                    raise
         elif f.endswith(".toml"):
             try:
                 import tomllib
@@ -148,7 +164,7 @@ PACKS = {
     ], "go test ./..."),
     "java": Pack("java", "Java: run diagnostics after edits; use the project's build tool (Maven or Gradle) for "
                  "tests.", [
-        Check("javac", (".java",), "javac", "javac -d \"${TMPDIR:-/tmp}/mh-javac\" -Xlint:none {files} 2>&1"),
+        Check("javac", (".java",), "javac", "javac -d \"${{TMPDIR:-/tmp}}/mh-javac\" -Xlint:none {files} 2>&1"),
     ], "mvn -q test"),
     "c": Pack("c", "C: run diagnostics (compiler syntax check) after edits.", [
         Check("cc -fsyntax-only", (".c", ".h"), "cc", "cc -fsyntax-only {files} 2>&1"),
@@ -334,7 +350,20 @@ def diagnostics(ws, paths: list[str] | None = None, language: str | None = None,
             label = f"python {v} syntax" if v else label
         ran.append(label)
         body = out.split("\n", 1)[1] if out.startswith("[exit") else out
-        locs = errctx.locations(body)
+        if "TS18003" in body:                    # tsconfig with nothing to compile: not a problem in the code
+            body = "\n".join(l for l in body.splitlines() if "TS18003" not in l)
+            if code not in (0, None) and not body.strip():
+                code = 0
+        sp_locs = []                             # paths with spaces: errctx's patterns stop at the first space
+        keep = []
+        for l in body.splitlines():
+            m = re.match(r"^(\S[^:\n]*? [^:\n]*\.\w{1,6}):(\d+):(\d+):? ?(.*)$", l)
+            if m and (ws.root / m.group(1)).exists():
+                sp_locs.append((m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)))
+            else:
+                keep.append(l)
+        body = "\n".join(keep) if sp_locs else body
+        locs = errctx.locations(body) + sp_locs
         if not locs and code not in (0, None) and body.strip() and "checked" not in body.strip().splitlines()[-1]:
             raw_tail.append(f"[{label}]\n" + body.strip()[-800:])
         blines = body.splitlines()
@@ -348,6 +377,8 @@ def diagnostics(ws, paths: list[str] | None = None, language: str | None = None,
             except (OSError, ValueError):
                 pass
             problems.append((path, line, col, msg.strip()))
+    has_other = {os.path.normpath(p[0]) for p in problems if not p[3].startswith("E902")}
+    problems = [p for p in problems if not (p[3].startswith("E902") and os.path.normpath(p[0]) in has_other)]
     seen, uniq = set(), []
     for p in problems:
         syntax = "syntax" in p[3].lower()          # the compiler and Ruff both report it: keep the compiler's
@@ -442,21 +473,31 @@ def quick_check(ws, path: str) -> str:
     return "\n[check after this edit: fix before moving on]\n" + "\n".join(l for l in lines if " F401 " not in l)[:1200]
 
 
+from .signals import cap_text as _cap_text   # noqa: E402
+
 _RUNNER = re.compile(r"`([^`\n]{2,160})`|(?<![\w/.-])((?:python3?|node|deno|ruby|bash|sh)\s+[\w./-]+\.(?:py|js|mjs|cjs|ts|rb|sh)"
                      r"(?:\s+--?[\w-]+(?:[ =][\w./-]+)?)*|pytest(?:\s+[\w./:-]+)*|npm (?:run )?test|yarn test|pnpm test|"
                      r"cargo (?:test|run|build)|go (?:test|run|build)(?:\s+\./\.\.\.)?)")
 _TESTFILE = re.compile(r"(?<![\w/.-])((?:[\w./-]*/)?test_[\w-]+\.py|(?:[\w./-]*/)?[\w-]+_test\.py|(?:[\w./-]*/)?[\w-]+\.test\.[jt]s)\b")
 _STARTS = ("python", "python3", "node", "deno", "ruby", "bash", "sh", "pytest", "npm", "yarn", "pnpm", "cargo", "go",
            "make", "./")
+# only these are re-run automatically before the first turn: they test or run a named file, never publish/deploy/install
+_SAFE_RUN = re.compile(r"^(?:(?:python3?|node|deno|ruby)\s+[\w./-]+\.(?:py|js|mjs|cjs|ts|rb)(?:\s+.*)?"
+                       r"|pytest(?:\s+.*)?|python3?\s+-m\s+pytest(?:\s+.*)?|npm (?:run )?test|yarn test|pnpm test"
+                       r"|cargo test(?:\s+.*)?|go test(?:\s+.*)?)$")
+_UNSAFE_ARGS = re.compile(r"--(?:wipe|delete|force|publish|deploy)\b|\brm\b|\bsudo\b")
 
 
 def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
     """Commands the user named for reproducing the problem, when the files they refer to exist."""
+    text = _cap_text(text)
     cmds: list[str] = []
     py = "python3" if shutil.which("python3") else "python"
     for m in _RUNNER.finditer(text or ""):
         c = (m.group(1) or m.group(2) or "").strip()
-        if not c or not c.split()[0].startswith(_STARTS) or any(ch in c for ch in ";&|><$"):
+        if not c or c.split()[0] not in _STARTS or any(ch in c for ch in ";&|><$"):
+            continue
+        if not _SAFE_RUN.match(c) or _UNSAFE_ARGS.search(c):
             continue
         files = [t for t in c.split()[1:] if re.search(r"\.\w{1,4}$", t)]
         if files and not all((root / f).exists() for f in files):
@@ -469,7 +510,7 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
         if not (root / f).is_file():
             continue
         if f.endswith(".py"):
-            body = (root / f).read_text(errors="replace")
+            body = (root / f).read_text(encoding="utf-8", errors="replace")
             c = f"{py} -m pytest -x -q {f}" if re.search(r"^\s*def test_", body, re.M) and shutil.which("pytest") \
                 else f"{py} {f}"
         else:
@@ -481,6 +522,7 @@ def repro_commands(text: str, root: Path, limit: int = 2) -> list[str]:
 
 def reproduce(ws, text: str) -> str:
     """Run the commands the user named before the model's first turn; their output, ready to read."""
+    text = _cap_text(text)
     if getattr(ws, "container", None) or re.search(r"\bdocker (exec|run)\b", text or ""):
         return ""                                     # the code runs elsewhere: a host run would mislead
     blocks = []
@@ -500,13 +542,14 @@ DATA_EXTS = (".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".json", ".jsonl")
 def data_preview(ws, text: str = "", limit: int = 5) -> str:
     """Columns, types, row counts and three sample rows of the data files the task is about (named in the request,
     else the ones at the top of the folder), so the model starts analysing instead of exploring."""
+    text = _cap_text(text)
     if getattr(ws, "container", None):
         return ""
     try:
         import pandas as pd
     except ImportError:
         return ""
-    named = [m for m in re.findall(r"[\w./-]+\.(?:csv|tsv|parquet|xlsx|xls|jsonl?)\b", text or "")
+    named = [m for m in re.findall(r"[\w./-]{1,200}\.(?:csv|tsv|parquet|xlsx|xls|jsonl?)\b", text or "")
              if (ws.root / m).is_file()]
     files = named or sorted(p.name for p in ws.root.iterdir() if p.is_file() and p.suffix.lower() in DATA_EXTS)
     blocks = []

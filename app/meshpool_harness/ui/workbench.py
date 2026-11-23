@@ -165,15 +165,14 @@ def models(refresh: bool = False) -> dict:
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key:
+    elif not key and not __import__("meshpool_harness.providers", fromlist=["x"]).keyless_ok(base):
         rows, err = [], "Add your API key to see your models."
     else:
         rows, err = [], ""
         try:
             from meshpool_harness import providers as _PV
-            auth = ({"x-api-key": key, "anthropic-version": "2023-06-01"} if _PV.key_wire() == "anthropic"
-                    else {"Authorization": f"Bearer {key}"})
-            req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
+            url, auth = _PV.chat_target(base, key, "", "models")     # Azure: /openai/models?api-version=, api-key
+            req = urllib.request.Request(url, headers={**auth, "User-Agent": "Meshpool"})
             with urllib.request.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
@@ -193,6 +192,8 @@ def models(refresh: bool = False) -> dict:
                              "provider": _provider_of(mid, meta.get("owned_by", "")),
                              "context": meta.get("context_length") or meta.get("context_window"), "caps": caps})
             rows.sort(key=lambda r: (r["provider"].lower(), r["id"].lower()))
+            if _PV.is_azure(base) and "/openai/v1" not in base:      # Azure lists base models, not your deployments
+                rows = []
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
             err = f"The endpoint answered HTTP {e.code} when listing models." + (
@@ -202,7 +203,7 @@ def models(refresh: bool = False) -> dict:
     from meshpool_harness import providers as PV
     dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}
-    if dprov == "key" and dbare not in ids and key:
+    if dprov == "key" and dbare not in ids and (key or PV.keyless_ok(base)):
         rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
     # One section per provider (the key endpoint and ChatGPT), ready or with what to set up.
@@ -241,7 +242,7 @@ def list_dir(root: str, rel: str = "") -> dict:
                 continue
     except PermissionError:
         raise ValueError(_perm_hint(d))
-    return {"root": str(r), "path": rel, "entries": rows[:2000]}
+    return {"root": str(r), "path": rel, "entries": rows[:2000], "truncated": len(rows) > 2000, "total": len(rows)}
 
 
 def _perm_hint(p: Path) -> str:
@@ -282,6 +283,8 @@ def read_file(root: str, rel: str) -> dict:
 def write_file(root: str, rel: str, text: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
+    if p.is_dir() or p == r:
+        raise ValueError("That is a folder, not a file.")
     p.parent.mkdir(parents=True, exist_ok=True)
     text = text.replace("\r\n", "\n")
     try:                                         # keep the file's line endings: a one-line edit is a one-line diff
@@ -297,7 +300,15 @@ def write_file(root: str, rel: str, text: str) -> dict:
 def attach(root: str, name: str, data: bytes) -> dict:
     """Save a file the user attached in the message box into the project, without overwriting anything."""
     r = check_root(root)
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
+    if name.strip(".") == "":
+        name = "file"
+    stem, dot, suf = name.rpartition(".")
+    if dot and stem and len(suf) <= 20 and len(name) > 200:    # keep the extension, cut the rest (255-byte limit)
+        name = stem[:200 - len(suf) - 1] + "." + suf
+    name = name[:200]
+    while len(name.encode("utf-8")) > 200:
+        name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     from meshpool_harness import project_store as PS
@@ -367,14 +378,53 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
         env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
-    r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    try:
+        r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
+                         "connection and try again.") from None
     if check and r.returncode != 0:
-        raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
+        raise ValueError((r.stderr or r.stdout).strip()[-800:]
+                         or f"git {next((a for a in args if not a.startswith('-')), 'command')} failed")
     return r.stdout
 
 
-def git_status(root: str) -> dict:
+_GS: dict = {}                      # project folder -> (time, status): the panel and PR code ask again and again
+_GS_LOCKS: dict = {}
+_GS_TTL = 1.5
+
+
+def git_status(root: str, fresh: bool = False) -> dict:
+    """Status of a project's repository. It is six git processes, so calls within a moment share one answer, and
+    callers at the same time wait for it instead of each starting their own. fresh=True after a change."""
+    key = str(root)
+    gate = _GS_LOCKS.setdefault(key, threading.Lock())
+    with gate:
+        stamp = _git_stamp(key)
+        hit = _GS.get(key)
+        if hit and not fresh and hit[2] == stamp and time.monotonic() - hit[0] < _GS_TTL:
+            return dict(hit[1])
+        res = _git_status(root)
+        if len(_GS) > 50:
+            _GS.clear()
+        _GS[key] = (time.monotonic(), res, stamp)
+        return dict(res)
+
+
+def _git_stamp(root: str) -> tuple:
+    """A change to the remote (config), the branch (HEAD) or the index shows at once, whatever the cache age."""
+    out = []
+    for n in ("config", "HEAD", "index"):
+        try:
+            st = (Path(root) / ".git" / n).stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _git_status(root: str) -> dict:
     r = check_root(root)
     if not git_exe():
         return {"repo": False, "git": False}
@@ -383,8 +433,17 @@ def git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", check=False)
-    files = [{"status": line[:2].strip(), "path": line[3:]} for line in porcelain.splitlines() if line.strip()]
+    porcelain = _git(r, "status", "--porcelain", "-z", check=False)
+    files, parts = [], porcelain.split("\0")
+    i = 0
+    while i < len(parts):
+        ent = parts[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        if ent[0] in "RC" or ent[1] in "RC":          # a rename or copy: the old path follows as its own entry
+            i += 1
+        files.append({"status": ent[:2].strip(), "path": ent[3:]})
     ahead = behind = 0
     try:
         ab = _git(r, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
@@ -417,7 +476,7 @@ def git_action(root: str, body: dict) -> dict:
                 [git_exe(), "check-ref-format", "--branch", name], cwd=str(r), capture_output=True,
                 creationflags=NO_WINDOW).returncode:
             raise ValueError(f"\"{name}\" is not a valid branch name.")
-        if not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
+        if not body.get("create") and not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
                 not _git(r, "for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/heads",
                          check=False).strip():
             # detached, with commits on no branch: switching away would leave them only in the reflog
@@ -441,6 +500,8 @@ def git_action(root: str, body: dict) -> dict:
              "commit", "-m", msg)
     elif act == "push":
         branch = _git(r, "branch", "--show-current").strip()
+        if not branch:
+            raise ValueError("Switch to a branch first. Pushing needs a branch, and this folder is on a detached commit.")
         _git(r, "push", "-u", "origin", branch, timeout=180)
     elif act == "pull":
         _git(r, "pull", "--ff-only", timeout=180)
@@ -448,14 +509,16 @@ def git_action(root: str, body: dict) -> dict:
         return _open_pr(r, body)
     else:
         raise ValueError("Unknown Git action.")
-    return git_status(str(r))
+    return git_status(str(r), fresh=True)
 
 
 def _open_pr(r: Path, body: dict) -> dict:
-    st = git_status(str(r))
+    st = git_status(str(r), fresh=True)
     slug = st.get("github")
     if not slug:
         raise ValueError("Pull requests work with GitHub remotes. This project's origin is not on GitHub.")
+    if st.get("branch") == "(detached)":
+        raise ValueError("Switch to a branch first. A pull request needs a branch, and this folder is on a detached commit.")
     title = (body.get("title") or "").strip() or _git(r, "log", "-1", "--pretty=%s").strip()
     desc = body.get("body") or ""
     if st["ahead"] or not st["upstream"]:
@@ -466,8 +529,15 @@ def _open_pr(r: Path, body: dict) -> dict:
     if token:
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}", headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "Meshpool"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            base = json.loads(resp.read())["default_branch"]
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                base = json.loads(resp.read())["default_branch"]
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"GitHub did not let Meshpool read {slug} (HTTP {e.code}). Check the GitHub "
+                             "connection in Settings.") from None
+        except (urllib.error.URLError, OSError, ValueError, KeyError):
+            raise ValueError("Could not reach GitHub to look up the default branch. Check your network "
+                             "connection and try again.") from None
         data = json.dumps({"title": title, "head": st["branch"], "base": body.get("base") or base,
                            "body": desc, "draft": bool(body.get("draft"))}).encode()
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}/pulls", data=data, method="POST", headers={
@@ -532,6 +602,9 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
          "p": None, "lock": threading.Lock()}
+    done = [k for k, v in TERMS.items() if v["rc"] is not None]
+    for k in done[:-20]:                         # finished commands keep their output, but only the last few
+        TERMS.pop(k, None)
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -565,19 +638,41 @@ def term_view(tid: str, since: int) -> dict:
             "running": rc is None}
 
 
+def _term_kill(t: dict, wait: float = 3.0) -> None:
+    """Stop a terminal command and everything it started: SIGTERM, then SIGKILL if it is still there."""
+    p = t.get("p")
+    if not p or p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
+        else:
+            import signal
+            pg = os.getpgid(p.pid)
+            os.killpg(pg, signal.SIGTERM)
+            try:
+                p.wait(wait)
+            except subprocess.TimeoutExpired:
+                os.killpg(pg, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def term_stop(tid: str) -> dict:
     t = TERMS.get(tid)
     if t and t["p"] and t["rc"] is None:
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(t["p"].pid)], capture_output=True,
-                               creationflags=NO_WINDOW)
-            else:
-                import signal
-                os.killpg(os.getpgid(t["p"].pid), signal.SIGTERM)
-        except Exception:  # noqa: BLE001
-            t["p"].kill()
+        _term_kill(t)
     return term_view(tid, 0) if t else {}
+
+
+def term_stop_all() -> None:
+    """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
+    for t in list(TERMS.values()):
+        if t.get("rc") is None:
+            _term_kill(t, 1.0)
 
 
 # ======================================== usage ===================================================================
@@ -956,7 +1051,8 @@ def pr_action(root: str, body: dict) -> dict:
     if act == "merge":
         d = pr_detail(root, n)
         if not d["can_merge"]:
-            why = ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
+            why = "it is not open" if d.get("state") != "open" else \
+                ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
                 "it is a draft" if d["draft"] else "GitHub says it cannot merge yet" if d["mergeable"] is not True \
                 else "it is not open"
             raise ValueError(f"Not merged: {why}.")

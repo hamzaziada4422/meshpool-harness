@@ -18,7 +18,12 @@ permissions:
 
 jobs:
   agent:
-    if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'meshpool'
+    # The issue text becomes the agent's prompt and the agent runs with --auto and your key: only run it for issues
+    # written by people with write access, so a stranger's injected instructions are never executed.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.label.name == 'meshpool' &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:

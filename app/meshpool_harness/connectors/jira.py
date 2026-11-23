@@ -24,6 +24,9 @@ def adf_text(node) -> str:
 class Jira(Connector):
     def __init__(self):
         self.base = os.environ.get("JIRA_BASE_URL", "").rstrip("/")
+        if not self.base:
+            raise ValueError("The Jira connector needs JIRA_BASE_URL (for example https://yourcompany.atlassian.net) "
+                             "plus JIRA_EMAIL and JIRA_API_TOKEN, or JIRA_PAT.")
         if os.environ.get("JIRA_PAT"):
             self.h = {"Authorization": f"Bearer {os.environ['JIRA_PAT']}"}
             self.v = "2"

@@ -103,8 +103,9 @@ class Server:
             st["busy"] = True
             a = st["agent"]
             try:
+                st["errored"] = False
                 a.send("\n\n".join(parts))
-                self.reply(rid, {"stopReason": "cancelled" if a._stop else "end_turn"})
+                self.reply(rid, {"stopReason": "cancelled" if a._stop else "refusal" if st.get("errored") else "end_turn"})
             except Exception as e:
                 self.reply(rid, error={"code": -32603, "message": str(e)})
             finally:
@@ -135,7 +136,12 @@ class Server:
             self.notify_update(sid, {"sessionUpdate": "plan", "entries": [
                 {"content": e["content"], "status": e.get("status", "pending"), "priority": "medium"}
                 for e in ev.get("entries") or []]})
-        elif t in ("status", "error", "interrupted"):
+        elif t in ("error", "interrupted"):                 # the user must see these, not a silent finish
+            if t == "error":
+                st["errored"] = True
+            self.notify_update(sid, {"sessionUpdate": "agent_message_chunk",
+                                     "content": {"type": "text", "text": ev.get("text", "") + "\n"}})
+        elif t == "status":
             self.notify_update(sid, {"sessionUpdate": "agent_thought_chunk",
                                      "content": {"type": "text", "text": ev.get("text", "") + "\n"}})
 
@@ -196,6 +202,8 @@ class Server:
             try:
                 msg = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(msg, dict):
                 continue
             threading.Thread(target=self.handle, args=(msg,), daemon=True).start() if msg.get("method") == "session/new" \
                 else self.handle(msg)

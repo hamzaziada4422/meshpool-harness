@@ -75,7 +75,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Updates install themselves.** MeshPool downloads updates in the background, checks them against their published checksums, and installs when you restart or quit.
 - **A new terminal app.** `meshpool` in a terminal: a clean input box, tool steps with timings, collapsible output, Markdown answers, slash commands (/model, /login, /help and more) and Shift+Tab to change permissions.
 - **Session panel.** The repository, branch, pull request (with Mark ready), connectors used, files made and background tasks of the current chat, in one side panel. Start a session straight from a GitHub repository without cloning it yourself.
-- **Mac with Intel** now needs macOS 11 or later. Codex and OpenCode are no longer bundled, so ChatGPT sign-in is not offered in the app.
+- **Mac with Intel** now needs macOS 11 or later. Codex and OpenCode are no longer bundled; they run through npx and download the first time you pick them.
 
 **New in 0.0.6**
 - The New chat button works again. Clicking it did nothing before; Ctrl+N and /new were not affected. If an earlier version saved the click as your folder, it is ignored, so updating fixes the home screen.

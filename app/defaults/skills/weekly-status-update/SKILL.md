@@ -1,6 +1,6 @@
 ---
 name: weekly-status-update
-description: Write a weekly status update from the work tracker, repositories and notes: done, in progress, blocked, next. Use for team or manager updates.
+description: 'Write a weekly status update from the work tracker, repositories and notes: done, in progress, blocked, next. Use for team or manager updates.'
 ---
 
 # Weekly status update
