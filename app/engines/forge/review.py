@@ -6,8 +6,9 @@ against our written standard (polish_rubric.md), and returns concrete, fixable c
     deck_verdict(review)                   # overall score, slides to fix, the top recurring complaints
 
 Rendering: LibreOffice -> PDF -> pypdfium2 -> one PNG per slide (as validate_pptx does for its render checks).
-Model chain (first that answers wins, per batch): `model` argument, MH_REVIEW_MODEL, claude-sonnet-5.5,
-gpt-6.1-terra, kimi-k3. Batches of `batch` slides run in parallel; each call has a wall-clock timeout. Any failure
+Model chain (first that answers wins, per batch): `model` argument, MH_REVIEW_MODEL, then the configured main model
+(core/models.py vision_reviewer_models: never a built-in name; models the endpoint is remembered to lack or to be
+text-only are left out; none left: the review is skipped with a note and nothing is called). Batches of `batch` slides run in parallel; each call has a wall-clock timeout. Any failure
 gives {"status": "not_run"} for the slides it covered (or the deck) and never raises.
 
 The reviewer never invents numbers: a complaint about a figure must quote what is on the slide, and complaints that
@@ -28,7 +29,6 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 RUBRIC_PATH = Path(__file__).with_name("polish_rubric.md")
-CHAIN = ["claude-sonnet-5.5", "gpt-6.1-terra", "kimi-k3"]
 SEVERITIES = ("high", "medium", "low")
 SCOPES = ("content", "layout")
 CATEGORIES = ("story", "visual", "layout", "typography", "data", "finish")
@@ -357,11 +357,8 @@ def build_messages(batch: list[tuple[int, Path]], slides: list[dict] | None, n_p
 
 
 def chain(model: str | None = None) -> list[str]:
-    out: list[str] = []
-    for m in [model, os.environ.get("MH_REVIEW_MODEL")] + CHAIN:
-        if m and m not in out:
-            out.append(m)
-    return out
+    from meshpool_harness.core.models import vision_reviewer_models
+    return vision_reviewer_models(model, os.environ.get("MH_REVIEW_MODEL"))
 
 
 def _usage(r: dict) -> dict:
@@ -399,6 +396,10 @@ def review_deck(pptx_path: str, slides: list[dict] | None = None, client=None, m
             return {"status": "not_run", "model": None, "slides": [], "not_run": [n for n, _ in pngs],
                     "errors": [f"client: {e}"], "usage": {"in": 0, "out": 0}, "seconds": round(time.time() - t0, 1)}
     models = chain(model)
+    if not models:                                          # nothing here can read images: say so, call nothing
+        return {"status": "not_run", "model": None, "slides": [], "not_run": [n for n, _ in pngs],
+                "errors": ["skipped: no reviewer model on this endpoint can read images (set MH_REVIEW_MODEL)"],
+                "usage": {"in": 0, "out": 0}, "seconds": round(time.time() - t0, 1)}
     batches = [pngs[k:k + max(1, batch)] for k in range(0, len(pngs), max(1, batch))]
     errors: list[str] = []
     lock = threading.Lock()

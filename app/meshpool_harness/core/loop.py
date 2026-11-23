@@ -72,6 +72,17 @@ def _compact(messages: list, keep_recent: int) -> list:
     return messages
 
 
+def _keep_reasoning(ledger, model: str) -> bool:
+    """Whether this model, on this endpoint, wants reasoning_content passed back inside a tool-call turn."""
+    try:
+        from . import modelcaps as MC
+        from meshpool_harness import providers as PV
+        base = getattr(ledger, "base_url", "") or PV.key_base()
+        return bool(MC.resolve(base, PV.split(model)[1]).keep_reasoning)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _sanitize_calls(calls: list) -> list:
     """A tool call with invalid JSON arguments (e.g. truncated output, or two calls merged by a stream) makes the next
     request invalid (gateway HTTP 400). Keep the call, with arguments the API accepts; the tool result still reports
@@ -253,8 +264,13 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                 log_failure(ctx, "budget_cap", False, res.reason)
                 return res
         msg = resp["choices"][0]["message"]
+        if not msg.get("tool_calls"):                        # a call written as text (<function=..>, [TOOL_CALLS], bare JSON)
+            from .textcalls import recover as _recover
+            _recover(msg, tool_names)
         calls = msg.get("tool_calls") or []
         keep = {"role": "assistant", "content": msg.get("content") or ""}
+        if msg.get("reasoning_content") and _keep_reasoning(_led, model):   # DeepSeek/Kimi thinking: sent back in the turn
+            keep["reasoning_content"] = msg["reasoning_content"]
         if calls and os.environ.get("MH_SANITIZE_CALLS", "1") == "1":
             calls = _sanitize_calls(calls)
         # an accepted finish/need_context returns at once, so they must run after every other call in the reply

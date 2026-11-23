@@ -1800,7 +1800,7 @@ def build(brief: str, out_dir: str, slides_wanted: int = 12, client=None, rules=
           theme=None, density: str | None = None, fixed_pages: list | None = None,
           extra_facts: list | None = None, template: str | None = None, brand: dict | None = None,
           insert: bool = False, research: bool | None = None, design: str | None = None,
-          design_images=None) -> dict:
+          design_images=None, data_expectations: list | None = None) -> dict:
     """research: allow the reviewers' research step (None: on for live builds, see research.allowed()).
     design: "image" | "auto" | "archetype" (None: env MH_DESIGN, then rules design.mode): content slides drawn
     design-first (an image model designs the page, a vision model reads it back, the page is rebuilt natively;
@@ -2135,6 +2135,14 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
 
     unified: list[str] = []
 
+    def content_check(res, path):             # P22: a chart of the deck must hold the data the request asks for
+        if data_expectations:
+            from engines.forge.data_pages import check_data
+            bad = check_data(str(path), data_expectations)
+            res["failures"] = list(res["failures"]) + bad
+            res["rules"]["P22"] = "fail" if bad else "pass"
+        return res
+
     def draw():
         try:                                  # one value per figure across the deck, fixed in code where mechanical
             unified.extend(unify_figures(slides, client, critics.text_models(critics.settings(rules)),
@@ -2148,6 +2156,7 @@ design. {HONESTY} A number that is not in the facts is written [GAP: what is mis
             prov = json.loads(Path(r["provenance"]).read_text())
             res = validate(str(pptx), rules, brief={"slide_count": len(slides) if fixed else slides_wanted, **ends},
                            provenance=prov, storyline={"nodes": nodes}, render=True, density=density)
+            content_check(res, pptx)
             if not specs or not designer.check(str(pptx), r, res, slides, specs):
                 break
         return r, res
@@ -2463,6 +2472,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
         prov = json.loads(Path(r["provenance"]).read_text())
         res = validate(str(pptx), rules, brief={"slide_count": slides_wanted, **ends}, provenance=prov,
                        storyline={"nodes": nodes}, render=True, density=density)
+        content_check(res, pptx)
     (out / "slides.json").write_text(json.dumps(slides, indent=1))
     (out / "facts.json").write_text(json.dumps(facts + [f for v in verify_calcs(slides, facts, rules)[0].values()
                                                          for f in v], indent=1))

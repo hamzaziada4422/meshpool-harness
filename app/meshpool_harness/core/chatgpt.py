@@ -411,20 +411,20 @@ def to_request(body: dict, model: str) -> dict:
     return out
 
 
-def read_stream(lines, on_text=None) -> dict:
+def read_stream(lines, on_text=None, data_idle=None, check=None) -> dict:
     """SSE events -> the final Responses object (from response.completed, or rebuilt from the output items).
     on_text gets each piece of reply text as it arrives."""
     done, items, text, err = None, [], [], None
-    for raw in lines:
-        line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else str(raw).strip()
-        if not line.startswith("data:"):
-            continue
-        data = line[5:].strip()
+    from meshpool_harness.core.stream import iter_sse
+    for _name, data in iter_sse(lines, data_idle=data_idle, check=check):
+        data = data.strip()
         if data == "[DONE]":
             break
         try:
             ev = json.loads(data)
         except ValueError:
+            continue
+        if not isinstance(ev, dict):
             continue
         t = ev.get("type", "")
         if t == "response.output_text.delta":
@@ -524,7 +524,7 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
         try:
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 from meshpool_harness.core.wire import _first_then_idle
-                out = read_stream(_first_then_idle(r, idle), on_text)
+                out = read_stream(_first_then_idle(r, idle), on_text, data_idle=idle)
             _LIMIT.pop(account, None)                 # a call went through: the plan's limit is over
             return out
         except urllib.error.HTTPError as e:
