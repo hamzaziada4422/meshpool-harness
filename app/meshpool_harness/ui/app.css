@@ -1056,3 +1056,12 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}
 .pvth{width:96px}
 
+
+/* the Browser panel */
+.brw-bar .btn{flex:none}
+.brw-title{padding:4px 12px;font-size:var(--fs-s);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+.brw-title:empty{display:none}
+.brw-stage{flex:1;min-height:0;overflow:auto;background:var(--surface);outline:none}
+.brw-stage:focus-visible{box-shadow:inset 0 0 0 2px var(--pool)}
+.brw-stage img{display:block;width:100%;height:auto;cursor:default;user-select:none}
+.brw-foot{flex:none;padding:6px 12px;font-size:var(--fs-s);color:var(--ink-3);border-top:1px solid var(--line-2)}

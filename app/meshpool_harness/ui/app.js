@@ -154,6 +154,7 @@ async function api(path, opts = {}) {
   try { r = await fetch(path, {...opts, headers: {"X-Meshpool-Token": MP.token, ...(opts.body ? {"Content-Type": "application/json"} : {}), ...(opts.headers || {})}}); }
   catch (e) { throw new Error("Meshpool isn't responding. If this keeps happening, quit and reopen Meshpool."); }
   let j = null; try { j = await r.json(); } catch (e) { /* not JSON */ }
+  if (j && j.inapp && r.ok && typeof showSignIn === "function") { try { showSignIn(); } catch (e) { /* the page still opened */ } }   // a sign-in page opened inside Meshpool
   if (!r.ok) {
     if (j && j.error && r.status < 500) throw new Error(j.error);
     if (r.status === 403) throw new Error("This page lost its connection to Meshpool. Reload the window.");
@@ -1133,6 +1134,7 @@ function applyEv(ev) {
       const d = document.createElement("details"); d.className = "tool"; d.id = "tool-" + ev.id; d.dataset.name = name; if (ev.mcp) d.dataset.mcp = "1";
       d.innerHTML = `<summary><span class="ic">${TOOL_ICON(name)}</span><span class="tn">${esc(label)}</span><span class="ts">${esc(stepSummary(name, ev))}</span><span class="st run"></span></summary>${ev.diff ? `<pre>${diffLines(ev.diff)}</pre>` : ""}`;
       $(".rows", g).appendChild(d); cur.tools[ev.id] = d; bumpGroup(g);
+      if (ev.mcp && name === "browser_open" && cur.ready && typeof browserAutoOpen === "function") browserAutoOpen(cur);
       { const sm = stepSummary(name, ev); cur.activity = `${label}${sm ? " " + sm : ""}`; } break; }
     case "tool_end": {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
@@ -1335,7 +1337,7 @@ async function undoTurn(n) {
 }
 
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser"};
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1358,15 +1360,16 @@ function renderPanel() {
   const p = $("#panel");
   clearTimeout(S.spT);
   if (S.panel && !panelSet().includes(S.panel)) { S.panel = panelSet()[0]; store("panel", S.panel); }
-  fitPanel(); if (!S.panel) { p.hidden = true; return; }
+  fitPanel(); if (S.panel !== "browser") brwStop();
+  if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
   $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
-  if (!S.cur && S.panel !== "session") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
+  if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
-    preview: panelPreview})[S.panel](body);
+    preview: panelPreview, browser: panelBrowser})[S.panel](body);
 }
 
 /* ---------- Cowork: progress, files made, context ---------- */
@@ -1683,7 +1686,7 @@ function spSec(k, title, count, inner) {
 }
 function spHTML(d, pr) {
   const env = d.environment, rp = d.repo, br = d.branch, cx = d.context, cn = d.connectors, bg = d.background, tr = d.tree;
-  const buttons = [["term", ICON.term, "Terminal"], ["preview", ICON.globe, "Browser"], ["diff", ICON.diff, "Changes"], [panelSet().includes("files") ? "files" : "outputs", ICON.files, panelSet().includes("files") ? "Files" : "Artifacts"]]
+  const buttons = [["term", ICON.term, "Terminal"], ["browser", ICON.globe, "Browser"], ["preview", ICON.dir, "Preview"], ["diff", ICON.diff, "Changes"], [panelSet().includes("files") ? "files" : "outputs", ICON.files, panelSet().includes("files") ? "Files" : "Artifacts"]]
     .filter(([k]) => panelSet().includes(k));
   const own = !!S.cur?.view?.scratch;
   const envHTML = own ? `<div class="sprow">${ICON.folder}<span><b>This chat’s own folder</b><small>Private to this chat. Files it makes show under Artifacts.</small></span></div>` : `<div class="sprow">${env.managed ? ICON.cloud : ICON.cpu}<span><b>${esc(env.label)}</b>${env.managed ? "" : `<small title="${esc(env.folder)}">${esc(shortPath(env.folder))}</small>`}</span></div>

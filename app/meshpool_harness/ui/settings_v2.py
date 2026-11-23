@@ -108,7 +108,7 @@ def browser_use() -> dict:
     return BU.describe()
 
 
-def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = None) -> dict:
+def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = None, show_window: bool | None = None) -> dict:
     """Save which browser browser use drives (meshpool, installed, attach), the debugging address for attach and, for
     installed, which of chrome, edge, brave (empty: the first found). New chats use it."""
     from meshpool_harness import browser_use as BU
@@ -117,6 +117,8 @@ def set_browser_use(mode: str, cdp_url: str | None = None, app: str | None = Non
         vals["MH_BROWSER_CDP_URL"] = str(cdp_url).strip()
     if app is not None:
         vals["MH_BROWSER_APP"] = str(app).strip().lower()
+    if show_window is not None:                    # off (the default, saved as empty): hidden, shown in the app. On: 0, its own window.
+        vals["MH_BROWSER_HEADLESS"] = "0" if show_window else ""
     BU.validate(vals)
     C.write(vals)
     for k, v in vals.items():
