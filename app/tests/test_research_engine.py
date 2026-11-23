@@ -515,3 +515,27 @@ def test_check_cli_names_a_damaged_corpus(tmp_path):
     r = subprocess.run([sys.executable, "-m", "engines.research.check", str(tmp_path / "report.md")],
                        capture_output=True, text=True, cwd=str(ROOT))
     assert r.returncode != 0 and "could not be read" in (r.stdout + r.stderr)
+
+
+def test_stopped_run_with_an_empty_report_is_not_ok_and_does_not_crash(tmp_path):
+    from engines.research import engine as E
+    from meshpool_harness.core.client import MockClient
+    (tmp_path / "report.md").write_text("", encoding="utf-8")
+    client = MockClient([{"role": "assistant", "content": "done"}] * 3)
+    out = E.solve("Research X", workdir=str(tmp_path), task_id="t-empty", client=client)
+    assert out["ok"] is False and "empty" in out["answer"] and out["artifacts"]
+
+
+def test_a_locked_sources_json_is_never_moved_aside(tmp_path, monkeypatch):
+    """A sharing violation (Windows: another process holds the file) is not damage: the file stays where it is."""
+    from engines.research import library as R
+    from meshpool_harness import fsio
+    c = corpus(tmp_path)
+    c.save()
+
+    def locked(path, default=None):
+        raise fsio.CorruptFile(path, PermissionError(13, "The process cannot access the file"))
+    monkeypatch.setattr(fsio, "read_json", locked)
+    with pytest.raises(fsio.CorruptFile):
+        R.Corpus(str(tmp_path))
+    assert (tmp_path / "sources.json").exists() and not list(tmp_path.glob("sources.json.corrupt-*"))

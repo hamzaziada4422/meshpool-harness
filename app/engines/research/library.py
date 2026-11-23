@@ -315,8 +315,10 @@ class Corpus:
             if not isinstance(d, dict):
                 raise ValueError("not a JSON object")
         except (fsio.CorruptFile, ValueError) as e:
-            # A damaged file (older version, killed save): keep it for inspection, start empty, say why.
             cause = getattr(e, "cause", e)
+            if isinstance(cause, OSError):     # locked or unreadable for now (Windows sharing violation): the file
+                raise                          # may be fine, so it is never moved aside
+            # A damaged file (older version, killed save): keep it for inspection, start empty, say why.
             moved = fsio.quarantine(self.path)
             self.load_error = f"{self.path} was damaged ({cause}); moved to {moved or 'nowhere (could not move it)'}"
             d = {}

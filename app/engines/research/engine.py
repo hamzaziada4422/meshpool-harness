@@ -143,6 +143,7 @@ def salvage(r, ws) -> dict:
                            "larger turn budget (MH_RESEARCH_MAX_TURNS) or a narrower question."),
                 "reason": f"{r.reason}; no report.md written"}
     arts = [str(ws.root / n) for n in ("report.md", "report.docx", "sources.json") if (ws.root / n).exists()]
+    msg = "ENGINE CHECK: report.md is empty"
     try:
         text = rep.read_text(encoding="utf-8", errors="replace")
     except OSError as e:
