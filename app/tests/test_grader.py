@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from meshpool_harness.agent import core, grader as GR  # noqa: E402
-from meshpool_harness.agent.core import Agent  # noqa: E402
+# Agent is looked up on the module at call time: test_agent_v3 reloads core, which leaves an imported class stale.
 
 
 @pytest.fixture(autouse=True)
@@ -70,7 +70,7 @@ class Model:
 
 def agent(tmp_path, **kw):
     ev = []
-    return Agent(str(tmp_path), emit=ev.append, mode="auto", **kw), ev
+    return core.Agent(str(tmp_path), emit=ev.append, mode="auto", **kw), ev
 
 
 def reviews(ev):
@@ -322,7 +322,7 @@ def cowork_case(tmp_path, monkeypatch, doc, main_final, items, **vk):
                call("mcp__meshpool_office__make_deck", {"path": "x"}, "z"), verdict(items, **vk)]
               + ([verdict([item(i["requirement"]) for i in items])] if open_items else []))
     ev = []
-    a = Agent(str(tmp_path), emit=ev.append, mode="auto", profile="work", mcp=FakeOffice({"deck.pptx": doc}))
+    a = core.Agent(str(tmp_path), emit=ev.append, mode="auto", profile="work", mcp=FakeOffice({"deck.pptx": doc}))
     return a, ev, m, a.send("Make a 3 slide deck: problem, solution, pricing.")
 
 
@@ -406,11 +406,14 @@ def test_grade_now_forces_a_check_without_rework(tmp_path, monkeypatch):
     assert r["verdict"] == "pass" and r["forced"] and reviews(ev)[0]["forced"]
 
 
-def test_headless_json_has_review(tmp_path, monkeypatch, capfd):
+def test_headless_json_has_review(tmp_path, monkeypatch):
+    import io
     from meshpool_harness.agent import tui
+    out = io.StringIO()                            # the headless result goes to sys.__stdout__: not the real one, whose
+    monkeypatch.setattr(sys, "__stdout__", out)    # state earlier tests of a full run can change
     Model(monkeypatch, [PLAN3, say("Done.")], [verdict([item("a")])])
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     tui.main(str(tmp_path), prompt="make a thing", auto=True, no_mcp=True, json_out=True)
-    res = json.loads(capfd.readouterr().out.strip().splitlines()[-1])
+    res = json.loads(out.getvalue().strip().splitlines()[-1])
     assert res["type"] == "result" and res["review"]["verdict"] == "pass" and res["review"]["met"] == 1
     assert "Independent check" in res["result"]
