@@ -170,7 +170,7 @@ class Terminal:
         return max(20, shutil.get_terminal_size((100, 24)).columns)
 
     def _write(self, s: str, to=None):
-        (to or self.out).write(s)
+        (to or self.out).write(R.safe(s))
         (to or self.out).flush()
 
     def p(self, s="", end="\n", to=None):
@@ -760,7 +760,7 @@ class Terminal:
         lines = []
         while True:
             try:
-                line = input("❯ " if sys.stdin.isatty() and not lines else "")
+                line = input(R.safe("❯ ") if sys.stdin.isatty() and not lines else "")
             except EOFError:
                 return "\n".join(lines).strip() if lines else None
             if line.endswith("\\"):

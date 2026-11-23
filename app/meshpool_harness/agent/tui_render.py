@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import unicodedata
 
 from meshpool_harness.agent import brand as B
@@ -546,3 +547,34 @@ def context_window(model: str, known: dict | None = None) -> int:
     if m:
         return int(float(m.group(1)) * (1_000_000 if m.group(2) == "m" else 1_000))
     return 128_000
+
+
+# ---- OSS-30: a console that cannot show the interface's glyphs (Windows cp1252, a redirected stdout) -------------------
+GLYPHS = "❯…─│·•✓✗↑↓✢✳✶✻✽"
+_ASCII = {"❯": ">", "…": "...", "─": "-", "│": "|", "·": "-", "•": "*", "✓": "v", "✗": "x", "↑": "^", "↓": "v",
+          "✢": "*", "✳": "*", "✶": "*", "✻": "*", "✽": "*", "—": "-", "–": "-", "“": '"', "”": '"', "’": "'"}
+ASCII = [False]                      # True: this terminal shows the plain-text look
+
+
+def prepare_streams(streams=None) -> bool:
+    """Called once at CLI start. A stream whose encoding cannot write the interface's glyphs is switched to UTF-8 with
+    errors="replace" (so nothing can crash on a character), and the interface falls back to ASCII glyphs. Returns True
+    when every stream could already show them."""
+    ok = True
+    for st in streams or (sys.stdout, sys.stderr):
+        try:
+            GLYPHS.encode(getattr(st, "encoding", None) or "ascii")
+            continue
+        except (UnicodeEncodeError, LookupError):
+            ok = False
+        try:
+            st.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+    ASCII[0] = not ok
+    return ok
+
+
+def safe(text: str) -> str:
+    """The text, with plain-ASCII stand-ins for the glyphs when this terminal cannot show them."""
+    return text.translate(str.maketrans(_ASCII)) if ASCII[0] else text

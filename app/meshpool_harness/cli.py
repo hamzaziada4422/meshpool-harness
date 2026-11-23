@@ -330,6 +330,8 @@ def _main(argv=None):
     if argv[:1] == ["app"]:              # the desktop app (Meshpool.app / Meshpool.exe)
         from meshpool_harness.ui.desktop import run as run_app
         return run_app()
+    from meshpool_harness.agent import tui_render as _R
+    _R.prepare_streams()             # OSS-30: a cp1252 console or a redirected stdout must not crash on glyphs
     _config.ensure_home()
     _config.load_into_env()          # before any engine import: engines read MH_* at import time
     try:
