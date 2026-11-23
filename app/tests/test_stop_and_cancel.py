@@ -165,17 +165,19 @@ def test_second_image_to_text_only_model_does_not_400(tmp_path):
 
 # ---------- M02-01 ------------------------------------------------------------------------------------------------
 def test_stop_during_approval_is_not_a_denial(tmp_path):
-    gate = threading.Event()
-    a = Agent(str(tmp_path), mode="ask", approve=lambda *x: (gate.wait(30), ("no", ""))[1])
+    gate, asked = threading.Event(), threading.Event()
+    a = Agent(str(tmp_path), mode="ask", approve=lambda *x, **k: (asked.set(), gate.wait(30), ("no", ""))[2])
     seq = [{"content": "", "tool_calls": [_call(1, "bash", {"command": "touch x.txt"})]}, {"content": "done"}]
     a._post = lambda base, key, body, stream: ({"choices": [{"message": seq.pop(0), "finish_reason": "stop"}],
                                                 "usage": {}}, False)
 
     def stop():
+        asked.wait(30)                                 # Stop while the approval is open, not before the turn starts
         a.stop()
         gate.set()
-    _later(0.4, stop)
+    threading.Thread(target=stop, daemon=True).start()
     a.send("do it")
+    assert asked.is_set()
     assert not any("denied" in str(m.get("content")) for m in a.messages)
     assert any("stopped" in str(m.get("content")) for m in a.messages if m.get("role") == "tool")
 
