@@ -235,3 +235,20 @@ def test_changed_prefix_forces_a_full_snapshot(tmp_path):
     a.save()
     assert not (a.dir / "session.journal").exists()
     assert SS.read(a.dir)["messages"][0]["content"] == "one + env"
+
+
+def test_journal_after_another_process_snapshot_is_not_lost(tmp_path):
+    """A snapshot written by another process (the CLI, a scheduled run) must not make this process's later journal
+    lines carry a stale generation and be skipped on read."""
+    import subprocess
+    import sys
+    from meshpool_harness import session_store as SS
+    d = tmp_path / "chat"
+    SS.write_snapshot(d, {"id": "c", "messages": [{"role": "user", "content": "one"}]})
+    SS.append_journal(d, 1, [{"role": "assistant", "content": "two"}], {})       # caches this process's generation
+    code = ("import sys; from meshpool_harness import session_store as SS; "
+            "SS.write_snapshot(sys.argv[1], {'id': 'c', 'messages': [{'role': 'user', 'content': 'one'}, "
+            "{'role': 'assistant', 'content': 'two'}, {'role': 'user', 'content': 'three'}]})")
+    subprocess.run([sys.executable, "-c", code, str(d)], check=True, cwd=str(Path(__file__).resolve().parents[1]))
+    SS.append_journal(d, 3, [{"role": "assistant", "content": "four"}], {})
+    assert [m["content"] for m in SS.read(d)["messages"]] == ["one", "two", "three", "four"]

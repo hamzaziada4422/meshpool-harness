@@ -30,7 +30,7 @@ JOURNAL_MAX_BYTES = 2 * 1024 * 1024
 TRANSCRIPT_MAX_LINES = 6000
 TRANSCRIPT_KEEP_LINES = 3000
 
-_GENS: dict[str, str] = {}                       # chat folder -> generation of its current snapshot
+_GENS: dict[str, tuple] = {}                     # chat folder -> (stat of session.json, its generation)
 _GENS_GUARD = threading.Lock()
 
 
@@ -71,17 +71,28 @@ def _backup(src: Path, bak: Path) -> None:
             os.unlink(tmp)
 
 
+def _sj_stat(d: Path):
+    try:
+        st = (d / "session.json").stat()
+        return (st.st_mtime_ns, st.st_size, st.st_ino)
+    except OSError:
+        return None
+
+
 def _gen_of(d: Path) -> str | None:
-    key = str(d)
+    """The generation of the snapshot on disk now. Cached against the file's stat, so a snapshot written by another
+    process (the CLI, a scheduled run) is noticed and later journal lines never carry a stale generation."""
+    key, st = str(d), _sj_stat(d)
     with _GENS_GUARD:
-        if key in _GENS:
-            return _GENS[key]
+        hit = _GENS.get(key)
+    if hit and hit[0] == st:
+        return hit[1]
     try:
         g = (fsio.read_json(d / "session.json", None) or {}).get("_jgen")
     except (fsio.CorruptFile, AttributeError):
         g = None
     with _GENS_GUARD:
-        _GENS[key] = g
+        _GENS[key] = (st, g)
     return g
 
 
@@ -96,7 +107,7 @@ def write_snapshot(d, data: dict) -> None:
             _backup(sj, d / "session.json.bak")
         fsio.atomic_write_json(sj, dict(data, _jgen=gen), indent=None, default=str)
         with _GENS_GUARD:
-            _GENS[str(d)] = gen
+            _GENS[str(d)] = (_sj_stat(d), gen)
         with contextlib.suppress(OSError):
             os.unlink(d / "session.journal")
 
