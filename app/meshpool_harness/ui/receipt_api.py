@@ -30,6 +30,6 @@ def handle(method: str, u, body: bytes = b""):
             return 404, {"error": "That chat no longer exists."}
         from meshpool_harness.hrouter import outcomes as OUT
         t = b.get("turn")
-        OUT.mark(chat, outcome, int(t) if isinstance(t, (int, float)) and not isinstance(t, bool) else None)
+        OUT.mark(chat, outcome, t if isinstance(t, int) and not isinstance(t, bool) and 0 < t < 10**6 else None)
         return 200, {"ok": True}
     return 404, {"error": "not found"}

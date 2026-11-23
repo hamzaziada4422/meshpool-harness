@@ -117,8 +117,10 @@ def test_mark_without_turn_hits_latest_turn_only():
     assert _fail() == round(1 / 3, 3)     # another chat is untouched
 
 
-def test_feedback_endpoint_passes_turn():
+def test_feedback_endpoint_passes_turn(monkeypatch):
+    from meshpool_harness.ui import agent_api as API
     from meshpool_harness.ui import receipt_api as RA
+    monkeypatch.setattr(API, "exists", lambda sid: sid == "c9")    # the endpoint answers only for a real chat
     body = json.dumps({"chat": "c9", "outcome": "down", "turn": 3}).encode()
     assert RA.handle("POST", urlparse("/api/receipt/feedback"), body)[0] == 200
     m = _rows()[-1]
