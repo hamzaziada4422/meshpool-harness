@@ -5,6 +5,13 @@
   "models": [
     {"match": "claude-(?:fable|mythos)|claude-(?:opus|sonnet|haiku)-5|claude-opus-4[.-][6-9]|claude-sonnet-4[.-][6-9]", "window": 1000000, "source": "platform.claude.com context-windows"},
     {"match": "claude", "window": 200000, "source": "platform.claude.com models overview (Opus 4/4.1/4.5, Sonnet 4/4.5, Haiku 4.5 and older)"},
+    {"match": "meshpool-fast", "window": 128000, "source": "llm.meshpool.ai /v1/models max_input_tokens"},
+    {"match": "meshpool-balanced", "window": 200000, "source": "llm.meshpool.ai /v1/models max_input_tokens"},
+    {"match": "meshpool-max", "window": 160000, "source": "llm.meshpool.ai /v1/models max_input_tokens"},
+    {"match": "gpt-oss", "window": 131072, "source": "OpenAI gpt-oss model card: 128k"},
+    {"match": "grok-?4(?:[.-]1)?-fast", "window": 2000000, "source": "xAI docs: Grok 4 Fast 2M"},
+    {"match": "grok-?[4-9]", "window": 256000, "uncertain": true, "source": "xAI docs: Grok 4 256k; later versions assumed equal"},
+    {"match": "grok", "window": 131072, "uncertain": true, "source": "xAI Grok 2/3: 131k"},
     {"match": "gpt-?5", "window": 400000, "source": "OpenAI docs: 272k input + 128k output"},
     {"match": "gpt-?6", "window": 400000, "uncertain": true, "source": "assumed equal to GPT-5"},
     {"match": "gpt-?4\\.1", "window": 1047576, "source": "OpenAI docs"},

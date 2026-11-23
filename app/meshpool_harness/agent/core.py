@@ -1780,7 +1780,7 @@ class Agent:
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, list(self.messages), body, "worker")
-        if os.environ.get("MH_ELIDE_OLD_CALLS", "1") != "0":
+        if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
         if sum(1 for m in msgs if isinstance(m.get("content"), list)

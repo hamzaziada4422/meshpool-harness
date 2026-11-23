@@ -299,7 +299,8 @@ def test_usage_with_reasoning_tokens_counts_all_output_tokens(tmp_path, monkeypa
     assert c.usage_cached and c.usage_reasoning
 
 
-def test_old_long_tool_call_arguments_are_stubbed_in_the_request_only(tmp_path):
+def test_old_long_tool_call_arguments_are_stubbed_in_the_request_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_ELIDE_OLD_CALLS", "1")
     a = _agent(tmp_path)
     big = json.dumps({"input": "*** Begin Patch\n" + "+x = 1\n" * 400 + "*** End Patch"})
     def call(i, args):
