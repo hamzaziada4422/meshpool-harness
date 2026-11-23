@@ -63,6 +63,75 @@ GIT_SOURCE_SHA256 = "f0b0bf89264b9bd2e1c640363e7529643989da76281600473c50745cd34
 GIT_SOURCE_URL = f"https://mirrors.edge.kernel.org/pub/software/scm/git/git-{GIT_VERSION}.tar.xz"
 
 
+# ------------------------------------------------------------------------------------------------ ffmpeg and pandoc
+# Programs that ship inside two PyPI wheels (their publishers build the binaries and attach them to the wheel), so each
+# is one pinned URL with a SHA-256 per platform, like LibreOffice. The binary is taken out of the wheel and put in
+# <app>/vendor/<name>/; the wheel itself is not installed. Standard library only.
+#   ffmpeg  imageio-ffmpeg 0.7.0 (BSD wrapper; the program is a static GPL build of FFmpeg 7.0 to 7.1, no ffprobe)
+#   pandoc  pypandoc_binary 1.13 (the program is pandoc 2.19.2, GPL-2.0-or-later)
+# Why these and not the newest: Mac files must run on macOS 11. The macOS pandoc in pypandoc_binary 1.14 and later needs
+# macOS 12 to 15 (the wheel tag says 11 anyway), the official pandoc 3.x Mac zips need 13 to 26, and every Apple silicon
+# ffmpeg that could be fetched needs macOS 12 or later (imageio-ffmpeg 12, martin-riedl.de 12, osxexperts 13). Read with
+# packaging/mac/wheel_minos.py; the numbers are in packaging/mac/verified_minos.json and held by tests.
+# Refresh a hash:  curl -fsSL <url> | sha256sum   (or the digests on https://pypi.org/project/<name>/<version>/#files)
+_PYPI = "https://files.pythonhosted.org/packages/"
+WHEEL_PROGRAMS = {
+    "ffmpeg": {
+        "version": "imageio-ffmpeg 0.7.0",
+        "license": "GPL-2.0-or-later (static FFmpeg build with libx264 and others); the wrapper is BSD-2-Clause",
+        "source": "https://ffmpeg.org/releases/ (the version is in the binary's name inside the wheel); builds: "
+                  "https://github.com/imageio/imageio-binaries",
+        "member": r"imageio_ffmpeg/binaries/ffmpeg-[^/]+",
+        "exe": {"win-x64": "ffmpeg.exe"},                       # every other platform: ffmpeg
+        "pins": {
+            "mac-arm64": (_PYPI + "24/d3/be06b86c75acc49113aaf869b8c3d1e721ee01e1d1d7fa12cfc7d9708ea3/imageio_ffmpeg-0.7.0-py3-none-macosx_11_0_arm64.whl",
+                          "5cb5c37d3c19aa8e7cd95b9f4833e6a3d9fd33e4b1d126a42995b14aef9fef02", 21114068),
+            "mac-x64": (_PYPI + "f1/ef/e006996ba8735c1605b05fc931b7b49297cbdf11603259701bd0d62e17e1/imageio_ffmpeg-0.7.0-py3-none-macosx_10_9_intel.macosx_10_9_x86_64.whl",
+                        "fafa399433b571e8963471487cd7a7bb3ee7b532af42e6342145add6379f479b", 24933149),
+            "win-x64": (_PYPI + "e5/55/1d50cdd78d862a30c2ce44f01cea387f77b364b21fa2fecf1590258b215b/imageio_ffmpeg-0.7.0-py3-none-win_amd64.whl",
+                        "7a22b45f60321d4172bdf2bc61f716bce4c81b85727bd59c7c7e371055a6a440", 31247004),
+            "linux-x64": (_PYPI + "04/96/15fe7ef562f7494c358cbd9b521d2da82d7a331b5513703756166478bd5f/imageio_ffmpeg-0.7.0-py3-none-manylinux2014_x86_64.whl",
+                          "4e1f36bef7bedd4bc5dc25f60a8345d88f57133fa1e754f09b411ac61b854408", 29498414),
+        },
+    },
+    "pandoc": {
+        "version": "pypandoc_binary 1.13 (pandoc 2.19.2)",
+        "license": "GPL-2.0-or-later; the wrapper is MIT",
+        "source": "https://github.com/jgm/pandoc/releases/tag/2.19.2",
+        "member": r"pypandoc/files/pandoc(?:\.exe)?",
+        "exe": {"win-x64": "pandoc.exe"},
+        "pins": {
+            "mac-arm64": (_PYPI + "80/5e/70051958952850b9747032f9c854d1ae7870052c7d5697feb0a1d74d65c2/pypandoc_binary-1.13-py3-none-macosx_11_0_arm64.whl",
+                          "21ef0345726d36fc45a50211320614daf2caede684b0d0963ce8738292809746", 20136798),
+            "mac-x64": (_PYPI + "97/f3/8e1ba6d7ecc97cb57ac61a3b8e935967e1f273421e37b6861c6742ad202d/pypandoc_binary-1.13-py3-none-macosx_10_9_x86_64.whl",
+                        "946666388eb79b307d7f497b3b33045ef807750f8e5ef3440e0ba3bbab698044", 20136798),
+            "win-x64": (_PYPI + "0a/d2/bcbf20b497d0393eb29b03d677eba204afdd4ce3af1ed0cd584194378e60/pypandoc_binary-1.13-py3-none-win_amd64.whl",
+                        "3881aa7c84faec2007c0ae4466d3a1cfc93171206b8540f2defa8ea971bf6fd6", 24762997),
+            "linux-x64": (_PYPI + "c8/91/df8eff0a17a3e714589e84516aebaf82d952930ef0894a5b160ae7bcd3cb/pypandoc_binary-1.13-py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+                          "9455fdd9521cbf4b56d79a56b806afa94c8c22f3c8ef878536e58d941a70f6d6", 17055071),
+        },
+    },
+}
+# The Apple silicon ffmpeg needs macOS 12 (read from the file); the app promises 11, so it is exempt from the macOS 11
+# check up to 12.0 and the app says so on an older Mac (bundled.ffmpeg_needs_newer_macos). Nothing else depends on it:
+# speech to text decodes audio with PyAV, whose Apple silicon build needs 11.
+FFMPEG_MAC_ARM64_NEEDS = "12.0"
+
+# ------------------------------------------------------------------------------------------------ Speech model (MIT)
+# OpenAI Whisper "base" (multilingual, 74 M parameters) converted for CTranslate2 by Systran; faster-whisper loads it
+# from a folder. The revision is a commit, the hashes are of the files at that commit, so the model cannot change under
+# a build. Size: 146 MB, which is what makes transcription work without a download.
+WHISPER_MODEL = "base"
+WHISPER_REPO = "Systran/faster-whisper-base"
+WHISPER_REVISION = "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66"
+WHISPER_FILES = {                                           # name: (sha256, size)
+    "config.json": ("56a6d8110d311f19c8f0471e562832c7527f146b567275bfca59fcf7c184da9a", 2309),
+    "model.bin": ("d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9", 145217532),
+    "tokenizer.json": ("fb7b63191e9bb045082c79fd742a3106a12c99513ab30df4a0d47fa6cb6fd0ab", 2203239),
+    "vocabulary.txt": ("34ce3fe1c5041027b3f8d42912270993f986dbc4bb34cf27f951e34a1e453913", 459861),
+}
+
+
 def _say(msg: str, cb: Callable[[str], None] | None = None) -> None:
     print(f"[bundle] {msg}", file=sys.stderr, flush=True)
     if cb:
@@ -348,3 +417,48 @@ def fetch_mingit(cache: Path, dest: Path) -> Path:
     with zipfile.ZipFile(archive) as z:
         z.extractall(dest)
     return dest
+
+
+# ------------------------------------------------------------------------------------------------ ffmpeg, pandoc, speech model
+def fetch_wheel_program(name: str, key: str, cache: Path, dest: Path) -> Path:
+    """Download the pinned wheel (cached, SHA-256 checked), take its program out and put it in dest as ffmpeg or pandoc
+    (.exe on Windows), executable, with MESHPOOL-<NAME>.json beside it. Returns the program's path."""
+    import zipfile
+    spec = WHEEL_PROGRAMS[name]
+    if key not in spec["pins"]:
+        raise BundleError(f"no pinned {name} for {key}")
+    url, sha, size = spec["pins"][key]
+    archive = cache / url.rsplit("/", 1)[1]
+    if not (archive.exists() and sha256_of(archive) == sha):
+        download_verified([url], archive, sha, size, label=f"{name} ({key})")
+    exe = spec["exe"].get(key, name)
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True)
+    with zipfile.ZipFile(archive) as z:
+        hits = [i for i in z.infolist() if re.fullmatch(spec["member"], i.filename)]
+        if len(hits) != 1:
+            raise BundleError(f"{archive.name} should hold exactly one {name} program, found {[h.filename for h in hits]}")
+        with z.open(hits[0]) as src, open(dest / exe, "wb") as out:
+            shutil.copyfileobj(src, out, 1 << 20)
+    (dest / exe).chmod(0o755)
+    (dest / f"MESHPOOL-{name.upper()}.json").write_text(
+        json.dumps({"program": name, "from": spec["version"], "member": hits[0].filename, "wheel": archive.name,
+                    "sha256": sha, "license": spec["license"], "source": spec["source"]}, indent=1), encoding="utf-8")
+    return dest / exe
+
+
+def fetch_whisper_model(cache: Path, dest: Path) -> Path:
+    """The pinned faster-whisper model into dest/<WHISPER_MODEL>/ (config.json, model.bin, tokenizer.json, vocabulary.txt)."""
+    out = dest / WHISPER_MODEL
+    shutil.rmtree(dest, ignore_errors=True)
+    out.mkdir(parents=True)
+    for fname, (sha, size) in WHISPER_FILES.items():
+        got = cache / f"whisper-{WHISPER_REVISION[:8]}-{fname}"
+        if not (got.exists() and sha256_of(got) == sha):
+            url = f"https://huggingface.co/{WHISPER_REPO}/resolve/{WHISPER_REVISION}/{fname}"
+            download_verified([url], got, sha, size, label=f"speech model {fname}")
+        shutil.copy2(got, out / fname)
+    (out / "MESHPOOL-WHISPER.json").write_text(
+        json.dumps({"model": "OpenAI Whisper base (multilingual)", "converted_by": WHISPER_REPO, "revision": WHISPER_REVISION,
+                    "license": "MIT", "sha256": {k: v[0] for k, v in WHISPER_FILES.items()}}, indent=1), encoding="utf-8")
+    return out

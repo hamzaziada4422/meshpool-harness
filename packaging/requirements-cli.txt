@@ -17,3 +17,18 @@ psutil>=5.9
 duckdb>=1.1
 ddgs>=9.0                 # free web search (metasearch); without it web search fell back to rate-limited engines
 ruff>=0.8
+# Built into the app so no skill has to install anything (docs/plan/0.0.11-bundled.md). Pinned on purpose: these are the
+# versions whose macOS builds were read file by file and need macOS 11 at most (packaging/mac/wheel_minos.py,
+# packaging/mac/verified_minos.json; app/tests/test_macos_floor.py holds this list to it). The same packages' newer
+# builds need macOS 12 to 15 (onnxruntime 1.20+, debugpy 1.8.9+, protobuf 7), which broke the 0.0.10 build.
+faster-whisper==1.2.1         # speech to text (transcribe-audio); the model ships in vendor/whisper
+ctranslate2==4.9.1
+av==14.1.0                    # decodes audio and video for faster-whisper, so transcription needs no ffmpeg program
+onnxruntime==1.19.2; python_version < "3.13"    # voice-activity detection; newer ones have no macOS 11 build
+nbformat==5.11.1              # notebooks skill: read, edit, run and export .ipynb
+nbclient==0.11.0
+nbconvert==7.17.2
+ipykernel==7.4.0
+debugpy==1.8.5
+pillow-heif==1.8.1         # iPhone photos (.heic): Pillow cannot open them alone; app/meshpool_harness/ocr.py and docread.py already look for it
+matplotlib==3.11.2          # the make-chart skill draws with it; contourpy and kiwisolver are its native parts
