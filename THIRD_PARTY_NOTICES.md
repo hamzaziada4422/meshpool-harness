@@ -13,6 +13,9 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Git for Windows, MinGit (Windows) | GPL-2.0 | Source: https://github.com/git-for-windows/git |
 | Git 2.56.1, built unmodified from the official source (macOS: `git/`; build script `packaging/mac/build_git.sh`, licence `git/COPYING-git-GPL-2.0.txt`) | GPL-2.0 | Source: https://mirrors.edge.kernel.org/pub/software/scm/git/git-2.56.1.tar.xz |
 | LibreOffice 26.2.7, binaries unmodified (unused parts such as help, Base, Math, extensions and other languages are removed: `packaging/lo_prune.py`), used for Office conversion and rendering (`app/vendor/libreoffice`; notice and licence in `app/defaults/licenses/libreoffice`) | MPL-2.0 and bundled licenses | Source: https://downloadarchive.documentfoundation.org/libreoffice/old/26.2.7.3/src/ |
+| ffmpeg (static build taken unmodified from the imageio-ffmpeg 0.7.0 wheel, `app/vendor/ffmpeg`; FFmpeg 7.0 to 7.1 as configured by its builders, GPL because it includes libx264; build details in `ffmpeg -version`) | GPL-2.0-or-later (the wrapper package is BSD-2-Clause) | Source: https://ffmpeg.org/releases/ and https://github.com/imageio/imageio-binaries |
+| pandoc 2.19.2, unmodified, from the pypandoc_binary 1.13 wheel (`app/vendor/pandoc`) | GPL-2.0-or-later | Source: https://github.com/jgm/pandoc/releases/tag/2.19.2 |
+| OpenAI Whisper "base" speech model, converted to CTranslate2 format by Systran (`app/vendor/whisper/base`) | MIT | https://huggingface.co/Systran/faster-whisper-base (revision ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66) and https://github.com/openai/whisper |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
 | OpenAI Codex CLI (commit 097558c1bdfc6318cb0ce80a64816ca4d61c7814): base instructions, apply_patch format description and grammar, update_plan tool definition, and the apply_patch parser and matching rules re-implemented in Python for MeshPool's "codex" engine style (`app/defaults/engines/codex`, notice and licence in that folder), Copyright 2025 OpenAI; modified by MeshPool (see the NOTICE comment in `prompt.md`) | Apache-2.0 | https://github.com/openai/codex |
 
@@ -39,6 +42,14 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 
 | Package | Version | License |
 |---|---|---|
+| faster-whisper | 1.2.1 | MIT |
+| ctranslate2 | 4.9.1 | MIT |
+| av (PyAV, with FFmpeg libraries inside its wheel) | 14.1.0 | BSD-3-Clause, with LGPL-2.1+ FFmpeg libraries |
+| onnxruntime | 1.19.2 | MIT |
+| nbformat, nbclient, nbconvert, ipykernel | 5.11.1, 0.11.0, 7.17.2, 7.4.0 | BSD-3-Clause |
+| debugpy | 1.8.5 | MIT |
+| pillow-heif (with libheif and libde265 inside its wheel) | 1.8.1 | BSD-3-Clause, with LGPL-3.0 libheif and libde265 |
+| matplotlib, contourpy, kiwisolver, fonttools | 3.11.2, 1.4.0, 1.5.1, 4.68.0 | PSF-based (matplotlib), BSD-3-Clause, BSD-3-Clause, MIT |
 | agent-client-protocol | 0.9.0 | see package |
 | annotated-doc | 0.0.6 | MIT |
 | annotated-types | 0.8.0 | MIT |

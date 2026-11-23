@@ -127,7 +127,10 @@ jobs:
           # The oldest macOS the app opens on is 11 (MIN_MACOS in packaging/build_all.py stamps the same into Info.plist).
           # Node 22, Playwright's driver and LibreOffice run on 11. Playwright's Chromium (159) needs macOS 13, so browser
           # use says so on older Macs (bundled.browser_needs_newer_macos) and Chromium is the one exemption.
-          exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0')
+          # The Apple silicon ffmpeg (imageio-ffmpeg's build, read from the file) needs macOS 12: converting audio and video
+          # says so on an older Mac (bundled.ffmpeg_needs_newer_macos); speech to text decodes with PyAV and runs on 11.
+          # Every other file, the new Python packages included, must pass at 11 (app/tests/test_macos_floor.py reads them).
+          exempt=(--exempt 'Contents/Resources/app/vendor/browsers/*=13.0' --exempt 'Contents/Resources/app/vendor/ffmpeg/*=12.0')
           # without a minimum, clang targets the build machine's macOS and Finder shows the app crossed out on older ones
           clang -O2 -arch $arch -mmacosx-version-min=$min -o dist-src/app-mac-$a/Meshpool.app/Contents/MacOS/Meshpool packaging/mac/launcher/main.c
           # Playwright's own Node needs macOS 13.5; it runs on the app's Node 22 (macOS 11) instead

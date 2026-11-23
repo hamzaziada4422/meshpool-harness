@@ -6,6 +6,8 @@ Checks what a user would hit first, with no network and no paid calls:
   1. the packages the app ships with import (PDF, Word, Excel, PowerPoint, browser),
   2. the app's version is the release's version,
   3. Word and PDF files can be made,
+  3b. the programs and packages the skills rely on work from the app alone: ffmpeg, pandoc, speech to text (the bundled
+      model, offline), a notebook run with the bundled kernel, a chart, HEIC support,
   4. the app's server starts, and a Meshpool Code chat gets an answer from a stand-in model (testkit/mock_llm.py).
 Exits non-zero on the first failure, so the release is not published.
 """
@@ -45,6 +47,66 @@ def wait_http(url: str, secs: int = 90):
         except Exception:  # noqa: BLE001
             time.sleep(1)
     raise SystemExit(f"smoke: FAILED, nothing answered at {url} within {secs} s")
+
+
+def bundled_media(proj: Path):
+    """What the skills rely on (transcribe-audio, convert-files, notebooks, make-chart, image-tools) runs from the app alone."""
+    import wave
+    from meshpool_harness import bundled
+    bundled.use_bundled_tools()
+    step("bundled ffmpeg, pandoc, speech to text, notebooks")
+    why = bundled.ffmpeg_needs_newer_macos()
+    ff = bundled.bundled_ffmpeg()
+    if not ff:
+        raise SystemExit("smoke: FAILED, ffmpeg is not in the app (vendor/ffmpeg)")
+    if why:
+        step(f"ffmpeg skipped: {why}")
+    else:
+        r = subprocess.run([ff, "-version"], capture_output=True, text=True, timeout=60)
+        if r.returncode or "ffmpeg version" not in r.stdout:
+            raise SystemExit(f"smoke: FAILED, the bundled ffmpeg does not run: {r.stdout[:200]!r} {r.stderr[-200:]!r}")
+        step(r.stdout.splitlines()[0][:80])
+    pd = bundled.bundled_pandoc()
+    if not pd:
+        raise SystemExit("smoke: FAILED, pandoc is not in the app (vendor/pandoc)")
+    src = proj / "smoke.md"
+    src.write_text("# Smoke\n\nA *test*.\n", encoding="utf-8")
+    r = subprocess.run([pd, str(src), "-o", str(proj / "smoke.html")], capture_output=True, text=True, timeout=60)
+    if r.returncode or "<em>test</em>" not in (proj / "smoke.html").read_text(encoding="utf-8"):
+        raise SystemExit(f"smoke: FAILED, the bundled pandoc does not convert: {r.stderr[-300:]!r}")
+    model = bundled.whisper_model_dir()
+    if not model:
+        raise SystemExit("smoke: FAILED, the speech model is not in the app (vendor/whisper)")
+    wav = proj / "silence.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\0\0" * 16000 * 2)
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    from faster_whisper import WhisperModel
+    segs, info = WhisperModel(str(model), device="cpu", compute_type="int8").transcribe(str(wav), vad_filter=False)
+    list(segs)
+    step(f"speech to text ran offline ({info.language})")
+    import nbformat
+    nb = nbformat.v4.new_notebook()
+    nb.cells = [nbformat.v4.new_code_cell("x = 6 * 7\nprint(x)")]
+    nbf = proj / "smoke.ipynb"
+    nbformat.write(nb, nbf)
+    r = subprocess.run([sys.executable, "-m", "nbconvert", "--to", "notebook", "--execute", "--inplace", str(nbf)],
+                       capture_output=True, text=True, timeout=300)
+    done = nbformat.read(nbf, as_version=4)
+    if r.returncode or "42" not in str(done.cells[0].outputs):
+        raise SystemExit(f"smoke: FAILED, a notebook did not run with the bundled kernel: {r.stderr[-400:]!r}")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.plot([1, 2, 3])
+    plt.savefig(proj / "smoke.png")
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    import onnxruntime  # noqa: F401  (the voice detector)
+    step("notebook, chart and HEIC support work")
 
 
 def main():
@@ -89,6 +151,8 @@ def main():
         out, bad = fn("# Smoke test\n\nRevenue grew 12% to $4.2m.\n\n| a | b |\n|---|---|\n| 1 | 2 |", name)
         if bad or not (proj / "Meshpool outputs" / name).stat().st_size:
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
+
+    bundled_media(proj)
 
     step("server and a chat")
     mport, uport = free_port(), free_port()
