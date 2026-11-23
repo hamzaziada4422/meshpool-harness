@@ -233,3 +233,54 @@ def test_toolless_end_with_a_failing_workbook_returns_file_and_failures(tmp_path
     assert r["ok"] is False and r["artifacts"] == [str(tmp_path / "Model.xlsx")]
     assert r["checks"] == ["X4 DCF!C9: hardcoded number in a formula"]
     assert "does NOT pass" in r["answer"] and "hardcoded number" in r["answer"] and "stopped calling tools" in r["answer"]
+
+
+# ---- an input workbook copied into the job folder is not the run's own work (M30-02)
+
+def _input_copy(tmp_path):
+    src = tmp_path / "inputs"
+    src.mkdir()
+    orig = src / "input.xlsx"
+    orig.write_bytes(b"the user's own workbook")
+    work = tmp_path / "work"
+    work.mkdir()
+    shutil.copy(orig, work / "input.xlsx")                  # what cli.run_request does: a new mtime, same content
+    return orig, work
+
+
+def _all_notes(client):
+    return "\n".join(m["content"] for m in client.requests[-1]["messages"] if m["role"] == "user")
+
+
+def test_a_copied_input_workbook_is_not_a_saved_workbook(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    c = MockClient([tool_call("bash", {"command": f"echo explore {i}"}) for i in range(6)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is False and r["artifacts"] == []
+    assert r["reason"] == "turn cap 6 reached; no workbook saved"
+    assert "BUILD NOW" in _all_notes(c)
+
+
+def test_editing_the_copied_input_in_place_counts_as_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    edit = "python -c \"open('input.xlsx','wb').write(b'changed by the run')\""
+    c = MockClient([tool_call("bash", {"command": edit})] + [tool_call("bash", {"command": f"echo r {i}"})
+                                                              for i in range(5)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is True and r["artifacts"] == [str(work / "input.xlsx")]
+    assert orig.read_bytes() == b"the user's own workbook"
+
+
+def test_an_unchanged_copy_of_the_input_under_a_new_name_is_not_saved(tmp_path, monkeypatch):
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: None)
+    orig, work = _input_copy(tmp_path)
+    c = MockClient([tool_call("bash", {"command": "cp input.xlsx Copy.xlsx"})]
+                   + [tool_call("bash", {"command": f"echo r {i}"}) for i in range(5)])
+    r = E.solve("Extend the model", workdir=str(work), task_id="t", max_turns=6, client=c, model="mock",
+                files=[str(orig)])
+    assert r["ok"] is False and r["artifacts"] == [] and r["reason"].endswith("no workbook saved")
+    assert "BUILD NOW" in _all_notes(c)

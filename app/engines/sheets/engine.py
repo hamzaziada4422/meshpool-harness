@@ -271,6 +271,22 @@ class SheetsWorkspace(Workspace):
         self.wrapped = False                  # the ~80% "wrap up and finish" note was sent
         self.turn = 0                         # last turn whose tools ran (set by turn_budget)
         self.before = set(_files(self.root))  # files already in the folder: never moved or deleted by the tidy-up
+        # "written in this run" is judged by content, not mtime or path: the CLI copies inputs into the folder (new
+        # mtime), so fingerprint every workbook already there and every input at the start
+        self._file_shas: dict = {}            # (path, mtime_ns, size) -> sha256, so per-turn checks stay cheap
+        self.start_hashes = {p.resolve(): h for p in self.before if p.suffix.lower() in (".xlsx", ".xlsm")
+                             and (h := self._file_sha(p))}
+        self.input_hashes = {h for p in self.inputs if p.is_file() and (h := self._file_sha(p))}
+
+    def _file_sha(self, p: Path) -> str | None:
+        try:
+            st = p.stat()
+            key = (str(p), st.st_mtime_ns, st.st_size)
+            if key not in self._file_shas:
+                self._file_shas[key] = _sha(p)
+            return self._file_shas[key]
+        except OSError:
+            return None
 
     def _allowed(self, q: Path) -> bool:
         return q == self.root or self.root in q.parents or q in self.inputs
@@ -316,8 +332,9 @@ class SheetsWorkspace(Workspace):
         return msg
 
     def saved_workbooks(self) -> list[Path]:
-        """.xlsx files written in this run (input workbooks copied in beforehand do not count): top-level files first,
-        then the most recently saved."""
+        """.xlsx files written in this run: top-level files first, then the most recently saved. A file counts only
+        when its content differs from what the folder held at the start and from every input workbook, so an input
+        copied into the folder (new mtime, same bytes) is not the run's work."""
         out = []
         for p in self.root.rglob("*.xlsx"):
             rel = p.relative_to(self.root).parts
@@ -325,7 +342,10 @@ class SheetsWorkspace(Workspace):
                 continue
             try:
                 m = p.stat().st_mtime
-                if m >= self.started - 1 and p.resolve() not in self.inputs:
+                if m < self.started - 1 or p.resolve() in self.inputs:
+                    continue
+                h = self._file_sha(p)              # content must differ from the start-of-run file and every input
+                if h is not None and h != self.start_hashes.get(p.resolve()) and h not in self.input_hashes:
                     out.append((len(rel) > 1, -m, p))
             except OSError:
                 continue
