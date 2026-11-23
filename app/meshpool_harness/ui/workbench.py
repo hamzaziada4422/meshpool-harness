@@ -293,6 +293,11 @@ def write_file(root: str, rel: str, text: str) -> dict:
     except OSError:
         pass
     p.write_bytes(text.encode("utf-8"))
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(root, str(p), "workbench")
+    except Exception:
+        pass
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
@@ -322,6 +327,11 @@ def attach(root: str, name: str, data: bytes) -> dict:
         i += 1
     with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
         f.write(data)
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(r), str(p), "attach")
+    except Exception:
+        pass
     return {"path": (sub + "/" if sub else "") + p.name}
 
 
