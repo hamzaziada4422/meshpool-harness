@@ -194,3 +194,21 @@ def test_pi_chat_grant_is_scoped(tmp_path):
     assert gate("npm test") and gate("npm test -k x") and len(asked) == 1 and asked[0] == "`npm test` commands"
     assert gate("npm install") and len(asked) == 2
     assert gate("npm test && rm -rf /") and len(asked) == 3
+
+
+def test_a_chained_command_offers_no_chat_grant(tmp_path):
+    """A command that cannot be granted (chained, redirecting) is approved once: the card must not offer
+    "Allow ... in this chat" (scope "once"), and "always" stores nothing."""
+    import json as _j
+    from meshpool_harness.agent.core import Agent
+    seen = []
+
+    def approve(kind, title, detail, scope=""):
+        seen.append(scope)
+        return "always", ""
+    a = Agent(str(tmp_path), mode="ask", approve=approve)
+    ok, _ = a._permit("bash", {"command": "make build && make test"})
+    assert ok and seen == ["once"]
+    assert not [x for x in a.always if x.startswith("bash")]
+    js = (Path(__file__).resolve().parents[1] / "meshpool_harness" / "ui" / "app.js").read_text(encoding="utf-8")
+    assert 'ev.scope === "once" ? ""' in js

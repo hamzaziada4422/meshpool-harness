@@ -2771,7 +2771,7 @@ class Agent:
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args) else []
         pats = list(dict.fromkeys(pats))
         scope = ("all file edits" if group == "edit" else "this tool" if group != "bash" else
-                 " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "")
+                 " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
         if decision == "always":
             if group == "bash":

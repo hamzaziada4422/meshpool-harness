@@ -836,6 +836,10 @@ class Terminal:
         else:
             shown = [style(ln) for ln in rows]
         what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
+        if scope == "once":               # a chained or redirecting command: approved one at a time, never for the session
+            i = self.choose(title, shown, ["Yes", "No"], hotkeys={"y": 0, "n": 1},
+                            hint="↑↓ or 1-2 · enter to confirm · esc: no")
+            return ("yes" if i == 0 else "no"), ""
         i = self.choose(title, shown, ["Yes", f"Yes, and don't ask again for {what} in this session", "No"],
                         hotkeys={"y": 0, "a": 1, "n": 2},
                         hint="↑↓ or 1-3 · enter to confirm · esc: no")
@@ -856,7 +860,8 @@ class Terminal:
         what = scope or {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
         while True:
             try:
-                a = input(B.prompt(f"  {st.bold('y')} yes   {st.bold('a')} yes, and allow {what} for this session   "
+                always = "" if scope == "once" else f"{st.bold('a')} yes, and allow {what} for this session   "
+                a = input(B.prompt(f"  {st.bold('y')} yes   {always}"
                                    f"{st.bold('n')} no (Enter: no) > ")).strip().lower()
             except EOFError:
                 return "no", ""
@@ -866,7 +871,7 @@ class Terminal:
                 return "no", ""
             if a in ("y", "yes"):
                 return "yes", ""
-            if a in ("a", "always"):
+            if a in ("a", "always") and scope != "once":
                 return "always", ""
             if a in ("n", "no"):
                 try:
