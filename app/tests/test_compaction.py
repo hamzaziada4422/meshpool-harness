@@ -87,6 +87,7 @@ def test_a_three_hundred_step_task_finishes_and_never_overflows(tmp_path, monkey
     send valid requests every time, and still deliver the final answer."""
     monkeypatch.setenv("MH_COMPACT_MODEL", "0")
     monkeypatch.setenv("MH_COMPACT_CHARS", "30000")
+    monkeypatch.setenv("MESHPOOL_CONTEXT_WINDOW", "16384")   # a small window: eliding old output is not enough, notes are needed
     monkeypatch.setenv("MH_MAX_STEPS", "400")         # a long task by choice: the 200-step default (S-08) is raised
     (tmp_path / "a.txt").write_text("hello\n")
     a = Agent(str(tmp_path), mode="auto")
@@ -97,7 +98,8 @@ def test_a_three_hundred_step_task_finishes_and_never_overflows(tmp_path, monkey
         msgs = body["messages"]
         assert _valid(msgs)
         sizes.append(core._context_size(msgs))
-        notes.append(any("were summarized to save space" in str(m.get("content")) for m in msgs))
+        notes.append(any("were summarized to save space" in str(m.get("content")) or "elided at compaction" in str(m.get("content"))
+                         for m in msgs))        # old output shortened, or the older steps turned into a note
         i = n["i"] = n["i"] + 1
         if i > 300:
             return {"choices": [{"message": {"content": "all 300 steps done"}, "finish_reason": "stop"}], "usage": {}}, False

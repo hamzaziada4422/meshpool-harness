@@ -60,7 +60,7 @@ def classify_error(msg: str) -> str:
     import re
     if _CONTEXT_RX is None:
         _CONTEXT_RX = (re.compile(r"context[ _-]?(?:length|window)|maximum context|too many tokens|prompt is too long|"
-                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum)|"
+                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum (?:context|input|prompt|number of (?:input )?tokens|length))|"
                                   r"token limit", re.I),
                        re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
     m = msg or ""
@@ -79,9 +79,11 @@ def classify_error(msg: str) -> str:
         return "context"                            # any status: llama.cpp and Ollama servers use 400, 500 or 200
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
-    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
+    # A thinking/reasoning/token "budget" is a request setting, not money: a 400 about it is a plain bad request.
+    money = re.sub(r"(?:thinking|reasoning|token|output)[ _.-]*budget\w*|budget[_ ]tokens", " ", m, flags=re.I)
+    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceededbudget|exceeded your (current )?quota|"
                  r"insufficient[_ ](credits?|balance|funds|quota)|quota[_ ]exhausted|out of credits|"
-                 r"credit balance is too low|max budget", m, re.I):
+                 r"credit balance is too low|max budget (?:for|of|has|reached)", money, re.I):
         return "quota"                              # spent: waiting or retrying cannot help (UHP: quota_exhausted)
     if "HTTP 429" in m:
         return "rate_limit"
@@ -318,7 +320,7 @@ class LiveClient:
                     shrinks += 1
                     said = CTX.parse_limit(msg)
                     if said and said < win:
-                        win = CTX.learn(model, said)
+                        win = CTX.learn(model, said, explicit=True)
                         CTX.tell_once(model, win, self.notify or _tell_retry)
                     tighten *= 0.7
                     if shrinks > 4:
@@ -467,14 +469,12 @@ class LiveClient:
         return d
 
     def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
-        """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far
-        under what was sent: take that as the window, so the next request is trimmed to it."""
+        """Ollama and some local servers cut a too-long prompt without an error (core/context.observe_silent_cut judges
+        it: local endpoints only, total prompt tokens, two matching replies, a sane floor)."""
         try:
             from meshpool_harness.core import context as CTX
-            used = int(((resp or {}).get("usage") or {}).get("prompt_tokens") or 0)
-            sent_tok = CTX.estimate(sent) + CTX.estimate(tools or [])
-            if used and sent_tok > 1500 and sent_tok > used * 1.6 and used >= 512:
-                CTX.learn(model, int(used * 1.02) + CTX.max_output(win, None))
+            CTX.observe_silent_cut(model, CTX.estimate(sent) + CTX.estimate(tools or []), (resp or {}).get("usage") or {},
+                                   win, getattr(self.ledger, "base_url", None))
         except Exception:  # noqa: BLE001
             pass
 

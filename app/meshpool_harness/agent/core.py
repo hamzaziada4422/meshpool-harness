@@ -88,6 +88,10 @@ def _codex_prompt() -> str:
     text = _trim_codex(text)
     if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
+    if os.environ.get("MH_OUTPUT_RULES", "0") == "1":      # MH_OUTPUT_RULES=1: fewer output tokens (patches and scripts are most of them)
+        text = text.rstrip() + ("\n\nKeep output small: change existing files with apply_patch, never by rewriting them; "
+                               "a throwaway check is at most a few lines, and the project's own tests come first; do not "
+                               "restate the plan or repeat code you already wrote.\n")
     if os.environ.get("MH_SCAN_RULE", "0") == "1":         # MH_SCAN_RULE=1: no whole-file-system scans, no sandbox copies
         text = text.rstrip() + ("\n\nTest with the project's own tests or a short script in the project; do not scan the "
                                "file system (`find /`) or copy the project elsewhere to test it.\n")
@@ -315,6 +319,9 @@ office_task request (e.g. "density: present", "ocean theme", "exactly 8 slides",
 then call it again with the answers as fields. If you already asked them, pass brief_ok=true.
 
 Rules
+- Copy values the request gives (dates, amounts, labels, names) exactly as written, unless it asks you to reformat them: do not rewrite an ISO date, add a note such as "(excl. VAT)" or round a figure the user gave.
+- Save a result at the exact path and file name the request names (for example ./deck.pptx); use the Meshpool outputs folder only when it names none.
+- To fill in or change a workbook, document or deck the user already has, use edit_office_file with direct edits (cell references such as Assumptions!B2 on the named sheets); build with an engine only for a new file.
 - Use facts from the user's files and fetched sources. Never invent numbers, quotes or sources; say what is missing.
 - You can only write inside the working folder. Ask before deleting or overwriting the user's files.
 - Never print or store secrets such as API keys or tokens.
@@ -740,7 +747,8 @@ def _batches(calls: list) -> list:
 # 'max_tokens'..."). The fix is known for each: drop it, or swap max_tokens for max_completion_tokens. What a model
 # refused is remembered for the process, so the next request is right the first time. (Same class of problem as
 # HarnessRouter's measured reasoning table, runner/reasoning.py: a field a model lacks is refused, not ignored.)
-_REFUSED: dict[str, set] = {}
+from meshpool_harness.core.modelcaps import RefusedView as _RefusedView  # noqa: E402
+_REFUSED = _RefusedView()      # one record with ModelCaps.learn_refused (persisted per endpoint)
 _ADAPTABLE = ("temperature", "top_p", "tool_choice", "parallel_tool_calls", "stream_options", "reasoning_effort",
               "max_tokens", "response_format", "seed", "presence_penalty", "frequency_penalty")
 
@@ -1021,6 +1029,8 @@ class Agent:
             shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
+        if "ask_user" in self._dropped():             # headless or a lean route: no tool, so no 2k-char section about it
+            text = re.sub(r"\nAsking the user \(ask_user\)\n.*?(?=\nRules\n)", "\n", text, count=1, flags=re.S)
         if "todo_write" in self._dropped():          # no todo tool in this harness: no instruction to use it
             text = re.sub(r"\n2\. For (work|a multi-step job)( with several steps)?, keep a short plan with todo_write[^\n]*",
                           "\n2. Get several independent facts in one call (bash_many) rather than one call each.", text)
@@ -1110,6 +1120,10 @@ class Agent:
             # 2k tokens less on every call. Once a message asks for more, the whole set stays for the chat, so the
             # prompt prefix does not flip back and forth.
             names = [n for n in names if n in _CHAT_TOOLS]
+        elif self.profile == "work" and os.environ.get("MH_LITE_WORK_TOOLS", "0") == "1":
+            # MH_LITE_WORK_TOOLS=1 (off by default, unmeasured): a Work chat carries the 14 tools a document or data job
+            # uses, not the 20 of a long coding job (background shells, notebooks, sub-agents): 1.5k tokens a call.
+            names = [n for n in names if n in _CHAT_TOOLS | {"ask_user", "todo_write", "use_skill", "find_skill"}]
         else:
             self._tools_full = True
             if "delegate_task" not in names and getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():
@@ -1129,9 +1143,9 @@ class Agent:
         """E2E-AUTONOMY: with many connected tools show an index and load schemas on demand (agent/mcp_assist.py)."""
         lz = getattr(self, "_lazy", None)
         if lz is None:
-            lz = self._lazy = MA.LazyTools()
+            lz = self._lazy = MA.LazyTools(self.profile)
         self._lazy_all, self._lazy_hidden = ms, []
-        if not ms or not MA.LazyTools.wanted(ms):
+        if not ms or not MA.LazyTools.wanted(ms, self.profile):
             return ms
         shown, hidden = lz.split(ms)
         self._lazy_hidden = [h["function"]["name"] for h in hidden]
@@ -1333,6 +1347,9 @@ class Agent:
             self._stop = True                              # Stop came before this turn began: it ends at once
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
+        if not self._style() and "\u200b" in text:      # the app's hidden block repeats what the system prompt already says
+            from meshpool_harness.assistant import HONESTY, PLAIN
+            text = text.replace(PLAIN, "").replace(HONESTY, "")
         from meshpool_harness.agent import extras as EX
         cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
         if cmd:
@@ -1884,6 +1901,18 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _local_check_passed(self) -> bool:
+        """The engine's own validator (check_deck, check_workbook, check_document) passed and nothing was written after
+        it: the deliverable already met the house rules, so a reviewer loop would only re-read it (MH_GRADER_LOCAL=0 off)."""
+        last_ok, last_write = None, -1
+        for i, t in enumerate(getattr(self, "trace", [])[-60:]):
+            name = str(t.get("tool", "")).replace("-", "_")
+            if re.search(r"(^|__)check_(deck|workbook|document)$", name):
+                last_ok = i if t.get("ok", True) and not re.search(r"\bfail", str(t.get("arg", "")), re.I) else None
+            elif name in ("write_file", "edit", "apply_patch", "shell", "bash") or re.search(r"(^|__)(make_|edit_|add_|convert_)", name):
+                last_write = i
+        return last_ok is not None and last_ok > last_write
+
     def _small_job(self, info: dict) -> bool:
         """Any lane: under 10 tool calls, one or two files that are not a deck, workbook or web page, a short final
         answer and no failing command after the last edit. A reviewer loop on a one-page document cost 30 to 60
@@ -1924,6 +1953,8 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
+            if os.environ.get("MH_GRADER_LOCAL", "1") != "0" and self._local_check_passed():
+                return False, final        # check_deck / check_workbook / check_document passed on the last build
             if why.startswith("files made") and os.environ.get("MH_GRADER_SMALL", "0") != "1" and (
                     self._small_code_verified() or self._small_job(info)):
                 return False, final        # a small job, or a code change whose own checks passed: no second model loop
@@ -2117,6 +2148,21 @@ class Agent:
             key = re.sub(r"\d+", "#", key)
         runs = g.setdefault("same", [])
         edits = self.ws.edits
+        nm = str(f.get("name", ""))
+        if os.environ.get("MH_REPEAT_READS", "1") != "0" and (
+                self._inspection(nm, str(f.get("arguments", ""))) or (nm.startswith("mcp__") and MA.read_like(nm))):
+            bg = self.ws.__dict__.get("_bg") or {}
+            prev = [r for r in runs if r[0] == key and r[2] == edits]
+            if not any(e["p"].poll() is None for e in list(bg.values())) and len(prev) >= 2 and \
+                    len({r[1] for r in prev}) == 1:
+                # the same look, nothing changed since, the same result twice already: a third run says nothing new
+                g["refused"] = g.get("refused", 0) + 1
+                runs.append((key, prev[-1][1], edits, False, prev[-1][4]))      # counts toward the 5th ask
+                del runs[:-12]
+                more = (" You have asked this " + str(len(prev) + 1) + " times. Change your approach: edit, run the "
+                        "tests, or answer with what you have." if len(prev) >= 4 else "")
+                return ("[Meshpool] Not run: you already ran this; the result is unchanged and no file changed since. "
+                        "It was: " + str(prev[-1][4])[:200].replace("\n", " ") + more)
         if os.environ.get("MH_REPEAT_WINDOW") == "1":
             stuck = (sum(1 for r in runs if r[0] == key and r[2] == edits and r[3]) >= 3
                      and len({r[1] for r in runs if r[0] == key and r[2] == edits}) == 1)
@@ -2136,7 +2182,7 @@ class Agent:
                 any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
             out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
                               "case, a shorter timeout), print what it is waiting on, or change the code first.")
-        runs.append((key, h, edits, failed))     # only a call that failed counts: a poll that says "pending" may repeat
+        runs.append((key, h, edits, failed, str(out)[:240]))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
 
@@ -2308,11 +2354,20 @@ class Agent:
             limit = min(limit, CTX.compact_chars(win, fixed, limit))
         except Exception:  # noqa: BLE001
             pass
-        if _context_size(self.messages) > limit:
+        try:                                       # a big window never compacts at a few thousand tokens
+            if win > 32_768:
+                limit = max(limit, min(int(self.hsettings()["compact_chars"]), 80_000))
+        except Exception:  # noqa: BLE001
+            pass
+        size = _context_size(self.messages)
+        guard = self.__dict__.setdefault("_compact_guard", __import__("meshpool_harness.core.context", fromlist=["x"]).CompactGuard())
+        edits = getattr(self.ws, "edits", 0)
+        if size > limit and guard.allow(size, edits):
             _shrink_context(self.messages, int(limit * 0.6))
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
             if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
                 self.compact_now()
+            guard.record(_context_size(self.messages), edits, size)
 
     def compact_now(self):
         """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
@@ -2677,7 +2732,7 @@ class Agent:
                         from meshpool_harness.core import context as CTX
                         said = CTX.parse_limit(msg)
                         if said and said < self._ctx_window():
-                            CTX.learn(self.current_model(), said)       # the server named its real window
+                            CTX.learn(self.current_model(), said, explicit=True)       # the server named its real window
                         self._ctx_tighten *= 0.7
                     except Exception:  # noqa: BLE001
                         pass
@@ -2890,11 +2945,10 @@ class Agent:
             _MC.observe_usage(base, body["model"], u)      # does this endpoint report cached / reasoning tokens
         except Exception:  # noqa: BLE001
             pass
-        try:                                               # a server that silently cuts a too-long prompt (Ollama)
+        try:                                               # a local server that silently cuts a too-long prompt (Ollama)
             from meshpool_harness.core import context as CTX
-            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
-            if d_in >= 512 and sent > 1500 and sent > d_in * 1.6:
-                CTX.learn(self.current_model(), int(d_in * 1.02) + CTX.max_output(self._ctx_window(), None))
+            CTX.observe_silent_cut(self.current_model(), CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or []),
+                                   u, self._ctx_window(), base)
         except Exception:  # noqa: BLE001
             pass
         self._absorb_usage(turn)                           # this call's record, and any helper's since the last one
@@ -3504,7 +3558,7 @@ class Agent:
                 ok = not err
                 out = self.ws._cap(str(out), "mcp")
             elif name == MA.FIND:
-                lz = getattr(self, "_lazy", None) or MA.LazyTools()
+                lz = getattr(self, "_lazy", None) or MA.LazyTools(self.profile)
                 self._lazy = lz
                 out = lz.search(getattr(self, "_lazy_all", []), str(args.get("query") or ""), args.get("names"))
             elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:

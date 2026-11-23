@@ -129,7 +129,7 @@ def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_pat
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
     g = {}
-    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python3 t.py"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     outs = [a._repeat_guard(call, g) for _ in range(6)]
     assert len(runs) == 3 and all("Not run" in o for o in outs[3:])
@@ -145,7 +145,7 @@ def test_repeat_window_switch_catches_alternation_and_spares_progress(tmp_path, 
     a = _agent(tmp_path)
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
-    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "echo hi"]}'}}
+    call = {"id": "1", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python3 t.py"]}'}}
     other = {"id": "2", "function": {"name": "apply_patch", "arguments": "{}"}}
     g = {}
     seq = [a._repeat_guard(x, g) for _ in range(6) for x in (call, other)]
@@ -526,3 +526,96 @@ def test_small_job_on_any_lane_skips_the_review_but_decks_and_long_jobs_keep_it(
     w.ws.edits = 1
     w.ws.commands = [{"cmd": "python check.py", "code": 2, "after_edit": 1, "kind": "run"}]
     assert not w._small_job(base)                                             # a failing check keeps it
+
+
+def test_lite_work_tools_switch_is_off_by_default_and_cuts_schemas_when_on(tmp_path, monkeypatch):
+    base = {t["function"]["name"] for t in _agent(tmp_path, "work").tool_schemas()}
+    monkeypatch.setenv("MH_LITE_WORK_TOOLS", "1")
+    lite = {t["function"]["name"] for t in _agent(tmp_path, "work").tool_schemas()}
+    assert "delegate_task" in base and "bash_start" in base
+    assert "delegate_task" not in lite and {"office_task", "read_file", "edit", "bash", "ask_user"} <= lite
+
+
+def test_work_prompt_drops_the_ask_user_section_when_the_tool_is_not_offered(tmp_path):
+    a = _agent(tmp_path, "work")
+    assert "Asking the user (ask_user)" in a.system_prompt()
+    a.headless = True
+    sp = a.system_prompt()
+    assert "Asking the user (ask_user)" not in sp and "\nRules\n" in sp and "Answer style" in sp
+
+
+def test_hidden_block_does_not_repeat_honesty_and_plain_text(tmp_path, monkeypatch):
+    from meshpool_harness.assistant import HONESTY, PLAIN
+    a = _agent(tmp_path, "work")
+    seen = []
+    monkeypatch.setattr(a, "_chat", lambda turn: seen.append([m for m in a.messages if m["role"] == "user"][-1]["content"])
+                        or ({"content": "ok"}, False))
+    a.emit = lambda ev: None
+    a.send("hello\n\n​" + PLAIN + "\n\n" + HONESTY + "\n\nfacts: x")
+    assert HONESTY not in seen[0] and PLAIN not in seen[0] and "facts: x" in seen[0]
+
+
+def test_grader_skipped_when_the_local_check_passed_and_todos_alone_are_not_large(tmp_path):
+    from meshpool_harness.agent import grader as GR
+    assert GR.large({"todos": [{}, {}, {}], "calls": 4}) == ""
+    assert GR.large({"todos": [{}, {}, {}], "calls": 9}).startswith("a plan")
+    a = _agent(tmp_path, "work")
+    a.trace = [{"tool": "mcp__meshpool_office__make_deck", "ok": True, "arg": ""},
+               {"tool": "mcp__meshpool_office__check_deck", "ok": True, "arg": "pass"}]
+    assert a._local_check_passed()
+    a.trace.append({"tool": "edit_office_file", "ok": True, "arg": ""})
+    assert not a._local_check_passed()                      # something was written after the check
+
+
+def test_light_grader_is_one_call_without_tools_when_switched_on(tmp_path, monkeypatch):
+    from meshpool_harness.agent import grader as GR
+    seen = []
+    real = GR.make_agent
+
+    def spy(parent, emit, stop):
+        a = real(parent, emit, stop)
+        a._post = lambda base, key, body, stream: (seen.append(body) or ({"choices": [{"message": {"content": json.dumps(
+            {"verdict": "pass", "acceptance": "accept", "items": [], "blockers": [], "fix": [], "expectations": []})},
+            "finish_reason": "stop"}], "usage": {}}, False))
+        return a
+    monkeypatch.setattr(GR, "make_agent", spy)
+    a = _agent(tmp_path)
+    info = {"files": [], "request": "x", "calls": 5, "todos": [], "research": 0, "final": "done", "root": str(tmp_path)}
+    monkeypatch.delenv("MH_GRADER_LIGHT", raising=False)       # on by default
+    GR.run(a, info, [])
+    assert 1 <= len(seen) <= 2 and all(b.get("tool_choice") == "none" for b in seen)   # a verdict (plus one repair at most), no tool loop
+
+
+def test_output_rules_are_opt_in(monkeypatch):
+    assert "Keep output small" not in core._codex_prompt()
+    monkeypatch.setenv("MH_OUTPUT_RULES", "1")
+    assert "Keep output small" in core._codex_prompt()
+
+
+def test_identical_successful_reads_are_stopped_on_the_third_run_and_a_change_resets_it(tmp_path):
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "line 1\nline 2"
+    g = {}
+    read = {"id": "1", "function": {"name": "read_file", "arguments": '{"path": "a.py", "start": 1, "end": 40}'}}
+    outs = [a._repeat_guard(read, g) for _ in range(6)]
+    assert len(runs) == 2 and all("you already ran this" in o for o in outs[2:])
+    assert "Change your approach" in outs[5] and "line 1" in outs[2]
+    a.ws.edits += 1                                          # a file changed: the same read is fine again
+    assert "you already ran this" not in a._repeat_guard(read, g)
+    other = {"id": "2", "function": {"name": "read_file", "arguments": '{"path": "b.py"}'}}
+    assert "you already ran this" not in a._repeat_guard(other, g)
+
+
+def test_polls_of_background_jobs_are_never_refused(tmp_path):
+    a = _agent(tmp_path)
+    a._run_tool = lambda c, cut=False: "[exit 0]\npending"
+    poll = {"id": "1", "function": {"name": "bash_output", "arguments": '{"id": "bg1"}'}}
+    g = {}
+    assert not any("you already ran this" in a._repeat_guard(poll, g) for _ in range(8))
+
+
+def test_work_prompt_has_the_fidelity_path_and_edit_rules():
+    from meshpool_harness.agent import core as K
+    for must in ("Copy values the request gives", "exact path and file name", "edit_office_file with direct edits"):
+        assert must in K.WORK_SYSTEM

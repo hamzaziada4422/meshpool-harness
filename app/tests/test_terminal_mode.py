@@ -105,7 +105,7 @@ def test_print_mode_exits_non_zero_when_the_turn_failed(monkeypatch, tmp_path):
 
 def test_context_is_the_apps_context_block(monkeypatch):
     from meshpool_harness import assistant as AS
-    monkeypatch.setattr(AS, "context_block", lambda: "Today is X.\n\nNotes from Meshpool: ...")
+    monkeypatch.setattr(AS, "context_block", lambda **k: "Today is X.\n\nNotes from Meshpool: ...")
     assert T._context() == "Today is X.\n\nNotes from Meshpool: ..."
 
 

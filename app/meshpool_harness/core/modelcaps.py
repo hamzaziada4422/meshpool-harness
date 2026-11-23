@@ -12,7 +12,8 @@ Order of precedence for every field: the user's override (MH_CAPS json, MH_REASO
 "caps" mapping) > what the endpoint's replies taught (learn_*) > the endpoint's kind (host) > the name-pattern table
 (app/defaults/model_hints.json, or <data folder>/model_hints.json) > conservative defaults: chat completions, no
 reasoning parameter, no cache fields, parallel calls on. An unknown model therefore sends nothing a strict server could
-refuse; a field the server refuses with a 400 is dropped and remembered by the caller (agent/core.py _REFUSED)."""
+refuse; a field the server refuses with a 400 is dropped and remembered here (learn_refused, persisted per endpoint; the
+agent's `_REFUSED` is a view of that same record)."""
 from __future__ import annotations
 
 import json
@@ -461,6 +462,61 @@ def refused(base: str, model: str) -> set:
         row = ((src.get(ep) or {}).get(bare) or {}).get("refused") or {}
         out |= {k for k, ts in row.items() if isinstance(ts, (int, float)) and time.time() - ts < _ttl()}
     return out
+
+
+def clear_refused() -> None:
+    """Forget every refused-field mark (memory and file). For tests and "reset what Meshpool learned"."""
+    for src in (_mem_read(), _FALLBACK):
+        for ep in src.values():
+            for row in ep.values():
+                row.pop("refused", None)
+    try:
+        from meshpool_harness import fsio
+        p = _mem_path()
+        if p.exists():
+            data = _mem_read()
+            fsio.atomic_write_json(p, data)
+            _MEM.update(mtime=p.stat().st_mtime_ns)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class RefusedView:
+    """The agent's `_REFUSED` ({model: {fields}}), backed by learn_refused/refused so there is one record: the same
+    mapping calls the agent always made (get, setdefault(...).add, [], in, clear), on the key endpoint."""
+
+    @staticmethod
+    def _base() -> str:
+        try:
+            from meshpool_harness import providers as PV
+            return PV.key_base()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def get(self, model, default=()):
+        got = refused(self._base(), str(model))
+        return got if got else default
+
+    def __getitem__(self, model):
+        got = refused(self._base(), str(model))
+        if not got:
+            raise KeyError(model)
+        return got
+
+    def __contains__(self, model) -> bool:
+        return bool(refused(self._base(), str(model)))
+
+    def setdefault(self, model, default=None):
+        view, m = self, str(model)
+
+        class _Marks(set):
+            def add(self, f):
+                learn_refused(view._base(), m, f)
+                super().add(f)
+        return _Marks(refused(self._base(), m))
+
+    def clear(self) -> None:
+        clear_refused()
 
 
 def learn_no_vision(base: str, model: str) -> None:

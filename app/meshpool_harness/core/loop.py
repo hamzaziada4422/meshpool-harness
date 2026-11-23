@@ -236,17 +236,20 @@ def _run_loop(task_text: str, *, client, model: str, profile, ws: Workspace, ctx
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
     t_start = time.time()
     meter = CacheMeter()
+    _cguard = CTX.CompactGuard()
     for turn in range(1, caps.max_turns + 1):
         res.turns = turn
         if caps.max_seconds and time.time() - t_start > caps.max_seconds:
             res.reason = f"wall-clock cap {caps.max_seconds}s reached"
             log_failure(ctx, "time_cap", False, res.reason)
             return res
-        if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars:
+        _sz = sum(len(json.dumps(m)) for m in messages)
+        if _sz > caps.compact_chars and _cguard.allow(_sz, ws.edits):
             messages = _compact(messages, caps.keep_recent)
             if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars and CTX.is_small(win):
                 from meshpool_harness.agent import compaction as _CP     # still over 70% of a small window: summarize
                 _CP.compact_history(messages, client=client, model=model, win=win)
+            _cguard.record(sum(len(json.dumps(m)) for m in messages), ws.edits, _sz)
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()

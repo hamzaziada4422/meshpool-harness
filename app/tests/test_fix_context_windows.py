@@ -123,7 +123,7 @@ def test_unknown_local_model_learns_window_from_the_error(tmp_path, monkeypatch)
     srv = Fake(4096, STEPS)
     monkeypatch.setenv("MESHPOOL_BASE_URL", srv.url)
     monkeypatch.setenv("MH_PROBE_CONTEXT", "0")
-    assert CTX.window("mystery-model", srv.url) == CTX.DEFAULT_LOCAL      # local, unknown: conservative 8k
+    assert CTX.window("mystery-model", srv.url) == CTX.DEFAULT_HOSTED      # a local proxy/mock says nothing: large
     ws = project(tmp_path)
     cl = LiveClient("phase_2_build")
     cl.notify = lambda t: None
@@ -216,13 +216,92 @@ def test_error_messages_are_context_errors():
     assert CTX.parse_limit("maximum context length is 4096 tokens") == 4096
 
 
-def test_silent_truncation_is_learned():
-    cl = LiveClient.__new__(LiveClient)
-    sent = [{"role": "user", "content": "x" * 40000}]
-    cl._check_silent_cut("ollama-model", sent, None, {"usage": {"prompt_tokens": 2048}}, 8192)
-    assert CTX.window("ollama-model", "http://localhost:11434/v1", probe_endpoint=False) < 8192
+def test_silent_truncation_needs_two_sane_observations_and_total_tokens():
+    base = "http://localhost:11434/v1"
+    win = CTX.DEFAULT_LOCAL if False else 32768
+    big = 80_000                                                       # tokens we sent
+    use = {"prompt_tokens": 20_000}
+    assert not CTX.observe_silent_cut("ollama-model", big, use, win, base)          # one observation is not enough
+    assert CTX.observe_silent_cut("ollama-model", big, use, win, base)              # a second, matching one is
+    assert CTX.window_info("ollama-model", base, probe_endpoint=False)[0] < win
+    CTX.forget()
+    for _ in range(3):                                                  # a model the table knows is never shrunk by it
+        assert not CTX.observe_silent_cut("llama-3.1-8b", big, use, 131072, base)
+    assert CTX.window_info("llama-3.1-8b", base, probe_endpoint=False) == (131072, "table")
+    CTX.forget()
+    # a tiny implied window is never believed from usage numbers
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("m2", 10_000, {"prompt_tokens": 2048}, win, base)
+    assert CTX.window_info("m2", base, probe_endpoint=False)[0] == CTX.DEFAULT_LOCAL
+    # a remote gateway is never shrunk by it, whatever it reports
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("deepseek-v4.1-flash", 40_000, {"prompt_tokens": 6000}, 1_048_576,
+                                          "https://llm.meshpool.ai/v1")
+    assert CTX.window("deepseek-v4.1-flash", "https://llm.meshpool.ai/v1", probe_endpoint=False) == 1_048_576
+    # fresh-only usage next to separate cache fields: the total is what counts
+    for _ in range(3):
+        assert not CTX.observe_silent_cut("m3", 40_000, {"prompt_tokens": 6000, "cache_read_input_tokens": 33_000},
+                                          131072, base)
 
 
+def test_learn_ignores_guesses_below_the_floor_but_believes_an_error():
+    CTX.learn("tiny", 3000)
+    assert CTX.window_info("tiny", "https://api.example.com/v1", probe_endpoint=False)[1] != "learned"
+    CTX.learn("tiny", 3000, explicit=True)
+    assert CTX.window_info("tiny", "https://api.example.com/v1", probe_endpoint=False) == (3000, "learned")
+
+
+def test_compact_guard_breaks_the_loop():
+    g = CTX.CompactGuard()
+    assert g.allow(100_000, 0)
+    g.record(30_000, 0, 100_000)
+    assert not g.allow(35_000, 0)                                      # not 30% bigger yet
+    assert g.allow(40_000, 0)
+    g.record(30_000, 0, 40_000)                                        # cut only 25%: idle
+    assert g.allow(40_000, 0)
+    g.record(30_000, 0, 40_000)
+    assert not g.allow(500_000, 0)                                     # two idle compactions: stop compacting
+    assert g.allow(500_000, 3)                                         # files changed since: working again
+
+
+def test_usage_that_reports_fresh_tokens_only_does_not_loop_compaction(tmp_path, monkeypatch):
+    """The ws20 regression: a metering proxy at 127.0.0.1 in front of a 1M model, usage with fresh-only prompt_tokens."""
+    class Counting(Fake):
+        pass
+    steps = [("bash", {"command": "cat big.py | head -c 20000"})] * 40 + [("finish", {"answer": "done", "evidence": []})]
+    srv = Fake(2_000_000, steps)
+    # the fake reports fresh-only prompt tokens (tiny) with the cached part in separate fields
+    orig = srv.srv.RequestHandlerClass.do_POST
+
+    def post(self):
+        import io
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        self.rfile = io.BytesIO(json.dumps(body).encode())
+        self.headers.replace_header("Content-Length", str(len(json.dumps(body).encode())))
+        orig(self)
+    monkeypatch.setattr(srv.srv.RequestHandlerClass, "do_POST", post)
+    monkeypatch.setenv("MESHPOOL_BASE_URL", srv.url)
+    monkeypatch.setenv("MH_PROBE_CONTEXT", "0")
+    cl = LiveClient("phase_2_build")
+    cl.notify = lambda t: None
+    real = cl.ledger.chat
+
+    def chat(**kw):
+        r = real(**kw)
+        r["usage"] = {"prompt_tokens": 900, "cache_read_input_tokens": 40_000, "completion_tokens": 30}
+        return r
+    monkeypatch.setattr(cl.ledger, "chat", chat)
+    summaries = []
+    from meshpool_harness.agent import compaction as CP
+    real_ch = CP.compact_history
+    monkeypatch.setattr(CP, "compact_history", lambda *a, **k: summaries.append(1) or real_ch(*a, **k))
+    ws = project(tmp_path)
+    r = L.run("inspect big.py", client=cl, model="deepseek-v4.1-flash", profile=None, ws=ws, ctx={"task_id": "t"},
+              system_text="You are an agent.", require_check=False, caps=L.Caps(max_turns=60))
+    srv.stop()
+    assert r.ok
+    assert CTX.window("deepseek-v4.1-flash", srv.url, probe_endpoint=False) >= 131072      # not shrunk by the usage numbers
+    assert len(summaries) == 0                                                              # nothing near a 1M window
 def test_compaction_budgets_fit_small_windows():
     from meshpool_harness.agent import compaction as CP
     b = CP.budgets(4096)
@@ -357,3 +436,90 @@ def test_ollama_style_probes_only_for_local_endpoints(monkeypatch):
     CTX.window_info("some-model", "http://localhost:11434/v1")
     assert seen == ["http://localhost:11434/v1"]
     assert CTX.PROBE_TIMEOUT_S >= 8
+
+
+def test_local_detection_never_includes_remote_hosts():
+    for u in ["https://llm.meshpool.ai/v1", "https://api.example.com:8000/v1", "https://api.openai.com/v1",
+              "http://172.217.0.1/v1", "http://8.8.8.8:11434/v1"]:
+        assert not CTX._is_local(u), u
+    for u in ["http://localhost:8080/v1", "http://127.0.0.1:1234/v1", "http://192.168.1.5:11434/v1",
+              "http://gpu-box:11434/v1", "http://[::1]:11434/v1", "http://172.20.0.3/v1"]:
+        assert CTX._is_local(u), u
+
+
+def test_show_route_is_asked_once_per_endpoint_and_a_404_is_remembered(tmp_path, monkeypatch):
+    from meshpool_harness.core import modelcaps as MC
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    MC.reset()
+    hits = []
+
+    class H(BaseHTTPRequestHandler):                  # a localhost proxy that has no Ollama routes: plain 404 pages
+        def log_message(self, *a):
+            pass
+
+        def _nf(self):
+            hits.append(self.path)
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        do_GET = do_POST = _nf
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/v1"
+    for m in ["a", "b", "c", "d", "e"]:
+        assert CTX.probe(base, m) is None
+    assert sum(1 for p in hits if p == "/api/show") == 1 and sum(1 for p in hits if p.startswith("/api/v0/")) == 1
+    CTX.forget()                                      # a new process: the 404 is read back from the saved memory
+    CTX.probe(base, "z")
+    assert sum(1 for p in hits if p == "/api/show") == 1
+    srv.shutdown()
+    MC.reset()
+
+
+def test_refused_fields_have_one_source(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as A
+    from meshpool_harness.core import modelcaps as MC
+    from meshpool_harness import providers as PV
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
+    MC.reset()
+    A._REFUSED.clear()
+    body = {"model": "kimi-x", "temperature": 0.0, "max_tokens": 100, "messages": []}
+    assert A._adapt_params(body, "HTTP 400: Unsupported parameter: 'temperature'")
+    assert "temperature" not in body and A._REFUSED["kimi-x"] == {"temperature"}
+    assert "temperature" in MC.refused(PV.key_base(), "kimi-x")           # the same record ModelCaps/LiveClient read
+    MC.learn_refused(PV.key_base(), "other", "top_p")
+    b2 = A._apply_refused({"model": "other", "top_p": 1, "max_tokens": 5})
+    assert "top_p" not in b2
+    A._REFUSED.clear()
+    assert A._REFUSED.get("kimi-x", ()) == () and not MC.refused(PV.key_base(), "kimi-x")
+    MC.reset()
+
+
+def test_local_proxy_with_a_path_prefix_and_unsized_models_list_is_not_a_small_window():
+    """ws20: base http://127.0.0.1:<port>/m/<task>/<arm>/<run>/v1 in front of a hosted model, /models without sizes."""
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _r(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            if self.path.endswith("/models"):
+                out, code = json.dumps({"data": [{"id": "mp-work"}, {"id": "deepseek-v4.1-flash"}]}).encode(), 200
+            else:
+                out, code = json.dumps({"error": {"message": "not found"}}).encode(), 404
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+        do_GET = do_POST = _r
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/m/pptx_chart/mp-work/1/v1"
+    for model in ("deepseek-v4.1-flash", "mp-work", "some-unlisted-alias"):
+        win, src = CTX.window_info(model, base)
+        assert win >= 200_000, (model, win, src)
+        assert CTX.compact_chars(win, 8000, 160_000) == 160_000       # no compaction at 11k tokens
+    srv.shutdown()
+    assert CTX.window("x", "http://localhost:11434/v1", probe_endpoint=False) == CTX.DEFAULT_LOCAL   # Ollama's port: small
+    assert CTX.compact_chars(32768, 20000, 160_000) >= 12_000                # a floor, never 1.5k
