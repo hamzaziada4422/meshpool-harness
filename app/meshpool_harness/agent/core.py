@@ -692,7 +692,8 @@ def _batches(calls: list) -> list:
 # 'max_tokens'..."). The fix is known for each: drop it, or swap max_tokens for max_completion_tokens. What a model
 # refused is remembered for the process, so the next request is right the first time. (Same class of problem as
 # HarnessRouter's measured reasoning table, runner/reasoning.py: a field a model lacks is refused, not ignored.)
-_REFUSED: dict[str, set] = {}
+from meshpool_harness.core.modelcaps import RefusedView as _RefusedView  # noqa: E402
+_REFUSED = _RefusedView()      # one record with ModelCaps.learn_refused (persisted per endpoint)
 _ADAPTABLE = ("temperature", "top_p", "tool_choice", "parallel_tool_calls", "stream_options", "reasoning_effort",
               "max_tokens", "response_format", "seed", "presence_penalty", "frequency_penalty")
 

@@ -60,13 +60,20 @@ def estimate(obj) -> int:
 
 
 def _is_local(base: str) -> bool:
+    """This computer or its LAN (loopback, private ranges, .local names, a bare host name like `gpu-box`). A public
+    host never counts, whatever its port: nothing Ollama-style is ever asked of a remote gateway."""
     try:
         u = urlparse(base or "")
     except ValueError:
         return False
     h = (u.hostname or "").lower()
-    return (h in ("localhost", "::1") or h.startswith(("127.", "10.", "192.168.", "169.254.")) or h.endswith(".local")
-            or re.match(r"172\.(1[6-9]|2\d|3[01])\.", h) is not None or u.port in (11434, 1234, 8080, 8000, 5000, 5001))
+    if not h:
+        return False
+    if ":" in h:                                           # an IPv6 literal: loopback, link-local or unique-local
+        return h == "::1" or h.startswith(("fe80:", "fc", "fd"))
+    return (h == "localhost" or h.startswith(("127.", "10.", "192.168.", "169.254."))
+            or re.match(r"172\.(1[6-9]|2\d|3[01])\.", h) is not None
+            or h.endswith((".local", ".lan", ".internal", ".home.arpa")) or "." not in h)
 
 
 def _name_hint(model: str) -> int | None:
@@ -99,42 +106,76 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+_NO_SHOW: set = set()             # endpoints that answered a plain 404 to Ollama/LM Studio style routes
+
+
+def _mc():
+    from meshpool_harness.core import modelcaps as MC
+    return MC
+
+
+def _route_absent(base: str, kind: str) -> bool:
+    if (base, kind) in _NO_SHOW:
+        return True
+    try:
+        if _mc()._mem_get(base, "*", kind):
+            _NO_SHOW.add((base, kind))
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _mark_absent(base: str, kind: str) -> None:
+    _NO_SHOW.add((base, kind))
+    try:
+        _mc()._mem_mark(base, "*", kind)           # remembered on disk: the next run does not ask again
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _plain_404(e) -> bool:
+    """A 404/405 that is the route missing (an HTML or empty page), not a JSON "model not found" from a real Ollama."""
+    import urllib.error
+    if not isinstance(e, urllib.error.HTTPError) or e.code not in (404, 405):
+        return False
+    try:
+        d = json.loads(e.read().decode("utf-8", "replace"))
+        return not (isinstance(d, dict) and d.get("error"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def probe(base: str, model: str, key: str = "") -> int | None:
-    """The window the endpoint reports for this model: Ollama /api/show (the num_ctx it will really use), LM Studio
-    /api/v0/models, or context_length in an OpenAI-style /models list (OpenRouter and others). None if unknown."""
-    if not base:
+    """The window a LOCAL endpoint reports for this model: Ollama /api/show (the num_ctx it will really use) or LM Studio
+    /api/v0/models. Never asks a remote host; asks an endpoint that has no such route once, then remembers that (on disk
+    too). None if unknown."""
+    if not base or not _is_local(base):
         return None
     root = re.sub(r"/v\d+/?$", "", base.rstrip("/"))
-    local = _is_local(base)              # /api/show (Ollama) and /api/v0 (LM Studio) exist only on a local server
-    try:
-        if not local:
-            raise ValueError("hosted endpoint")
-        d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
-        params = str(d.get("parameters") or "")
-        m = re.search(r"\bnum_ctx\s+(\d+)", params)
-        if m:
-            return int(m.group(1))
-        mi = d.get("model_info") or {}
-        full = next((int(v) for k, v in mi.items() if k.endswith(".context_length") and isinstance(v, int)), None)
-        if full:
-            return min(full, 4096)         # no num_ctx set: Ollama serves its small default, not the model's maximum
-    except Exception:  # noqa: BLE001 - not Ollama
-        pass
-    for url in ((root + "/api/v0/models/" + model,) if local else ()) + (base.rstrip("/") + "/models",):
+    if not _route_absent(base, "no_show"):
         try:
-            d = _http_json(url, None, key)
-        except Exception:  # noqa: BLE001
-            continue
-        items = [d] if isinstance(d, dict) and ("id" in d or "loaded_context_length" in d) else \
-            (d.get("data") if isinstance(d, dict) else d) or []
-        for it in items:
-            if not isinstance(it, dict) or str(it.get("id") or it.get("name") or "") not in (model, model.split("/")[-1], ""):
-                if not (isinstance(it, dict) and model in str(it.get("id") or "")):
-                    continue
-            for k in ("loaded_context_length", "context_length", "context_window", "max_context_length",
-                      "max_input_tokens", "inputTokenLimit"):
-                if isinstance(it.get(k), int) and it[k] > 0:
-                    return it[k]
+            d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
+            params = str(d.get("parameters") or "")
+            m = re.search(r"\bnum_ctx\s+(\d+)", params)
+            if m:
+                return int(m.group(1))
+            mi = d.get("model_info") or {}
+            full = next((int(v) for k, v in mi.items() if k.endswith(".context_length") and isinstance(v, int)), None)
+            if full:
+                return min(full, 4096)     # no num_ctx set: Ollama serves its small default, not the model's maximum
+        except Exception as e:  # noqa: BLE001 - not Ollama
+            if _plain_404(e):
+                _mark_absent(base, "no_show")
+    if not _route_absent(base, "no_v0"):
+        try:
+            d = _http_json(root + "/api/v0/models/" + model, None, key)
+            for k in ("loaded_context_length", "context_length", "max_context_length"):
+                if isinstance(d.get(k), int) and d[k] > 0:
+                    return d[k]
+        except Exception as e:  # noqa: BLE001
+            if _plain_404(e):
+                _mark_absent(base, "no_v0")
     return None
 
 
@@ -283,6 +324,7 @@ def forget() -> None:
         _PROBED.clear()
         _LISTS.clear()
         _FAILED.clear()
+        _NO_SHOW.clear()
         _TOLD.clear()
 
 
