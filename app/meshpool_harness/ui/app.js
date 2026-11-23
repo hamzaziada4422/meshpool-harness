@@ -1973,7 +1973,7 @@ async function renderSection(sec) {
           let q; try { q = await post("/api/connectors", {action: "github_poll", id: "github"}); } catch (e) { return; }
           if (q.status === "done") { S.connCache = q.connectors; draw(q.connectors); RES("cnRes").className = "res ok"; RES("cnRes").textContent = `Connected to GitHub${q.login ? " as " + q.login : ""}.`; return; }
           if (q.status === "failed") { RES("cnRes").className = "res bad"; RES("cnRes").textContent = q.error; return; }
-          setTimeout(tick, (r.interval || 5) * 1000);
+          setTimeout(tick, (q.interval || r.interval || 5) * 1000);
         };
         setTimeout(tick, (r.interval || 5) * 1000);
       });

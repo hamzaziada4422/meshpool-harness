@@ -890,37 +890,64 @@ def github_client_id() -> str:
     return v.strip()
 
 
-def github_device_start() -> dict:
+_DEVICE_LOCK = threading.Lock()
+
+
+def _device_view() -> dict:
+    return {"user_code": _DEVICE["user_code"],
+            "url": _DEVICE.get("verification_uri") or "https://github.com/login/device",
+            "interval": int(_DEVICE.get("interval") or 5)}
+
+
+def github_device_start(restart: bool = False) -> dict:
+    """Start the GitHub device sign-in. A code that is still valid is returned again (a second click or tab must not
+    replace the code the user is typing); `restart` asks GitHub for a new one."""
     cid = github_client_id()
     if not cid:
         raise ValueError("GitHub sign-in is not set up in this build. Use the login on this computer or paste a token.")
-    s, _, j = _http("https://github.com/login/device/code", form={"client_id": cid, "scope": GITHUB_SCOPES})
-    if s != 200 or not j.get("device_code"):
-        raise ValueError(f"GitHub did not start the sign-in: {j.get('error_description') or j.get('error') or s}")
-    _DEVICE.clear()
-    _DEVICE.update(j, started=time.time())
-    return {"user_code": j["user_code"], "url": j.get("verification_uri") or "https://github.com/login/device",
-            "interval": int(j.get("interval") or 5)}
+    with _DEVICE_LOCK:
+        if (not restart and _DEVICE.get("device_code")
+                and time.time() < _DEVICE["started"] + int(_DEVICE.get("expires_in") or 900)):
+            return _device_view()
+        s, _, j = _http("https://github.com/login/device/code", form={"client_id": cid, "scope": GITHUB_SCOPES})
+        if s != 200 or not j.get("device_code"):
+            raise ValueError(f"GitHub did not start the sign-in: {j.get('error_description') or j.get('error') or s}")
+        _DEVICE.clear()
+        _DEVICE.update(j, started=time.time(), last_poll=time.time(), interval=int(j.get("interval") or 5))
+        return _device_view()
 
 
 def github_device_poll() -> dict:
-    if not _DEVICE:
-        return {"status": "none"}
-    s, _, j = _http("https://github.com/login/oauth/access_token", form={
-        "client_id": github_client_id(), "device_code": _DEVICE["device_code"],
-        "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
-    if j.get("access_token"):
-        set_token("github", j["access_token"])
+    """Ask GitHub whether the code was entered, no faster than GitHub's interval (slow_down raises it)."""
+    with _DEVICE_LOCK:
+        if not _DEVICE:
+            return {"status": "none"}
+        now = time.time()
+        iv = int(_DEVICE.get("interval") or 5)
+        if now >= _DEVICE["started"] + int(_DEVICE.get("expires_in") or 900):
+            _DEVICE.clear()
+            return {"status": "failed", "error": "The GitHub code expired. Start the sign-in again."}
+        if now - _DEVICE.get("last_poll", 0) < iv:
+            return {"status": "waiting", "interval": iv}
+        _DEVICE["last_poll"] = now
+        s, _, j = _http("https://github.com/login/oauth/access_token", form={
+            "client_id": github_client_id(), "device_code": _DEVICE["device_code"],
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code"})
+        if j.get("access_token"):
+            _DEVICE.clear()
+            set_token("github", j["access_token"])
+            return {"status": "done", "login": _github_check(j["access_token"]) or ""}
+        err = j.get("error") or ""
+        if err == "slow_down":
+            _DEVICE["interval"] = iv = int(j.get("interval") or iv + 5)
+            return {"status": "waiting", "interval": iv}
+        if err == "authorization_pending" or s == 0 or s >= 500 or (s in (408, 429) and not err):
+            return {"status": "waiting", "interval": iv}
         _DEVICE.clear()
-        return {"status": "done", "login": _github_check(j["access_token"]) or ""}
-    err = j.get("error") or ""
-    if err in ("authorization_pending", "slow_down"):
-        return {"status": "waiting"}
-    _DEVICE.clear()
-    return {"status": "failed", "error": j.get("error_description") or err or str(s)}
+        return {"status": "failed", "error": j.get("error_description") or err or str(s)}
 
 
 def github_token() -> str:
-    """The token Meshpool uses for GitHub: the saved one, else a login found on this computer."""
-    t = os.environ.get("GITHUB_TOKEN") or C.read().get("GITHUB_TOKEN", "")
-    return t or github_found().get("token", "")
+    """The token saved in Meshpool for GitHub. Never the login found on this computer (the GitHub CLI or Git's
+    credentials): that is used only when the user chooses "Use the login on this computer" (github_use_found)."""
+    return os.environ.get("GITHUB_TOKEN") or C.read().get("GITHUB_TOKEN", "")
