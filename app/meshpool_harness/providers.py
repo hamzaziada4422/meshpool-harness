@@ -315,7 +315,7 @@ def list_models(prov: str, refresh: bool = False) -> tuple[list[str], str]:
     if prov == "chatgpt":
         from meshpool_harness.core import chatgpt as CG
         if refresh:
-            CG._MODELS.update(t=0.0)
+            CG.forget_models()
         ids = CG.models()
         d = CG.default_model()
         note = CG.limit_note() or ("" if ids else "Showing the default model; the plan's list did not load.")

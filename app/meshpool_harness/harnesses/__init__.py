@@ -359,7 +359,8 @@ def signed_in(which: str) -> bool:
     """Whether the Codex (ChatGPT) sign-in already exists on this computer (it never reads the secret)."""
     try:
         if which == "codex":
-            return (user_codex_home() / "auth.json").is_file()
+            from meshpool_harness.core import chatgpt as CG
+            return bool(CG.signin_state()["ok"])      # a rejected or API-key sign-in is not a ready one
     except Exception:  # noqa: BLE001
         return False
     return False
