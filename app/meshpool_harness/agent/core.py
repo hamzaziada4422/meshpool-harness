@@ -77,7 +77,7 @@ def _codex_prompt() -> str:
     if os.environ.get("MH_CODEX_PROMPT") == "full":
         return text
     text = _trim_codex(text)
-    if os.environ.get("MH_FINISH_CHECK", "1") == "0":
+    if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # not measured on the 52 yet (quota ran out): opt-in
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
     return text
 

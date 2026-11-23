@@ -63,7 +63,9 @@ def usage_numbers(u: dict) -> dict:
         if isinstance(det, dict):
             cached = max(cached, int(det.get("cached_tokens") or 0))
     cached = max(cached, int(u.get("prompt_cache_hit_tokens") or 0))
-    if "cache_read_input_tokens" in u or "cache_creation_input_tokens" in u:           # Anthropic messages
+    # Anthropic messages: input_tokens excludes cache reads. Gateways that add cache_read_input_tokens to an
+    # OpenAI-shaped usage (they carry prompt_tokens, which already includes it) must not take this branch.
+    if ("cache_read_input_tokens" in u or "cache_creation_input_tokens" in u) and "prompt_tokens" not in u:
         read = int(u.get("cache_read_input_tokens") or 0)
         prompt = int(u.get("input_tokens") or 0) + read + int(u.get("cache_creation_input_tokens") or 0)
         cached = max(cached, read)

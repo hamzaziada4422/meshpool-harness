@@ -333,3 +333,9 @@ def test_same_command_with_only_numbers_changed_counts_as_a_repeat(tmp_path):
     outs = [a._repeat_guard({"id": str(n), "function": {"name": "shell", "arguments": json.dumps(
         {"command": ["bash", "-lc", f"timeout 10 python -c 'import sync; sync.fetch_all({n})'"]})}}, g) for n in range(1, 9)]
     assert sum("Not run" in o for o in outs) >= 4
+
+
+def test_finish_check_rule_is_opt_in(monkeypatch):
+    assert "Before you finish" not in core._codex_prompt()
+    monkeypatch.setenv("MH_FINISH_CHECK", "1")
+    assert "Before you finish" in core._codex_prompt()
