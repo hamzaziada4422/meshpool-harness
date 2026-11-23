@@ -166,11 +166,12 @@ def test_real_run_tool_books_the_tool_call(env):
     out = a._run_tool({"id": "c1", "function": {"name": "write_file",
                                                 "arguments": json.dumps({"path": "w.txt", "content": "hi\n"})}})
     assert "ERROR" not in out and (env / "w.txt").read_text() == "hi\n"
+    (env / "mine.txt").write_text("the user, between two tool calls\n")      # never booked: it is not a tool's write
     out = a._run_tool({"id": "c2", "function": {"name": "read_file", "arguments": json.dumps({"path": "keep.txt"})}})
     bad = a._run_tool({"id": "c3", "function": {"name": "write_file", "arguments": "{}"}})
     assert bad.startswith("ERROR")                                  # the failure propagates as before
     s.cp.end_turn()
-    assert [c["path"] for c in s.cp.turns()[0]["changed"]] == ["w.txt"]
+    assert s.cp.mode == "journal" and [c["path"] for c in s.cp.turns()[0]["changed"]] == ["w.txt"]
 
 
 def test_user_event_carries_message_index_and_children_have_no_checkpoint(env):
