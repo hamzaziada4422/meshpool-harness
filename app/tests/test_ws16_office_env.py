@@ -115,6 +115,19 @@ def test_manager_sends_chat_model_with_per_call_servers(tmp_path, monkeypatch):
     assert sent["arguments"]["_model"] == "gpt-chat" and sent["arguments"]["_project"] == str(tmp_path.resolve())
 
 
+def test_chat_that_cannot_start_says_why(monkeypatch, tmp_path):
+    import errno
+    from meshpool_harness.ui import agent_api as A
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "h"))
+
+    def boom(*a, **k):
+        raise OSError(errno.EMFILE, "Too many open files")
+
+    monkeypatch.setattr(A, "Session", boom)
+    with pytest.raises(ValueError, match="limit of open files"):
+        A.create({"workdir": str(tmp_path), "kind": "code"})
+
+
 def test_each_server_gets_its_own_chats_folder_not_the_process_env(tmp_path, monkeypatch):
     seen = []
 
