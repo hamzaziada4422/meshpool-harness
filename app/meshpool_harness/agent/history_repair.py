@@ -4,12 +4,12 @@ from __future__ import annotations
 INTERRUPTED = "Not run: the chat was interrupted."
 
 
-def repair_tool_pairs(messages: list) -> tuple[list, bool]:
+def repair_tool_pairs(messages: list, note: str = INTERRUPTED) -> tuple[list, bool]:
     """Return ``(messages, changed)`` where every assistant tool call has exactly one result right after it and no
     tool result lacks its call.
 
-    - a call without a result gets a synthetic one ("Not run: the chat was interrupted."), placed after the
-      assistant's existing results;
+    - a call without a result gets a synthetic one (``note``); a repaired block lists the results in the order of
+      the assistant's tool calls;
     - a result whose id matches no call of the nearest preceding assistant message (or with no assistant before it)
       is dropped;
     - a second result for the same id is dropped (the first is kept).
@@ -40,8 +40,8 @@ def repair_tool_pairs(messages: list) -> tuple[list, bool]:
                 if out is None:
                     out = list(messages[:i])
                 out.append(m)
-                out.extend(keep)
-                out.extend({"role": "tool", "tool_call_id": k, "content": INTERRUPTED} for k in missing)
+                got = {t.get("tool_call_id"): t for t in keep}
+                out.extend(got.get(k) or {"role": "tool", "tool_call_id": k, "content": note} for k in ids)
             elif out is not None:
                 out.extend(messages[i:j])
             i = j

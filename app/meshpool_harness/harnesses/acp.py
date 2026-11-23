@@ -337,6 +337,7 @@ class ACPAgent:
         self._text = []
         self._replaying = False
         self._tools: dict[str, dict] = {}
+        self._open_tools: dict[str, str] = {}          # started this turn, no tool_end yet: id -> label
         self._lock = threading.Lock()
         self._in_turn = False                  # Stop ends only requests made for a running turn
 
@@ -608,6 +609,7 @@ class ACPAgent:
             tid = u.get("toolCallId") or uuid.uuid4().hex
             self._tools[tid] = u
             name, summary = _label(u)
+            self._open_tools[tid] = name
             self._emit({"type": "tool_start", "id": tid, "name": name, "summary": summary,
                         "mcp": False, "diff": _diff_of(u.get("content"))})
             if u.get("status") in ("completed", "failed"):
@@ -633,7 +635,15 @@ class ACPAgent:
         elif kind == "session_info_update" and u.get("title"):
             self.title = self.title or str(u["title"])[:80]
 
+    def _close_open_tools(self):
+        """The turn is over: a tool card that never got a final status must not stay 'running'."""
+        for tid, name in list(self._open_tools.items()):
+            self._open_tools.pop(tid, None)
+            self._emit({"type": "tool_end", "id": tid, "name": name, "ok": False, "denied": False,
+                        "output": "Not finished: the turn ended."})
+
     def _tool_end(self, tid, u):
+        self._open_tools.pop(tid, None)
         out = _text_of(u.get("content"))
         if not out.strip() or re.fullmatch(r"\s*\[terminal [^\]]*\]\s*", out):
             out = u.get("_term_out") or _raw_text(u.get("rawOutput")) or ""
@@ -885,6 +895,7 @@ class ACPAgent:
                 self._emit({"type": "error", "text": str(e)})
         finally:
             self._in_turn = False
+            self._close_open_tools()
             self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),
                         "context": self.context})
             self.save()

@@ -177,6 +177,7 @@ class Health:
         self.next_probe = 0.0                       # while down: no one probes before this (shared backoff)
         self.fails = 0
         self.up_at = 0.0
+        self.waiters = 0                            # callers inside wait_until_up
 
     # the gate is shared by every model on the key
     @property
@@ -263,6 +264,16 @@ class Health:
         self.cond.notify_all()
 
     def wait_until_up(self, probe, sleep, emit, budget_s: float, check_stop) -> bool:
+        with self.cond:
+            self.waiters += 1
+            alone = self.waiters == 1
+        try:
+            return self._wait_until_up(probe, sleep, emit, budget_s, check_stop, alone)
+        finally:
+            with self.cond:
+                self.waiters -= 1
+
+    def _wait_until_up(self, probe, sleep, emit, budget_s, check_stop, alone=False) -> bool:
         """Block until the endpoint answers a probe, for up to budget_s. One caller probes at a time, on a backoff
         shared by every caller (10, 20 ... 60 s); the others wait for its answer. With no budget (recovery off) the
         caller probes once at once, whatever the backoff, so a past outage never blocks the app. True when it is
@@ -274,7 +285,7 @@ class Health:
                 if not self.down_since:
                     return True
                 now = time.time()
-                lead = not self.prober and (now >= self.next_probe or (first and budget_s <= 0))
+                lead = not self.prober and (now >= self.next_probe or (first and (budget_s <= 0 or alone)))
                 if not lead and now - t0 >= budget_s:
                     return False
                 if lead:
@@ -286,6 +297,10 @@ class Health:
                     told = True
                     emit({"type": "status", "text": "The model endpoint isn't answering. Another chat is already "
                                                     "checking it; this one carries on when it is back."})
+                elif not told:
+                    told = True
+                    emit({"type": "status", "text": "The model endpoint isn't answering. Checking again in "
+                                                    f"{max(1, int(self.next_probe - time.time()))} s."})
                 sleep(min(1.0, max(0.05, budget_s - (time.time() - t0))))
                 continue
             wait, got = 0.0, ""

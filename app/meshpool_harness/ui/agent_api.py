@@ -55,10 +55,36 @@ GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working u
              "GOAL line out.")
 GOAL_NEXT = "Continue working toward the goal."
 GOAL_NET_WAIT_S = 30                                 # first pause before a goal picks up after an outage (doubles, 5 min max)
+
+
+def agent_token(agent) -> int:
+    f = getattr(agent, "turn_token", None)
+    return f() if callable(f) else 0
+
+
 _GOAL_RE = re.compile(r"^\W*GOAL:\s*(DONE|CONTINUE)\b", re.I | re.M)
 _NET_RE = re.compile(r"Couldn't reach the model|model service had a problem|model is busy|HTTP 0|HTTP 5\d\d|HTTP 429|"
                      r"rate.?limit|too many requests|(?:code|status)\W{0,3}429\b|overloaded",
                      re.I)                          # an outage or a key whose slots are full: wait it out
+
+
+def _turn_outcome(evs: list) -> dict:
+    """How a turn ENDED, from its events. An error counts only if nothing came after it: a later reply with text,
+    a text delta or a tool start/end means the agent recovered (Pi reports an error before its own retry)."""
+    err, acted, reply = None, False, ""
+    for e in evs:
+        t = e.get("type")
+        if t == "error":
+            err = e
+        elif err is not None and (t in ("text_delta", "tool_start", "tool_end")
+                                  or (t == "assistant" and (e.get("text") or "").strip())):
+            err = None
+        if t == "tool_end":
+            acted = True
+        if t == "assistant":
+            reply = e.get("text") or ""
+    return {"error": err, "interrupted": any(e.get("type") == "interrupted" for e in evs),
+            "net": bool(err and _NET_RE.search(err.get("text") or "")), "acted": acted, "reply": reply}
 # A turn cut off by a rate limit or an outage (no goal set): the chat waits, then picks the task up by itself, up to
 # RESUME_TRIES times in a row (30 s, 1, 2, 4, 5 min). Typing a message or pressing Stop takes over at once.
 RESUME_NEXT = "Continue where you left off."
@@ -253,6 +279,10 @@ def _last_reply(agent) -> str:
     except Exception:  # noqa: BLE001
         pass
     return ""
+
+UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
+                   "and say in your summary what needed the user.")
+
 
 class Session:
     incognito = False          # class defaults: tests and old callers build a Session without __init__
@@ -489,10 +519,22 @@ class Session:
                 self._persist_err = None
                 self.emit({"type": "status", "text": "Saved again."})
 
-    def approve(self, kind, title, detail, options=None):
-        if os.environ.get("MESHPOOL_HEADLESS") == "1":            # `meshpool run-due` while the app is closed
-            return "no", ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
-                          "and say in your summary what needed the user.")
+    def approve(self, kind, title, detail, options=None, scope=""):
+        sid = getattr(self, "id", None)
+        gone = bool(getattr(self, "deleted", False) or getattr(getattr(self, "agent", None), "deleted", False) or (sid and sid in DELETED))
+        if os.environ.get("MESHPOOL_HEADLESS") == "1" or getattr(self, "scheduled", False) or gone:
+            # `meshpool run-due` with the app closed, an unattended scheduled run, or a chat nobody can open any more:
+            # no one can answer, so it fails fast instead of waiting for ever.
+            note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
+                                                      "and do not retry the action.")
+            if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
+                with self.lock:
+                    self._n = getattr(self, "_n", 0) + 1
+                    n = self._n
+                self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
+                           "options": options, "scope": scope})
+                self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
+            return "no", note
         with self.lock:
             self._n += 1
             p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
@@ -500,17 +542,30 @@ class Session:
             self.pendings[p["id"]] = p
         self.state = "waiting"
         self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
-                   "options": options})
-        if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
+                   "options": options, "scope": scope})
+        if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
-        while not p["ev"].wait(0.5):
+        try:
+            limit = float(os.environ.get("MH_APPROVAL_TIMEOUT_S", "1800"))
+        except ValueError:
+            limit = 1800.0
+        t_end = time.time() + limit if limit > 0 else None
+        timed_out = False
+        while not p["ev"].wait(0.5 if t_end is None else max(0.01, min(0.5, t_end - time.time()))):
             if self.agent._stop:
                 break
+            if t_end is not None and time.time() >= t_end:
+                timed_out = True
+                break
+        if timed_out and not p.get("answered"):
+            mins = max(1, round(limit / 60))
+            p["note"] = (f"No answer within {mins} minute{'s' if mins != 1 else ''}, so this was not done. "
+                         "Ask again when you are back.")
         with self.lock:
             self.pendings.pop(p["id"], None)
             if not self.pendings:
                 self.state = "working"
-        shown = p["decision"] if p.get("answered") else "stopped"
+        shown = p["decision"] if p.get("answered") else ("timeout" if timed_out else "stopped")
         self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
         return p["decision"], p["note"]
 
@@ -616,6 +671,9 @@ class Session:
                 with self.lock:                      # the turn may be ending: decide under the lock it ends under
                     if self.state in ("working", "waiting"):
                         self.agent.steer(self._body(text, images), images=images)
+                        from meshpool_harness import pace as PACE
+                        if PACE.classify(text, bool(images)) != "quick":
+                            self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
                         return {"queued": False, "added": True}
                 self._start_turn(text, images)       # it ended meanwhile: this message starts the next turn
                 return {"queued": False}
@@ -681,7 +739,9 @@ class Session:
                 # asks for a deck must not start before it is up: the agent then had no make_deck, looked for one in
                 # the shell and built the deck by hand (158 shell calls, testkit/deck_matrix.py, 20 Nov 2026).
                 self.emit({"type": "status", "text": "Starting the office tools..."})
-                ready.wait(float(os.environ.get("MH_MCP_START_S", "45")) + 5)
+                end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
+                while not ready.is_set() and time.time() < end and not getattr(self, "_stop_req", False):
+                    ready.wait(0.25)                 # Stop ends the wait
         return caps
 
     def switch_harness(self, hid: str) -> None:
@@ -892,6 +952,9 @@ class Session:
             pass
 
     def _start_turn(self, text: str, images: list | None):
+        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits)
+            self.state = "working"
+        self._stop_req = False
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
             from meshpool_harness import providers as PV
@@ -901,6 +964,7 @@ class Session:
                     self.emit({"type": "user", "text": text, "images": []})
                     self.emit({"type": "error", "text": bad})
                     self.emit({"type": "turn_end"})
+                    self.state = "idle"
                     return
         except Exception:  # noqa: BLE001
             pass
@@ -911,9 +975,11 @@ class Session:
         except BaseException:
             self.state = "idle"
             raise
-        self._stop_req = False
         if hasattr(self.agent, "plan"):
+            changed = bool(self.agent.plan) != self.plan
             self.agent.plan = self.plan
+            if changed and hasattr(self.agent, "apply_mode"):
+                self.agent.apply_mode()              # an agent with its own modes (Codex): the mode the turn runs in
 
         self.t_turn = time.time()
         ev0 = len(self.events)
@@ -967,15 +1033,9 @@ class Session:
                     body += PACE.NOTE                   # hidden in the chat; a small budget for a quick request
                     if hasattr(self.agent, "pace_deadline"):
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
-                    elif self.harness["type"] == "pi" and hasattr(self.agent, "steer"):
-                        def wrap(agent=self.agent, turn=self.t_turn):
-                            time.sleep(PACE.QUICK_S + 10)
-                            if self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False):
-                                try:
-                                    agent.steer(PACE.WRAP)
-                                except Exception:  # noqa: BLE001
-                                    pass
-                        threading.Thread(target=wrap, daemon=True).start()
+                    elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
+                        threading.Thread(target=self._pi_quick_wrap,
+                                         args=(self.agent, self.t_turn, agent_token(self.agent)), daemon=True).start()
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 if self.ctx_pending:
@@ -1024,6 +1084,9 @@ class Session:
                         body += "\n\n\u200b" + pend
                 except Exception:  # noqa: BLE001
                     pass
+                # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
+                # a Stop from here on either trips the check below or changes the generation send() checks.
+                gen0 = getattr(self.agent, "_gen", 0)
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
                     self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
@@ -1031,6 +1094,8 @@ class Session:
                     self.emit({"type": "turn_end"})
                     return
                 self._turn_begin()
+                if self.harness.get("type") not in ("acp", "pi") and hasattr(self.agent, "_repair"):
+                    self.agent._expect_gen = gen0     # a Stop since the message was taken ends this turn at once
                 if images:
                     self.agent.send(body, images=images)
                 else:
@@ -1227,15 +1292,15 @@ class Session:
         """After a turn with a goal: the next turn's message, or None when the goal is met or the user is needed."""
         with self.lock:
             evs = self.events[ev0:]
+        out = _turn_outcome(evs)
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
         if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
             return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
         verdict = found[-1].upper() if found else ""
-        acted = any(e.get("type") == "tool_end" for e in evs)
-        failed = any(e.get("type") in ("error", "interrupted") for e in evs)
-        net = [e for e in evs if e.get("type") == "error" and _NET_RE.search(e.get("text") or "")]
-        if failed and net and not any(e.get("type") == "interrupted" for e in evs):
+        acted = out["acted"]
+        failed = bool(out["error"]) or out["interrupted"]      # ended on an error (not one it recovered from)
+        if out["net"] and not out["interrupted"]:
             # An outage, not the task: never give up on the goal for it. The turn already waited for the endpoint;
             # pause a little longer each time (30 s up to 5 min) so a long outage is waited out without hammering
             # the gateway, then pick the goal up. Stop, or clearing the goal, ends the wait.
@@ -1246,7 +1311,7 @@ class Session:
             return self._pause(wait, GOAL_NEXT, lambda: bool(self.goal))
         if not failed:
             self._goal_net = 0
-        if verdict == "DONE":
+        if verdict == "DONE" and not out["interrupted"] and not out["error"]:
             done, self.goal = self.goal, ""
             write_meta(self.id, goal="")
             self.emit({"type": "status", "text": f"Goal met: {done}"})
@@ -1287,10 +1352,11 @@ class Session:
             return None
         with self.lock:
             evs = self.events[ev0:]
-        if any(e.get("type") == "interrupted" for e in evs):
+        out = _turn_outcome(evs)
+        if out["interrupted"]:
             self._resume_n = 0
             return None
-        if not any(e.get("type") == "error" and _NET_RE.search(e.get("text") or "") for e in evs):
+        if not out["net"]:
             self._resume_n = 0                       # a good turn (or another kind of error): start the count again
             return None
         n = self._resume_n = getattr(self, "_resume_n", 0) + 1
@@ -1306,8 +1372,33 @@ class Session:
                                              "a message or press Stop to take over."})
         return self._pause(wait, RESUME_NEXT)
 
+    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None):
+        """Pi: when a quick request runs past its time, tell Pi to answer (a note only the model sees). It targets the
+        turn send() starts after tok0 and nothing later; a real task added meanwhile (send) cancels it."""
+        from meshpool_harness import pace as PACE
+        end = time.time() + (PACE.QUICK_S + 10 if wait is None else wait)
+        tok = tok0
+        while tok == tok0 and time.time() < end:          # send() has not started its turn yet
+            time.sleep(0.05)
+            tok = agent_token(agent)
+        if tok == tok0:
+            return False
+        time.sleep(max(0.0, end - time.time()))
+        if (self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False)
+                and getattr(self, "_quick_off", None) != turn):
+            try:
+                return bool(agent.nudge(PACE.WRAP, tok))   # only while that same turn runs; no chat message
+            except Exception:  # noqa: BLE001
+                return False
+        return False
+
     def set_plan(self, on: bool):
         self.plan = bool(on)
+        if self.state in ("working", "waiting"):     # the running turn keeps its tools; this applies to the next one
+            write_meta(self.id, plan=self.plan)
+            self.emit({"type": "status", "text": f"Plan mode turns {'on' if self.plan else 'off'} from your next "
+                                                 "message."})
+            return
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         if hasattr(self.agent, "apply_mode"):

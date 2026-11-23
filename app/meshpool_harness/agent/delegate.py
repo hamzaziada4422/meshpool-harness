@@ -188,7 +188,7 @@ def check_goals(tasks) -> list[dict]:
             tasks = json.loads(tasks)
         except ValueError:
             tasks = [{"goal": tasks}]
-    rows = []
+    rows, seen = [], set()
     for t in tasks or []:
         t = {"goal": t} if isinstance(t, str) else t
         if not isinstance(t, dict):
@@ -207,9 +207,14 @@ def check_goals(tasks) -> list[dict]:
                 raise ValueError("output_schema is not valid JSON. Give it as a JSON Schema object.")
         if t.get("output_schema") is not None and not isinstance(t.get("output_schema"), dict):
             raise ValueError("output_schema must be a JSON Schema object, like {\"type\": \"object\", ...}.")
-        rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
-                     "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
-                     "title": str(t.get("title") or goal.splitlines()[0])[:80]})
+        row = {"goal": goal, "context": str(t.get("context") or "").strip(),
+               "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
+               "title": str(t.get("title") or goal.splitlines()[0])[:80]}
+        key = json.dumps([row["goal"], row["context"], row["schema"]], sort_keys=True, default=str)
+        if key in seen:                                 # an identical request in the same batch runs once
+            continue
+        seen.add(key)
+        rows.append(row)
     if not rows:
         raise ValueError("Give at least one task with a goal.")
     return rows
@@ -569,12 +574,8 @@ class Delegation:
 
     def _copy(self, row: dict) -> dict | None:
         """An isolated copy of the project for one sub-agent, or None (it then works in the project itself)."""
-        try:
-            from meshpool_harness import worktrees as WT
-            return WT.create(str(self.parent.root), owner_kind="subagent", owner_id=self.id, title=row["title"],
-                             base="worktree", max_bytes=50 * 1024 * 1024)   # a plain copy only of a small folder
-        except Exception:  # noqa: BLE001 - no git, too big, disk full: share the folder as before
-            return None
+        from meshpool_harness import worktrees as WT
+        return WT.subagent_copy(self.parent.root, self.id, row["title"])
 
     def _apply(self, results: list) -> None:
         """Bring each sub-agent's changes into the project, in task order, and remove its copy. A sub-agent whose
@@ -587,26 +588,20 @@ class Delegation:
             wt = rec.pop("wt", None)
             if not wt:
                 continue
-            try:
-                res = WT.merge(wt["id"])
-            except Exception as e:  # noqa: BLE001
-                res = {"ok": False, "reason": str(e), "conflicts": []}
-            try:
-                kept = WT.discard(wt["id"], keep_work=not res.get("ok")).get("kept_branch")
-            except Exception:  # noqa: BLE001
-                kept = None
+            res = WT.apply_subagent_copy(wt)
+            kept = res["kept_branch"]
             e = by_sid.get(sid)
             if e is None:
                 continue
             base, root = str(wt["workdir"]), str(self.parent.root)
             e["files_written"] = [root + f[len(base):] if f.startswith(base + os.sep) else f
                                   for f in e["files_written"]]
-            e["changes_applied"] = bool(res.get("ok"))
-            if not res.get("ok"):
-                bad = res.get("conflicts") or res.get("blocked") or []
+            e["changes_applied"] = res["ok"]
+            if not res["ok"]:
+                bad = res["bad"]
                 e["conflicts"] = bad[:50]
                 e["summary"] = (e["summary"] + "\n\nIts changes were NOT applied to the project: "
-                                + str(res.get("reason") or "")
+                                + res["reason"]
                                 + (f" Files: {', '.join(bad[:10])}." if bad else "")
                                 + (f" They are kept on git branch {kept}." if kept else ""))
 
