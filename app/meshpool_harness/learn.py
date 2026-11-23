@@ -95,8 +95,9 @@ def after_turn(chat_id: str, text: str, reply: str = "", client=None, model: str
             continue
     if added:
         with _LOCK:
-            _PENDING[chat_id] = (_PENDING.get(chat_id, []) + added)[-MAX_PENDING:]
+            _PENDING[chat_id] = (_load(chat_id) + added)[-MAX_PENDING:]
             LAST_IDS[chat_id] = ids
+            _persist(chat_id)
     return added
 
 
@@ -113,14 +114,74 @@ def after_turn_async(chat_id: str, text: str, reply: str = "", on_learned=None) 
     return th
 
 
-def pending(chat_id: str) -> str:
-    """Preferences learned since this chat last heard them, as a note for its next message ("" when none)."""
+def _meta():
+    from meshpool_harness.ui import agent_api as AG
+    return AG
+
+
+def _load(chat_id: str) -> list[str]:
+    """What this chat has not heard yet: in memory, else from the chat's own meta (kept across a restart, M19-04)."""
+    if chat_id not in _PENDING:
+        try:
+            got = _meta().read_meta(chat_id).get("learn_pending") or []
+        except Exception:  # noqa: BLE001
+            got = []
+        _PENDING[chat_id] = [x for x in got if isinstance(x, str)]
+    return list(_PENDING[chat_id])
+
+
+def _persist(chat_id: str) -> None:
+    try:
+        _meta().write_meta(chat_id, learn_pending=list(_PENDING.get(chat_id, [])))
+    except Exception:  # noqa: BLE001 - a chat with no folder (tests, deleted) keeps it in memory only
+        pass
+
+
+def _still_wanted(lines: list[str]) -> list[str]:
+    """Only preferences that are still in memory: one the user deleted or archived is not injected (M19-02)."""
+    live = {A._norm_fact(x) for x in A.memory().splitlines() if x.strip()}
+    return [x for x in lines if A._norm_fact(x) in live]
+
+
+def peek(chat_id: str) -> list[str]:
+    """The preferences to tell this chat on its next message, without using them up (commit() does that once the turn
+    really starts). Empty when memory is off, and anything the user removed from memory is dropped (M19-02)."""
     with _LOCK:
-        got = _PENDING.pop(chat_id, [])
-    if not got:
-        return ""
+        got = _load(chat_id)
+        if not got:
+            return []
+        if not A.settings()["memory_on"]:
+            _PENDING[chat_id] = []
+            _persist(chat_id)
+            return []
+        keep = _still_wanted(got)
+        if keep != got:
+            _PENDING[chat_id] = keep
+            _persist(chat_id)
+        return keep
+
+
+def commit(chat_id: str, lines: list[str]) -> None:
+    """These preferences were sent with a turn that started: do not send them again."""
+    with _LOCK:
+        left = [x for x in _load(chat_id) if x not in lines]
+        _PENDING[chat_id] = left
+        _persist(chat_id)
+
+
+def note(lines: list[str]) -> str:
     return "Standing preferences the user just taught you (saved to memory; follow them from now on):\n" + \
-        "\n".join(f"- {x}" for x in got)
+        "\n".join(f"- {x}" for x in lines)
+
+
+def pending(chat_id: str) -> str:
+    """Preferences learned since this chat last heard them, as a note for its next message ("" when none). Uses
+    them up; the app uses peek() and commit() so a turn that never starts keeps them."""
+    lines = peek(chat_id)
+    if not lines:
+        return ""
+    commit(chat_id, lines)
+    return note(lines)
 
 
 def preferences() -> str:

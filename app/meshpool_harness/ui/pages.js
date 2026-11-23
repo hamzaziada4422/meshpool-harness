@@ -103,11 +103,12 @@ function taskDialog(t = {}) {
       <label class="field" id="tkTimeF"><span>Time</span><input id="tkTime" type="time" value="${esc(t.time || "09:00")}"></label>
       <label class="field" id="tkMinF"><span>Minutes</span><input id="tkMin" type="number" min="15" value="${t.minutes || 60}"></label>
       <label class="field" id="tkAtF"><span>Date and time</span><input id="tkAt" type="datetime-local" value="${esc(t.at || "")}"></label></div>
+      <label class="field" id="tkSkipF"><span>Skip a run that is missed by more than (hours)</span><input id="tkSkip" type="number" min="0" step="1" value="${t.skip_if_missed_h || ""}" placeholder="Never skip: run it late"></label>
       <label class="switchrow"><input type="checkbox" id="tkChange" ${t.only_on_change ? "checked" : ""}> Only tell me when something changed</label>
       <div class="row"><button class="btn" data-a="0">Cancel</button><button class="btn primary" data-a="1">${t.id ? "Save task" : "Create task"}</button></div></div>`;
     document.body.appendChild(sc);
     const touched = new Set();
-    for (const [k, id] of [["time", "tkTime"], ["day", "tkDay"], ["minutes", "tkMin"], ["at", "tkAt"], ["only_on_change", "tkChange"]]) $("#" + id, sc).addEventListener("change", () => touched.add(k));
+    for (const [k, id] of [["time", "tkTime"], ["day", "tkDay"], ["minutes", "tkMin"], ["at", "tkAt"], ["only_on_change", "tkChange"], ["skip_if_missed_h", "tkSkip"]]) $("#" + id, sc).addEventListener("change", () => touched.add(k));
     const show = () => { const w = $("#tkWhen", sc).value; $("#tkDayF", sc).hidden = w !== "weekly"; $("#tkTimeF", sc).hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tkMinF", sc).hidden = w !== "every"; $("#tkAtF", sc).hidden = w !== "once"; };
     $("#tkWhen", sc).onchange = show; show();
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
@@ -116,11 +117,12 @@ function taskDialog(t = {}) {
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(null); });
     $("[data-a='0']", sc).onclick = () => done(null);
     $("[data-a='1']", sc).onclick = () => {
-      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value, only_on_change: $("#tkChange", sc).checked};
+      const v = {name: $("#tkName", sc).value.trim(), prompt: $("#tkPrompt", sc).value.trim(), when: $("#tkWhen", sc).value, time: $("#tkTime", sc).value, day: $("#tkDay", sc).value, minutes: +$("#tkMin", sc).value || 60, at: $("#tkAt", sc).value, only_on_change: $("#tkChange", sc).checked, skip_if_missed_h: +$("#tkSkip", sc).value || 0};
       if (t.id) {                                  // editing: send only what the person changed, never the dialog's defaults
-        const init = {when: t.when || "daily", time: t.time || "09:00", day: t.day || "mon", minutes: t.minutes || 60, at: t.at || "", only_on_change: !!t.only_on_change};
+        const init = {when: t.when || "daily", time: t.time || "09:00", day: t.day || "mon", minutes: t.minutes || 60, at: t.at || "", only_on_change: !!t.only_on_change, skip_if_missed_h: t.skip_if_missed_h || 0};
         if (v.when === init.when) for (const k of ["time", "day", "minutes", "at"]) if (v[k] === init[k] && !touched.has(k)) delete v[k];
         if (v.only_on_change === init.only_on_change && !touched.has("only_on_change")) delete v.only_on_change;
+        if (v.skip_if_missed_h === init.skip_if_missed_h && !touched.has("skip_if_missed_h")) delete v.skip_if_missed_h;
         if (v.when === init.when && t.when === undefined) delete v.when;
       } else {
         if (t.kind) v.kind = t.kind;
@@ -142,10 +144,11 @@ async function pageScheduled() {
   const draw = () => {
     const tab = G.tab.scheduled || "yours", q = (G.q.scheduled || "").toLowerCase();
     const tasks = d.tasks.filter(t => !q || t.name.toLowerCase().includes(q) || t.prompt.toLowerCase().includes(q));
-    const card = t => gcard(t.id, `<div class="gt"><b>${esc(t.name)}</b>${t.unread ? `<i class="bdot" aria-label="Unread result"></i>` : ""}<p class="clip2">${esc(t.prompt)}</p><small class="st ${t.enabled ? "on" : ""}">${esc(t.status)} · ${esc(t.schedule)}</small></div>${t.project ? `<span class="gchip">${ICON.stack}${esc(t.project)}</span>` : ""}<button class="iconbtn more" data-tk="${esc(t.id)}" aria-label="Options for ${esc(t.name)}">${ICON.more}</button>`, "task");
+    const card = t => gcard(t.id, `<div class="gt"><b>${esc(t.name)}</b>${t.unread ? `<i class="bdot" aria-label="Unread result"></i>` : ""}<p class="clip2">${esc(t.prompt)}</p><small class="st ${t.enabled ? "on" : ""}">${esc(t.status)} · ${esc(t.schedule)}</small>${t.error ? `<small class="st bad">Could not start: ${esc(t.error)}</small>` : ""}${t.invalid ? `<small class="st bad">${esc(t.invalid)}</small>` : ""}${t.skipped ? `<small>Skipped a run: ${esc(t.skipped)}</small>` : ""}${t.running ? `<small>Running now</small>` : ""}</div>${t.project ? `<span class="gchip">${ICON.stack}${esc(t.project)}</span>` : ""}<button class="iconbtn more" data-tk="${esc(t.id)}" aria-label="Options for ${esc(t.name)}">${ICON.more}</button>`, "task");
     const tpl = (t, i) => gcard("t" + i, `<div class="gt"><b>${esc(t.name)}</b><p class="clip2">${esc(t.prompt)}</p><small>${esc(WHENS.find(w => w[0] === t.when)?.[1] || "")}${t.time ? " at " + t.time : ""}</small></div>`, "task tpl");
     const body = tab === "templates" ? `<div class="ggrid c2">${d.templates.map(tpl).join("")}</div>` : tasks.length ? `<div class="ggrid c2">${tasks.map(card).join("")}</div>` : `<div class="gempty"><b>${q ? "No tasks match." : "No scheduled tasks yet."}</b><span>${q ? "Try fewer words." : "Have Meshpool do something for you on a schedule: a daily briefing, a weekly recap, a repository check."}</span>${q ? "" : `<button class="btn primary" id="tkNew2">New task</button>`}</div>`;
-    shell0(gHead("scheduled", {tabs: [["yours", "Yours"], ["templates", "Templates"]], tools: `${gBtn("gSearch", "search", "Search", G.find.scheduled)}<button class="btn primary split" id="tkNew">New task<span class="sd">${ICON.chev}</span></button>`}) + `<div id="gtk">${body}</div>`);
+    shell0(gHead("scheduled", {tabs: [["yours", "Yours"], ["templates", "Templates"]], tools: `${gBtn("gSearch", "search", "Search", G.find.scheduled)}<button class="btn primary split" id="tkNew">New task<span class="sd">${ICON.chev}</span></button>`}) + (d.problem ? `<div class="gempty"><b>Your scheduled tasks could not be read.</b><span>${esc(d.problem)}</span><button class="btn" id="tkReset">Start fresh</button></div>` : "") + `<div id="gtk">${body}</div>`);
+    $("#tkReset")?.addEventListener("click", async () => { try { await post("/api/assistant", {action: "tasks_reset"}); pageScheduled(); } catch (err) { toast(err.message); } });
     bindHead("scheduled", () => draw());
     const add = async preset => { const v = await taskDialog(preset); if (v && await taskSave(v)) { await loadAccount(); pageScheduled(); } };
     $("#tkNew").onclick = () => add();
@@ -161,7 +164,7 @@ async function pageScheduled() {
         ...(t.last_thread ? [{label: "Open the last run", icon: ICON.chat, fn: () => openThread(t.last_thread)}] : []),
         {label: "Run now", icon: ICON.bolt, fn: async () => { try { const r = await post("/api/assistant", {action: "task_run", id: t.id}); toast("Started"); loadThreads(); if (r.thread) openThread(r.thread); } catch (err) { toast(err.message); } }},
         {label: "Edit", icon: ICON.pencil, fn: () => add2(t)},
-        {label: t.enabled ? "Pause" : "Resume", icon: ICON.clock, fn: async () => { try { await post("/api/assistant", {action: "task_update", id: t.id, enabled: !t.enabled}); pageScheduled(); } catch (err) { toast(err.message); } }},
+        {label: t.enabled ? "Pause" : t.status === "Done" ? "Run again at a new time" : "Resume", icon: ICON.clock, fn: async () => { if (t.status === "Done") return add2(t); try { await post("/api/assistant", {action: "task_update", id: t.id, enabled: !t.enabled}); pageScheduled(); } catch (err) { toast(err.message); } }},
         {sep: true},
         {label: "Delete", icon: ICON.trash, danger: true, fn: async () => { if (await ask({title: `Delete “${clip(t.name, 40)}”?`, text: "It stops running. Chats it already made stay.", ok: "Delete task", cancel: "Keep task", danger: true})) { await post("/api/assistant", {action: "task_delete", id: t.id}); pageScheduled(); } }},
       ]);

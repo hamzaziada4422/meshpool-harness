@@ -78,21 +78,25 @@ def test_bad_settings_file_does_not_crash(home):
 
 def test_corrupt_schedules_are_kept_not_wiped(home):
     (home / "schedules.json").write_text("{corrupt", encoding="utf-8")
+    with pytest.raises(AS.TasksDamaged):                  # M18-05: writes are refused until the person resolves it
+        AS.add_task("n", "p", when="hourly")
+    assert (home / "schedules.json").read_text() == "{corrupt"
+    assert [p.read_text() for p in home.glob("schedules.json.corrupt-*")] == ["{corrupt"]
+    AS.reset_tasks()
     AS.add_task("n", "p", when="hourly")
-    assert (home / "schedules.json.bak").read_text() == "{corrupt"
     assert len(AS.tasks()) == 1
 
 
 def test_unreadable_schedules_are_not_overwritten(home, monkeypatch):
     t = AS.add_task("keep", "p", when="hourly")
-    real = type(home / "x").read_text
+    real = type(home / "x").read_bytes
 
     def deny(self, *a, **k):
         if self.name == "schedules.json":
             raise PermissionError("locked")
         return real(self, *a, **k)
     with monkeypatch.context() as m:
-        m.setattr(type(home / "x"), "read_text", deny)
+        m.setattr(type(home / "x"), "read_bytes", deny)
         with pytest.raises(RuntimeError):
             AS.add_task("other", "p", when="hourly")
         assert AS.due() == []

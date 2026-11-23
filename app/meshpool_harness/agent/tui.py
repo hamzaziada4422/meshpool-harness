@@ -38,7 +38,7 @@ COMMANDS = [
     ("compact", "", "shorten old tool output to free context"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
-    ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
+    ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
     ("plan", "[on|off]", "investigate and reply with a plan before changing anything"),
     ("goal", "[text|off]", "keep working until this is done"),
     ("style", "[id]", "pick how the agent writes"),
@@ -1156,8 +1156,9 @@ class Session(SharedCommands):
 
     def cmd_auto(self, arg):
         t, st = self.term, self.term.st
-        if arg and arg not in t.modes:
-            return t.p(st.amber(f"  Modes: {', '.join(t.modes)}"))
+        arg = C.normalize_mode(arg, None) if arg else ""
+        if arg is None or (arg and arg not in t.modes):
+            return t.p(st.amber("  Modes: " + ", ".join({"ask": "ask", "edits": "accept-edits", "auto": "full-access"}[m] for m in t.modes)))
         mode = arg or ("ask" if t.mode == "auto" else "auto")
         self.set_mode(mode)
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
@@ -1406,7 +1407,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             return 1
     os.environ["MESHPOOL_FRONTEND"] = "terminal"        # the app's desktop notifications stay quiet: this is the prompt
     from meshpool_harness import chats
-    pm = os.environ.get("MH_PERMISSION_MODE", "")
+    pm = C.normalize_mode(os.environ.get("MH_PERMISSION_MODE"), "")   # old names accepted (F-19)
     mode_kind = mode or ("work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")
     if mode_kind not in _KINDS:
         term.p(st.red(f"Unknown mode {mode_kind}. Use code, work or auto."))

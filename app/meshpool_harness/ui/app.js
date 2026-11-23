@@ -225,12 +225,17 @@ const S = {
   page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
   // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
   // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
-  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false, style: ""},
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: "", plan: false, style: ""},
   panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Manual", "Asks before it edits files or runs commands"], edits: ["Auto", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Asks before it edits files or runs commands"], edits: ["Accept edits", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+// Earlier spellings of the three levels still read as these three.
+const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
+function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }
+// New chats start from the saved setting (Settings, Capabilities). Changing the access for one chat never changes it.
+function defaultMode() { return normMode(get0("MH_AGENT_PERMISSIONS")); }
 
 function isDark() { const t = store("theme") || "system"; return t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches); }
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
@@ -489,7 +494,7 @@ function setupComposer() {
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
   if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, style: S.draft.style, busy: false};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: S.draft.style, busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -503,7 +508,7 @@ async function setPlan(on) {
 }
 async function setMode(m) {
   if (S.cur) { try { await post(`/api/agent/${S.cur.id}/mode`, {mode: m, since: 1e9}); S.cur.view.mode = m; } catch (e) { return toast(e.message); } }
-  else { S.draft.mode = m; store("mode", m); }
+  else S.draft.mode = m;                       // this draft only: the default for later chats is the saved setting
   renderBar();
 }
 async function setModel(id) {
@@ -550,7 +555,7 @@ async function sendNow(interrupt) {
   let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
-      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
       S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
@@ -823,7 +828,7 @@ function newThread(opt) {
   S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
   { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
-  S.draft.harness = modeHarness();
+  S.draft.harness = modeHarness(); S.draft.mode = "";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
 }
@@ -877,7 +882,7 @@ function openThread(id, fresh) {
   const known = S.threads.find(t => t.id === id);
   if (known) { const m = isCodeThread(known) ? "code" : "chat"; if (S.mode !== m) { S.mode = m; store("appmode", m); syncMode(); } }
   const hit = !fresh && CACHE.get(id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
@@ -1888,8 +1893,11 @@ async function renderSection(sec) {
     $("#paMemPage").onclick = () => { closeSettings?.(); goPage("memory"); };
     $("#paSave").onclick = async () => {
       try {
-        await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
-        await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked, learn_from_edits: $("#paEdits").checked});
+        // Send only what this person changed on the page, never the whole snapshot it loaded (M19-01).
+        if ($("#paIns").value !== a.instructions) await post("/api/assistant", {action: "instructions", text: $("#paIns").value, base: a.instructions});
+        const sw = {}; for (const [k, id] of [["memory_on", "paMemOn"], ["instructions_on", "paInsOn"], ["learn_from_edits", "paEdits"]]) if ($("#" + id).checked !== !!a.settings[k]) sw[k] = $("#" + id).checked;
+        if (Object.keys(sw).length) await post("/api/assistant", {action: "settings", ...sw});
+        a.instructions = $("#paIns").value; Object.assign(a.settings, sw);
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New chats use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
@@ -2173,7 +2181,7 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Ask"], ["edits", "Accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
@@ -2310,7 +2318,9 @@ async function contextPanel(box) {
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? " Facts about you will appear in Memory to review." : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${r.summary || ""}` + (r.context_pending ? " Reading it for facts about you…" : ""), false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
+      if (r.context_pending) { const t0 = Date.now(); const poll = async () => { try { const st = await api("/api/import-status"); if (st.state === "failed") return res(`${r.summary} Could not read facts about you from it: ${st.error}`, true); if (st.state === "done") return res(`${r.summary} ${n(st.memory)} fact${st.memory === 1 ? "" : "s"} to review in Memory.`, false, true); } catch (e) { return; } if (Date.now() - t0 < 180000) setTimeout(poll, 3000); }; setTimeout(poll, 3000); }
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2322,7 +2332,8 @@ async function contextPanel(box) {
     x.disabled = true; res(`Importing ${local[x.dataset.local].name} sessions…`);
     try {
       const r = await post("/api/import-chats", {sources: [x.dataset.local]}); await refresh();
-      res(`Imported ${n(r.imported)} ${local[x.dataset.local].name} session${r.imported === 1 ? "" : "s"} as chats${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.`, false, true);
+      res(`${local[x.dataset.local].name}: ${r.summary}`, false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} session${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
       x.textContent = "Imported";
     } catch (e) { x.disabled = false; res(e.message, true); }
   });
@@ -2408,7 +2419,7 @@ async function importPanel(box, onDone) {
   const agents = f.agents.filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
   const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : (it.kind === "instructions" || it.default === false) ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
   const sum = a => ["skill", "mcp", "memory", "instructions"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
@@ -2487,13 +2498,18 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal" checked> <span id="oLocalTxt"></span></label>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
+  let found = {};
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Bring in my ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} chats (${n.toLocaleString()})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
+    const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };

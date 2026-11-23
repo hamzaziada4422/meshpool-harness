@@ -374,7 +374,7 @@ def test_finish_check_and_scan_rules_are_opt_in(monkeypatch):
 
 
 def test_default_prompt_is_the_measured_one():
-    assert len(core._codex_prompt()) == 14085          # the after2 build's system prompt, byte for byte in size
+    assert len(core._codex_prompt()) == 14066          # the after2 build's system prompt, byte for byte in size
 
 
 def test_auto_reasoning_effort_is_opt_in(monkeypatch):

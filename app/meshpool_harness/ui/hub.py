@@ -105,7 +105,10 @@ def _task_row(t: dict, threads: dict) -> dict:
             if p.get("path") == t["folder"]:
                 pj = p.get("name", "")
     return {"id": t["id"], "name": t.get("name") or "Scheduled task", "prompt": t.get("prompt", ""),
-            "enabled": bool(t.get("enabled")), "status": "Active" if t.get("enabled") else "Paused",
+            "enabled": bool(t.get("enabled")), "status": AS.status(t),
+            "error": (t.get("last_error") or {}).get("text", ""), "invalid": t.get("invalid", ""),
+            "skipped": (t.get("skipped") or {}).get("why", ""), "skip_if_missed_h": t.get("skip_if_missed_h"),
+            "running": bool(t.get("lease") and float((t["lease"] or {}).get("until") or 0) > __import__("time").time()),
             "schedule": AS.describe(t), "when": t.get("when"), "time": t.get("time"), "day": t.get("day"),
             "minutes": t.get("minutes"), "at": t.get("at"), "only_on_change": bool(t.get("only_on_change")), "next_run": t.get("next_run"),
             "last_run": t.get("last_run"), "last_thread": t.get("last_thread"), "kind": t.get("kind", "cowork"),
@@ -123,7 +126,7 @@ TEMPLATES = [
 def scheduled() -> dict:
     threads = {r["id"]: r for r in A.listing()}
     rows = [_task_row(t, threads) for t in AS.tasks()]
-    return {"tasks": rows, "templates": TEMPLATES}
+    return {"tasks": rows, "templates": TEMPLATES, "problem": AS.tasks_problem()}
 
 
 def account() -> dict:

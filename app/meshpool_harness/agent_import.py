@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -281,8 +282,10 @@ def scan(only: list[str] | None = None) -> dict:
             sig = json.dumps(clean, sort_keys=True)
             what = ("Connects to " + urlparse(clean["url"]).netloc) if clean.get("url") else \
                 "Runs " + " ".join([clean.get("command", "")] + clean.get("args", []))[:80]
+            broken = bool(clean.get("command")) and not shutil.which(str(clean["command"]))
             items.append({"key": f"mcp:{aid}:{name}", "kind": "mcp", "name": str(name), "spec": clean, "preview": what,
-                          "stripped": gone, "exists": sig in have_m})
+                          "stripped": gone, "exists": sig in have_m,
+                          "default": not (broken or gone), "broken": broken})
         for f in _files(base, a["instructions"]):
             t = _read(f).strip()
             if t:

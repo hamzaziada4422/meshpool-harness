@@ -506,7 +506,7 @@ def _add_server(plugin: str, name: str, raw: dict, pdir: Path, notes: list) -> s
     spec["disabled"] = True
     sname = _prefixed(plugin, name)
     desc = f"From the {plugin} plugin. Off until you turn it on. Runs: {_target(spec)}"
-    return importer.import_mcp(sname, spec, description=desc)
+    return importer.import_mcp(sname, spec, description=desc, needs_test=False)   # the plugin page shows the command
 
 
 def _install_root(root: Path, source: str, entry: dict | None = None) -> dict:

@@ -944,7 +944,7 @@ class Agent:
         self.mcp = mcp
         self.emit = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.always: set[str] = set()
         self.max_steps = max_steps                  # explicit cap (0 = unset): _step_cap() resolves it each turn
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
@@ -3096,7 +3096,7 @@ class Agent:
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:
-        """Why a read-only call still needs a yes in Supervised and Auto-accept edits: it reads outside the project
+        """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
         if name in ("read_file", "grep"):
             p = os.path.expanduser(str(args.get("path") or "."))

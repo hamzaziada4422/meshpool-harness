@@ -150,7 +150,7 @@ def _agent_parser():
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
-    ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
+    ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (default), accept-edits (accept file changes), full-access (everything), plan (read only, then a plan). Old names (edits, auto, manual, supervised) still work")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
     ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
                     help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
@@ -339,8 +339,7 @@ def _main(argv=None):
     if argv[:1] == ["app"]:              # the desktop app (Meshpool.app / Meshpool.exe)
         from meshpool_harness.ui.desktop import run as run_app
         return run_app()
-    if os.environ.get("MESHPOOL_HOME"):
-        _config.ensure_home()
+    _config.ensure_home()
     _config.load_into_env()          # before any engine import: engines read MH_* at import time
     try:
         from meshpool_harness.ui.desktop import _bundled_tools
@@ -452,15 +451,15 @@ def _main(argv=None):
             what = argv[1]
             if what in ("claude-code", "codex"):
                 r = CI.import_local([what])
-                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
+                print(f"{what}: {r['summary']}")
                 return 0
             try:
                 r = CI.import_export(os.path.expanduser(what))
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 print(f"Could not import {what}: {e}")
                 return 1
-            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
-                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['summary']} "
+                  f"{len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
