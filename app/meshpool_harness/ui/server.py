@@ -373,8 +373,8 @@ class Handler(BaseHTTPRequestHandler):
             if not p.is_file() or p.stat().st_size > 60_000_000:
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-            if not (ctype.startswith("image/") or ctype == "application/pdf"):
-                return self._send(415, {"error": "only images and PDFs are served"})
+            if not (ctype.startswith(("image/", "audio/", "video/")) or ctype == "application/pdf"):
+                return self._send(415, {"error": "only images, audio, video and PDFs are served"})
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition("inline", p.name),
                                                           "X-Content-Type-Options": "nosniff",
                                                           "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
@@ -470,7 +470,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__,
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
-                return self._send(200, {"sessions": A.listing()})
+                q = parse_qs(u.query)
+                def _n(k):
+                    try:
+                        return max(0, int(q.get(k, ["0"])[0]))
+                    except ValueError:
+                        return 0
+                return self._send(200, A.listing_page(_n("limit"), _n("offset")))
             if u.path == "/api/styles":
                 from meshpool_harness import styles as ST
                 return self._send(200, ST.listing())
@@ -952,10 +958,13 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 act = b.get("action", "add")
                 if act == "pick":
-                    from meshpool_harness.ui.desktop import choose_folder, has_folder_picker
-                    if not has_folder_picker():          # the UI asks the user to type or paste the path instead
+                    from meshpool_harness.ui import desktop as DK
+                    if not DK.has_folder_picker():       # the UI asks the user to type or paste the path instead
                         return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
-                    path = choose_folder(b.get("start", ""))
+                    try:
+                        path = DK.choose_folder(b.get("start", ""))
+                    except DK.PickerUnavailable:         # the dialog could not open: same typed-path fallback
+                        return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
@@ -1148,6 +1157,7 @@ from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the t
 class _Server(ThreadingHTTPServer):
     # Windows' SO_REUSEADDR lets a second server bind a port already in use, so the free-port search never moved on
     allow_reuse_address = os.name != "nt"
+    request_queue_size = 128                     # P-13: the default of 5 drops connections when many tabs reconnect at once
 
 
 def _running() -> bool:

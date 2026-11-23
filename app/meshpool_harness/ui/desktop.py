@@ -138,18 +138,20 @@ def _log_to_file() -> None:
     log = C.runs_dir() / "app.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     try:
-        if log.exists() and log.stat().st_size > 2_000_000:
-            log.replace(log.with_suffix(".old.log"))
-        f = open(log, "a", encoding="utf-8", errors="replace", buffering=1)
+        from meshpool_harness.logfiles import PipedLog, RotatingFile   # H-23: the app log rotates by size while it runs
+        if os.name != "nt":
+            f = PipedLog(log)                  # native output (fd 1 and 2) goes through the same rotating file
+            sys.stdout = sys.stderr = f.sink
+            try:
+                os.dup2(f.fileno(), 1)
+                os.dup2(f.fileno(), 2)
+            except OSError:
+                pass
+            f.release()
+        else:
+            sys.stdout = sys.stderr = RotatingFile(log)
     except OSError:
         return
-    sys.stdout = sys.stderr = f
-    if os.name != "nt":
-        try:
-            os.dup2(f.fileno(), 1)
-            os.dup2(f.fileno(), 2)
-        except OSError:
-            pass
 
 
 def _mac_environment() -> None:
@@ -394,8 +396,12 @@ def has_folder_picker() -> bool:
     return WINDOW[0] is not None or sys.platform == "darwin" or os.name == "nt" or bool(shutil.which("zenity"))
 
 
+class PickerUnavailable(Exception):
+    """The native folder dialog could not open at all (no display, no helper): not the same as the user cancelling."""
+
+
 def choose_folder(start: str = "") -> str:
-    """Native folder picker. Returns '' when cancelled or not available."""
+    """Native folder picker. Returns '' when cancelled; raises PickerUnavailable when the dialog cannot open (F-05)."""
     start = start if start and Path(start).is_dir() else str(Path.home())
     w = WINDOW[0]
     if w is not None:                          # the app's own window: a native sheet attached to it
@@ -425,9 +431,13 @@ def choose_folder(start: str = "") -> str:
         if shutil.which("zenity"):
             r = subprocess.run(["zenity", "--file-selection", "--directory", f"--filename={start}/"],
                                capture_output=True, text=True, timeout=600)
+            if r.returncode != 0 and r.stderr.strip() and not r.stdout.strip():     # a cancel prints nothing
+                raise PickerUnavailable(r.stderr.strip()[:200])
             return r.stdout.strip()
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
         return ""
+    except OSError as e:
+        raise PickerUnavailable(str(e)) from None
     return ""
 
 

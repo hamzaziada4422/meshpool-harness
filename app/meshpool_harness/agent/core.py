@@ -983,7 +983,7 @@ class Agent:
     # ---------- prompt -----------------------------------------------------------------------------------------
     def _style(self) -> bool:
         """True when this chat runs in Codex style (harness profile engine_style "codex"): Codex's base instructions,
-        shell / apply_patch / update_plan and Codex's loop, under MeshPool's routing. Code chats only."""
+        shell / apply_patch / update_plan and Codex's loop, under Meshpool's routing. Code chats only."""
         try:
             return self.profile == "code" and self.hsettings()["engine_style"] == "codex"
         except Exception:  # noqa: BLE001
@@ -1516,6 +1516,7 @@ class Agent:
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         self.ws.turn_files = set()
+        self.ws.turn_new = set()
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
              "todo_nudged": False}
         route = getattr(self, "route", None)
@@ -2263,7 +2264,7 @@ class Agent:
                 stats[name] = f"+{a} -{d}"
         except Exception:  # noqa: BLE001 - not a git repo, or git missing
             pass
-        created = {os.path.relpath(c, self.root) for c in getattr(self.ws, "created", set()) if os.path.isabs(c)}
+        created = {os.path.relpath(c, self.root) for c in getattr(self.ws, "turn_new", set()) if os.path.isabs(c)}
         parts = [f"{r} ({stats[r]})" if r in stats else f"{r} (new)" if r in created else r for r in rel[:12]]
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
@@ -3826,7 +3827,7 @@ class Agent:
             for p in SESSIONS.glob("*/session.json"):
                 if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
                     continue
-                d = SS.read(p.parent)
+                d = SS.read_head(p.parent) or SS.read(p.parent)      # the small head first: not every chat is read in full
                 if not d:
                     continue
                 if session_id and d.get("id") != session_id:
@@ -3839,6 +3840,8 @@ class Agent:
                     best, best_dir = d, p.parent
         if not best:
             return None
+        if "messages" not in best:                       # only the chat that won is read in full
+            best = SS.read(best_dir) or best
         kw.setdefault("profile", "work" if best.get("harness") == "meshpool-work" else "code")
         a = cls(best["workdir"], session_id=best["id"], **kw)
         if isinstance(best.get("route"), dict):

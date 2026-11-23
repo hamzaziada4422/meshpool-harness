@@ -550,6 +550,7 @@ class Workspace:
         self.edits = 0
         self.written: set[str] = set()
         self.created: set[str] = set()        # files the agent created (new tests are allowed)
+        self.turn_new: set[str] = set()       # files created in the current turn (the receipt's "new")
         self.turn_files: set[str] = set()     # files changed in the current turn (the review receipt)
         self._n = 0
 
@@ -797,7 +798,7 @@ class Workspace:
                 compile(text, str(path), "exec", dont_inherit=True)
                 return None
             except SyntaxError as e:     # Python's own message: "'(' was never closed", "invalid syntax. Perhaps you forgot a comma?"
-                # MeshPool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
+                # Meshpool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
                 # The code is judged by the newest Python that would run it: the project's venv, else the newest
                 # python3.x on this computer. Without a newer one the code cannot run here either, so the error stands.
                 if _parses_with_newer_python(path, text):
@@ -1124,10 +1125,13 @@ class Workspace:
         if p.is_dir():
             raise ToolError(f"{path or '.'} is a directory; give a file path")
         fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
+        same = False
         if not p.exists():
             self.created.add(str(p))
+            self.turn_new.add(str(p))
         elif p.is_file():
             text, eol, bom = read_src(p)                # an existing file keeps its line endings and BOM
+            same = not append and text == content.replace("\r\n", "\n")      # rewritten with the text it already had
             fmt = (eol, bom)
             if str(p) not in self.original:
                 self.original[str(p)] = self._hash(text)
@@ -1140,7 +1144,8 @@ class Workspace:
         self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
-        self.turn_files.add(str(p))
+        if not same:                                  # F-21: an unchanged rewrite is not a change
+            self.turn_files.add(str(p))
         bad = self._syntax_error(p, after) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")

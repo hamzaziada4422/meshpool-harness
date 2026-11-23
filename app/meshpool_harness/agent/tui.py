@@ -1,4 +1,4 @@
-"""Terminal front end for the MeshPool coding agent.
+"""Terminal front end for the Meshpool coding agent.
 
   meshpool                       start a session in the current folder
   meshpool --dir PATH            start in another folder
@@ -33,7 +33,7 @@ from meshpool_harness.agent.tui_render import Style
 COMMANDS = [
     ("help", "", "show the commands"),
     ("model", "[id]", "pick the model"),
-    ("login", "", "sign in: MeshPool key, another provider, or ChatGPT"),
+    ("login", "", "sign in: Meshpool key, another provider, or ChatGPT"),
     ("clear", "", "start a new conversation in this folder"),
     ("compact", "", "shorten old tool output to free context"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
@@ -405,7 +405,7 @@ class Terminal:
         self.cost = self._price()
 
     def _price(self) -> float | None:
-        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). MeshPool has no
+        """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). Meshpool has no
         price list, so without those variables no dollar figure is shown."""
         try:
             pi, po = float(os.environ["MH_PRICE_IN"]), float(os.environ["MH_PRICE_OUT"])
@@ -462,22 +462,22 @@ class Terminal:
         ok = bool(ev.get("ok"))
         if name in R.SHELL_TOOLS:
             meta = f"(timeout {info['timeout']}s)" if info.get("timeout") else ""
-            lines, hidden = R.shell_block(info["summary"], out, took, st, self.width, meta=meta,
-                                          limit=self.output_limit, ok=ok)
+            lines, hidden = R.guard(R.shell_block, st, info["summary"], out, took, st, self.width, meta=meta,
+                                    limit=self.output_limit, ok=ok)
             self.last_block = {"command": info["summary"], "output": out, "took": took, "meta": meta, "ok": ok,
                                "hidden": hidden}
             self.scroll(lines)
         else:
-            self.scroll(["  " + x for x in R.tool_line(name, info["summary"], out, ok, took, st, self.width - 4,
-                                                       info["diff"], bool(info["mcp"]))])
+            self.scroll(["  " + x for x in R.guard(R.tool_line, st, name, info["summary"], out, ok, took, st, self.width - 4,
+                                                    info["diff"], bool(info["mcp"]))])
 
     def expand_last(self):
         """Ctrl+O: print the last shell output in full (the screen above is append-only, so it is printed again)."""
         b = self.last_block
         if not b:
             return self.scroll(["  " + self.st.dim("Nothing to expand.")])
-        lines, _ = R.shell_block(b["command"], b["output"], b["took"], self.st, self.width, meta=b["meta"], limit=0,
-                                 ok=b["ok"])
+        lines, _ = R.guard(R.shell_block, self.st, b["command"], b["output"], b["took"], self.st, self.width,
+                           meta=b["meta"], limit=0, ok=b["ok"])
         self.scroll(lines)
 
     # ---------- facts for the screen ----------
@@ -493,7 +493,7 @@ class Terminal:
         except Exception:  # noqa: BLE001
             label = prov
         self.provider = "ChatGPT subscription" if prov == "chatgpt" else (
-            "MeshPool API" if label.lower() == "meshpool" else f"{label} API")
+            "Meshpool API" if label.lower() == "meshpool" else f"{label} API")
         self.mode = getattr(agent, "mode", self.mode) or "ask"
         self.modes = ["ask", "auto"] if hasattr(agent, "manifest") else MODES
         self.cwd = self.cwd_label or str(getattr(agent, "root", self.cwd))
@@ -911,7 +911,7 @@ class Terminal:
                 return "always", ""
             if a in ("n", "no"):
                 try:
-                    note = input("  What should MeshPool do instead? (Enter to skip) > ").strip()
+                    note = input("  What should Meshpool do instead? (Enter to skip) > ").strip()
                 except EOFError:
                     note = ""
                 return "no", note
@@ -979,7 +979,7 @@ def ask_key(force: bool = False) -> bool:
 
 
 def logo_lines(color: bool) -> list[str]:
-    """The MeshPool mark, for terminals."""
+    """The Meshpool mark, for terminals."""
     return R.logo(B.depth() if color else 0)
 
 
@@ -1322,7 +1322,7 @@ class Session(SharedCommands):
         from meshpool_harness import provider_setup as PS
         from meshpool_harness import providers as PV
         t, st = self.term, self.term.st
-        kinds = ["MeshPool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
+        kinds = ["Meshpool API key", "Another provider (OpenAI-compatible URL and key)", "ChatGPT subscription"]
         i = t.choose("Sign in", [], kinds)
         if i is None:
             return

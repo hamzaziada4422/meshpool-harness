@@ -57,7 +57,13 @@ const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelLabel(id, list) {                 // the name, plus the id when another model in the list shares it
-  const n = modelName(id); return (list || []).filter(m => modelName(m.id || m) === n).length > 1 ? `${n} · ${bareModel(id)}` : n;
+  // F-20: the same model name from two providers or endpoints also shows where it comes from
+  const n = modelName(id), same = (list || []).filter(m => modelName(m.id || m) === n);
+  if (same.length < 2) return n;
+  const label = `${n} · ${bareModel(id)}`;
+  const twin = same.some(m => (m.id || m) !== id && `${modelName(m.id || m)} · ${bareModel(m.id || m)}` === label);
+  const src = provOf(id) === "key" ? ((list || []).find(m => (m.id || m) === id) || {}).provider || "your endpoint" : provOf(id);
+  return twin ? `${label} (${src})` : label;
 }
 function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
@@ -924,7 +930,7 @@ async function poll() {
   if (busy) startStream(cur);
   // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
   cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
-  const delay = busy ? (document.hidden ? 2000 : cur.es && cur.es.readyState === 1 ? 4000 : 400)
+  const delay = busy ? (document.hidden ? 2000 : (cur.es && cur.es.readyState === 1) || cur.relay ? 4000 : 400)
     : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
   cur.pollT = setTimeout(poll, delay);
 }
@@ -979,12 +985,35 @@ function reconcileOpen(cur, v) {
   } catch (e) { console.error(e); }
 }
 // ---- Server-Sent Events: the open chat's events pushed as they happen
+// P-11: browsers allow six connections per site, and every tab used to hold its own stream: twenty tabs on a running chat
+// starved each other. One tab per chat (the one that holds a Web Lock) keeps the EventSource and relays what arrives to the
+// other tabs over a BroadcastChannel; when it closes, the next tab takes over. An idle tab holds no stream at all.
 function startStream(cur) {
-  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
-  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  if (cur.es || cur.relay || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  if (!(window.BroadcastChannel && navigator.locks)) return openStream(cur);
+  const name = "mp-sse-" + cur.id;
+  let ch, ac;
+  try { ch = new BroadcastChannel(name); ac = new AbortController(); } catch (e) { return openStream(cur); }
+  const r = cur.relay = {ch, ac, leader: false, release: null};
+  ch.onmessage = e => {                              // a follower: what the leader's stream delivered
+    if (r.leader || cur.relay !== r || S.cur !== cur) return;
+    const d = e.data || {};
+    if (d.end) { poll(); return; }
+    let v; try { v = JSON.parse(d.data); } catch (err) { return; }
+    const first = (v.events || []).find(x => typeof x.i === "number");
+    if (first && first.i > (cur.next || 0)) { poll(); return; }     // a gap (this tab joined late): fetch what it missed
+    if (ingest(cur, v)) poll();
+  };
+  navigator.locks.request(name, {signal: ac.signal}, () => new Promise(done => {
+    if (cur.relay !== r || S.cur !== cur) return done();
+    r.leader = true; r.release = done; openStream(cur);
+  })).catch(() => {});
+}
+function openStream(cur) {
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; stopStream(cur); return; }
   cur.es = es;
-  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
-  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; try { cur.relay?.ch.postMessage({data: m.data}); } catch (e) { /* closed */ } if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { try { cur.relay?.ch.postMessage({end: true}); } catch (e) { /* closed */ } stopStream(cur); if (S.cur === cur) poll(); });
   es.onerror = () => {                           // fall back to polling; try the stream again a few times
     stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
     if (cur.esFails >= 4) { cur.sseOff = true; return; }
@@ -992,7 +1021,10 @@ function startStream(cur) {
     if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
   };
 }
-function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+function stopStream(cur) {
+  if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; }
+  const r = cur?.relay; if (r) { cur.relay = null; try { r.release?.(); r.ac.abort(); r.ch.close(); } catch (e) { /* already gone */ } }
+}
 // ---- the paced drain: events leave the queue in order; text goes a few characters per frame
 function drainQ(cur, all) {
   const q = cur.q; if (!q || !q.length) return;
@@ -1162,7 +1194,15 @@ const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
 const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
+// OSS-12: one event that cannot be drawn must not break the page or the rest of a saved chat.
+function safe(fn) { try { return fn(); } catch (e) { try { console.warn("meshpool: could not draw part of this chat", e); } catch (_) {} } }
 function applyEv(ev) {
+  try { return applyEvRaw(ev); }
+  catch (e) {
+    try { console.warn("meshpool: could not show an item", ev && ev.type, e); const d = document.createElement("div"); d.className = "note"; d.textContent = "Could not show this item."; colEl().appendChild(d); } catch (_) {}
+  }
+}
+function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
@@ -1286,7 +1326,7 @@ function applyEv(ev) {
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
       cur.gateEl?.remove(); cur.gateEl = null;
@@ -1296,7 +1336,7 @@ function applyEv(ev) {
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
-      pvTurnCards(cur, foot, 0);                        // the files it changed arrive with its checkpoint event
+      safe(() => pvTurnCards(cur, foot, 0));                     // the files it changed arrive with its checkpoint event
       if (cur.turnPlan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
@@ -1469,7 +1509,7 @@ function renderPanel() {
   fitPanel(); if (S.panel !== "browser") brwStop();
   if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
-  $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
@@ -1649,10 +1689,10 @@ async function panelGit(body) {
       <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
     <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
-    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
+    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
     <div id="chgBox"></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
-    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
+    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
   $("#gbr").onchange = () => gitAct({action: "checkout", branch: $("#gbr").value});
   $("#gcreate").onclick = () => gitAct({action: "checkout", branch: $("#gnew").value, create: true});
@@ -1853,7 +1893,7 @@ function openGithubPicker(opts = {}) {
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
-    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>${esc(opts.cta || "Start chat")}</button></div></div>`;
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled title="Choose a repository first">${esc(opts.cta || "Start chat")}</button></div></div>`;
   document.body.appendChild(sc);
   let repo = null, qT = null;
   const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
@@ -2037,7 +2077,7 @@ async function renderSection(sec) {
       $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
       filter();
       $("#cxAdd").onclick = async () => {
-        const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
+        const url = $("#cxUrl").value.trim(); if (!url) { say("Paste the address of the app's MCP server first.", "bad"); $("#cxUrl").setAttribute("aria-invalid", "true"); $("#cxUrl").focus(); return; }
         $("#cxAdd").disabled = true; say("Checking the server...");
         const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim(), client_id: $("#cxCid").value.trim(), client_secret: $("#cxSec").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
@@ -2148,7 +2188,7 @@ async function renderSection(sec) {
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? `disabled title="Not available on this computer."` : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
@@ -2661,7 +2701,7 @@ function updatePanel(u) {
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
   const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
   const busy = !!S.updBusy;
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? "disabled" : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
   bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
