@@ -17,7 +17,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ALLOWED = {"fixed", "already fixed", "not reproducible"}
-ROW = re.compile(r"^\|\s*([A-Z]+-?[0-9A-Z]*(?:-\d+)?)\s*\|(.*)\|\s*$")
+ROW = re.compile(r"^\|\s*([A-Z]+-?[0-9A-Z]*(?:-\d+)?(?:\s*[/,]\s*[A-Z]+-?[0-9A-Z]*(?:-\d+)?)*)\s*\|(.*)\|\s*$")
 
 
 def cells(line: str) -> list[str]:
@@ -36,7 +36,9 @@ def read_ws() -> dict[str, list[tuple[str, str, str]]]:
                 continue
             status = re.sub(r"\s*[(:;-].*$", "", c[1].lower().strip("* `")).strip()   # "fixed (note)" -> "fixed"
             test = c[5] if len(c) > 5 else (c[-1] if len(c) > 2 else "")
-            found.setdefault(c[0], []).append((f.stem, status, test))
+            for rid in re.split(r"\s*[/,]\s*", c[0]):          # "S-13/B11/P-08" covers several findings
+                if rid:
+                    found.setdefault(rid, []).append((f.stem, status, test))
     return found
 
 
