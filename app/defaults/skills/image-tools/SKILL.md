@@ -5,7 +5,7 @@ description: Resize, crop, convert, compress, remove a background colour from or
 
 # Image tools
 
-1. Use Python with PIL (HEIC and WebP work too). Keep the original; write new files with the size in the name.
+1. Use Python with PIL (it ships inside Meshpool; never pip install it). WebP works. For iPhone .heic or .heif photos run `from pillow_heif import register_heif_opener; register_heif_opener()` first, then open them like any image. Keep the original; write new files with the size in the name.
 2. For batches, loop over the folder and report how many were done and the total size saved.
 3. Open one result with view_output to check it before reporting.
 4. Say plainly when something cannot be done well, such as true background removal of a photo.
