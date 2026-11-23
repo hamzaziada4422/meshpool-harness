@@ -221,6 +221,22 @@ def _disposition(kind: str, name: str) -> str:
     return f"{kind}; filename=\"{plain}\"; filename*=UTF-8''{quote(name, safe='')}"
 
 
+_RESTART_FAILED = "Meshpool was updated but could not restart itself. Quit and open it again."
+
+
+def _restart_or_recover(UP, AU) -> None:
+    """Restart into the new code. The code on disk is already new, so if the restart itself fails (it could not start the
+    new process) the app stays up: reopen the run gate and tell the user to restart it by hand."""
+    try:
+        UP.restart([A.close_all, *ON_QUIT])
+    except Exception:  # noqa: BLE001
+        A.resume()
+        try:
+            AU.install_finished(False, _RESTART_FAILED)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Meshpool"
 
@@ -681,7 +697,7 @@ class Handler(BaseHTTPRequestHandler):
                         if r.get("mode") == "code":
                             self._send(200, {"ok": True, "mode": "code", "restarting": True, "boot": BOOT})
                             gate_open = False          # the gate stays closed: the process is going away
-                            threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                            threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
                             return
                         self._send(200, r)
                         gate_open = False
@@ -696,14 +712,18 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import autoupdate as AU
                 from meshpool_harness import updater as UP
                 gate_open = False
+                marked = applied = False
+                stage = ""
                 try:
                     with UP.install_lock():
                         r = UP.install()
                         if r.get("action") != "staged":
                             return self._send(200, r)
+                        stage = r["stage"]
                         AU.mark_installing(r["tag"], r["latest"], "code")
+                        marked = True
                         if not A.quiesce():
-                            UP.discard_stage(r["stage"])
+                            UP.discard_stage(stage)
                             msg = "A task is still running. Update when it finishes."
                             AU.install_finished(False, msg)
                             return self._send(200, {"ok": False, "error": msg})
@@ -712,20 +732,26 @@ class Handler(BaseHTTPRequestHandler):
                         if not r2.get("ok"):
                             AU.install_finished(False, r2.get("error", ""))
                             return self._send(200, r2)        # the finally below reopens the gate
+                        applied = True
                         self._send(200, {"ok": True, "action": "restarting", "boot": BOOT})
                         gate_open = False                  # the gate stays closed: the process is going away
-                        threading.Thread(target=UP.restart, args=([A.close_all, *ON_QUIT],), daemon=True).start()
+                        threading.Thread(target=_restart_or_recover, args=(UP, AU), daemon=True).start()
                         return
                 except UP.UpdateBusy as e:
                     return self._send(200, {"ok": False, "error": str(e)})
-                except Exception as e:  # noqa: BLE001 - after the gate closed: reopen it and say what failed
-                    if not gate_open:
+                except Exception as e:  # noqa: BLE001 - after mark_installing: never leave "installing" behind
+                    if not marked:
                         raise
+                    msg = str(e) or e.__class__.__name__
+                    if applied:
+                        msg = _RESTART_FAILED
+                    else:
+                        UP.discard_stage(stage)
                     try:
-                        AU.install_finished(False, str(e))
+                        AU.install_finished(False, msg)
                     except Exception:  # noqa: BLE001
                         pass
-                    return self._send(200, {"ok": False, "error": str(e)})
+                    return self._send(200, {"ok": False, "error": msg})
                 finally:
                     if gate_open:
                         A.resume()

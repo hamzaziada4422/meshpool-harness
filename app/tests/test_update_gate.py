@@ -232,3 +232,40 @@ def test_install_refused_while_a_task_runs(server, monkeypatch):
     assert log == ["install", "mark", "quiesce", "discard",
                    "finished:False:A task is still running. Update when it finishes."]
     assert A.QUIESCING[0] is False
+
+
+def test_exception_after_mark_installing_is_recorded_and_cleaned_up(server, monkeypatch):
+    # M12-02: an error before the gate closed must not leave the state "installing" forever
+    log = []
+    _fake_update(monkeypatch, log)
+
+    def boom():
+        raise RuntimeError("disk exploded")
+    monkeypatch.setattr(A, "quiesce", boom)
+    r = _post(server + "/api/update/install")
+    assert r == {"ok": False, "error": "disk exploded"}
+    assert log == ["install", "mark", "discard", "finished:False:disk exploded"]
+    assert A.QUIESCING[0] is False
+
+
+def test_restart_failure_reopens_the_gate_and_says_restart(server, monkeypatch):
+    from meshpool_harness import updater as UP
+    log = []
+    _fake_update(monkeypatch, log)
+    done = threading.Event()
+
+    def bad_restart(on_quit=()):
+        log.append("restart")
+        done.set()
+        raise OSError("cannot spawn")
+    monkeypatch.setattr(UP, "restart", bad_restart)
+    r = _post(server + "/api/update/install")
+    assert r["ok"] is True and r["action"] == "restarting"
+    assert done.wait(5)
+    for _ in range(100):
+        if log[-1].startswith("finished"):
+            break
+        time.sleep(0.05)
+    assert log[-1] == ("finished:False:Meshpool was updated but could not restart itself. "
+                       "Quit and open it again.")
+    assert A.QUIESCING[0] is False
