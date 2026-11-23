@@ -32,12 +32,59 @@ _RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-pa
            "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
 
 
+def _brace_expand(pat: str) -> list[str]:
+    m = re.search(r"\{([^{}]*)\}", pat)
+    if not m:
+        return [pat]
+    return [x for alt in m.group(1).split(",") for x in _brace_expand(pat[:m.start()] + alt + pat[m.end():])]
+
+
+def _glob_rx(pat: str):
+    out, i = "", 0
+    while i < len(pat):
+        c = pat[i]
+        if pat.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+            continue
+        if pat.startswith("**", i):
+            out += ".*"
+            i += 2
+            continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile(out + r"\Z", re.S)
+
+
+def glob_match(rel: str, glob: str) -> bool:
+    """ripgrep-like file filter: comma-less braces ({py,txt}), ** across folders (also none), a leading ! to exclude,
+    a pattern without / matches the file name at any depth, one with / matches the path from the project root."""
+    rel = rel.replace("\\", "/")
+    name = rel.rsplit("/", 1)[-1]
+    pos, neg = [], []
+    for g in re.split(r"\s+", glob.strip()):
+        if not g:
+            continue
+        (neg if g.startswith("!") else pos).append(g.lstrip("!"))
+
+    def one(p: str) -> bool:
+        for q in _brace_expand(p):
+            q = q[2:] if q.startswith("./") else q
+            if "/" not in q:
+                if fnmatch.fnmatch(name, q):
+                    return True
+            elif _glob_rx(q.lstrip("/")).match(rel):
+                return True
+        return False
+    return (not pos or any(one(p) for p in pos)) and not any(one(n) for n in neg)
+
+
 def read_only(cmd: str) -> bool:
     """Conservative check that a shell command only reads (safe to run beside others). Unknown means False."""
     import re
     import shlex
     s = re.sub(r"\d?>\s*/dev/null|2>&1|>&2", " ", cmd)
-    if re.search(r"[>`]|\$\(|<<|\bxargs\b|-exec\b|-delete\b|\bsudo\b", s):
+    if re.search(r"[>`]|\$\(|<\(|<<|\bxargs\b|-exec\b|-execdir\b|-ok\b|-delete\b|\bsudo\b", s):
         return False
     for seg in re.split(r"\|\|?|&&|;|\n", s):
         try:
@@ -53,10 +100,35 @@ def read_only(cmd: str) -> bool:
             return False
         if prog == "sed" and any(a.startswith("-i") or a == "--in-place" for a in rest):
             return False
-        if prog == "awk" and "system" in seg:
+        if prog == "awk" and ("system" in seg or "getline" in seg):
             return False
-        if prog == "git" and not (rest and rest[0] in _RO_GIT):
+        if prog == "sort" and any(a == "-o" or a.startswith(("--output", "-o")) for a in rest):
             return False
+        if prog == "find" and any(a in ("-fprint", "-fprint0", "-fprintf", "-fls") for a in rest):
+            return False
+        if prog == "sed" and any(re.search(r"(^|[;\s{])[wWeE]\s*\S|^s(.).*?\1.*?\1[gIpm0-9]*[we]", a)
+                                 for a in rest if not a.startswith("-")):
+            return False
+        if prog in ("rg", "grep", "egrep", "fgrep") and any(a in ("-z", "--search-zip", "--pre") or a.startswith("--pre=")
+                                                           for a in rest):
+            return False
+        if prog == "git":
+            if not (rest and rest[0] in _RO_GIT):
+                return False
+            if any(a.startswith(("--output", "--ext-diff", "--textconv", "-O", "--open-files-in-pager")) for a in rest):
+                return False
+            if rest[0] in ("branch", "tag", "remote"):
+                pos = [a for a in rest[1:] if not a.startswith("-")]
+                bad = {"-d", "-D", "-m", "-M", "-c", "-C", "-u", "-f", "-a", "--delete", "--move", "--copy", "--force",
+                       "--set-upstream-to", "--unset-upstream", "--edit-description", "-s", "-S", "-F", "-e"}
+                if rest[0] == "remote":
+                    if pos and pos[0] not in ("show", "get-url"):
+                        return False
+                elif pos and not any(a in ("-l", "--list", "--contains", "--merged", "--no-merged", "--points-at")
+                                     for a in rest[1:]):
+                    return False                     # `git branch x` / `git tag v1` create refs
+                if any(a.split("=")[0] in bad - {"-a"} for a in rest[1:]):
+                    return False
         if prog in ("pip", "pip3") and not (rest and rest[0] in ("show", "list", "freeze", "--version", "-V")):
             return False
         if prog in ("python", "python3", "node", "npm", "cargo", "go", "java", "gcc", "rustc") and not (
@@ -479,6 +551,9 @@ class Workspace:
         if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
+        with p.open("rb") as _f:
+            if b"\0" in _f.read(8192):
+                raise ToolError(f"{path} is a binary file ({p.stat().st_size} bytes); read_file shows text only")
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
@@ -532,7 +607,7 @@ class Workspace:
             rel = f.relative_to(self.root) if self.root in f.parents else f
             if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
                 continue
-            if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
+            if glob and not glob_match(str(rel), glob):
                 continue
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
@@ -542,13 +617,21 @@ class Workspace:
                 continue
             lines = text.splitlines()
             hits: list[int] = []                                   # 1-based line numbers that start a match
+            need = head - len(out) + 1                             # enough to know the list is full; no more
             if multiline:
                 for m in rx.finditer(text):
                     hits.append(text.count("\n", 0, m.start()) + 1)
+                    if output_mode != "count" and len(hits) >= need:
+                        break
             else:
-                hits = [i for i, line in enumerate(lines, 1) if rx.search(line)]
+                for i, line in enumerate(lines, 1):
+                    if rx.search(line):
+                        hits.append(i)
+                        if output_mode != "count" and len(hits) >= need:
+                            break
             if not hits:
                 continue
+            hitset = set(hits)
             matched += 1
             if output_mode == "files_with_matches":
                 out.append(str(rel))
@@ -558,6 +641,8 @@ class Workspace:
                 shown: set[int] = set()
                 last = 0
                 for h in hits:
+                    if len(out) > head:
+                        break
                     lo, hi = max(1, h - before), min(len(lines), h + after)
                     if (before or after) and last and lo > last + 1:
                         out.append("--")
@@ -565,7 +650,8 @@ class Workspace:
                         if n in shown:
                             continue
                         shown.add(n)
-                        out.append(f"{rel}{':' if n in hits else '-'}{n}{':' if n in hits else '-'}{lines[n - 1][:300]}")
+                        sep = ":" if n in hitset else "-"
+                        out.append(f"{rel}{sep}{n}{sep}{lines[n - 1][:300]}")
                     last = max(last, hi)
             if len(out) >= head:
                 truncated = True
@@ -795,7 +881,7 @@ class Workspace:
                 raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
                                 f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
             if isinstance(old, AllStr) and text.count(old) > 1:        # replace_all: every occurrence, counted
-                notes.append(f"replaced {text.count(old)} occurrences")
+                notes.append(f" (replaced {text.count(old)} occurrences)")
                 text = text.replace(str(old), new)
                 continue
             try:
@@ -812,6 +898,8 @@ class Workspace:
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         text, eol, bom = read_src(p)
         return str(p), text, p, (eol, bom)
 
@@ -928,6 +1016,8 @@ class Workspace:
             self.turn_files.add(self._cpath(path))
             return f"wrote {path} ({len(content)} chars{', appended' if append else ''}) in the container"
         p = self._path(path, write=True)
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
         if not p.exists():
             self.created.add(str(p))
