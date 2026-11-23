@@ -210,8 +210,46 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
         return _write(values, path)
+
+
+@__import__("contextlib").contextmanager
+def _file_lock(lock: Path):
+    """An exclusive lock across processes for one read-modify-write (the app, `meshpool login`, MCP servers)."""
+    import time
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock, "a+b")
+    except OSError:
+        yield                                             # no lock file possible: same as before
+        return
+    with fh:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                while True:
+                    try:
+                        fh.seek(0)
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass
+        try:
+            yield
+        finally:
+            if os.name == "nt":
+                import msvcrt
+                try:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+                except OSError:
+                    pass
 
 
 def _write(values: dict, path: Path) -> Path:
@@ -228,7 +266,7 @@ def _write(values: dict, path: Path) -> Path:
         if k not in done:
             lines.append(f"{k}={v}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{__import__('threading').get_ident()}.tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     try:
         os.chmod(tmp, 0o600)                     # it holds API keys: readable by this user only

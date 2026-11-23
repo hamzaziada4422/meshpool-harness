@@ -313,6 +313,18 @@ def _fold(t: str) -> str:
     return MS.norm(t)
 
 
+def _scan_text(text: str) -> tuple[str, int]:
+    """Instruction text without lines that hold a secret value or something the memory filter refuses."""
+    from meshpool_harness import assistant as AS
+    keep, dropped = [], 0
+    for ln in text.splitlines():
+        if AS.BAD.search(ln) or any(SECRET_VALUE.match(w.strip("\"'`,;:()[]")) for w in ln.split()):
+            dropped += 1
+        else:
+            keep.append(ln)
+    return "\n".join(keep), dropped
+
+
 # ---------- apply ------------------------------------------------------------------------------------------------------
 def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None) -> dict:
     """Write the chosen items (or, with dry_run, say what would be written). Returns the report."""
@@ -336,7 +348,7 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
                     if it["stripped"]:
                         rep["stripped"].append({"server": it["name"], "agent": a["name"], "names": it["stripped"]})
                     rep["mcp"].append(it["name"] if dry_run else IM.import_mcp(
-                        it["name"], it["spec"], f"Imported from {a['name']}. Add any keys it needs in Settings."))
+                        it["name"], it["spec"], f"Imported from {a['name']}. Switched off until you review it: add any keys it needs, then turn it on in Settings."))
                 elif it["kind"] == "memory":
                     if not dry_run:
                         from meshpool_harness import memstore as MS
@@ -349,7 +361,11 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
                 elif it["kind"] == "instructions":
                     if not dry_run:
                         from meshpool_harness import assistant as AS
-                        body = _read(Path(it["path"])).strip()[:MAX_INSTRUCTIONS]
+                        body, dropped = _scan_text(_read(Path(it["path"])).strip()[:MAX_INSTRUCTIONS])
+                        if dropped:
+                            rep["skipped"].append(f"{it['name']}: {dropped} line(s) that looked like secrets were left out")
+                        if not body.strip():
+                            continue
                         cur = AS.instructions()
                         head = f"From {a['name']} ({it['name']}):"
                         if head not in cur:

@@ -30,7 +30,10 @@ SUPPORTS = {
 
 
 def _cfg(k: str) -> str:
-    return (C.read().get(k) or os.environ.get(k) or "").strip()
+    env = os.environ.get(k)
+    if env and k not in C._INJECTED:                  # a value the shell set wins over the saved file
+        return env.strip()
+    return (C.read().get(k) or env or "").strip()
 
 
 def host(url: str) -> str:

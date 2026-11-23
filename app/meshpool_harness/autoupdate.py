@@ -60,7 +60,7 @@ def udir() -> Path:
 
 def _write_json(p: Path, data: dict) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
+    tmp = p.with_name(f"{p.name}.{os.getpid()}.{threading.get_ident()}.{time.time_ns()}.tmp")   # unique per writer
     tmp.write_text(json.dumps(data), encoding="utf-8")
     C.replace_file(tmp, p)
 
@@ -167,6 +167,8 @@ def download_resumable(url: str, dst: Path, expected_size: int | None = None, pr
                         done += len(chunk)
                         if progress:
                             progress(done)
+    if expected_size and part.exists() and part.stat().st_size < expected_size:
+        raise UpdateError("The download was interrupted; it will continue where it stopped.")   # .part is kept
     C.replace_file(part, dst, keep_src=True)    # keep the finished download if antivirus holds it: retry later
     return dst
 

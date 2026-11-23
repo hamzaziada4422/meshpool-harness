@@ -184,8 +184,24 @@ def _no_console() -> bool:
         return False
 
 
+_HELP = {
+    "login": "Usage: meshpool login\nAsk for your API key and save it.",
+    "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
+    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
+    "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
+    "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
+    "mcp": "Usage: meshpool mcp\nStart the configured MCP servers and show their status.",
+    "app": "Usage: meshpool app\nOpen the desktop app.",
+    "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
+    "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
+}
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
+        print(_HELP[argv[0]])                              # help never runs the command
+        return 0
     if os.environ.pop("MESHPOOL_RESTART_WAIT", None):     # started by "Restart" after an update: let the old app close
         import time
         time.sleep(3)
@@ -370,8 +386,12 @@ def main(argv=None):
         return r.returncode
     if a.cmd == "work":
         from meshpool_harness.connectors import get
-        conn, ref = get(a.source)
-        task = conn.fetch(ref)
+        try:
+            conn, ref = get(a.source)
+            task = conn.fetch(ref)
+        except (OSError, ValueError) as e:
+            print(f"Could not fetch {a.source}: {e}")
+            return 1
         res = run_request(task.text(), [], a.out, a.engine, a.workdir)
         if a.report:
             conn.report(task, res)

@@ -298,7 +298,8 @@ def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
         n, i = base, 2
         while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
             n, i = f"{base}-{i}", i + 1
-        servers[n] = dict(spec, description=description or f"Imported from another app ({name}).")
+        servers[n] = dict(spec, description=description or f"Imported from another app ({name}).",
+                          disabled=True)               # another app's command: reviewed and switched on by the user
         return n
     try:
         return M.edit_config(add)
