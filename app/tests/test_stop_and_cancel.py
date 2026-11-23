@@ -200,7 +200,11 @@ def test_stop_while_office_tools_start_never_runs_the_turn(tmp_path, monkeypatch
     s.emit = lambda ev: s.events.append(ev)
     s.state = "idle"
     s.pendings = {}
-    s.harness = {"type": "auto"}
+    s.harness = {"type": "auto", "id": "meshpool-code"}
+    s.cp, s.plan, s.scheduled, s.kind, s.workdir, s.ctx_pending, s.incognito = None, False, False, "code", str(tmp_path), False, True
+    s.route_addon, s.t_turn, s._turn_shared = "", 0, False
+    s._body = lambda text, images: text
+    s._turn_begin = s._turn_finish = lambda: None
     reqs = []
 
     class Ag:
@@ -230,6 +234,7 @@ def test_stop_while_office_tools_start_never_runs_the_turn(tmp_path, monkeypatch
         pass
     time.sleep(0.5)
     assert not reqs and time.time() - t0 < 4        # the wait ended on Stop, not after 5 s, and nothing was sent
+    assert any(e.get("type") == "interrupted" for e in s.events), s.events   # said so, instead of silently dying
 
 
 # ---------- M28-06 ------------------------------------------------------------------------------------------------

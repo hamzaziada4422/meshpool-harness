@@ -790,7 +790,6 @@ class Session:
         with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits)
             self.state = "working"
         self._stop_req = False
-        gen0 = getattr(self.agent, "_gen", 0)
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
             from meshpool_harness import providers as PV
@@ -920,6 +919,9 @@ class Session:
                         body += "\n\n\u200b" + pend
                 except Exception:  # noqa: BLE001
                     pass
+                # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
+                # a Stop from here on either trips the check below or changes the generation send() checks.
+                gen0 = getattr(self.agent, "_gen", 0)
                 if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
                     self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
                     self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
