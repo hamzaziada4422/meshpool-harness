@@ -235,7 +235,8 @@ def _walk(node: Any, defs: dict, depth: int, stack: tuple, subset: bool) -> Any:
             out[k] = copy.deepcopy(v)
     if subset:
         out = _to_subset(out)
-    _prune_required(out)
+    if isinstance(out.get("properties"), dict):     # an allOf branch may require a sibling branch's property
+        _prune_required(out)
     return out
 
 
