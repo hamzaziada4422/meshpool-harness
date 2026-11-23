@@ -205,6 +205,30 @@ def _safe_name(filename: str, default: str, ext: str) -> str:
     return (stem.strip() or Path(default).stem) + ext
 
 
+def _dest(filename: str | None, default: str, ext: str, named: bool | None = None) -> Path:
+    """Where a file made for `filename` goes. A name the user gave (not the tool's default) is written exactly there
+    when it is a plain name or a path inside the project folder, so "make report.pdf" gives ./report.pdf; with no
+    name (or one outside the project) it goes to "<project>/Meshpool outputs". Either way an existing file is never
+    replaced: a free "name (2).ext" is used."""
+    name = _safe_name(filename or "", default, ext)
+    given = str(filename or "").strip()
+    if named is None:
+        named = bool(given) and Path(given).name.lower() != default.lower()
+    if named:
+        try:
+            proj = _project().resolve()
+            rel = Path(given).expanduser()
+            d = (rel.parent if rel.is_absolute() else proj / rel.parent).resolve()
+            if d == proj or proj in d.parents:
+                d.mkdir(parents=True, exist_ok=True)
+                return _free(d / name)
+        except OSError:
+            pass
+    out = _project() / "Meshpool outputs"
+    out.mkdir(parents=True, exist_ok=True)
+    return _free(out / name)
+
+
 def _pdf_font(text: str) -> tuple[str, str]:
     """(regular, bold) font names for a PDF: Helvetica covers Latin only, so other scripts got black boxes. The first
     Unicode font on this computer that covers the text is embedded; CJK falls back to a built-in CID font."""
@@ -276,13 +300,11 @@ def _set_num(par, num_id: int):
     ppr.numPr.get_or_add_ilvl().val = 0
 
 
-def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True):
+def make_document(markdown: str, filename: str = "document.docx", title: str | None = None, _clarity: bool = True,
+                  _named: bool | None = None):
     from docx import Document
     from docx.shared import Pt
-    name = _safe_name(filename, "document.docx", ".docx")
     markdown, title = _clean_md(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     doc = Document()
     doc.styles["Normal"].font.name = "Calibri"
     doc.styles["Normal"].font.size = Pt(11)
@@ -365,7 +387,7 @@ def make_document(markdown: str, filename: str = "document.docx", title: str | N
         elif s:
             _runs(doc.add_paragraph(), s)
         i += 1
-    path = _free(out / name)
+    path = _dest(filename, "document.docx", ".docx", _named)
     doc.save(path)
     return f"Saved the Word document: {path}.{clarity_note}", False
 
@@ -583,7 +605,7 @@ def _md_inline(s: str) -> str:
     return re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<link href='\2' color='#1A56DB'>\1</link>", s)
 
 
-def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None):
+def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
@@ -591,8 +613,6 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
     from reportlab.platypus import ListFlowable, ListItem, Paragraph, Preformatted, SimpleDocTemplate, Spacer, Table, TableStyle
     name = _safe_name(filename, "document.pdf", ".pdf")
     markdown, title = _clean_md(markdown), _clean(title) or None
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     st = getSampleStyleSheet()
     reg, bold = _pdf_font(markdown + (title or ""))
     for k in ("Title", "BodyText", "Heading1", "Heading2", "Heading3", "Heading4", "Code"):
@@ -656,7 +676,7 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             flush()
         i += 1
     flush()
-    path = _free(out / name)
+    path = _dest(filename, "document.pdf", ".pdf", _named)
     SimpleDocTemplate(str(path), pagesize=A4, leftMargin=2 * cm, rightMargin=2 * cm, topMargin=2 * cm,
                       bottomMargin=2 * cm, title=title or name).build(flow)
     return f"Saved the PDF: {path}", False
@@ -667,7 +687,7 @@ def _soffice() -> str | None:
     return office_runtime.find_soffice()
 
 
-def convert_document(path: str, to: str = "pdf"):
+def convert_document(path: str, to: str = "pdf", output: str | None = None):
     src = _resolve(path)
     if not src.exists():
         return f"File not found: {src}", True
@@ -675,8 +695,8 @@ def convert_document(path: str, to: str = "pdf"):
     if src.suffix.lower() in (".md", ".txt") and to in ("pdf", "docx"):
         text = src.read_text(encoding="utf-8", errors="replace")      # a conversion keeps the words as they are:
         if to == "pdf":                                                # no clarity rewrite
-            return make_pdf(text, src.stem + ".pdf")
-        return make_document(text, src.stem + ".docx", _clarity=False)
+            return make_pdf(text, output or src.stem + ".pdf", _named=bool(output))
+        return make_document(text, output or src.stem + ".docx", _clarity=False, _named=bool(output))
     infilter: list[str] = []
     if src.suffix.lower() == ".pdf":
         # LibreOffice opens a PDF in Draw, which has no Word export ("no export filter"). Opened as a text document
@@ -692,8 +712,6 @@ def convert_document(path: str, to: str = "pdf"):
         return (f"Converting Office files needs Meshpool's LibreOffice, which is not available: "
                 f"{office_runtime.missing_reason()}. Or build the file directly with make_pdf, make_document, "
                 "make_deck or make_spreadsheet."), True
-    out = _project() / "Meshpool outputs"
-    out.mkdir(parents=True, exist_ok=True)
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
     import shutil
     import tempfile
@@ -703,7 +721,7 @@ def convert_document(path: str, to: str = "pdf"):
         made = Path(tmp) / (src.stem + "." + to)
         if r.returncode != 0 or not made.exists():
             return f"LibreOffice could not convert {src.name}: {(r.stderr or r.stdout)[-500:]}", True
-        dst = _free(out / made.name)
+        dst = _dest(output, made.name, "." + to, bool(output))
         shutil.move(str(made), str(dst))
     return f"Saved: {dst}", False
 
