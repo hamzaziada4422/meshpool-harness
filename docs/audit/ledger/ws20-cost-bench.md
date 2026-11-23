@@ -1,0 +1,22 @@
+# ws20-cost-bench ledger
+
+Scope after the coordinator split: ws20 owns office cost and speed, the office grader and the build-on-top arms; the
+audit session (claude/amazing-hopper-j9708m) owns code-task cost, the 52-task code eval and `agent/core.py` /
+`core/loop.py`. Kit: `testkit/bench3` (one command), results `docs/results/v4/`.
+
+| ID | status | root cause | fix | files | test (path::name) |
+|---|---|---|---|---|---|
+| K-01 | open (partly fixed) | Meshpool layer on Pi/Codex sent 17-24k tokens per request (all 130 skills in Pi's prompt, every Meshpool MCP schema, a second Codex title session); edit-in-place requests launched the sheets engine; Work loop: reviewer and checks on every deliverable | lean layer: Pi gets matched skills only and deferred MCP, Codex gets only needed servers and no title session, edits go to edit_office_file/python, shorter notes and tool descriptions; reviewer gating and prompt cuts by the audit session. Re-measured: Meshpool on Codex $0.033 -> $0.025 per task, still 2.2x Codex; Meshpool Work hit a compaction loop (audit session's code) on 3 tasks | harnesses/pi_rpc.py, harnesses/acp.py, harnesses/__init__.py, harnesses/pi_gate.js, skills.py, capabilities.py, assistant.py, agent/office_mcp_server.py, agent/mcp_assist.py, engines/forge/tools.py, ui/agent_api.py | app/tests/test_ws20_layer.py (21 tests; 16 fail on 50119d6d) |
+| K-03 | open (partly fixed) | same as K-01 (calls and nested engines) | same; workbook edit 163 s -> 49 s, Meshpool on Codex 85 s -> 72 s per task; Codex 45 s, Pi 35 s | as K-01 | as K-01; benchmark docs/results/v4/final-office |
+| K-04 | fixed (office half) | README "all 7 passed / 42 s" and docs claims not backed by same-model numbers | office section in docs/BENCHMARKS.md with 0.0.12 and current numbers vs Codex and Pi, including where Meshpool loses; README Work row rewritten; BENCHMARKS_V2 points to it. Code half: audit session | docs/BENCHMARKS.md, README.md, docs/BENCHMARKS_V2.md | n/a (docs) |
+| X-02 | fixed | CLI (agent/tui.py), `-p`, ACP server and app chats created without `task` never routed, so Agent.route None -> profiles.settings_of(None) = FULL instead of the shipped default "codex" | Agent._auto_route routes the first message of an unrouted chat (not plan, grader or delegate; MH_AUTO_ROUTE=0 off) | agent/core.py, tests/conftest.py | app/tests/test_ws20_cli_route.py::test_cli_default_routes_to_codex (fails without the hunk) |
+| X-08 | fixed | PDF report chart check was optional | grader requires a chart: raster image or vector bars/curves/diagonal polyline; frames and table rules do not count | testkit/gradekit.py, testkit/bench3/tasks.py | testkit/bench3/tests/test_graders.py::test_pdf_report_requires_chart, ::test_stroked_border_box_is_not_a_chart |
+| X-09 | fixed | swe_local.grade restored tests and wrote the patch in the workspace; bench.grade wrote hidden tests there; no shared result counter | grading on a scratch copy (gradekit.scratch_copy); count_tests sums every pytest/cargo/node/unittest result line | testkit/gradekit.py, testkit/loop/bench.py, testkit/loop/swe_local.py | testkit/tests_ws20/test_loop_graders.py (7, all fail on old graders); testkit/bench3/tests/test_gradekit.py::test_cargo_counts_every_result_line |
+| D-02 | open (partly fixed) | no public office suite adapter | the 7 office tasks are graded by file content (no model judge); SpreadsheetBench/OfficeBench adapters stopped by the coordinator's spend limit | testkit/bench3/ | testkit/bench3/tests/test_graders.py |
+| K-02 | handed to audit session | code-task cost | owned by the audit session's 52-task eval | - | - |
+| S-12 | handed to audit session | Meshpool MCP schemas always sent | ws20 found causes (profile); work-lane lazy split in mcp_assist (ws20) activated by the audit session's core.py lines; code lanes theirs | agent/mcp_assist.py | app/tests/test_ws20_layer.py (lazy split) |
+| P-01 | handed to audit session | as S-12 | as S-12 | - | - |
+| H-10 | handed to audit session | no 128-tool cap | audit session's cost worker | - | - |
+
+Full-suite baseline on 370427e: 9 failures before any ws20 change (test_fix_models_wire x3, test_fix_tokens_agent x4,
+test_small_bench x2).

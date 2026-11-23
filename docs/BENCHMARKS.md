@@ -8,6 +8,52 @@ Meshpool Auto uses the results on this page to choose a harness for each task (s
 engine). Meshpool Code and Meshpool Work in the app run the app's own chat agent, which shares that loop's tools but
 not its loop. Since 12 November 2026 the app agent is measured directly (next section).
 
+## Office work against Codex and Pi (23 November 2026)
+
+Seven office tasks a user would type (edit a workbook in place, tracked changes in Word, invoices in three
+currencies to Excel, mail-merge letters, a live-formula budget, a deck with a native chart, a PDF report with a
+chart), graded by file content only: formulas recalculated in LibreOffice, chart data compared with the CSV, tracked
+changes accepted and rejected, the PDF must contain a chart. Every agent ran on the same model (DeepSeek V4.1 Flash)
+through one metering proxy that counts every request, including Meshpool's nested engine and reviewer calls. One run
+per agent, so a single pass or fail can move; costs are estimates from one price table
+(`testkit/bench3/prices.json`). Kit: `testkit/bench3` (one command, `run.py`); raw rows in `docs/results/v4/`.
+
+| Agent | 0.0.12 passed | 0.0.12 $ per task | Now passed | Now $ per task | Now calls (7 tasks) | Now s per task |
+|---|---|---|---|---|---|---|
+| Pi | 7/7 | $0.0065 | 6/7 | $0.0061 | 65 | 35 |
+| Codex CLI | 7/7 | $0.0102 | 7/7 | $0.0113 | 84 | 45 |
+| Meshpool on Codex (the app driving Codex) | 5/7 | $0.033 | 6/7 | $0.025 | 185 | 72 |
+| Meshpool on Pi (the app driving Pi) | 4/7 | $0.040 | 3/7 | $0.030 | 196 | 199 |
+| Meshpool CLI | 4/7 | $0.056 | 4/7 | $0.055 | 337 | 182 |
+| Meshpool Work | 5/7 | $0.056 | 6/7 | $0.154 | 874 | 396 |
+
+**Meshpool is not cheaper or faster than Codex or Pi on office work yet.** Pi is the cheapest and Codex the most
+reliable. The best Meshpool option, Meshpool on Codex, costs about 2.2x Codex and 4x Pi per task.
+
+What changed since 0.0.12, and what it did:
+- The Meshpool layer on top of Pi and Codex is much smaller per request (measured on a fake endpoint, first request
+  of the workbook edit): on Pi 23.6k to 3.5k tokens (vanilla Pi 1.4k), on Codex 17.1k to 11.6k (vanilla Codex
+  10.2k), and the extra Codex session that only wrote the chat title is gone. Meshpool on Codex is now 25% cheaper
+  and 15% faster than in 0.0.12. Details: `testkit/bench3/profile/FINDINGS.md`.
+- Editing an existing file no longer launches the spreadsheet engine. Meshpool Work's workbook edit went from 68
+  calls and $0.058 to 16 calls and $0.019; letters and invoices are also close to Codex now.
+- Known regression in this run: on three tasks (tracked changes, chart deck, PDF report) Meshpool Work fell into a
+  loop where the context is summarized after every step and the agent repeats its last check (about 100 times, two
+  runs hit the 15-minute limit). That loop alone explains Meshpool Work's cost in the table; it is being fixed in the
+  agent's context handling and the table will be re-measured.
+- Quality: Meshpool on Pi failed tracked changes (an extra edit outside the requested ones), invoices (extra rows),
+  the budget (values, not formulas linked to the assumptions) and the PDF report (time limit). Pi failed the budget
+  once in this run.
+
+Default agent: on these numbers the cheapest agent that passes is vanilla Pi or Codex; Meshpool keeps its own loop as
+the Work default only until a re-measure shows it at or under Codex. The decision is recorded in
+`hrouter` `builtin_for()` when the re-measure is done.
+
+Coding sanity check (3 Exercism tasks: Python forth and zipper, Rust react with every test including ignored ones,
+GPT-6 Luna, one run): Pi 3/3 at $0.0025 and 32 s per task, Meshpool on Pi 3/3 at $0.0041 and 32 s, Meshpool Code
+3/3 at $0.0051 and 45 s, Codex 2/3 at $0.0063 and 54 s, Meshpool on Codex 2/3 at $0.0050. The full coding
+comparison is the 52-task evaluation below.
+
 ## App agent, measured directly (12 November 2026, dev tasks)
 
 Every agent ran at the same time on DeepSeek V4.1 Flash through the Meshpool gateway, with the same task text, caps

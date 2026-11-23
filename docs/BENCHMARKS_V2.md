@@ -62,7 +62,7 @@ answers (no LLM judge). "Significant" = 95% interval or exact test excludes no d
 | Pi | 24/24 | $0.0356 | 61.0 |
 | Hermes | 24/24 | $0.0224 | 82.8 |
 
-## Not yet run
+## Not yet run (office: see docs/BENCHMARKS.md, "Office work against Codex and Pi")
 - **SpreadsheetBench Verified:** needs LibreOffice.
 - **OfficeBench:** the adapter is still to build.
 - **The full 52-task V2 evaluation and DABench 24:** the commands are in `handoff prompt.md`.
