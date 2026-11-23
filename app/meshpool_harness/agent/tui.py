@@ -1328,9 +1328,12 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
                     sess.send(prompt)
                 reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
                               and isinstance(m.get("content"), str) and m.get("content").strip()), "")
-                sys.__stdout__.write(_json.dumps({"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
-                                              "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])},
-                                             ensure_ascii=False) + "\n")
+                out = {"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
+                       "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
+                rv = getattr(agent, "last_review", None)
+                if rv:                                # the independent check of a big task (agent/grader.py)
+                    out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
+                sys.__stdout__.write(_json.dumps(out, ensure_ascii=False, default=str) + "\n")
                 return 1 if term.failed else 0
             sess.send(prompt)
             return 1 if term.failed else 0

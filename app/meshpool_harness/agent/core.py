@@ -1037,6 +1037,10 @@ class Agent:
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
         g.update({"since_todo": 0, "plan_asked": False})
+        g.update({"msg0": max(0, len(self.messages) - 1), "t0": time.time(), "cmd0": len(self.ws.commands),
+                  "after_plan": bool(getattr(self, "_prev_plan", False)), "grade_rounds": 0})
+        self._last_g, self._last_final = g, ""
+        self._turn_no = getattr(self, "_turn_no", 0) + 1
         cx = self._codex()
         if cx:                                       # Codex's loop: no plan round, no reminders, no extra checks
             self._plan_needed = False
@@ -1176,6 +1180,9 @@ class Agent:
                         continue
                     if self.has_steers():           # added while the checks above ran
                         continue
+                    again, final = self._grade_gate(g, turn, final)   # independent check of a big task (agent/grader.py)
+                    if again:
+                        continue
                     break
                 said = ""
                 shots = []
@@ -1243,6 +1250,8 @@ class Agent:
                 msg += f" ({raw[:120]})"               # the detail, for support and the command line
             self.emit({"type": "error", "text": msg})
         finally:
+            self._last_final = final
+            self._prev_plan = bool(self.plan)
             try:
                 rec = self.receipt()
                 self.last_receipt = rec
@@ -1259,6 +1268,96 @@ class Agent:
             self._running = False
             self.save()
         return final
+
+    # ---------- independent grader (agent/grader.py) -----------------------------------------------------------
+    def _grade_info(self, g: dict, final: str) -> dict:
+        from meshpool_harness.agent import grader as GR
+        msgs = self.messages
+        calls, research = GR.count_calls(msgs, g.get("msg0", 0))
+        reqs = GR.requests(msgs, g.get("msg0", 0))
+        route = getattr(self, "route", None)
+        return {"todos": [t for t in getattr(self, "_todos", []) if isinstance(t, dict)], "calls": calls,
+                "research": research, "final": final, "request": " ".join(reqs[-3:]), "requests": reqs,
+                "files": GR.files_changed(self.root, g.get("t0", self.created), getattr(self.ws, "turn_files", ())),
+                "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
+                "root": str(self.root)}
+
+    def _grade_commands(self, g: dict) -> list:
+        return [c for c in self.ws.commands[g.get("cmd0", 0):] if c.get("kind") != "read"] or \
+            self.ws.commands[g.get("cmd0", 0):][-6:]
+
+    def _grade_usage(self, res: dict, turn: dict) -> None:
+        u = res.get("usage") or {}
+        for k in ("in", "cached", "out", "calls"):
+            turn[k] += int(u.get(k, 0) or 0)
+            self.usage[k] += int(u.get(k, 0) or 0)
+        self.emit({"type": "usage", "aux": True, **{k: int(u.get(k, 0) or 0) for k in ("in", "cached", "out", "calls")}})
+
+    def _grade_gate(self, g: dict, turn: dict, final: str, force: bool = False) -> tuple[bool, str]:
+        """At the final answer of a big task: an independent review. Returns (True, final) when the findings were sent
+        back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
+        try:
+            from meshpool_harness.agent import grader as GR
+            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan
+                    or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
+                return False, final
+            info = self._grade_info(g, final)
+            why = "you asked for it" if force else GR.large(info)
+            if not why:
+                return False, final
+            rounds = g.get("grade_rounds", 0)
+            self.emit({"type": "status", "text": "Independent check: a separate reviewer is checking the result"
+                       + (f" (round {rounds + 1})" if rounds else "") + "..."})
+            res = GR.run(self, info, self._grade_commands(g))
+            self._grade_usage(res, turn)
+            rework = (not force and "error" not in res and GR.needs_rework(res) and rounds < GR.limits()["rounds"])
+            text = GR.report(res, rounds)
+            ev = GR.event(res, text=text, rounds=rounds, why=why, secs=res.get("secs", 0), usage=res.get("usage") or {},
+                          forced=force, rework=rework, model=res.get("model", ""))
+            self.last_review = dict(ev, turn=getattr(self, "_turn_no", 0))
+            self.emit(ev)
+            if rework:
+                g["grade_rounds"] = rounds + 1
+                self.messages.append({"role": "user", "content": GR.inject_text(res)})
+                self._trace_note("grader", f"round {rounds + 1}: {res['not_met']} not met")
+                return True, final
+            self._trace_note("grader", res.get("verdict", "error"))
+            if self.messages and self.messages[-1].get("role") == "assistant" and isinstance(
+                    self.messages[-1].get("content"), str) and not force:
+                self.messages[-1]["content"] += "\n\n" + text
+            return False, (final + "\n\n" + text) if not force else final
+        except (Interrupted, KeyboardInterrupt):
+            raise
+        except Exception as e:  # noqa: BLE001 - the check must never break the turn
+            try:
+                from meshpool_harness.agent import grader as GR
+                res = {"error": f"it hit a problem: {str(e)[:80]}"}
+                text = GR.report(res)
+                self.emit(GR.event(res, text=text, rounds=g.get("grade_rounds", 0), why="", secs=0, usage={}, forced=force))
+                return False, final + "\n\n" + text
+            except Exception:  # noqa: BLE001
+                return False, final
+
+    def grade_now(self) -> dict:
+        """Check the last piece of work on demand (/grade, "Check this"): the same independent review, no rework round.
+        Returns the review event."""
+        self._stop = False
+        turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        g = getattr(self, "_last_g", None)
+        final = getattr(self, "_last_final", "") or next(
+            (m.get("content") for m in reversed(self.messages) if m.get("role") == "assistant"
+             and isinstance(m.get("content"), str) and m["content"].strip()), "")
+        if g is None:
+            i = max((i for i, m in enumerate(self.messages) if m.get("role") == "user"), default=0)
+            g = {"msg0": i, "t0": self.created, "cmd0": 0, "after_plan": False, "grade_rounds": 0}
+        if not final.strip():
+            ev = {"type": "review", "verdict": "error", "error": "there is nothing to check yet", "text":
+                  "Independent check: there is nothing to check yet.", "items": [], "met": 0, "total": 0}
+            self.emit(ev)
+            return ev
+        self.last_review = None
+        self._grade_gate(g, turn, final, force=True)
+        return getattr(self, "last_review", None) or {}
 
     def _plan_start(self, route, g: dict):
         """Decide, for free, whether this request needs a written plan; if so the first call is told to write it
@@ -1486,6 +1585,10 @@ class Agent:
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"
+        rv = getattr(self, "last_review", None)
+        if rv and rv.get("turn") == getattr(self, "_turn_no", 0):
+            from meshpool_harness.agent import grader as GR
+            check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
 
     def _delta(self, t: str):
