@@ -27,6 +27,8 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness import fsio
+from meshpool_harness.core import http as _HTTP
 
 PROTOCOL = "2025-06-18"
 CLIENT = {"name": "meshpool", "version": _VERSION}
@@ -184,14 +186,19 @@ def _sig(spec) -> str:
 
 def _read_health() -> dict:
     try:
-        d = json.loads(_health_file().read_text(encoding="utf-8"))
+        d = fsio.read_json(_health_file(), {})
         return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    except fsio.CorruptFile:
+        return {}                                   # only a cache of recent failures: starting afresh is safe
+
+
+_TIMEOUT_ERR = re.compile(r"no reply to .* within \d+ s|did not start within|still starting", re.I)
 
 
 def record_health(rows: dict) -> None:
-    """rows: {name: (spec, ok, error)}"""
+    """rows: {name: (spec, ok, error)}. Only real failures (and successes) are remembered: a start that merely ran
+    out of time (a cold npx download) says nothing about the server, so the next chat tries again."""
+    rows = {n: r for n, r in (rows or {}).items() if r[1] or not _TIMEOUT_ERR.search(str(r[2] or ""))}
     if not rows:
         return
     with _HLOCK:
@@ -200,7 +207,7 @@ def record_health(rows: dict) -> None:
         for name, (spec, ok, err) in rows.items():
             d[name] = {"sig": _sig(spec), "ok": bool(ok), "error": redact(err)[:300], "t": now}
         try:
-            _health_file().write_text(json.dumps(d, indent=1), encoding="utf-8")
+            fsio.atomic_write_json(_health_file(), d, fsync=False)
         except OSError:
             pass
 
@@ -260,6 +267,15 @@ class _AuthRefused(MCPError):
     """HTTP 401/403: the credentials were refused (a connector's token may only need refreshing)."""
 
 
+class _NotSent(MCPError):
+    """The request could not be written (the server process is gone), so it never reached the server and it is safe
+    to start the server again and send it once more."""
+
+
+class Cancelled(MCPError):
+    """The user pressed Stop (or the call timed out) and the server was told to drop the request."""
+
+
 class _SessionLost(MCPError):
     """The server forgot the session (HTTP 404 with a session id, or the legacy event stream closed) before it saw
     the request, so it is safe to connect again and resend."""
@@ -274,6 +290,101 @@ def _secret_name(k: str) -> bool:
     return k in C.SECRET or bool(_SECRET_RE.search(k)) or k in ("OPENAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
 
 
+def raise_file_limit(want: int = 4096) -> None:
+    """Many chats mean many helper processes and pipes: macOS starts at 256 open files per process. Raise the soft
+    limit to 4096 (or the hard limit when that is lower). Windows has no such limit."""
+    if os.name == "nt":
+        return
+    try:
+        import resource
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        top = hard if hard != resource.RLIM_INFINITY else want
+        new = max(soft, min(want, top)) if soft != resource.RLIM_INFINITY else soft
+        if hard != resource.RLIM_INFINITY and new > hard:
+            new = hard
+        if new > soft:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (new, hard))
+    except (ImportError, ValueError, OSError):
+        pass
+
+
+_LOGIN_ENV: list = []
+
+
+def login_shell_env() -> dict:
+    """The environment a terminal would give a program: the app started from the Dock or Start menu has only a bare
+    one (no nvm, no pyenv, no tokens set in .zshrc), so a server that works from the terminal failed in Meshpool.
+    Resolved once, as VS Code does: run the user's shell as an interactive login shell and read its env. {} when it
+    cannot be read (then the app's own environment is used). Off with MH_LOGIN_ENV=0."""
+    if _LOGIN_ENV:
+        return _LOGIN_ENV[0]
+    got: dict = {}
+    if os.name != "nt" and os.environ.get("MH_LOGIN_ENV", "1") != "0" and not os.environ.get("MESHPOOL_RESOLVING_ENV"):
+        sh = os.environ.get("MH_LOGIN_SHELL") or os.environ.get("SHELL") or "/bin/sh"
+        mark = "MESHPOOL_ENV_" + str(os.getpid())
+        try:
+            r = subprocess.run([sh, "-ilc", f"printf '%s' {mark}; env -0; printf '%s' {mark}"], capture_output=True,
+                               timeout=float(os.environ.get("MH_LOGIN_ENV_S", "10")), stdin=subprocess.DEVNULL,
+                               env={**os.environ, "MESHPOOL_RESOLVING_ENV": "1"})
+            out = r.stdout.decode("utf-8", "replace")
+            if out.count(mark) >= 2:
+                body = out.split(mark)[1]
+                got = dict(kv.split("=", 1) for kv in body.split("\0") if "=" in kv)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            got = {}
+    _LOGIN_ENV.append(got)
+    return got
+
+
+def child_env() -> dict:
+    """What an MCP server starts with: the terminal's environment plus anything Meshpool itself was started with
+    (its own settings win), PATH merged so neither side's folders are lost."""
+    env = dict(os.environ)
+    login = login_shell_env()
+    if login:
+        merged = {**login, **env}
+        for k in ("PATH",):
+            seen, parts = set(), []
+            for part in (login.get(k, "") + os.pathsep + env.get(k, "")).split(os.pathsep):
+                if part and part not in seen:
+                    seen.add(part)
+                    parts.append(part)
+            merged[k] = os.pathsep.join(parts)
+        env = merged
+        for k in ("MESHPOOL_RESOLVING_ENV", "PWD", "OLDPWD", "SHLVL", "_"):
+            env.pop(k, None)
+    return env
+
+
+_RUNNERS = {"npx", "uvx", "uv", "bunx", "pnpm", "pipx", "deno", "docker", "podman"}
+
+
+def first_response_seconds(spec: dict | None = None) -> float:
+    """How long an MCP server may take to answer initialize. Upstream clients wait about 25 s; a server started by a
+    package runner (npx, uvx) may be downloading itself the first time, so it gets longer, and the chat does not wait
+    for it (see Manager.start). Per server: "init_timeout"; for all: MH_MCP_INIT_S."""
+    spec = spec or {}
+    try:
+        if spec.get("init_timeout"):
+            return max(1.0, float(spec["init_timeout"]))
+    except (TypeError, ValueError):
+        pass
+    try:
+        base = max(1.0, float(os.environ.get("MH_MCP_INIT_S", "25")))
+    except ValueError:
+        base = 25.0
+    if is_cold_start(spec):
+        return max(base, float(os.environ.get("MH_MCP_COLD_S", "180") or 180))
+    return base
+
+
+def is_cold_start(spec: dict) -> bool:
+    """A package runner that may download the server on first use."""
+    cmd = Path(str(spec.get("command") or "")).name.lower()
+    cmd = re.sub(r"\.(cmd|exe|bat)$", "", cmd)
+    return cmd in _RUNNERS and not spec.get("url")
+
+
 class _Stdio:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         cmd = spec["command"]
@@ -281,11 +392,11 @@ class _Stdio:
             cmd = sys.executable                          # the same Python Meshpool runs on
         exe = shutil.which(cmd) or cmd                    # Windows: npx -> npx.cmd
         args = [exe, *[str(a) for a in spec.get("args", [])]]
-        env = dict(os.environ)
+        env = child_env()
         if exe != sys.executable:
-            # Someone else's server (often an unpinned npx package) gets no keys it was not given: only the ones its
-            # own "env" names. Meshpool's settings are all in this process's environment.
-            env = {k: v for k, v in env.items() if not _secret_name(k)}
+            # Someone else's server (often an unpinned npx package) gets none of Meshpool's own provider keys unless
+            # its "env" names them. Everything else the terminal has (GITHUB_TOKEN set in .zshrc, ...) is passed on.
+            env = {k: v for k, v in env.items() if k not in C.SECRET or login_shell_env().get(k) == v}
         if roots:
             env["MESHPOOL_PROJECT"] = str(Path(roots[0]).resolve())    # not the shared os.environ: it may be another chat's
         env.update({k: str(v) for k, v in (spec.get("env") or {}).items()})
@@ -296,7 +407,7 @@ class _Stdio:
         self.log = log_dir / f"{name}.log"
         self.err = open(self.log, "a", encoding="utf-8", errors="replace")
         self.log_start = self.err.tell()
-        kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {}
+        kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if os.name == "nt" else {"start_new_session": True}
         try:
             self.p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.err,
                                       env=env, cwd=spec.get("cwd") or None, **kw)
@@ -310,7 +421,11 @@ class _Stdio:
         self.cv = threading.Condition()
         self.alive = True
         self.reader_error = ""
-        threading.Thread(target=self._reader, daemon=True).start()
+        self.cancelled_ids: set = set()                # requests we told the server to drop (Stop, timeout)
+        self.cancel_why: dict = {}
+        self.closing = False
+        self._rt = threading.Thread(target=self._reader, daemon=True)
+        self._rt.start()
 
     def _reader(self):
         try:
@@ -331,14 +446,18 @@ class _Stdio:
                         pass                               # stdin closed: the loop ends when stdout does
                     continue
                 with self.cv:
+                    if rid in self.cancelled_ids:          # a late reply to a call we gave up on: drop it
+                        self.cancelled_ids.discard(rid)
+                        continue
                     self.pending[rid] = msg
                     self.cv.notify_all()
         except Exception as e:  # noqa: BLE001  never leave waiters hanging until their timeout
-            self.reader_error = f"{type(e).__name__}: {e}"
-            try:
-                self.p.kill()
-            except Exception:  # noqa: BLE001
-                pass
+            if not self.closing:
+                self.reader_error = f"{type(e).__name__}: {e}"
+                try:
+                    self.p.kill()
+                except Exception:  # noqa: BLE001
+                    pass
         with self.cv:
             self.alive = False
             self.cv.notify_all()
@@ -358,7 +477,7 @@ class _Stdio:
             self.p.stdin.write((json.dumps(obj) + "\n").encode("utf-8"))
             self.p.stdin.flush()
         except (BrokenPipeError, OSError, ValueError):
-            raise MCPError(self._exit_reason())
+            raise _NotSent(self._exit_reason())
 
     def _exit_reason(self) -> str:
         """Why the server stopped, from the last meaningful line it printed (its whole log is in runs/mcp-logs)."""
@@ -393,38 +512,92 @@ class _Stdio:
         end = time.time() + timeout
         with self.cv:
             while rid not in self.pending:
+                if rid in self.cancelled_ids:
+                    raise Cancelled(self.cancel_why.get(rid) or "cancelled")
                 if not self.alive:
                     if self.reader_error:
                         raise MCPError(f"Meshpool stopped reading the server's replies ({self.reader_error})")
                     raise MCPError(self._exit_reason())
                 left = end - time.time()
                 if left <= 0:
-                    raise MCPError(f"no reply to {method} within {int(timeout)} s")
+                    break
                 self.cv.wait(min(left, 0.5))
-            return self.pending.pop(rid)
+            else:
+                return self.pending.pop(rid)
+        if method != "initialize":
+            self.cancel_request(rid, f"no reply within {int(timeout)} s")       # the server must not run it later
+        raise MCPError(f"no reply to {method} within {int(timeout)} s")
+
+    def cancel_request(self, rid: int, reason: str = "cancelled by the user") -> None:
+        """MCP spec: notifications/cancelled with the request id. We stop waiting at once and drop a late reply."""
+        with self.cv:
+            if rid in self.pending:
+                return
+            self.cancelled_ids.add(rid)
+            self.cancel_why[rid] = reason
+            self.cv.notify_all()
+        try:
+            self.notify("notifications/cancelled", {"requestId": rid, "reason": reason})
+        except MCPError:
+            pass                                          # the process is gone: nothing left to tell
 
     def notify(self, method: str, params: dict | None = None):
         self._write({"jsonrpc": "2.0", "method": method, **({"params": params} if params else {})})
 
     def close(self):
+        """Stop the process and everything it started, and give back its pipes (file descriptors)."""
+        self.closing = True
         try:
             self.p.stdin.close()
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
         if self.grace:                       # the browser server closes its window on EOF, which saves sign-ins
             try:
                 self.p.wait(timeout=self.grace)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 pass
         try:
             self.p.terminate()
             self.p.wait(timeout=3)
-        except Exception:
+        except Exception:  # noqa: BLE001
+            pass
+        kill_tree(self.p)                    # npx, uvx and scripts start children: end the whole tree
+        try:
+            self.p.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+        self._rt.join(2.0)
+        for f in (self.p.stdout, self.p.stderr):
             try:
-                self.p.kill()
-            except Exception:
+                if f:
+                    f.close()
+            except Exception:  # noqa: BLE001
                 pass
-        self.err.close()
+        try:
+            self.err.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def kill_tree(p) -> None:
+    """End a process and all it started (killpg on macOS and Linux, taskkill /T /F on Windows). It also finds
+    children of a process that already exited when it led its own group."""
+    from meshpool_harness.core.tools import _kill_tree
+    try:
+        if os.name == "nt":
+            if p.poll() is None:
+                _kill_tree(p)
+            return
+        import signal
+        try:
+            os.killpg(p.pid, signal.SIGKILL)      # the group outlives its leader when children remain
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 class _Http:
@@ -442,7 +615,7 @@ class _Http:
             h["MCP-Protocol-Version"] = self.version
         req = urllib.request.Request(self.url, data=json.dumps(obj).encode(), headers=h, method="POST")
         try:
-            r = urllib.request.urlopen(req, timeout=timeout)
+            r = _HTTP.open(req, timeout)
         except urllib.error.HTTPError as e:
             body = e.read()[:300].decode("utf-8", "replace")
             if e.code in (401, 403):
@@ -498,7 +671,7 @@ class _Http:
         if self.session:
             try:
                 h = {**UA, "Mcp-Session-Id": self.session, **self.headers}
-                urllib.request.urlopen(urllib.request.Request(self.url, headers=h, method="DELETE"), timeout=5)
+                _HTTP.open(urllib.request.Request(self.url, headers=h, method="DELETE"), 5)
             except Exception:
                 pass
 
@@ -517,7 +690,7 @@ class _Sse:
         self.endpoint = None
         req = urllib.request.Request(self.url, headers={**UA, "Accept": "text/event-stream", **self.headers})
         try:                                    # the timeout covers connecting and the response headers only
-            self.r = urllib.request.urlopen(req, timeout=timeout)
+            self.r = _HTTP.open(req, timeout)
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 raise _AuthRefused(f"HTTP {e.code}: the server refused the credentials. Sign in again under "
@@ -589,7 +762,7 @@ class _Sse:
         req = urllib.request.Request(self.endpoint, data=json.dumps(obj).encode(), method="POST",
                                      headers={**UA, "Content-Type": "application/json", **self.headers})
         try:
-            urllib.request.urlopen(req, timeout=30).close()
+            _HTTP.open(req, 30).close()
         except urllib.error.HTTPError as e:
             body = redact(e.read()[:200].decode('utf-8', 'replace'))
             if e.code in (401, 403):
@@ -651,11 +824,13 @@ _STATEFUL = ("browser", "computer")
 _POOL: dict[str, "_Entry"] = {}
 _PLOCK = threading.Lock()
 _REAPER: list = []
+_REAPER_THREAD: list = []
 
 
 class _Entry:
     def __init__(self):
         self.lock = threading.RLock()
+        self.init_lock = threading.Lock()   # one initialize at a time, outside self.lock
         self.t = None                    # the shared _Stdio, None while stopped
         self.ready = False               # initialize already done on self.t
         self.info: dict = {}
@@ -698,22 +873,28 @@ def _reap_loop():
             with e.lock:
                 if limit > 0 and e.t is not None and not e.inflight and time.time() - e.last > limit:
                     e.stop()                          # idle: no process, no CPU; the next call starts it again
-        with _PLOCK:
-            if not _POOL:
-                _REAPER.clear()
-                return
 
 
 _REAPER_STOP = threading.Event()
 
 
+def start_reaper() -> None:
+    """Start the idle reaper. The app calls this at start-up, so helper processes of chats reopened after a restart
+    are stopped when idle even before anything else touches MCP."""
+    _ensure_reaper()
+
+
 def _ensure_reaper():
     with _PLOCK:
+        if _REAPER and not (_REAPER_THREAD and _REAPER_THREAD[0].is_alive()):
+            _REAPER.clear()
         if _REAPER:
             return
         _REAPER.append(1)
         _REAPER_STOP.clear()
-    threading.Thread(target=_reap_loop, daemon=True, name="mcp-reaper").start()
+    th = threading.Thread(target=_reap_loop, daemon=True, name="mcp-reaper")
+    _REAPER_THREAD[:] = [th]
+    th.start()
 
 
 def stop_all() -> None:
@@ -806,6 +987,9 @@ class Server:
         self.log_dir, self.roots = log_dir, roots
         self._entry: _Entry | None = None      # the shared process of a stdio server (see the pool above)
         self._key = ""
+        self.get_model = None                  # () -> the chat's model; sent with calls of a per-call-project server
+        self._inflight: dict[int, object] = {}   # request id -> transport, for Stop (notifications/cancelled)
+        self.timed_out = False                 # the start only ran out of time: not a verdict on the server
 
     def _poolable(self) -> bool:
         return (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
@@ -824,21 +1008,33 @@ class Server:
         """The shared process, started and initialized when it is not running (first use, or after an idle stop)."""
         e = self._entry
         with e.lock:
+            if self.closed:                        # close() came first: do not start a process nobody will stop
+                raise MCPError("closed")
             if e.t is not None and not e.t.alive:
                 e.stop()
             if e.t is None:
                 e.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
                 e.ready = False
-            if not e.ready:
-                rid = e.next_id()
-                msg = e.t.request(rid, "initialize", self._init_params(), min(timeout, 90))
-                if "error" in msg:
-                    er = msg["error"]
-                    e.stop()
-                    raise MCPError(f"{er.get('message', 'error')} (code {er.get('code')})")
-                e.info = (msg.get("result") or {}).get("serverInfo") or {}
-                e.t.notify("notifications/initialized")
-                e.ready = True
+            t = e.t
+        if not e.ready:
+            # initialize waits for the server, so it runs without e.lock: close() must be able to stop the process
+            # (which ends this wait) instead of queueing behind a slow start
+            with e.init_lock:
+                if e.t is t and not e.ready:
+                    rid = e.next_id()
+                    msg = t.request(rid, "initialize", self._init_params(), min(timeout, self._init_budget()))
+                    if "error" in msg:
+                        er = msg["error"]
+                        with e.lock:
+                            if e.t is t:
+                                e.stop()
+                        raise MCPError(f"{er.get('message', 'error')} (code {er.get('code')})")
+                    e.info = (msg.get("result") or {}).get("serverInfo") or {}
+                    t.notify("notifications/initialized")
+                    e.ready = True
+        with e.lock:
+            if self.closed or e.t is not t or not e.ready:
+                raise MCPError("closed" if self.closed else t._exit_reason())
             self.t, self.info = e.t, e.info
             e.last = time.time()
 
@@ -863,9 +1059,29 @@ class Server:
                 self._id += 1
                 rid = e.next_id() if e is not None else self._id
                 gen = self._gen
+            t = self.t
+            if isinstance(t, _Stdio) and e is None and not t.alive and method != "initialize" and "dead" not in retried:
+                retried.add("dead")                # a private server that died while idle: start it once more
+                self._restart_stdio(gen, timeout)
+                continue
             try:
-                msg = self.t.request(rid, method, params, timeout)
+                self._inflight[rid] = t
+                try:
+                    msg = t.request(rid, method, params, timeout)
+                finally:
+                    self._inflight.pop(rid, None)
                 break
+            except _NotSent:
+                if "dead" in retried or self.closed or method == "initialize" or not isinstance(t, _Stdio):
+                    raise
+                retried.add("dead")                # the request never reached the server: restart it, send again
+                if e is not None:
+                    with e.lock:
+                        if e.t is t:
+                            e.stop()
+                    self._acquire(timeout)
+                else:
+                    self._restart_stdio(gen, timeout)
             except _AuthRefused:
                 if "auth" in retried or self.closed or not self._refresh_auth():
                     raise
@@ -879,6 +1095,34 @@ class Server:
             e = msg["error"]
             raise MCPError(f"{e.get('message', 'error')} (code {e.get('code')})")
         return msg.get("result") or {}
+
+    def _restart_stdio(self, gen: int, timeout: float):
+        with self._conn:
+            if self._gen != gen or self.closed:
+                return
+            old = self.t
+            try:
+                if old is not None:
+                    old.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
+            self._handshake(min(timeout, self._init_budget()))
+            self._gen += 1
+
+    def abort_calls(self, reason: str = "cancelled by the user") -> int:
+        """Stop pressed: tell the server to drop every call in flight (notifications/cancelled with its request id)
+        and stop waiting for it. Returns how many calls were cancelled."""
+        n = 0
+        for rid, t in list(self._inflight.items()):
+            fn = getattr(t, "cancel_request", None)
+            if fn:
+                fn(rid, reason)
+                n += 1
+        return n
+
+    def _init_budget(self) -> float:
+        return first_response_seconds(self.spec)
 
     def _init_params(self) -> dict:
         return {"protocolVersion": PROTOCOL, "clientInfo": CLIENT, "capabilities": {"roots": {"listChanged": False}}}
@@ -921,6 +1165,8 @@ class Server:
 
     def start(self, timeout: float = 90):
         try:
+            if self.closed:
+                raise MCPError("closed")
             if self.spec.get("url") and _sse_spec(self.spec):
                 self.t = _Sse(self.name, self.spec, min(timeout, 30))
                 self._handshake(timeout)
@@ -944,9 +1190,13 @@ class Server:
                     self._acquire(timeout)
                 else:
                     self.t = _Stdio(self.name, self.spec, self.log_dir, self.roots)
-                    self._handshake(timeout)
+                    if self.closed:                    # close() ran while the process started
+                        raise MCPError("closed")
+                    self._handshake(min(timeout, self._init_budget()))
             else:
                 raise MCPError("needs either a command or a url")
+            if self.closed:
+                raise MCPError("closed")
             tools, cursor = [], None
             for _ in range(20):
                 r = self._rpc("tools/list", {"cursor": cursor} if cursor else {}, 60)
@@ -965,6 +1215,7 @@ class Server:
             with self._lock:
                 if not self.cancelled:
                     self.status, self.error = "error", redact(e)[:400]
+                    self.timed_out = bool(_TIMEOUT_ERR.search(str(e)))
             self.close()
 
     def start_lazy(self) -> bool:
@@ -988,6 +1239,7 @@ class Server:
             if self.status == "connected":
                 return
             self.cancelled = True
+            self.timed_out = True
             self.status, self.error = "error", reason
         self.close()
 
@@ -999,6 +1251,12 @@ class Server:
         """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
         if self.spec.get("per_call_project") and self.roots:
             args = {**args, "_project": str(Path(self.roots[0]).resolve())}
+            try:
+                model = self.get_model() if self.get_model else ""
+            except Exception:  # noqa: BLE001
+                model = ""
+            if model:
+                args["_model"] = str(model)                  # the chat's model, for engines that call one
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
@@ -1061,6 +1319,10 @@ class Manager:
         self._names: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
         self.last_images: list[dict] = []
+        self.model = None                              # str or () -> str: the chat's model (set by the agent)
+        self.closed = False
+        self._threads: list = []
+        self._sig = None
 
     def start(self, timeout: float = 90, use_health: bool = True, lazy: bool | None = None) -> "Manager":
         """lazy (default: when use_health is on, that is for real chats; off for a server test): a shared stdio server
@@ -1073,13 +1335,17 @@ class Manager:
             cfg = {}
         cfg = {**cfg, **self.extra}
         log_dir = C.runs_dir() / "mcp-logs"
+        raise_file_limit()
         os.environ["MESHPOOL_PROJECT"] = str(Path(self.roots[0]).resolve())   # usable as ${MESHPOOL_PROJECT}
         threads = []
         for name, spec in cfg.items():
+            if self.closed:
+                break
             if not isinstance(spec, dict) or spec.get("disabled"):
                 self.disabled.append(name)
                 continue
             s = Server(name, self._with_chat(spec), log_dir, self.roots)
+            s.get_model = lambda: self.model() if callable(self.model) else self.model
             self.servers[name] = s
             bad = recently_failed(name, spec) if use_health else None
             if bad is not None:                       # failed a moment ago: do not make every thread wait for it
@@ -1087,16 +1353,25 @@ class Manager:
                 continue
             if lazy and s.start_lazy():
                 continue
-            th = threading.Thread(target=s.start, args=(timeout,), daemon=True)
+            # a cold npx/uvx start may be downloading: it keeps starting in the background with its own, longer budget
+            # (the chat does not wait for it) instead of blocking the chat or being cached as broken
+            th = threading.Thread(target=s.start, args=(max(timeout, first_response_seconds(spec))
+                                                        if is_cold_start(spec) else timeout,), daemon=True)
             th.start()
-            threads.append((s, th))
-        end = time.time() + timeout + 5
-        for s, th in threads:
+            threads.append((s, th, is_cold_start(spec)))
+        self._threads = [th for _, th, _ in threads]
+        t0 = time.time()
+        for s, th, cold in threads:
+            # a cold start is waited for only as long as any server's first reply (25 s); the others get the full budget
+            end = t0 + (min(timeout + 5, first_response_seconds({"command": "x"})) if cold else timeout + 5)
             th.join(max(0.0, end - time.time()))
             if th.is_alive():
-                s.cancel(f"did not start within {int(timeout)} s")
-        record_health({n: (cfg.get(n), s.status == "connected", s.error) for n, s in self.servers.items()
-                       if not str(s.error).startswith("skipped")})
+                if cold and not self.closed:
+                    s.status, s.error = "starting", "still starting: the first start downloads the server"
+                else:
+                    s.cancel(f"did not start within {int(timeout)} s")
+        record_health({n: (cfg.get(n), s.status == "connected", s.error) for n, s in list(self.servers.items())
+                       if not str(s.error).startswith("skipped") and s.status != "starting"})
         self._rebuild()
         return self
 
@@ -1112,7 +1387,8 @@ class Manager:
         """Tool name -> (server, tool) for every connected server. schemas() reads the same table, so the model is
         never offered a tool that call() does not know."""
         with self._lock:
-            pairs = [(s.name, t["name"]) for s in self.servers.values() if s.status == "connected" for t in s.tools]
+            pairs = [(s.name, t["name"]) for s in list(self.servers.values()) if s.status == "connected" for t in s.tools]
+            self._sig = tuple(pairs)
             names = unique_tool_names(pairs)
             self._names = names
             self.map = {n: pair for pair, n in names.items()}
@@ -1130,6 +1406,9 @@ class Manager:
 
     def schemas(self) -> list[dict]:
         out = []
+        if self._sig != tuple((s.name, t["name"]) for s in list(self.servers.values())
+                              if s.status == "connected" for t in s.tools):
+            self._rebuild()                    # a server that was still starting has connected since
         with self._lock:
             names = dict(self._names)
         for s in list(self.servers.values()):
@@ -1162,6 +1441,9 @@ class Manager:
             return (f"MCP server '{sname}' is not connected: {s.error}", True), []
         try:
             return s.call_with_images(tool, args)
+        except Cancelled as e:
+            return (f"Stopped: '{sname}' was told to cancel this call ({redact(e)}). It may have finished part of the "
+                    "work: a file it was already writing can still appear, so check before running it again.", True), []
         except MCPError as e:
             return (f"MCP error from '{sname}': {redact(e)}", True), []
 
@@ -1174,6 +1456,17 @@ class Manager:
                  for n in self.disabled]
         return rows
 
+    def abort_calls(self, reason: str = "cancelled by the user") -> int:
+        """Stop: tell every server to drop the calls in flight."""
+        return sum(s.abort_calls(reason) for s in list(self.servers.values()))
+
     def close(self):
-        for s in self.servers.values():
+        """Close every server, including ones whose start has not returned yet: they stop what they started."""
+        self.closed = True
+        for s in list(self.servers.values()):
+            s.close()
+        for th in list(self._threads):
+            if th is not threading.current_thread():
+                th.join(5)
+        for s in list(self.servers.values()):      # a start that finished while we waited
             s.close()

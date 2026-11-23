@@ -105,7 +105,7 @@ def test_scrub_env_removes_injected_connector_keys(monkeypatch):
     env = {"PERPLEXITY_API_KEY": "k", "MDB_MCP_CONNECTION_STRING": "mongodb://u:p@h", "SLACK_MCP_XOXP_TOKEN": "t",
            "MH_MODEL": "m", "MY_OWN_TOKEN": "mine"}
     out = C.scrub_env(env)
-    assert set(out) == {"MH_MODEL", "MY_OWN_TOKEN"}               # a key the user set themselves stays
+    assert set(out) == {"MH_MODEL"}               # S-06: every secret-named variable goes, the user's own too (MH_SHELL_ENV_ALLOW keeps one)
 
 
 def test_checkpoint_writes_are_atomic(tmp_path, monkeypatch):

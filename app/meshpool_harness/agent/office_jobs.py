@@ -77,9 +77,10 @@ def _python_m() -> list[str]:
 
 
 def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str = "",
-            model: str | None = None) -> str:
+            model: str | None = None, env_extra: dict | None = None) -> str:
     """Register a job (its output folder, command and build number) and return its id; run() runs it. scope is the
-    chat the job serves: build numbers, reuse and the rebuild stop are counted per scope, not per process."""
+    chat the job serves: build numbers, reuse and the rebuild stop are counted per scope, not per process. env_extra
+    is added to the engine process's environment (the usage task it records into)."""
     with _LOCK:
         jid = uuid.uuid4().hex[:8]
         out = Path(root) / "Meshpool outputs" / f"{time.strftime('%Y%m%d-%H%M%S')}-{engine}-{jid}"   # one folder per job
@@ -94,7 +95,7 @@ def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str 
                   and now - x["started"] < REBUILD_WINDOW_S]
         JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
                      "scope": scope, "request": request, "paths": sorted(paths or []), "event": threading.Event(),
-                     "inputs": {Path(x).name for x in paths or []}}
+                     "inputs": {Path(x).name for x in paths or []}, "env_extra": dict(env_extra or {})}
         return jid
 
 
@@ -118,7 +119,7 @@ def _made(j: dict) -> list[Path]:
 
 
 def start(engine: str, request: str, paths: list[str], root: Path, scope: str = "",
-          model: str | None = None) -> tuple[str, str]:
+          model: str | None = None, env_extra: dict | None = None) -> tuple[str, str]:
     """(job id, how) for a request. One request is one engine run: the same request (same chat, engine and input
     files) while its job runs returns that job ("running": wait on its "event"); after it finished within the
     window, returns it again ("done": report it, nothing is rebuilt); otherwise a new job (""). A new request that
@@ -144,7 +145,7 @@ def start(engine: str, request: str, paths: list[str], root: Path, scope: str = 
                 if (j.get("done") and j.get("result") and j["paths"] == sorted(paths or []) and w and v
                         and len(w & v) / len(w | v) >= SIMILAR and _made(j)):
                     return i, "refused"
-        return new_job(engine, request, paths, root, scope, model=model), ""
+        return new_job(engine, request, paths, root, scope, model=model, env_extra=env_extra), ""
 
 
 def refusal_text(jid: str, rel_to: Path | None = None) -> str:
@@ -155,14 +156,23 @@ def refusal_text(jid: str, rel_to: Path | None = None) -> str:
             "checks remain. Build again only for a materially different request (new content, not a rewording).")
 
 
-def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
+def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dict | None = None) -> None:
     """Run a job's engine process to the end. Its output is read while it runs (a full pipe would block the engine
     until the timeout). should_stop() true: the process is killed and the job is marked stopped."""
     j = JOBS[jid]
     timeout = float(timeout if timeout is not None else os.environ.get("OFFICE_JOB_TIMEOUT_S", "1800"))
     env = dict(os.environ, PYTHONPATH=str(APP), PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
     env.pop("MH_EVENT_LOG", None)
-    kw = {"creationflags": 0x08000000} if os.name == "nt" else {}     # CREATE_NO_WINDOW: no console flashes up
+    extra = env_extra or j.get("env_extra")
+    if not extra:                           # a usage task is current (the Office MCP server of a chat): bill under it
+        from meshpool_harness.core import usage
+        cur = usage.current()[0]
+        if cur is not None:
+            extra = usage.child_env(usage.start_task(chat=cur.chat, parent=cur, label="office:" + j["engine"]),
+                                    "engine:" + j["engine"])
+    env.update(extra or {})
+    kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;
+    # its own process group, so Stop and the timeout end LibreOffice and model-written scripts too, not only the engine
     try:
         proc = subprocess.Popen(j["cmd"], cwd=str(j["out"]), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace", **kw)
@@ -174,6 +184,8 @@ def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
             except subprocess.TimeoutExpired:
                 stop = bool(should_stop and should_stop())
                 if stop or time.time() > end:
+                    from meshpool_harness.agent.mcp import kill_tree
+                    kill_tree(proc)
                     proc.kill()
                     proc.communicate()
                     j["result"], j["stopped"] = {}, stop

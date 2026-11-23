@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest  # noqa: E402
 
 from meshpool_harness.agent import core  # noqa: E402
-from meshpool_harness.agent.core import Agent, _pair_tool_results  # noqa: E402
+from meshpool_harness.agent.core import Agent  # noqa: E402
+from meshpool_harness.agent.history_repair import repair_tool_pairs  # noqa: E402
 from meshpool_harness.core import gateway as GW  # noqa: E402
 
 TURN = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -341,8 +342,9 @@ def test_body_pairs_orphans():
             {"role": "tool", "tool_call_id": "c2", "content": "two"},
             {"role": "tool", "tool_call_id": "nope", "content": "stray"},
             {"role": "user", "content": "next"}]
-    out = _pair_tool_results(msgs)
+    out, changed = repair_tool_pairs(msgs)          # the one shared repair (ws10 history_repair)
+    assert changed
     assert [m["role"] for m in out] == ["system", "user", "assistant", "tool", "tool", "user"]
-    assert out[3]["tool_call_id"] == "c1" and "turn ended" in out[3]["content"]
+    assert out[3]["tool_call_id"] == "c1" and out[3]["content"].startswith("Not run")
     assert out[4]["content"] == "two"
     assert len(msgs) == 7                              # the input is not changed

@@ -2,18 +2,22 @@
 The page polls for events and answers approval requests."""
 from __future__ import annotations
 
+import errno
 import json
 import re
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
 from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
+from meshpool_harness.core import usage
 from meshpool_harness.harnesses.acp import ACPAgent
 from meshpool_harness.harnesses.pi_rpc import PiAgent
 
@@ -91,7 +95,15 @@ RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
-         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review"}
+         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok"}
+# Transient "trying again" notices (core.py): tagged retry:true; a retry_ok event follows once the model answers.
+_RETRY_RE = re.compile(r"Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming|"
+                       r"^Usage limit reached")
+_RETRY_DONE = ("usage", "model_end", "text_delta", "assistant", "tool_start")
+_BUSY = ("working", "waiting")
+# Turn state machine (Session._set_state): the only moves a chat's state may make.
+_MOVES = {("starting", "idle"), ("starting", "working"), ("idle", "working"), ("working", "waiting"),
+          ("waiting", "working"), ("working", "idle"), ("waiting", "idle")}
 
 
 def _transcript(sid: str) -> dict | None:
@@ -279,17 +291,73 @@ def _last_reply(agent) -> str:
         pass
     return ""
 
+class _Always(set):
+    """The "Allow ... in this chat" set of an agent, saved to the chat's meta.json whenever it changes, so the choice
+    survives the reaper closing the chat, a restart and a handoff to another agent."""
+
+    def __init__(self, items=(), on_change=None):
+        super().__init__(items)
+        self._cb = on_change
+
+    def _changed(self):
+        cb = getattr(self, "_cb", None)
+        if cb:
+            try:
+                cb(set(self))
+            except Exception:  # noqa: BLE001 - failing to save a choice never stops the turn
+                pass
+
+    def add(self, x):
+        new = x not in self
+        super().add(x)
+        if new:
+            self._changed()
+
+    def update(self, *others):
+        n = len(self)
+        super().update(*others)
+        if len(self) != n:
+            self._changed()
+
+    def discard(self, x):
+        had = x in self
+        super().discard(x)
+        if had:
+            self._changed()
+
+    def remove(self, x):
+        super().remove(x)
+        self._changed()
+
+    def clear(self):
+        had = bool(self)
+        super().clear()
+        if had:
+            self._changed()
+
+
 UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
                    "and say in your summary what needed the user.")
 
 
 class Session:
+    scheduled = None           # class default: the scheduled task that started this thread
     incognito = False          # class defaults: tests and old callers build a Session without __init__
+    auto_resume = True         # wait out an outage and carry on (the terminal's -p turns it off: a script wants the failure)
+    listeners = ()             # front ends that watch the events (the terminal): callables taking the stored event
+    _saved_mtime = 0.0
     _ck_run, _ck_n, _ck_stop = "", 0, None
+    _turn_id = 0               # the token of the current turn (see _claim_turn / _end_turn)
+    _stop_req = False          # Stop was pressed for the current turn
+    _interrupting = None       # the token of the turn a "send now" message is stopping
+    _after_stop = None         # messages sent once Stop was pressed: they run as their own turn (list, made lazily)
+    _retry_open = False        # a retry notice is showing: the next good model event resolves it
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
-                 harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False):
+                 harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
+                 no_mcp: bool = False):
         self.events: list[dict] = []
+        self.listeners: list = []
         self.epoch = int(time.time() * 1000)      # a resumed thread is a new event list: pages reset on change
         self.plan = bool(plan)
         self.goal, self._goal_idle, self._goal_net = "", 0, 0   # /goal: see GOAL_NOTE
@@ -298,7 +366,9 @@ class Session:
         self.changed = threading.Condition(self.lock)    # notified by emit(): event streams wait on it, not sleep
         self.state = "starting"
         self.queue: list = []                       # messages sent while a harness without mid-turn input works
-        self.ctx_pending = not resume_id             # instructions and memory go with the first message
+        # Instructions and memory go with the first message. Kept in the chat's meta, so a restart or an idle close
+        # before that message does not lose them (M20-06); a chat saved before this was kept has them already.
+        self.ctx_pending = bool(read_meta(resume_id).get("ctx_pending")) if resume_id else True
         self.incognito = bool(resume_id and read_meta(resume_id).get("incognito"))   # no memory, learning or insights
         self.scheduled: dict | None = None           # the scheduled task that started this thread
         self.pendings: dict = {}                     # open approvals by id: harnesses may ask several at once
@@ -306,9 +376,10 @@ class Session:
         self._mcp_ready = threading.Event()          # set once _start_mcp has finished (connected or not)
         self.agent = None
         self.touched = time.time()                   # last view, send or event: idle threads are closed (_reap)
+        mode = C.normalize_mode(mode, None)
         if mode not in MODES and resume_id:
             mode = read_meta(resume_id).get("mode")      # a chat keeps its own mode across restarts
-        self.mode = mode if mode in MODES else os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self._n = 0
         kw = dict(emit=self.emit, approve=self.approve, mode=self.mode)
         legacy = False
@@ -367,6 +438,9 @@ class Session:
                 self.agent = Agent(workdir, profile="work" if self.harness["id"] == "meshpool-work" else "code", **kw)
             self.agent.save()
         self.id, self.workdir = self.agent.id, str(self.agent.root)
+        if not resume_id:
+            write_meta(self.id, ctx_pending=True)
+        self._bind_always(self.agent)
         if self.harness["type"] not in ("acp", "pi"):
             # ask_user waits for this page's answer; a scheduled run has no one watching, so it takes the defaults
             self.agent.interactive = lambda: not self.scheduled and not getattr(self, "deleted", False)
@@ -382,6 +456,10 @@ class Session:
                                "text": "Meshpool closed while this was running, so it stopped. Your message is kept: "
                                        "send it again to continue."})
                     self._persist(running=False)
+            try:                                     # an approval, question or step left open when the app closed
+                self._close_open_items(turns=bool(tr and tr.get("events")))
+            except Exception:  # noqa: BLE001 - never blocks reopening a chat
+                pass
         else:
             write_meta(self.id, kind=self.kind, mode=self.mode)   # Cowork or Code, and its permission mode
         if model:
@@ -401,7 +479,7 @@ class Session:
         if not outside:
             self.agent.checkpoint = self.cp          # the agent books what its own tools wrote (core._run_tool)
         if self.harness["type"] in ("acp", "pi"):
-            self.state = "idle"
+            self._set_state("idle", expect=("starting",))
             name = self.harness["name"]
             if not self.events:
                 self.emit({"type": "status", "text": f"{name} is ready. "
@@ -411,7 +489,60 @@ class Session:
                 self.emit({"type": "status", "text": f"Meshpool no longer includes the agent this chat started with. "
                                                      f"It continues in {self.harness['name']}."})
                 self.agent.save()
-            threading.Thread(target=self._start_mcp, daemon=True).start()
+            if no_mcp:                                   # the terminal's --no-mcp: no servers, ready at once
+                self.state = "idle"
+                self._mcp_ready.set()
+            else:
+                threading.Thread(target=self._start_mcp, daemon=True).start()
+        self._mark_saved()
+
+    def _mark_saved(self):
+        """Remember when session.json was last written by this Session, to notice another front end's writes."""
+        try:
+            self._saved_mtime = (SESSIONS / self.id / "session.json").stat().st_mtime
+        except (OSError, AttributeError):
+            pass
+
+    def _close_open_items(self, turns: bool = True):
+        """A chat reopened after the app closed: whatever was open then can never be answered or finished. Appends,
+        once, what closes it: approval_done / question_done / tool_end for each, and a synthetic turn_end when the
+        last user message has no end. Running it again adds nothing. Ids may be ints (old transcripts) or strings."""
+        with self.lock:
+            evs = list(self.events)
+        done = {"approval": set(), "question": set(), "tool": set()}
+        for e in evs:
+            t = e.get("type")
+            if t == "approval_done":
+                done["approval"].add(str(e.get("id")))
+            elif t == "question_done":
+                done["question"].add(str(e.get("id")))
+            elif t == "tool_end":
+                done["tool"].add(str(e.get("id")))
+        out, seen = [], set()
+        last_end = max((n for n, e in enumerate(evs) if e.get("type") == "turn_end"), default=-1)
+        for n, e in enumerate(evs):
+            t, i = e.get("type"), str(e.get("id"))
+            if e.get("id") is None or (t, i) in seen:
+                continue
+            if t == "approval" and i not in done["approval"]:
+                out.append({"type": "approval_done", "id": e["id"], "decision": "stopped", "closed": True})
+            elif t == "question" and e.get("timeout_s") and i not in done["question"]:
+                out.append({"type": "question_done", "id": e["id"], "source": "stopped", "answers": [],
+                            "text": "Meshpool closed before you answered.", "closed": True})
+            elif t == "tool_start" and i not in done["tool"] and n > last_end:   # steps of finished turns stay as they were
+                out.append({"type": "tool_end", "id": e["id"], "name": e.get("name", ""), "ok": False,
+                            "stopped": True, "output": "Not run: Meshpool closed before this step finished."})
+            else:
+                continue
+            seen.add((t, i))
+        if turns or any(e.get("type") == "turn_end" for e in evs):
+            last = max((n for n, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")), default=None)
+            if last is not None and not any(e.get("type") in ("turn_end", "interrupted") for e in evs[last + 1:]):
+                out.append({"type": "turn_end", "synthetic": True})
+        for ev in out:
+            self.emit(ev)
+        if out:
+            self._persist(running=False)
 
     def _start_mcp(self):
         try:
@@ -434,6 +565,7 @@ class Session:
                 self.mcp.close()
                 return
             self.agent.mcp = self.mcp
+            self.mcp.model = lambda: getattr(self.agent, "model", None) or ""
             ok = [s for s in self.mcp.status() if s["status"] == "connected"]
             bad = [s for s in self.mcp.status() if s["status"] == "error"]
             txt = ("MCP: " + ", ".join(f"{s['name']} ({len(s['tools'])} tools)" for s in ok)) if ok else "No MCP servers enabled."
@@ -444,18 +576,69 @@ class Session:
             self.emit({"type": "status", "text": txt})
         except Exception as e:
             self.emit({"type": "status", "text": f"MCP did not start: {e}"})
-        if self.state == "starting":
-            self.state = "idle"
+            if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
+                self.emit({"type": "error", "text": "This chat could not start its tools: the computer's limit of open "
+                                                    "files was reached. Close chats you are not using and try again."})
+        self._set_state("idle", expect=("starting",))     # a turn that started meanwhile keeps "working"
+
+    # ---- the turn state machine. Every move of self.state goes through _claim_turn / _set_state / _end_turn, under
+    # self.lock, tied to the token of the turn it belongs to (self._turn_id).
+    def _claim_turn_locked(self):
+        if getattr(self, "state", "idle") in _BUSY:
+            return None
+        with GATE:                                   # an update is being installed: no turn may start (M11-02)
+            if QUIESCING[0]:
+                raise ValueError(_GATE_MSG)
+            self.state = "working"
+        self._turn_id += 1
+        self._stop_req = False
+        self.t_turn = time.time()
+        return self._turn_id
+
+    def _claim_turn(self):
+        """Idle/starting -> working under the lock: the token of the new turn, or None when a turn already runs."""
+        with self.lock:
+            return self._claim_turn_locked()
+
+    def _set_state(self, to: str, token=None, expect=None) -> bool:
+        """Move to `to` when allowed. Refused when `token` is not the current turn, when the state is not one of
+        `expect`, or when the move is not one of the allowed ones. Returns whether it moved."""
+        with self.lock:
+            cur = getattr(self, "state", None)
+            if token is not None and token != self._turn_id:
+                return False
+            if expect is not None and cur not in expect:
+                return False
+            if cur != to and (cur, to) not in _MOVES:
+                return False
+            self.state = to
+            return True
 
     def emit(self, ev: dict):
         self._question_state(ev)
-        if ev.get("type") == "interrupted" and getattr(self, "_interrupting", False):
-            self._interrupting = False               # the new message is being answered: do not say "send a message"
+        t = ev.get("type")
+        if (t == "interrupted" and self._interrupting is not None and self._interrupting == self._turn_id
+                and getattr(self, "state", None) in _BUSY):
+            self._interrupting = None                # the new message is being answered: do not say "send a message"
             ev = dict(ev, text="Stopped the previous request.")
+        if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):
+            ev = dict(ev, retry=True)                # a transient notice: resolved by retry_ok once the call works
+            self._retry_open = True
+        elif self._retry_open and t in _RETRY_DONE:
+            self._retry_open = False
+            self.emit({"type": "retry_ok"})
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
             self.changed.notify_all()
+        lease = getattr(self, "_lease", None)
+        if lease and time.time() - getattr(self, "_lease_beat", 0) > 60:      # a working run keeps its task claimed
+            self._lease_beat = time.time()
+
+            def beat(tid=lease[0], tok=lease[1]):
+                from meshpool_harness import assistant as AS
+                AS.renew(tid, tok)
+            threading.Thread(target=beat, daemon=True).start()
         if ev.get("type") == "user" and not ev.get("steer"):
             self._turn_open = True                   # a turn is running until its turn_end arrives
         elif ev.get("type") == "turn_end":
@@ -464,6 +647,11 @@ class Session:
             self._persist()                          # moments a restart must not lose: write now
         elif ev.get("type") in _KEEP:
             self._persist_soon()
+        for fn in list(self.listeners):                  # outside the lock: a listener may call back into the Session
+            try:
+                fn(ev)
+            except Exception:  # noqa: BLE001 - a front end's drawing never breaks the turn
+                pass
 
     def _persist_soon(self):
         """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
@@ -507,7 +695,53 @@ class Session:
                     log.append(evs)
                     log.set_running(run)
                 self._tlog_n, self._tlog_epoch = total, epoch
-        except OSError:
+        except OSError as e:
+            first = not getattr(self, "_persist_err", None)
+            self._persist_err = e.strerror or str(e) or "write failed"
+            if first:                                # one notice per failure streak
+                self.emit({"type": "status", "save_error": True, "text": (
+                    f"Couldn't save this chat ({self._persist_err}). Free some disk space; Meshpool keeps trying.")})
+        else:
+            if getattr(self, "_persist_err", None):
+                self._persist_err = None
+                self.emit({"type": "status", "text": "Saved again."})
+
+    @staticmethod
+    def _acp_key(kind, title=""):
+        """edit and bash are remembered per kind; any other tool only for that one tool (its title)."""
+        if kind in ("edit", "bash"):
+            return "acp:" + str(kind)
+        return "acp:" + str(kind) + ":" + str(title or "").strip()[:200]
+
+    def _acp_always_pick(self, kind, detail, options, title=""):
+        """"Allow always" chosen once on an ACP harness's card for this kind of request (saved in meta.json): the
+        next ask of that kind is answered with its allow option, without a card. Never for a destructive command."""
+        if not options or not getattr(self, "id", None):
+            return None
+        try:
+            if self._acp_key(kind, title) not in (read_meta(self.id).get("always") or []):
+                return None
+            if kind == "bash":
+                from meshpool_harness.agent.core import _destructive
+                if _destructive({"command": detail}):
+                    return None
+            pick = (next((o for o in options if o.get("kind") == "allow_once"), None)
+                    or next((o for o in options if o.get("kind") == "allow_always"), None))
+            return pick["id"] if pick else None
+        except Exception:  # noqa: BLE001 - when in doubt, ask
+            return None
+
+    def _bind_always(self, agent):
+        """The agent's "Allow in this chat" set (built-in Agent.always, Pi _always) becomes a set that saves itself
+        to meta.json["always"] and starts from what was saved: it outlives the reaper, a restart and a handoff."""
+        attr = "always" if hasattr(agent, "always") else "_always" if hasattr(agent, "_always") else ""
+        sid = getattr(self, "id", None)
+        if not attr or not sid:
+            return
+        try:
+            seed = set(read_meta(sid).get("always") or []) | set(getattr(agent, attr) or ())
+            setattr(agent, attr, _Always(seed, lambda items, sid=sid: write_meta(sid, always=sorted(items))))
+        except Exception:  # noqa: BLE001 - the choice just stays in memory
             pass
 
     def approve(self, kind, title, detail, options=None, scope=""):
@@ -519,20 +753,24 @@ class Session:
             note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
                                                       "and do not retry the action.")
             if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
-                with self.lock:
-                    self._n = getattr(self, "_n", 0) + 1
-                    n = self._n
-                self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
+                aid = "ap-" + uuid.uuid4().hex[:10]
+                self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
                            "options": options, "scope": scope})
-                self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
+                self.emit({"type": "approval_done", "id": aid, "decision": "no", "reason": note})
             return "no", note
+        auto = self._acp_always_pick(kind, detail, options, title)
+        if auto:
+            return auto, ""
         with self.lock:
-            self._n += 1
-            p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
-                 "decision": "no", "note": "", "options": options}
-            self.pendings[p["id"]] = p
-        self.state = "waiting"
-        self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
+            tok = self._turn_id
+            running = getattr(self, "state", "idle") in _BUSY     # an ask outside a turn never changes the state
+            aid = "ap-" + uuid.uuid4().hex[:10]
+            p = {"id": aid, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
+                 "decision": "no", "note": "", "options": options, "token": tok, "in_turn": running}
+            self.pendings[aid] = p
+        if running:
+            self._set_state("waiting", token=tok, expect=_BUSY)
+        self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
                    "options": options, "scope": scope})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
@@ -543,7 +781,7 @@ class Session:
         t_end = time.time() + limit if limit > 0 else None
         timed_out = False
         while not p["ev"].wait(0.5 if t_end is None else max(0.01, min(0.5, t_end - time.time()))):
-            if self.agent._stop:
+            if getattr(self.agent, "_stop", False):
                 break
             if t_end is not None and time.time() >= t_end:
                 timed_out = True
@@ -553,16 +791,24 @@ class Session:
             p["note"] = (f"No answer within {mins} minute{'s' if mins != 1 else ''}, so this was not done. "
                          "Ask again when you are back.")
         with self.lock:
-            self.pendings.pop(p["id"], None)
-            if not self.pendings:
-                self.state = "working"
+            self.pendings.pop(aid, None)
+            others = any(q.get("in_turn") and q.get("token") == tok for q in self.pendings.values())
+        if running and not others:
+            self._set_state("working", token=tok, expect=("waiting",))   # not when the turn ended meanwhile
         shown = p["decision"] if p.get("answered") else ("timeout" if timed_out else "stopped")
-        self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
+        if p.get("answered") and options and getattr(self, "id", None):
+            try:                                      # "allow always" on an ACP card: remembered for this chat
+                if next((o.get("kind") for o in options if o.get("id") == p["decision"]), "") == "allow_always":
+                    cur = set(read_meta(self.id).get("always") or [])
+                    write_meta(self.id, always=sorted(cur | {self._acp_key(kind, title)}))
+            except Exception:  # noqa: BLE001
+                pass
+        self.emit({"type": "approval_done", "id": aid, "decision": shown})
         return p["decision"], p["note"]
 
-    def answer(self, aid: int, decision: str, note: str = ""):
-        p = self.pendings.get(aid)
-        if not p:
+    def answer(self, aid, decision: str, note: str = ""):
+        p = self.pendings.get(str(aid))
+        if not p or p.get("closed"):
             raise ValueError("That approval is no longer waiting.")
         allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
@@ -574,12 +820,14 @@ class Session:
         """ask_user: the thread waits for the user while a question is open (like an approval)."""
         t = ev.get("type")
         if t == "question" and ev.get("timeout_s"):
-            self.state = "waiting"
+            self._set_state("waiting", token=self._turn_id, expect=("working", "waiting"))
             if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
                 qs = ev.get("questions") or [{}]
                 _notify(f"{self.agent.title or 'A task'} has a question for you", str(qs[0].get("question", ""))[:200])
-        elif t == "question_done" and self.state == "waiting" and not self.pendings:
-            self.state = "working"
+        elif t == "question_done":
+            with self.lock:
+                if not getattr(self, "pendings", None):
+                    self._set_state("working", token=self._turn_id, expect=("waiting",))
 
     def reply(self, question_id: str, answers) -> None:
         """The user answered an ask_user question (POST /api/agent/<id>/reply)."""
@@ -618,61 +866,88 @@ class Session:
             raise ValueError("That style does not exist any more.")
         write_meta(self.id, style=style_id or ST.NORMAL)
 
+    _STOPPED_NOTE = ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                     "answer this message instead.")
+
     def send(self, text: str, images: list | None = None, interrupt: bool = False, files: list | None = None) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
         agent and Pi read it before their next step; other harnesses get it as soon as the current turn ends.
-        interrupt=True stops the current work first and sends the message as a new turn."""
+        interrupt=True stops the current work and sends the message as the next turn (it does not wait for the stop
+        to land); so does any message sent once Stop was pressed. Which of these happens is decided under the lock
+        the turn state changes under, so two messages can never both start a turn."""
         if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
+        if self.scheduled and not getattr(self, "_system_send", False):           # the person has taken over: someone is here now (M18-06)
+            self.scheduled = None
         if files:                                    # saved first: if it fails, nothing was emitted or started
             text = self._save_files(text, files)
         self.touched = time.time()
-        if self.state in ("working", "waiting") and interrupt:
-            self._interrupting = True
-            with self.lock:                          # messages waiting in the queue go with the new one, not lost
-                queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
-                qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
-            if queued:
-                text = "\n\n".join([*queued, text])
-                images = [*qimgs, *(images or [])] or None
-            self.stop()
-            end = time.time() + 15
-            while self.state in ("working", "waiting") and time.time() < end:
-                time.sleep(0.1)
-            if self.harness.get("type") == "acp":
-                # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and carry
-                # on with the old task. Say plainly that it was stopped; the note is hidden in the chat (after \u200b).
-                text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
-                               "answer this message instead.")
-        if (getattr(self, "_was_stopped", False) and not interrupt and self.harness.get("type") == "acp"
-                and self.state not in ("working", "waiting")):
-            # After Stop, ACP agents (Hermes, the subscriptions) can pick the stopped request back up. Say plainly
-            # that it was stopped; the note is hidden in the chat (after \u200b).
-            text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
-                           "answer this message instead.")
-        if self.state not in ("working", "waiting"):
-            self._was_stopped = False
+        acp = self.harness.get("type") == "acp"
+        if interrupt:
+            tok = None
+            with self.lock:
+                if getattr(self, "state", "idle") in _BUSY:
+                    tok = self._turn_id
+                    queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
+                    qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
+                    if queued:                       # messages waiting in the queue go with the new one, not lost
+                        text = "\n\n".join([*queued, text])
+                        images = [*qimgs, *(images or [])] or None
+                    self._interrupting = tok          # set for this turn only: its end clears it
+            if tok is not None:
+                if acp:
+                    # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and
+                    # carry on with the old task. Say plainly that it was stopped; hidden in the chat (after \u200b).
+                    text = text + self._STOPPED_NOTE
+                self.stop()
+                with self.lock:
+                    same = self._turn_id == tok and getattr(self, "state", "idle") in _BUSY
+                    if same:
+                        if self._after_stop is None:
+                            self._after_stop = []
+                        self._after_stop.append((text, images))
+                        n = len(self._after_stop)
+                    elif self._interrupting == tok:
+                        self._interrupting = None
+                if same:
+                    self.emit({"type": "queued", "text": text, "n": n, "after_stop": True})
+                    return {"queued": True, "after_stop": True}
+                # the turn ended before the lock was taken: this message starts the next one, below
         q = self.agent.pending_question() if hasattr(self.agent, "pending_question") else None
         if q and not interrupt and text.strip():
             self.agent.reply(q["id"], text)              # typed in the message box: the answer to the open question
             return {"queued": False, "answered": q["id"]}
-        if self.state in ("working", "waiting"):
-            if (hasattr(self.agent, "steer") and self.harness["type"] != "acp"
-                    and not getattr(self.agent, "_stop", False)):   # after Stop: queued, it runs once the turn ends
-                with self.lock:                      # the turn may be ending: decide under the lock it ends under
-                    if self.state in ("working", "waiting"):
-                        self.agent.steer(self._body(text, images), images=images)
-                        from meshpool_harness import pace as PACE
-                        if PACE.classify(text, bool(images)) != "quick":
-                            self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
-                        return {"queued": False, "added": True}
-                self._start_turn(text, images)       # it ended meanwhile: this message starts the next turn
-                return {"queued": False}
-            with self.lock:
+        token, queued_as, n = None, "", 0
+        with self.lock:
+            if getattr(self, "state", "idle") not in _BUSY:
+                if getattr(self, "_was_stopped", False) and not interrupt and acp:
+                    # After Stop, ACP agents can pick the stopped request back up: say plainly that it was stopped.
+                    text = text + self._STOPPED_NOTE
+                self._was_stopped = False
+                token = self._claim_turn_locked()
+            elif self._stop_req or interrupt:        # Stop was pressed: this message is its own turn, after it
+                if acp and not interrupt:
+                    text = text + self._STOPPED_NOTE
+                if self._after_stop is None:
+                    self._after_stop = []
+                self._after_stop.append((text, images))
+                queued_as, n = "after", len(self._after_stop)
+            elif hasattr(self.agent, "steer") and not acp:
+                self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
+                from meshpool_harness import pace as PACE
+                if PACE.classify(text, bool(images)) != "quick":
+                    self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
+                return {"queued": False, "added": True}
+            else:
                 self.queue.append((text, images))
-            self.emit({"type": "queued", "text": text, "n": len(self.queue)})
+                queued_as, n = "queue", len(self.queue)
+        if queued_as == "after":
+            self.emit({"type": "queued", "text": text, "n": n, "after_stop": True})
+            return {"queued": True, "after_stop": True}
+        if queued_as:
+            self.emit({"type": "queued", "text": text, "n": n})
             return {"queued": True}
-        self._start_turn(text, images)
+        self._start_turn(text, images, token)
         return {"queued": False}
 
     def _save_files(self, text: str, files: list) -> str:
@@ -794,6 +1069,7 @@ class Session:
                     a.model = model
             except Exception:  # noqa: BLE001
                 pass
+        self._bind_always(a)                         # "Allow in this chat" goes with the chat, not the agent
         self.agent, self.harness = a, new
         if self.cp:                                   # Meshpool's agent books by its tools, an outside agent by scan
             a_out = new["type"] in ("acp", "pi")
@@ -883,6 +1159,11 @@ class Session:
             pass
 
     def _turn_finish(self):
+        lease = getattr(self, "_lease", None)
+        if lease:                                    # the run is over: its task may run again
+            self._lease = None
+            from meshpool_harness import assistant as AS
+            AS.release(*lease)
         run = getattr(self, "_ck_run", "")
         if getattr(self, "_ck_stop", None):
             self._ck_stop.set()
@@ -956,37 +1237,42 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
 
-    def _start_turn(self, text: str, images: list | None):
-        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits)
-            self.state = "working"
-        self._stop_req = False
-        C.load_into_env(override=True)              # newest settings (model, key) for this turn
-        try:                                        # a masked or mangled key: one clear message for every agent
+    def _key_problem(self) -> str:
+        """A masked or mangled key: one clear message for every agent ("" when the key looks usable)."""
+        try:
             from meshpool_harness import providers as PV
             if self.harness.get("type") != "auto" and PV.split(getattr(self.agent, "model", None) or "")[0] == "key":
-                bad = PV.key_problem(PV.key())
-                if bad:
-                    self.emit({"type": "user", "text": text, "images": []})
-                    self.emit({"type": "error", "text": bad})
-                    self.emit({"type": "turn_end"})
-                    self.state = "idle"
-                    return
+                return PV.key_problem(PV.key())
         except Exception:  # noqa: BLE001
             pass
-        with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
-            _claim_working(self)
-        try:
-            caps = self._capability_turn(text)
-        except BaseException:
-            self.state = "idle"
-            raise
-        if hasattr(self.agent, "plan"):
-            changed = bool(self.agent.plan) != self.plan
-            self.agent.plan = self.plan
-            if changed and hasattr(self.agent, "apply_mode"):
-                self.agent.apply_mode()              # an agent with its own modes (Codex): the mode the turn runs in
+        return ""
 
-        self.t_turn = time.time()
+    def _wait_mcp(self, token: int):
+        """A message sent while the MCP servers still start (up to 45 s) is accepted; its turn waits here, on the turn's
+        own thread, until they are up, so the agent has its tools. Stop ends the wait."""
+        if self.harness.get("type") in ("acp", "pi"):
+            return
+        ready = getattr(self, "_mcp_ready", None)
+        if ready is None or ready.is_set():
+            return
+        end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
+        while not ready.wait(0.2):
+            if self._stop_req or self._turn_id != token or time.time() > end:
+                break
+
+    def _start_turn(self, text: str, images: list | None, token: int | None = None, cont: bool = False):
+        """Run one turn (`cont`: a continuation - goal next turn, resume after an outage - keeps the usage task of the
+        message that began the work, so the spending limit covers the whole goal). Run one turn on its own thread. `token` is the turn this message was given by _claim_turn (send, or
+        _end_turn handing over to the next message); everything slow (key check, capability wait, MCP wait,
+        checkpoint) happens inside it, and every way out of the thread ends it with _end_turn."""
+        if token is None:
+            token = self._claim_turn()
+            if token is None:
+                return
+        if not (cont and getattr(self, "_usage_task", None)):
+            self._usage_task = usage.start_task(chat=self.id, label="scheduled" if self.scheduled else "task")
+        if hasattr(self.agent, "usage_task"):
+            self.agent.usage_task = self._usage_task          # the agent (or harness) records its calls in this task
         ev0 = len(self.events)
         root = str(Path(self.workdir).resolve()) if self.workdir else ""
         with _ACTIVE_LOCK:
@@ -997,10 +1283,40 @@ class Session:
             _ACTIVE[root].add(self)
         self._turn_n = None
 
+        def stopped_before_start():                  # Stop pressed before the agent started: never start it
+            if not self._stop_req:
+                return False
+            self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
+            self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
+                                                      "above; send it again to run it."})
+            return True
+
         def go():
-            idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
+            synthetic, cp_begun, nxt = False, False, None
             try:
+                try:
+                    C.load_into_env(override=True)      # newest settings (model, key) for this turn
+                except Exception:  # noqa: BLE001
+                    pass
+                bad = self._key_problem()
+                if bad:
+                    self.emit({"type": "user", "text": text, "images": []})
+                    self.emit({"type": "error", "text": bad})
+                    synthetic = True
+                    return
+                caps = self._capability_turn(text)
+                self._wait_mcp(token)
+                if stopped_before_start():
+                    synthetic = True
+                    return
+                if hasattr(self.agent, "plan"):
+                    changed = bool(self.agent.plan) != self.plan
+                    self.agent.plan = self.plan
+                    if changed and hasattr(self.agent, "apply_mode"):
+                        self.agent.apply_mode()      # an agent with its own modes (Codex): the mode the turn runs in
+                idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
                 if self.cp:
+                    cp_begun = True
                     try:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
                                                event_index=ev0)
@@ -1040,11 +1356,11 @@ class Session:
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
                     elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
                         threading.Thread(target=self._pi_quick_wrap,
-                                         args=(self.agent, self.t_turn, agent_token(self.agent)), daemon=True).start()
+                                         args=(self.agent, self.t_turn, agent_token(self.agent), None, token), daemon=True).start()
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
+                commits: list = []                   # what this turn used up: spent only once it really starts (M20-03)
                 if self.ctx_pending:
-                    self.ctx_pending = False
                     try:
                         from meshpool_harness import assistant as AS
                         m0 = read_meta(self.id)
@@ -1057,13 +1373,16 @@ class Session:
                                 "all" if not self.harness.get("lean") else "none")
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
-                            rules=outside, tools=tools,
+                            lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
                             office=tools != "none" or bool(getattr(self.agent, "office_on", False)))
-                        write_meta(self.id, memory_exclude_sent=ex)
-                        if pid:
-                            write_meta(self.id, project_ctx=pid)
+
+                        def spend_ctx(pid=pid, ex=ex):
+                            self.ctx_pending = False
+                            write_meta(self.id, ctx_pending=False, memory_exclude_sent=ex,
+                                       **({"project_ctx": pid} if pid else {}))
+                        commits.append(spend_ctx)
                     except Exception:  # noqa: BLE001
-                        pass
+                        self.ctx_pending = False
                 else:                               # a chat moved into a project later gets the project once, next turn
                     try:
                         m = read_meta(self.id)
@@ -1073,7 +1392,7 @@ class Session:
                             pb = AS.project_block(pid, text, m.get("memory_exclude") or [])
                             if pb:
                                 body += "\n\n\u200b" + pb
-                            write_meta(self.id, project_ctx=pid)
+                            commits.append(lambda pid=pid: write_meta(self.id, project_ctx=pid))
                     except Exception:  # noqa: BLE001
                         pass
                 try:                                    # facts the user left out of this chat after its start
@@ -1086,25 +1405,28 @@ class Session:
                             if gone:
                                 body += ("\n\n\u200b" + "The user left these out of this chat. Ignore them from now on:\n"
                                          + "\n".join("- " + g for g in gone))
-                            write_meta(self.id, memory_exclude_sent=ex)
+                            commits.append(lambda ex=ex: write_meta(self.id, memory_exclude_sent=ex))
                 except Exception:  # noqa: BLE001
                     pass
                 try:                                    # preferences learned after the last turn apply now
                     from meshpool_harness import learn as LRN
-                    pend = LRN.pending(self.id)
-                    if pend:
-                        body += "\n\n\u200b" + pend
+                    lines = LRN.peek(self.id)
+                    if lines:
+                        body += "\n\n\u200b" + LRN.note(lines)
+                        commits.append(lambda lines=lines: LRN.commit(self.id, lines))
                 except Exception:  # noqa: BLE001
                     pass
                 # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
                 # a Stop from here on either trips the check below or changes the generation send() checks.
                 gen0 = getattr(self.agent, "_gen", 0)
-                if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
-                    self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
-                    self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
-                                                              "above; send it again to run it."})
-                    self.emit({"type": "turn_end"})
+                if stopped_before_start():          # Stop pressed while the checkpoint was taken
+                    synthetic = True
                     return
+                for spend in commits:
+                    try:
+                        spend()
+                    except Exception:  # noqa: BLE001
+                        pass
                 self._turn_begin()
                 if self.harness.get("type") not in ("acp", "pi") and hasattr(self.agent, "_repair"):
                     self.agent._expect_gen = gen0     # a Stop since the message was taken ends this turn at once
@@ -1125,70 +1447,134 @@ class Session:
                 except Exception:  # noqa: BLE001
                     pass
                 self._after_turn(text, ev0, self.t_turn)
-            except Exception as e:  # noqa: BLE001 - a failure shows in the chat, with the message kept
+            except Exception as e:  # noqa: BLE001 - a bug here must end in a message, not a chat stuck on working
                 try:
                     with self.lock:
                         shown = any(x.get("type") == "user" for x in self.events[ev0:])
                     if not shown:
                         self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
-                    self.emit({"type": "error", "text": f"This message could not be sent: {e}"})
-                    self.emit({"type": "turn_end"})
+                    self.emit({"type": "error", "text": f"This message could not run: {str(e)[:300]}"})
                 except Exception:  # noqa: BLE001
                     pass
             finally:
-                self._turn_finish()
-                with _ACTIVE_LOCK:
-                    _ACTIVE.get(root, set()).discard(self)
-                self._end_cp_turn()
-                while (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
-                       and self.agent.has_steers()):  # added with Enter just as the turn ended: answer it now
-                    try:
-                        self._resume_steers()
-                    except Exception as e:  # noqa: BLE001
-                        self.emit({"type": "error", "text": str(e)})
-                        break
-                write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan)
-                nxt = None
-                with self.lock:
-                    # Stop clears the queue, so whatever is queued now was sent after Stop, while the turn wound
-                    # down. The user was told it would run: run it (it was dropped, and its Queued chip stayed).
-                    if self.queue:
-                        items, self.queue = self.queue, []
-                        nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                        if getattr(self.agent, "_stop", False) and self.harness.get("type") == "acp":
-                            nxt = (nxt[0] + "\n\n\u200b[Meshpool] I stopped your previous request. Do not continue "
-                                   "it; answer this message instead.", nxt[1])
-                if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
-                    nxt = self._goal_next(ev0)
-                elif not nxt and not getattr(self.agent, "_stop", False) and not self._stop_req:
-                    nxt = self._resume_next(ev0)
-                if nxt:
-                    self.emit({"type": "queued", "text": "", "n": 0})
-                    self._start_turn(*nxt)               # stays "working": the queued message goes straight in
-                else:
-                    while True:                          # a message added in the last moment is answered, not left
-                        with self.lock:
-                            late = (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
-                                    and self.agent.has_steers())
-                            if not late:
-                                self.state = "idle"
-                                break
-                        try:
-                            self._resume_steers()
-                        except Exception as e:  # noqa: BLE001
-                            self.emit({"type": "error", "text": str(e)})
-                            with self.lock:
-                                self.state = "idle"
-                            break
-                    if not getattr(self, "deleted", False):
-                        write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
-                    took = time.time() - self.t_turn
-                    if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
-                        last = next((e.get("text") for e in reversed(self.events)
-                                     if e.get("type") == "assistant" and e.get("text")), "") or "Finished."
-                        _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
-                                + (self.agent.title or "task")[:60], last.strip()[:200])
+                try:
+                    nxt = self._turn_epilogue(root, ev0, cp_begun)
+                except Exception:  # noqa: BLE001
+                    nxt = None
+                self._end_turn(token, synthetic, nxt)
         threading.Thread(target=go, daemon=True).start()
+
+    def _turn_epilogue(self, root: str, ev0: int, cp_begun: bool):
+        """What runs after a turn, however it ended. Each step is guarded alone: one failing (a full disk, a locked
+        file) never skips the rest. Returns the goal or auto-resume follow-up (message, images), or None."""
+        def guard(fn, *a):
+            try:
+                return fn(*a)
+            except Exception:  # noqa: BLE001
+                return None
+        guard(self._turn_finish)
+        with _ACTIVE_LOCK:
+            _ACTIVE.get(root, set()).discard(self)
+        if self.cp and cp_begun:
+            guard(self._end_cp_turn)
+        while (not getattr(self.agent, "_stop", False) and not self._stop_req and hasattr(self.agent, "has_steers")
+               and guard(self.agent.has_steers)):         # added with Enter just as the turn ended: answer it now
+            try:
+                self._resume_steers()
+            except Exception as e:  # noqa: BLE001
+                guard(self.emit, {"type": "error", "text": str(e)})
+                break
+        guard(lambda: write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan))
+        stopped = getattr(self.agent, "_stop", False) or self._stop_req
+        with self.lock:                              # a message waiting to run: it goes first, the goal waits
+            waiting = bool(self._after_stop) or bool(self.queue)
+        if waiting or stopped:
+            return None
+        if self.goal:
+            return guard(self._goal_next, ev0)       # these take self.lock themselves: never called under it
+        return guard(self._resume_next, ev0)
+
+    def _end_turn(self, token: int, synthetic: bool = False, nxt=None, notice: bool = True):
+        """The only way a turn ends. A stale token is ignored. A turn that opened (a "user" event) but never
+        closed gets a synthetic turn_end, so the saved transcript never says it is still running. Then, under the
+        lock: the next message (sent after Stop, then the queue, then the goal / auto-resume follow-up `nxt` the
+        caller decided) takes over as a new turn, or the chat goes idle. Approvals this turn left open are closed."""
+        if token != self._turn_id:
+            return
+        self._retry_open = False                     # no retry_ok for a turn that ends in an error
+        try:
+            if synthetic or getattr(self, "_turn_open", False):
+                self.emit({"type": "turn_end", "synthetic": True})
+        except Exception:  # noqa: BLE001
+            pass
+        item, skip_late = None, False
+        while True:
+            with self.lock:
+                if token != self._turn_id:
+                    return
+                agent = self.agent
+                stopped = getattr(agent, "_stop", False)
+                late = (not skip_late and not stopped and not self._stop_req and hasattr(agent, "has_steers")
+                        and agent.has_steers())
+                if not late:
+                    if self._after_stop:             # sent after Stop: always runs, as its own turn
+                        items, self._after_stop = self._after_stop, []
+                        item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
+                    elif self.queue:                 # Stop clears the queue: what is in it now was sent after Stop
+                        items, self.queue = self.queue, []
+                        item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
+                        if stopped and self.harness.get("type") == "acp":
+                            item = (item[0] + self._STOPPED_NOTE, item[1])
+                    elif nxt and not stopped and not self._stop_req:
+                        item = nxt
+                    for p in self.pendings.values():  # a card of this turn nobody can answer any more
+                        if p.get("in_turn") and p.get("token") == token and not p.get("answered"):
+                            p["decision"], p["closed"] = "no", True
+                            p["ev"].set()
+                    if self._interrupting == token:
+                        self._interrupting = None
+                    if item:
+                        self._turn_id += 1
+                        new = self._turn_id
+                        self.state, self._stop_req, self._was_stopped = "working", False, False
+                        self.t_turn = time.time()
+                    else:
+                        took = time.time() - getattr(self, "t_turn", time.time())
+                        self.state = "idle"
+                    break
+            try:
+                self._resume_steers()
+            except Exception as e:  # noqa: BLE001
+                skip_late = True
+                try:
+                    self.emit({"type": "error", "text": str(e)})
+                except Exception:  # noqa: BLE001
+                    pass
+        if item:
+            try:
+                self.emit({"type": "queued", "text": "", "n": 0})
+                self._start_turn(item[0], item[1] or None, new,
+                                 cont=item[0] in (GOAL_NEXT, RESUME_NEXT))   # stays "working": straight into the next one
+            except Exception:  # noqa: BLE001
+                self._end_turn(new, True)
+        elif notice and not synthetic:
+            self._turn_done_notice(took)
+
+    def _turn_done_notice(self, took: float):
+        """After a turn that went idle: mark the chat unread and, for a long or scheduled one, tell the user."""
+        try:
+            if not getattr(self, "deleted", False):
+                write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
+                last = next((e.get("text") for e in reversed(self.events)
+                             if e.get("type") == "assistant" and e.get("text")), "") or "Finished."
+                _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
+                        + (self.agent.title or "task")[:60], last.strip()[:200])
+        except Exception:  # noqa: BLE001
+            pass
 
     def _end_cp_turn(self):
         """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
@@ -1231,13 +1617,14 @@ class Session:
     def grade(self) -> dict:
         """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
         Runs beside nothing else: the chat must be idle. The result arrives as a review event."""
-        if self.state in ("working", "waiting"):
-            raise ValueError("Wait for the reply to finish, or stop it, then check it.")
+        busy = "Wait for the reply to finish, or stop it, then check it."
+        if self.state in _BUSY:
+            raise ValueError(busy)
         if not hasattr(self.agent, "grade_now"):
             raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
-        with self.lock:
-            _claim_working(self)
-        self.t_turn = time.time()
+        token = self._claim_turn()
+        if token is None:
+            raise ValueError(busy)
 
         def go():
             try:
@@ -1245,8 +1632,7 @@ class Session:
             except Exception as e:  # noqa: BLE001
                 self.emit({"type": "error", "text": "The check could not run: " + str(e)[:160]})
             finally:
-                with self.lock:
-                    self.state = "idle"
+                self._end_turn(token, notice=False)
         threading.Thread(target=go, daemon=True, name="meshpool-grade").start()
         return {"started": True}
 
@@ -1306,6 +1692,10 @@ class Session:
             evs = self.events[ev0:]
         out = _turn_outcome(evs)
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
+        if getattr(getattr(self, "agent", None), "budget_stopped", False):
+            self.emit({"type": "status", "text": "Goal paused: the spending limit for this task was reached. Raise it "
+                                                 "in Settings or send a message to continue."})
+            return None                 # the goal stays set; a new message starts a new task with a fresh limit
         if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
             return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
@@ -1360,8 +1750,9 @@ class Session:
     def _resume_next(self, ev0: int):
         """After a turn with no goal: when it ended on a rate limit or an outage (not Stop), wait and pick the task
         up again by itself, so a long task is not left half done. None when there is nothing to pick up."""
-        if os.environ.get("MH_AUTO_RESUME", "1") == "0":
-            return None
+        if (os.environ.get("MH_AUTO_RESUME", "1") == "0" or not self.auto_resume
+                or getattr(getattr(self, "agent", None), "budget_stopped", False)):
+            return None                              # off, or the spending limit stopped it: never run on by itself
         with self.lock:
             evs = self.events[ev0:]
         out = _turn_outcome(evs)
@@ -1384,7 +1775,7 @@ class Session:
                                              "a message or press Stop to take over."})
         return self._pause(wait, RESUME_NEXT)
 
-    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None):
+    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None, turn_tok: int | None = None):
         """Pi: when a quick request runs past its time, tell Pi to answer (a note only the model sees). It targets the
         turn send() starts after tok0 and nothing later; a real task added meanwhile (send) cancels it."""
         from meshpool_harness import pace as PACE
@@ -1397,7 +1788,7 @@ class Session:
             return False
         time.sleep(max(0.0, end - time.time()))
         if (self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False)
-                and getattr(self, "_quick_off", None) != turn):
+                and getattr(self, "_quick_off", None) != turn and (turn_tok is None or self._turn_id == turn_tok)):
             try:
                 return bool(agent.nudge(PACE.WRAP, tok))   # only while that same turn runs; no chat message
             except Exception:  # noqa: BLE001
@@ -1505,22 +1896,23 @@ class Session:
         return CR.fork(self.id, CR.message_for_event(self, int(event_index)), session=self)
 
     def stop(self):
-        self._stop_req = True                        # checked before the agent starts: its own flag resets then
-        if self.state in ("working", "waiting"):
-            self._was_stopped = True             # a request really was cut short
         with self.lock:
+            self._stop_req = True                    # checked before the agent starts: its own flag resets then
+            if getattr(self, "state", "idle") in _BUSY:
+                self._was_stopped = True             # a request really was cut short
             had = bool(self.queue)
             self.queue = []
+            pend = list(self.pendings.values())
         if had:
             self.emit({"type": "queued", "text": "", "n": 0})
         if self.agent:
             self.agent.stop()
-        for p in list(self.pendings.values()):
+        for p in pend:
             p["ev"].set()
 
     def set_mode(self, mode: str):
-        self.agent.mode = self.mode = mode if mode in MODES else "ask"
-        write_meta(self.id, mode=self.mode)          # restored on resume: a Supervised chat stays Supervised
+        self.agent.mode = self.mode = C.normalize_mode(mode, "ask")
+        write_meta(self.id, mode=self.mode)          # restored on resume: an Ask chat stays Ask
         if hasattr(self.agent, "apply_mode"):
             try:
                 self.agent.apply_mode()
@@ -1534,7 +1926,14 @@ class Session:
             evs = self.events[since:]
         a = self.agent
         meta = read_meta(self.id)
+        try:
+            oq = (a.pending_question() or {}).get("id") if hasattr(a, "pending_question") else None
+        except Exception:  # noqa: BLE001
+            oq = None
+        with self.lock:
+            open_ids = [k for k, p in self.pendings.items() if not p.get("closed")]
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
+                "open": {"approvals": open_ids, "question": oq},
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
@@ -1554,6 +1953,7 @@ class Session:
     def close(self):
         self._closed = True                           # an MCP start still running closes its servers when it finishes
         self.stop()
+        _release(getattr(self, "id", ""))
         if self.mcp:
             self.mcp.close()
         if hasattr(self.agent, "close"):
@@ -1571,6 +1971,18 @@ def _default_style() -> str:
 
 
 def create(body: dict) -> dict:
+    """Start a chat. A private folder made for it is removed again when anything before the chat exists fails (M20-04)."""
+    made: list = []
+    try:
+        return _create(body, made)
+    except BaseException:
+        from meshpool_harness import project_store as PS
+        for p in made:
+            PS.remove_scratch(p)
+        raise
+
+
+def _create(body: dict, made: list) -> dict:
     from meshpool_harness import project_store as PS
     from meshpool_harness.ui.desktop import default_project
     wd = (body.get("workdir") or "").strip().strip('"')
@@ -1585,6 +1997,7 @@ def create(body: dict) -> dict:
             raise ValueError(f"This project's folder ({wd}) was moved or deleted. Link it again on the project page.")
     if not wd:                                      # a chat that needs no folder: it gets a private one
         wd, scratch = PS.new_scratch(pid), True
+        made.append(wd)
     elif Path(wd).expanduser().resolve() == default_project().resolve():
         wd = str(default_project())
         Path(wd).mkdir(parents=True, exist_ok=True)
@@ -1633,14 +2046,19 @@ def create(body: dict) -> dict:
         wd = wt["workdir"]                          # the chat works in its own isolated copy of the folder
     try:
         s = Session(workdir=wd, mode=body.get("mode"), harness=harness,
-                    kind=kind, model=model, plan=bool(plan))
-    except BaseException:
+                    kind=kind, model=model, plan=bool(plan), no_mcp=bool(body.get("no_mcp")))
+    except BaseException as e:
         if scratch:                                 # the private folder made above must not be left behind
             PS.remove_scratch(wd)
         if made_wt:
             from meshpool_harness import worktrees as WT
             WT.discard(wt["id"])
+        if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
+            # not "[Errno 24] Too many open files": say what to do (the page shows this text where Send was pressed)
+            raise ValueError("Meshpool cannot start another chat: this computer's limit of open files was reached. "
+                             "Close the chats you are not using, then send again.") from e
         raise
+    made.clear()                                    # the chat exists: it owns its folder now
     if wt:
         from meshpool_harness import worktrees as WT
         WT.set_owner(wt["id"], "chat", s.id)
@@ -1692,6 +2110,7 @@ def create(body: dict) -> dict:
         PS.touch(pid)
     with LOCK:
         LIVE[s.id] = s
+    _claim(s.id)
     _start_reaper()
     if not scratch and not pid:
         try:
@@ -1778,6 +2197,66 @@ def _start_reaper():
     th.start()
 
 
+class ChatBusy(ValueError):
+    """The chat is open in another running Meshpool process (the terminal or the app): two would overwrite each other."""
+
+
+def _live_file(sid: str) -> Path:
+    return SESSIONS / sid / "live.json"
+
+
+def _claim(sid: str, write: bool = True) -> None:
+    """Record that this process has the chat open. Another live process holding it refuses (ChatBusy); a dead one's
+    claim (a crash) is taken over."""
+    f = _live_file(sid)
+    try:
+        rec = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        rec = {}
+    pid = rec.get("pid")
+    if isinstance(pid, int) and pid != os.getpid() and HR._pid_alive(pid):
+        where = "the terminal" if rec.get("frontend") == "terminal" else "the Meshpool app"
+        raise ChatBusy(f"This chat is open in {where} (process {pid}). Close it there, or fork it: "
+                       f"meshpool chats fork {sid}")
+    if not write or not f.parent.is_dir():
+        return
+    try:
+        tmp = f.with_name("live.json.tmp")
+        tmp.write_text(json.dumps({"pid": os.getpid(), "frontend": os.environ.get("MESHPOOL_FRONTEND") or "app",
+                                   "t": time.time()}), encoding="utf-8")
+        C.replace_file(tmp, f)
+    except OSError:
+        pass
+
+
+def _release(sid: str) -> None:
+    if not sid:
+        return
+    f = _live_file(sid)
+    try:
+        if json.loads(f.read_text(encoding="utf-8")).get("pid") == os.getpid():
+            f.unlink()
+    except (OSError, ValueError):
+        pass
+
+
+def _stale(s: Session) -> bool:
+    """An idle chat whose session.json another process has written since: its copy here is out of date."""
+    if (getattr(s, "state", "") != "idle" or getattr(s, "pendings", None)
+            or not hasattr(getattr(s, "agent", None), "messages") or not getattr(s, "id", "")):
+        return False
+    try:
+        m = (SESSIONS / s.id / "session.json").stat().st_mtime
+    except OSError:
+        return False
+    if m <= s._saved_mtime + 0.001:
+        return False
+    if len(saved_messages(s.id)) != len([x for x in s.agent.messages if x.get("role") != "system"]):
+        return True
+    s._saved_mtime = m                                  # same content: our own write
+    return False
+
+
 class ProjectMissing(ValueError):
     """The chat's project folder was moved or deleted: its history can be read but not continued."""
 
@@ -1785,11 +2264,17 @@ class ProjectMissing(ValueError):
 _OPENING: dict = {}                 # chat id -> lock: only one request builds the Session of a saved chat
 
 
-def get(sid: str) -> Session:
+def get(sid: str, no_mcp: bool = False) -> Session:
     if sid in DELETED or read_meta(sid).get("deleted"):
         raise KeyError(sid)
     with LOCK:
         s = LIVE.get(sid)
+    if s and _stale(s):                          # another front end wrote this chat: show what it wrote
+        with LOCK:
+            if LIVE.get(sid) is s:
+                del LIVE[sid]
+        s.close()
+        s = None
     if s:
         return s
     with LOCK:
@@ -1799,7 +2284,9 @@ def get(sid: str) -> Session:
             s = LIVE.get(sid)
         if s:
             return s
-        s = Session(resume_id=sid)               # reopen a saved session
+        _claim(sid, write=False)                 # refuses while another running process has this chat open
+        s = Session(resume_id=sid, **({"no_mcp": True} if no_mcp else {}))    # reopen a saved session
+        _claim(sid)
         with LOCK:
             dead = sid in DELETED or bool(read_meta(sid).get("deleted"))   # deleted while it was being built
             live = s if dead else LIVE.setdefault(sid, s)
@@ -1814,6 +2301,7 @@ def get(sid: str) -> Session:
             raise KeyError(sid)
         if live is not s:
             s.close()
+            _claim(sid)
         return live
 
 
@@ -1905,7 +2393,7 @@ def _disk_rows() -> tuple:
                     if hit_row and hit_row[0] == key:
                         rows[hit_row[2]["id"]] = dict(hit_row[2])
                         continue
-                    d = SS.read(p.parent)
+                    d = SS.read_head(p.parent) or SS.read(p.parent)     # the small head record: no messages loaded
                 except OSError:
                     continue
                 if not isinstance(d, dict) or not isinstance(d.get("id"), str) or not d["id"]:
@@ -2005,6 +2493,11 @@ def _purge(sid: str, force: bool = False) -> None:
         t = _DEL_TIMERS.pop(sid, None)
         if t and t is not threading.current_thread():
             t.cancel()
+        try:
+            from meshpool_harness import chat_import as CI
+            CI.bury(sid)                                  # an imported chat the person deleted stays deleted (M21-02)
+        except Exception:  # noqa: BLE001
+            pass
         scratch_dir = ""
         if m.get("scratch"):
             scratch_dir = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
@@ -2076,7 +2569,13 @@ def thread_action(sid: str, body: dict) -> dict:
                 raise ValueError("That project does not exist any more.")
         if not read_meta(sid):
             raise KeyError("Chat not found.")
-        write_meta(sid, project_id=pid, project_ctx="" if not pid else None)
+        write_meta(sid, project_id=pid, project_ctx="", project_unbound=not pid)
+        try:                                          # the chat's own folder follows it to the new project (M20-01)
+            from meshpool_harness import project_store as PS
+            wd = (_saved(sid) or {}).get("workdir") or (LIVE[sid].workdir if sid in LIVE else "")
+            PS.rebind_chat(wd, pid)
+        except Exception:  # noqa: BLE001
+            pass
     elif act == "delete":                             # soft: the server purges it after the grace, page or no page
         with _DEL_LOCK:
             if sid in DELETED:
@@ -2145,8 +2644,8 @@ def search(q: str) -> list:
         except OSError:
             continue
         i = low.find(q)
-        if i < 0:
-            continue
+        if i < 0 and q not in str(read_meta(p.parent.name).get("title") or "").lower():
+            continue                                     # the name the person gave the chat counts too (F-07)
         try:
             d = json.loads(raw)
         except ValueError:
@@ -2193,6 +2692,20 @@ def mcp_info() -> dict:
     return {"path": str(path), "text": text, "servers": servers, "error": err}
 
 
+def _test_server(name: str, spec: dict) -> dict | None:
+    """Start one server on its own and report how it went (nothing else starts)."""
+    import tempfile
+    one = {k: v for k, v in spec.items() if k not in ("disabled", "needs_test")}
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "mcp.json"
+        p.write_text(json.dumps({"mcpServers": {name: one}}), encoding="utf-8")
+        m = M.Manager(roots=[str(Path.home())], path=p).start(timeout=40, use_health=False)
+        try:
+            return next((r for r in m.status() if r["name"] == name), None)
+        finally:
+            m.close()
+
+
 def mcp_save(body: dict) -> dict:
     path = M.config_file()
     if "text" in body:
@@ -2202,12 +2715,22 @@ def mcp_save(body: dict) -> dict:
             raise ValueError(f"Not valid JSON: {e}")
         M.write_text_atomic(path, body["text"].rstrip() + "\n")
     elif "name" in body:
+        if body.get("enabled"):                       # an imported server is switched on only once it starts (F-17)
+            cur = M.load_config(path).get(body["name"])
+            if isinstance(cur, dict) and cur.get("needs_test"):
+                row = _test_server(body["name"], cur)
+                if not row or row.get("status") != "connected":
+                    why = (row or {}).get("error") or "it did not start"
+                    raise ValueError(f"{body['name']} did not start ({str(why)[:200]}). It stays off. Check its "
+                                     "command and keys, then try again.")
+
         def toggle(servers):
             srv = servers.get(body["name"])
             if not isinstance(srv, dict):
                 raise ValueError(f"No server named {body['name']}")
             if body.get("enabled"):
                 srv.pop("disabled", None)
+                srv.pop("needs_test", None)
             else:
                 srv["disabled"] = True
         if not path.exists():
@@ -2238,6 +2761,8 @@ def close_all():
 
 
 def _notify(title: str, body: str):
+    if os.environ.get("MESHPOOL_FRONTEND") == "terminal":     # the terminal shows its own prompt
+        return
     try:
         from meshpool_harness.ui.desktop import notify
         notify(title, body)
@@ -2248,26 +2773,49 @@ def _notify(title: str, body: str):
 def run_scheduled(t: dict) -> str:
     """Start a new thread for a scheduled task and send its prompt. Returns the thread id."""
     from meshpool_harness import assistant as AS
-    folder = t.get("folder") or ""
-    if folder and not Path(folder).expanduser().is_dir():
-        raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
-    rf = AS.run_folder(t)                       # a repository: the run gets its own isolated copy
+    token = t.get("claim")                       # from due(); Run now takes its own
+    if not token:
+        try:
+            token = AS.claim(t["id"])
+        except KeyError:                         # the task was deleted just now: this run still goes ahead
+            token = ""
+        else:
+            if not token:
+                raise ValueError("This task is still running. Wait for it to finish, or stop its chat first.")
     try:
-        v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
-                    "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
-                    "worktree_id": rf.get("worktree_id") or None})
-    except BaseException:
-        if rf.get("worktree_id"):
-            from meshpool_harness import worktrees as WT
-            WT.discard(rf["worktree_id"])
+        folder = t.get("folder") or ""
+        if folder and not Path(folder).expanduser().is_dir():
+            raise ValueError(f"The folder for this task ({folder}) was moved or deleted. Edit the task and pick it again.")
+        rf = AS.run_folder(t)                   # a repository: the run gets its own isolated copy
+        try:
+            v = create({"workdir": rf["workdir"], "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
+                        "task": t.get("prompt", ""), "plan": False,      # nobody is there to approve a plan
+                        "worktree_id": rf.get("worktree_id") or None})
+        except BaseException:
+            if rf.get("worktree_id"):
+                from meshpool_harness import worktrees as WT
+                WT.discard(rf["worktree_id"])
+            raise
+        s = get(v["id"])
+        s.scheduled = dict(t, claim=token)
+        s._lease = (t["id"], token) if token else None
+        late = ""
+        if t.get("late"):
+            h = float(t.get("late_s") or 0) / 3600
+            late = (f"This run was due {h:.0f} hours ago: Meshpool was closed or the computer was off. "
+                    "It ran as soon as it could.")
+            s.emit({"type": "status", "text": late})
+        write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})"
+                   + (" (late)" if late else ""), scheduled=t["id"])
+        s._system_send = True                    # the run's own prompt is not the person taking over
+        s.send(t["prompt"] + (f"\n\n\u200b({late} " if late else "\n\n\u200b(") + "This is a scheduled run. The user is not "
+               "watching: make reasonable choices, say which ones you made, and finish with a short summary.)")
+        s._system_send = False
+        AS.set_thread(t["id"], s.id)
+        return s.id
+    except BaseException as e:
+        AS.run_failed(t["id"], token, str(e))
         raise
-    s = get(v["id"])
-    s.scheduled = t
-    write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
-    s.send(t["prompt"] + ("\n\n\u200b(This is a scheduled run. The user is not watching: make reasonable choices, say "
-                          "which ones you made, and finish with a short summary.)"))
-    AS.set_thread(t["id"], s.id)
-    return s.id
 
 
 def recover_worktrees():
@@ -2302,7 +2850,7 @@ def scheduler_loop():
             for t in ([] if QUIESCING[0] else AS.due()):      # due tasks stay due and run after the restart
                 try:
                     run_scheduled(t)
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001           # run_scheduled kept the reason on the task
                     _notify(f"Scheduled task could not start: {t.get('name')}", str(e)[:200])
         except Exception:  # noqa: BLE001
             pass
@@ -2311,7 +2859,10 @@ def scheduler_loop():
 
 def _saved(sid: str) -> dict | None:
     try:
-        return SS.read(SESSIONS / sid)
+        d = SS.read(SESSIONS / sid)
+        if d and isinstance(d.get("messages"), list):
+            d["messages"] = repair_tool_pairs(d["messages"])[0]       # a saved chat never loads with an orphan
+        return d
     except OSError:
         return None
 

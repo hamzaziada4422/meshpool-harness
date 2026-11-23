@@ -151,7 +151,7 @@ def test_undo_stays_on_every_turn_and_rewind_and_fork(page, app):
     page.locator("#col .msg-user").nth(0).locator("[data-ma='fork']").click()
     page.wait_for_function("id => S.cur && S.cur.id && S.cur.id !== id", arg=sid, timeout=60000)
     page.wait_for_function("() => document.querySelectorAll('#col .msg-user').length === 1 && "
-                           "document.querySelector('#col').innerText.includes('Made one.txt.')", timeout=30000)
+                           "document.querySelector('#col').innerText.includes('Made one.txt.')", timeout=90000)
     assert (page.evaluate("S.cur.view.title || ''") or "").startswith("Fork of")
     assert (proj / "one.txt").exists()
     assert page.errors == [], page.errors

@@ -308,3 +308,73 @@ def test_tool_outside_a_turn_and_read_only_record_nothing(tmp_path):
         (root / "keep.md").write_text("x\n")
     cp.end_turn()
     assert cp.turns()[0]["changed"] == []
+
+
+def test_overlap_detected_across_processes(tmp_path):
+    import subprocess
+    import sys
+    root = _proj(tmp_path, {"x.py": "x0\n", "y.py": "y0\n"})
+    a = _cp(tmp_path, root, "chatA")
+    code = (
+        "import sys, json\n"
+        "from pathlib import Path\n"
+        "from meshpool_harness.checkpoints import Checkpoints\n"
+        "root, store, shared = sys.argv[1:4]\n"
+        "c = Checkpoints(root, Path(store), mode='journal', shared=Path(shared))\n"
+        "c.begin_turn('B')\n"
+        "with c.tool('bash', {}):\n"
+        "    (Path(root) / 'y.py').write_text('y1\\n')\n"
+        "c.end_turn()\n"
+        "print(json.dumps(c.turns()[0]['changed']))\n"
+    )
+    app = str(Path(ck.__file__).resolve().parent.parent)
+    a.begin_turn("A")
+    with a.tool("bash", {}):
+        r = subprocess.run([sys.executable, "-c", code, str(root), str(tmp_path / "chatB"), str(tmp_path / "shared")],
+                           capture_output=True, text=True, cwd=app, env={**os.environ, "PYTHONPATH": app})
+        assert r.returncode == 0, r.stderr
+        (root / "x.py").write_text("x1\n")
+    a.end_turn()
+    ch_a = {c["path"]: c for c in a.turns()[0]["changed"]}
+    ch_b = {c["path"]: c for c in json.loads(r.stdout.strip().splitlines()[-1])}
+    assert ch_a["x.py"].get("ambiguous"), ch_a
+    assert ch_b["y.py"].get("ambiguous"), ch_b
+    assert fsio.read_json(tmp_path / "shared" / "windows.json", {}) == {}
+
+
+def test_stale_window_entry_is_ignored(tmp_path):
+    import socket
+    import subprocess
+    import sys
+    root = _proj(tmp_path, {"x.py": "x0\n"})
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()                                              # its pid is now dead
+    shared = tmp_path / "shared"
+    shared.mkdir(exist_ok=True)
+    fsio.atomic_write_json(shared / "windows.json", {
+        "999-1-dead": {"store": str(tmp_path / "ghost"), "pid": p.pid, "start": time.time(),
+                       "host": socket.gethostname()},
+        "999-2-old": {"store": str(tmp_path / "ghost2"), "pid": os.getpid(), "start": time.time() - 7 * 3600,
+                      "host": socket.gethostname()}})
+    a = _cp(tmp_path, root, "chatA")
+    a.begin_turn("A")
+    with a.tool("bash", {}):
+        (root / "x.py").write_text("x1\n")
+    a.end_turn()
+    ch = {c["path"]: c for c in a.turns()[0]["changed"]}
+    assert "x.py" in ch and not ch["x.py"].get("ambiguous")
+    assert fsio.read_json(shared / "windows.json", {}) == {}
+
+
+def test_corrupt_windows_file_is_quarantined(tmp_path):
+    root = _proj(tmp_path, {"x.py": "x0\n"})
+    shared = tmp_path / "shared"
+    shared.mkdir(exist_ok=True)
+    (shared / "windows.json").write_text("{not json")
+    a = _cp(tmp_path, root, "chatA")
+    a.begin_turn("A")
+    with a.tool("bash", {}):
+        (root / "x.py").write_text("x1\n")
+    a.end_turn()
+    assert not a.turns()[0]["changed"][0].get("ambiguous")
+    assert list(shared.glob("windows.json.corrupt-*"))

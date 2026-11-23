@@ -304,9 +304,9 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       await window.renderSuggestSettings?.(b, close);
     } else if (sec === "caps") {
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
-      const mode = get0("MH_AGENT_PERMISSIONS") || "ask";
+      const mode = normMode(get0("MH_AGENT_PERMISSIONS"));
       const bu = (feat.features.find(f => f.id === "browser") || {}).browser_use;
-      const row = f => toggleRow(f.id, f.name, f.desc, f.on, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : "", !f.available);
+      const row = f => toggleRow(f.id, f.name, f.desc, f.on && f.available, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : f.reason ? `<small class="why" style="color:var(--del)">Not available here: ${esc(f.reason)}</small>` : "", !f.available);
       b.innerHTML = `${close}<h3>Capabilities</h3><p class="lead">What Meshpool can do for you. Changes apply to new chats; chats already open keep what they started with.</p>
         <ul class="rows2" id="capL">${feat.features.filter(f => !f.advanced).map(row).join("")}</ul>
         <h3 style="font-size:16px;margin:20px 0 4px">Always available</h3><p class="lead">Making Word documents, slides, spreadsheets and PDFs, reading your files, and running scripts are part of Meshpool. Meshpool asks first, unless you change that here.</p>
@@ -323,7 +323,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         catch (e) { x.checked = !x.checked; res("capRes", "bad", e.message); }
       });
       $("#capHarness").onchange = () => { const v = $("#capHarness").value; store("harness_default", v === "meshpool-auto" ? null : v); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } res("capRes", "ok", "Saved. New chats use it."); };
-      $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = $("#capMode").value; store("mode", S.draft.mode); renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
+      $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = ""; renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
       if (bu) {
         const showBu = () => { const m = bu.modes.find(x => x.id === $("#capBrowser").value) || {}; $("#capBrowserD").textContent = `${m.desc || ""} (${m.detail || ""})`; $("#capCdpW").hidden = m.id !== "attach"; };
         $("#capBrowser").onchange = $("#capCdp").onchange = $("#capShow").onchange = async () => { showBu(); try { await post("/api/browser-use", {mode: $("#capBrowser").value, cdp_url: $("#capCdp").value, show_window: $("#capShow").value === "1"}); res("capRes", "ok", "Saved. New chats use it."); } catch (e) { res("capRes", "bad", e.message); } };

@@ -29,6 +29,7 @@ from pathlib import Path
 
 from meshpool_harness import config as C
 from meshpool_harness import session_store as SS
+from meshpool_harness.core import usage as USAGE
 from meshpool_harness.harnesses.acp import _kill_tree
 from meshpool_harness.harnesses.safe_tools import SAFE_MCP
 
@@ -334,6 +335,8 @@ def _before_turn(agent) -> list:
 
 class PiAgent:
     """One Pi process serving one Meshpool thread. Same surface as ACPAgent."""
+    usage_task = None          # the session's usage task (core/usage.py): Pi's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -345,7 +348,7 @@ class PiAgent:
         self.dir = C.runs_dir() / "sessions" / self.id
         self.emit_cb = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.title = ""
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -540,6 +543,26 @@ class PiAgent:
             raise PiError(str(r.get("error") or "Pi refused the request."))
         return r.get("data") or {}
 
+    def _record_usage(self, msg: dict, u: dict):
+        """One assistant message is one model call: put Pi's own numbers in the ledger (no usage block: counted as
+        an estimate, never free)."""
+        try:
+            extra = None
+            cost = u.get("cost")
+            cost = cost.get("total") if isinstance(cost, dict) else cost
+            if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
+                extra = {"reported_cost": cost}
+            text = "".join(str(c.get("text") or "") for c in msg.get("content") or [] if isinstance(c, dict))
+            USAGE.record(str(msg.get("model") or self.model or "pi"), u or None, source="external:pi",
+                         task=self.usage_task or None, reply_chars=len(text), extra=extra)
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     # ---------- events -----------------------------------------------------------------------------------------
     def _on(self, m: dict):
         t = m.get("type")
@@ -564,6 +587,7 @@ class PiAgent:
                 self._turn["in"] += int(u.get("input") or 0) + int(u.get("cacheRead") or 0)
                 self._turn["cached"] += int(u.get("cacheRead") or 0)
                 self._turn["out"] += int(u.get("output") or 0)
+                self._record_usage(msg, u)
                 has_tools = any(isinstance(c, dict) and c.get("type") == "toolCall" for c in msg.get("content") or [])
                 self._flush_text(has_tools)
                 if msg.get("stopReason") == "error" and msg.get("errorMessage"):
@@ -755,6 +779,12 @@ class PiAgent:
             self._turn_live = False
 
     def send(self, text: str, images: list | None = None, _show: bool = True) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         with self.__dict__.setdefault("_turn_gate", threading.Lock()):
             self._turn_seq = getattr(self, "_turn_seq", 0) + 1
             self._turn_live = True

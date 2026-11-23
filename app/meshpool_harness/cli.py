@@ -150,7 +150,9 @@ def _agent_parser():
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
-    ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
+    ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (default), accept-edits (accept file changes), full-access (everything), plan (read only, then a plan). Old names (edits, auto, manual, supervised) still work")
+    ap.add_argument("--sandbox", action="store_true", help="run the agent's commands in the sandbox (on by default except in Full access): they can write only in the project and temporary folders")
+    ap.add_argument("--no-network", dest="no_network", action="store_true", help="also cut the network for sandboxed commands")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
     ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
                     help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
@@ -160,7 +162,13 @@ def _agent_parser():
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
-    ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--mode", choices=["code", "work", "auto"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps; auto: pick the agent for the request")
+    ap.add_argument("--profile", choices=["code", "work"], help=argparse.SUPPRESS)      # the old name of --mode
+    ap.add_argument("--agent", dest="agent_id", help="the agent to run (an id from `meshpool agents`, e.g. meshpool-code, meshpool-work, codex)")
+    ap.add_argument("--project", help="a project id: its instructions, memory and folder apply")
+    ap.add_argument("--incognito", action="store_true", help="no memory is read or written and nothing is learned from this chat")
+    ap.add_argument("--attach", action="append", default=[], metavar="PATH", help="a file or picture to send with the request (repeatable)")
+    ap.add_argument("--output-last-message", metavar="FILE", help="with -p: also write the final reply to FILE")
     ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
     return ap
 
@@ -278,6 +286,34 @@ def _permissions_cmd(argv) -> int:
 
 
 def main(argv=None):
+    """The command line. Anything that goes wrong comes out as one `error: ...` line and exit code 1, never a
+    traceback (F-10); MH_DEBUG=1 keeps the traceback. Ctrl+C and sys.exit pass through."""
+    try:
+        return _main(argv)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("MH_DEBUG") == "1":
+            raise
+        from meshpool_harness.errors import plain
+        expected = isinstance(e, (ValueError, KeyError, OSError, zipfile.BadZipFile, RuntimeError))
+        line = f"error: {plain(e)}"
+        if not expected:
+            try:
+                import traceback
+                log = _config.runs_dir() / "logs" / "cli-error.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as f:
+                    f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(sys.argv[1:])}\n"
+                            + traceback.format_exc() + "\n")
+                line += f" (details: {log})"
+            except OSError:
+                pass
+        print(line, file=sys.stderr)
+        return 1
+
+
+def _main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command
@@ -305,8 +341,7 @@ def main(argv=None):
     if argv[:1] == ["app"]:              # the desktop app (Meshpool.app / Meshpool.exe)
         from meshpool_harness.ui.desktop import run as run_app
         return run_app()
-    if os.environ.get("MESHPOOL_HOME"):
-        _config.ensure_home()
+    _config.ensure_home()
     _config.load_into_env()          # before any engine import: engines read MH_* at import time
     try:
         from meshpool_harness.ui.desktop import _bundled_tools
@@ -328,12 +363,21 @@ def main(argv=None):
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
-        if a.profile:
-            os.environ["MH_AGENT_PROFILE"] = a.profile
+        if prompt is not None and not prompt.strip():
+            print("error: -p needs a request (an empty one was given)", file=sys.stderr)
+            return 2
+        mode = a.mode or a.profile
+        if mode in ("code", "work"):
+            os.environ["MH_AGENT_PROFILE"] = mode
         if a.max_turns is not None:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if getattr(a, "sandbox", False):
+            os.environ["MH_SANDBOX"] = "1"
+        if getattr(a, "no_network", False):
+            os.environ["MH_SANDBOX"] = "1"
+            os.environ["MH_SANDBOX_NETWORK"] = "0"
         if a.permission_mode:
             os.environ["MH_PERMISSION_MODE"] = a.permission_mode
             if a.permission_mode == "auto":
@@ -345,7 +389,11 @@ def main(argv=None):
         fmt = a.output_format or ("json" if a.json_out else "")
         wt = _worktree_session(a, prompt)
         try:
-            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request,
+                              json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
+                              agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
+                              output_last_message=a.output_last_message,
+                              **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
     if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
@@ -410,15 +458,15 @@ def main(argv=None):
             what = argv[1]
             if what in ("claude-code", "codex"):
                 r = CI.import_local([what])
-                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
+                print(f"{what}: {r['summary']}")
                 return 0
             try:
                 r = CI.import_export(os.path.expanduser(what))
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 print(f"Could not import {what}: {e}")
                 return 1
-            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
-                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['summary']} "
+                  f"{len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
@@ -552,6 +600,9 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
         if not isinstance(msg_, dict):
             raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
         txt = msg_.get("content") or ""
+        from meshpool_harness.core import usage
+        usage.record(model, r.get("usage"), base=led.base_url, source="check", request_chars=30,
+                     reply_chars=len(txt))
         return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:

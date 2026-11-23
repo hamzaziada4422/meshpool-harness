@@ -4,7 +4,7 @@
 "use strict";
 
 // The three things a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODE_NAME = {ask: "Manual", edits: "Auto", auto: "Full access"};
+const MODE_NAME = {ask: "Ask", edits: "Accept edits", auto: "Full access"};
 
 /* ---------- a searchable list in a popover: project, environment and repository selectors ---------- */
 // groups: [{label, items: [{id, label, desc, icon, check, note, fn}]}], footer: same item shape. Arrow keys, Enter, Esc.
@@ -130,7 +130,7 @@ function renderSel() {
   if (home && !code) left = `<button class="sel" id="projSel" aria-haspopup="listbox">${pj ? esc(clip(pj.name, 28)) : "Project"}${ICON.chev}</button>`;
   else if (home && code) left = `<button class="sel" id="envSel" aria-haspopup="listbox">${mg ? ICON.cloud : ICON.monitor}<span>${root ? esc(clip(projName(root), 24)) : "Choose a folder"}</span>${ICON.chev}</button><button class="sel" id="repoSel" aria-haspopup="listbox">${ICON.pr}<span>${mg ? esc(clip(projName(root), 22)) : "Repo"}</span>${ICON.chev}</button>`;
   else left = `<span class="disc">Answers can be wrong. Check what matters.</span>`;
-  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>Auto</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" data-tip="What it may do without asking" data-tip-pos="above">${esc(MODE_NAME[c.mode] || "Manual")}</button></span>`;
+  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>Auto</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" data-tip="What it may do without asking" data-tip-pos="above">${esc(MODE_NAME[c.mode] || "Ask")}</button></span>`;
   if (setHTML($("#selrow"), html, true)) {
     $("#mPill").onclick = e => modelMenu(e.currentTarget);
     $("#aPill").onclick = e => permMenu(e.currentTarget);
@@ -149,7 +149,7 @@ function renderBar() {
     ${window.cbar010 ? cbar010() : ""}
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" data-tip="Stop" data-kbd="Esc" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" data-tip="Stop what it is doing and send this instead" data-kbd="${MOD}Enter" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
-    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
+    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}">${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
     $("#planChip")?.addEventListener("click", () => setPlan(false));

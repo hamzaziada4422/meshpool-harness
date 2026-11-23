@@ -72,7 +72,7 @@ def test_unanswered_prompt_times_out(monkeypatch):
 def test_answered_prompt_still_works(monkeypatch):
     monkeypatch.setenv("MH_APPROVAL_TIMEOUT_S", "5")
     s = _session()
-    threading.Timer(0.3, lambda: s.answer(1, "yes")).start()
+    threading.Timer(0.3, lambda: s.answer(next(iter(s.pendings)), "yes")).start()   # ids are unique strings (ws09 M02-02)
     assert s.approve("bash", "Run it?", "ls")[0] == "yes"
 
 

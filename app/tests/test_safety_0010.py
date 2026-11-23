@@ -12,10 +12,13 @@ def test_saved_keys_are_not_in_the_environment_of_commands(monkeypatch):
     monkeypatch.setenv("MESHPOOL_API_KEY", "sk-secret")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret")
     C._INJECTED.add("TAVILY_API_KEY")
-    monkeypatch.setenv("GITHUB_TOKEN", "from-the-users-own-shell")          # not injected by Meshpool: stays
+    monkeypatch.setenv("GITHUB_TOKEN", "from-the-users-own-shell")          # S-06: secret-named, so dropped unless allowlisted
+    monkeypatch.setenv("MY_PLAIN_SETTING", "stays")
     env = C.scrub_env(dict(os.environ))
     assert "MESHPOOL_API_KEY" not in env and "TAVILY_API_KEY" not in env
-    assert env["GITHUB_TOKEN"] == "from-the-users-own-shell"
+    assert "GITHUB_TOKEN" not in env and env["MY_PLAIN_SETTING"] == "stays"
+    monkeypatch.setenv("MH_SHELL_ENV_ALLOW", "GITHUB_TOKEN")
+    assert C.scrub_env(dict(os.environ))["GITHUB_TOKEN"] == "from-the-users-own-shell"
     assert "env" not in T._RO_PROGS and "printenv" not in T._RO_PROGS
 
 

@@ -39,6 +39,12 @@ def cancelled() -> bool:
     return bool(ev and ev.is_set())
 
 
+def private_args() -> dict:
+    """Arguments Meshpool's own client adds to a call (_project: the chat's folder, _model: its model), which are not
+    part of any tool's schema."""
+    return getattr(_CALL, "private", None) or {}
+
+
 def cancel_check():
     """A function a tool can hand to its own threads: true once the client cancelled this call."""
     ev = getattr(_CALL, "cancel", None)
@@ -85,13 +91,17 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                 args = p.get("arguments") or {}
                 if not isinstance(args, dict):
                     args = {}
+                _CALL.private = {k: args[k] for k in ("_project", "_model") if k in args}
                 props = t.schema.get("properties") or {}
-                extra = sorted(k for k in args if k not in props) if props else []
+                extra = sorted(k for k in args if k not in props and k not in _CALL.private) if props else []
+                args = {k: v for k, v in args.items() if k not in _CALL.private or k in props}
                 args = {k: v for k, v in args.items() if k not in extra}   # a made-up argument costs a turn
                 _CALL.cancel = running[rid] = threading.Event()
                 try:
                     if serial:
                         with call_lock:
+                            if _CALL.cancel.is_set():       # cancelled while it waited its turn: do not run it now
+                                raise ToolFailed("cancelled before it ran")
                             r = t.fn(**args)
                     else:
                         r = t.fn(**args)

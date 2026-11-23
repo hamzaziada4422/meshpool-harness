@@ -411,6 +411,13 @@ def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check
                             "usage": usage})
 
 
+class _Attempt(RuntimeError):
+    """One HTTP attempt that did not answer 200; carries what the retry loop needs."""
+    def __init__(self, status: int, raw: bytes, retry_after: str = ""):
+        super().__init__(f"meshpool HTTP {status}: {raw[:300].decode('utf-8', 'replace')}")
+        self.status, self.raw, self.retry_after = status, raw, retry_after
+
+
 class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
 
@@ -429,6 +436,9 @@ class SimpleLedger:
         except (KeyError, IndexError, TypeError, AttributeError):
             empty = False
         if empty and 0 < max_tokens < 24000:
+            from meshpool_harness.core import usage   # the caller records the reply it gets; this one is billed too
+            usage.record(kw.get("model", ""), out.get("usage"), base=getattr(self, "base_url", ""),
+                         extra={"retry": "empty_reply"})
             ex = dict(extra or {})
             for k in ("max_completion_tokens",):
                 if ex.get(k):
@@ -437,7 +447,7 @@ class SimpleLedger:
         return out
 
     def _chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
-              temperature=None, extra=None, timeout=600, retries=2, key_only=False, **_):
+               temperature=None, extra=None, timeout=600, retries=2, key_only=False, side=False, **_):
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -493,11 +503,22 @@ class SimpleLedger:
         status, raw, retry_after, sse_reply = 0, b"", "", False
         gw_tries = 0
         attempt = 0
-        while True:
+        from meshpool_harness.core import gateway as GW
+        model = body.get("model", "")
+
+        def probe():
+            from meshpool_harness.agent.core import _probe_once
+            return _probe_once(base_url, api_key, model, timeout=timeout)
+
+        def send_once():
+            """One HTTP attempt. A reply other than 200 raises _Attempt, so the gate counts it as a failed call and
+            the retry loop below reads the status from it."""
+            nonlocal sse_reply
+            st, rw, ra = 0, b"", ""
             try:
                 with _mhttp.open(req, timeout) as r:
-                    status = r.status
-                    sse_reply = stream and status == 200 and (
+                    st = r.status
+                    sse_reply = stream and st == 200 and (
                         not anthropic or "event-stream" in (r.headers.get("Content-Type") or "").lower())
                     if sse_reply:
                         lines = _first_then_idle(r, idle)
@@ -505,17 +526,27 @@ class SimpleLedger:
                             asm = AW.StreamAssembler()
                             for ev_name, ev_data in ST.iter_sse(lines, data_idle=timeout):
                                 asm.feed(ev_name, ev_data)
-                            raw = json.dumps(asm.result()).encode()
+                            rw = json.dumps(asm.result()).encode()
                         else:
-                            raw = json.dumps(sse_to_chat(lines, data_idle=timeout)).encode()
+                            rw = json.dumps(sse_to_chat(lines, data_idle=timeout)).encode()
                     else:
-                        raw = ST.read_body(r, timeout)
+                        rw = ST.read_body(r, timeout)
             except urllib.error.HTTPError as e:
-                raw, status = e.read(), e.code
-                ra = ST.retry_after_seconds(getattr(e, "headers", None))
-                retry_after = f" [retry-after: {ra:g}]" if ra is not None else ""
+                rw, st = e.read(), e.code
+                ra_s = ST.retry_after_seconds(getattr(e, "headers", None))
+                ra = f" [retry-after: {ra_s:g}]" if ra_s is not None else ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
+                rw, st = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
+            if st != 200:
+                raise _Attempt(st, rw, ra)
+            return st, rw, ra
+
+        while True:
+            try:
+                status, raw, retry_after = GW.call(base_url, api_key, model, send_once, probe=probe,
+                                                   recover_s=0 if side else None)   # a side call never waits out an outage
+            except _Attempt as a:
+                status, raw, retry_after = a.status, a.raw, a.retry_after
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):

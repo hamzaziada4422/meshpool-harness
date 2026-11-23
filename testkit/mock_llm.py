@@ -125,9 +125,14 @@ def plan(messages, tools):
                 return ("tool", rd, {"path": "model.pbix"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
     if "hello" in u:
+        codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
         if step == 0:
+            if codex:
+                return ("tool", "apply_patch", {"input": "*** Begin Patch\n*** Add File: hello.py\n+print('hello from meshpool')\n*** End Patch\n"})
             return ("tool", "write_file" if "write_file" in names else "write", {"path": "hello.py", "content": "print('hello from meshpool')\n"})
         if step == 1:
+            if codex and "shell" in names:
+                return ("tool", "shell", {"command": ["bash", "-lc", "python3 hello.py || python hello.py"]})
             sh = "bash" if "bash" in names else "terminal" if "terminal" in names else "bash"   # Hermes: terminal
             return ("tool", sh, {"command": "python3 hello.py || python hello.py"})
         return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
@@ -145,7 +150,7 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
+        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o, "context_length": 131072} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 

@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import difflib
 import http.client
@@ -27,13 +28,16 @@ from pathlib import Path
 
 from meshpool_harness import pace as PACE
 from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import ask as ASK
 from meshpool_harness import config as C
 from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import http as _mhttp
 from meshpool_harness.core import permrules as PR
 from meshpool_harness.core import tools as T
-from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait, stated_wait
+from meshpool_harness.core import usage
+from meshpool_harness.core.client import (_reply_chars, _withhold_latest_output, classify_error, rate_limit_wait,
+                                          stated_wait)
 from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
 from meshpool_harness.core import stream as ST
@@ -362,6 +366,9 @@ class _TrackHTTPS(_Track, urllib.request.HTTPSHandler):
     pass
 
 
+_ABORT: contextvars.ContextVar = contextvars.ContextVar("meshpool_abort", default=None)   # see _post_slotted
+
+
 class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
 
@@ -371,7 +378,12 @@ def _urlopen(req, timeout: float, sink):
     return _mhttp.open(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
 
 
-def _probe_once(base: str, key: str, model: str, sink=None) -> str:
+def _is_local_base(base: str) -> bool:
+    from meshpool_harness.core import modelcaps as _MCL
+    return _MCL.is_local(base)
+
+
+def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | None = None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
@@ -386,14 +398,18 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
-        t = float(os.environ.get("MH_PROBE_S", "30"))
+        from meshpool_harness.core import modelcaps as _MCP
+        t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
+        if timeout:
+            t = min(t, float(timeout))                  # a caller with a shorter first-byte wait (core/wire.py)
         with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
             ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
     except Exception as e:  # noqa: BLE001
-        return f"HTTP 0: {_mhttp.explain(e, url)}"
+        from meshpool_harness.core import refusals as _RF
+        return ("tls: " if _RF.is_tls_error(str(e)) else "") + f"HTTP 0: {_mhttp.explain(e, url)}"
 
 
 def _image_in_newest_ask(messages: list) -> bool:
@@ -647,6 +663,21 @@ def _args_ok(call: dict) -> bool:
         return False
 
 
+def _image_part(im: dict) -> dict:
+    """An image_url part for an attached or returned image, shrunk when it is huge (OSS-23: one 12 MB photo must not
+    brick a chat). The file on disk is untouched; the chat stores the smaller one."""
+    from meshpool_harness.core import compat as _CP
+    return {"type": "image_url", "image_url": {"url": _CP.shrink_image_url(
+        f"data:{im.get('mime') or 'image/png'};base64,{im['data']}")}}
+
+
+def _shrunk(im: dict) -> dict:
+    """{"mime", "data"} of an image after shrink_image_url (the same ones when it is within limits)."""
+    url = _image_part(im)["image_url"]["url"]
+    head, _, data = url.partition(";base64,")
+    return {"mime": head[5:], "data": data}
+
+
 def _has_images(messages: list) -> bool:
     return any(isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"])
                for m in messages)
@@ -662,31 +693,6 @@ def _blind_copy(messages: list) -> list:
             m = dict(m, content=[{"type": "text", "text": "[image left out: this model cannot see images]"}
                                  if p.get("type") == "image_url" else p for p in c])
         out.append(m)
-    return out
-
-
-def _pair_tool_results(msgs: list) -> list:
-    """A request must answer every assistant tool call with one tool message, and carry no tool message that
-    answers nothing. Returns a repaired copy (the history is not changed)."""
-    out, i, n = [], 0, len(msgs)
-    while i < n:
-        m = msgs[i]
-        if m.get("role") == "tool":
-            i += 1                                   # answers no call before it: drop
-            continue
-        out.append(m)
-        i += 1
-        if m.get("role") == "assistant" and m.get("tool_calls"):
-            ids = [c.get("id") for c in m["tool_calls"]]
-            got: dict = {}
-            while i < n and msgs[i].get("role") == "tool":
-                t = msgs[i]
-                if t.get("tool_call_id") in ids and t["tool_call_id"] not in got:
-                    got[t["tool_call_id"]] = t
-                i += 1
-            for cid in ids:
-                out.append(got.get(cid) or {"role": "tool", "tool_call_id": cid,
-                                            "content": "Not run: the turn ended before this call ran."})
     return out
 
 
@@ -801,7 +807,7 @@ def _stopped_early(final: str) -> bool:
 
 
 _DESTRUCTIVE = re.compile(
-    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|stash\s+(drop|clear))"
+    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|checkout\s+\.(\s|$)|restore\s+(--\S+\s+)*\.(\s|$)|worktree\s+remove\s+.*(-f\b|--force)|stash\s+(drop|clear))"
     r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
     r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
     re.I)
@@ -939,6 +945,10 @@ def _bad_reply(resp) -> str:
 
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
+    usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
+    usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
+    budget_stopped = False  # the last turn ended on the spending limit
+    _task = None           # the usage task of the turn that is running
 
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
@@ -951,10 +961,11 @@ class Agent:
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
+        self.ws.get_mode = lambda: self.mode
         self.mcp = mcp
         self.emit = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.always: set[str] = set()
         self.max_steps = max_steps                  # explicit cap (0 = unset): _step_cap() resolves it each turn
         self.pace_deadline = 0.0                 # set for a quick request: answer by then (see pace.py)
@@ -962,6 +973,7 @@ class Agent:
         self._inbox, self._inbox_lock = [], threading.Lock()
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._absorb_lock = threading.Lock()
         self.model: str | None = None          # None: the default model from settings
         self._plan, self._plan_next, self._in_turn = False, None, False   # see the `plan` property
         self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
@@ -1196,14 +1208,17 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
-    def _wait(self, fn, *a, **kw):
+    def _wait(self, fn, *a, on_stop=None, on_abandon=None, **kw):
         """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
-        second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
+        second instead of when the call returns. A call that is abandoned finishes in the background, unseen;
+        on_abandon() tells it so just before Stop is raised. It runs in a copy of this thread's context, so its
+        model calls are recorded in the turn's usage task."""
         box: dict = {}
+        cx = contextvars.copy_context()
 
         def run():
             try:
-                box["v"] = fn(*a, **kw)
+                box["v"] = cx.run(fn, *a, **kw)
             except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
                 box["e"] = e
         t = threading.Thread(target=run, daemon=True)
@@ -1211,11 +1226,62 @@ class Agent:
         while t.is_alive():
             t.join(0.15)
             if self._stop:
+                if on_abandon:
+                    on_abandon()
                 self._abort_live()                 # close the model stream now, not when it next sends a byte
+                if on_stop:
+                    try:
+                        on_stop()                  # e.g. tell an MCP server to drop the call (notifications/cancelled)
+                    except Exception:  # noqa: BLE001
+                        pass
                 raise Interrupted()
         if "e" in box:
             raise box["e"]
         return box["v"]
+
+    # ---------- usage ledger (core/usage.py) -------------------------------------------------------------------
+    def _src(self) -> str:
+        return "grader" if getattr(self, "_is_grader", False) else self.usage_source
+
+    def _ensure_task(self):
+        """The usage task calls are recorded in: the turn's, or one made now (a call outside a turn)."""
+        if self._task is None:
+            self._task = self.usage_task or usage.start_task(chat=self.id, label="turn")
+        return self._task
+
+    def _begin_usage(self) -> None:
+        """Start the turn's usage task (the session's, else a new one; a grader nests under the turn that runs it)
+        and bind it for this thread until _end_usage()."""
+        cur = usage._CUR.get()
+        self._task = self.usage_task or usage.start_task(chat=self.id, parent=cur[0] if cur else None, label="turn")
+        self._utok = usage._CUR.set((self._task, self._src()))
+
+    def _end_usage(self) -> None:
+        tok, self._utok = getattr(self, "_utok", None), None
+        if tok is not None:
+            try:
+                usage._CUR.reset(tok)
+            except ValueError:                         # another context: nothing was bound here
+                pass
+
+    def _absorb_usage(self, turn: dict) -> None:
+        """Fold the ledger records the task has not shown yet (own calls, reviewers, graders, sub-agents, office
+        engines) into the turn and session totals, one usage event each. aux: anything but the chat's own call."""
+        t = self._task
+        if t is None:
+            return
+        with self._absorb_lock:
+            for r in t.poll():
+                c = r.get("cost")
+                d = {"in": int(r.get("in") or 0), "cached": int(r.get("cached") or 0), "out": int(r.get("out") or 0),
+                     "calls": 1}
+                more = {"cost": c or 0.0, "unpriced_calls": int(c is None), "unreported_calls": int(not r.get("reported")),
+                        "cache_write": int(r.get("cache_write") or 0), "reasoning": int(r.get("reasoning") or 0)}
+                for tot in (self.usage, turn) if isinstance(turn, dict) else (self.usage,):
+                    for k, v in {**d, **more}.items():
+                        tot[k] = tot.get(k, 0) + v
+                self.emit({"type": "usage", **d, "cost": c, "model": r.get("model", ""), "source": r.get("source", ""),
+                           "aux": r.get("source") != "chat"})
 
     def steer(self, text: str, images: list | None = None):
         """Add to the request while the agent works. It reads this before its next step."""
@@ -1249,9 +1315,7 @@ class Agent:
                         "and the rule against creating or changing files no longer apply. Do what they asked.")})
             body = "[Added by the user while you were working] " + text
             if images:
-                parts = [{"type": "text", "text": body}] + [
-                    {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                    for im in images[:6]]
+                parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
                 self.messages.append({"role": "user", "content": parts})
             else:
                 self.messages.append({"role": "user", "content": body})
@@ -1268,6 +1332,7 @@ class Agent:
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
         self.ws.should_stop = lambda: self._stop
+        self.ws.get_mode = lambda: self.mode
         self.title = ""
 
     def send(self, text: str, images: list | None = None) -> str:
@@ -1321,9 +1386,7 @@ class Agent:
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
         if images:
-            parts = [{"type": "text", "text": body}] + [
-                {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                for im in images[:6]]
+            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
@@ -1463,6 +1526,8 @@ class Agent:
     def _turn(self) -> str:
         self._begin_turn_state()
         turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
+        self.budget_stopped = False
+        self._begin_usage()
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         self.ws.turn_files = set()
@@ -1546,6 +1611,7 @@ class Agent:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                msg = self._text_tools(msg)             # a model without tool calling asks for tools in text (W-02)
                 if not tools_off and not msg.get("tool_calls"):
                     from meshpool_harness.core import textcalls as _TC
                     try:
@@ -1637,6 +1703,16 @@ class Agent:
                             if found:
                                 self.messages.append({"role": "user", "content": found})
                                 continue
+                        if not g.get("autocheck_done") and self.ws.turn_files:
+                            g["autocheck_done"] = True     # G-15: once per request, off unless MH_AUTO_CHECK is set
+                            try:
+                                from meshpool_harness.core import autocheck as AC
+                                bad = AC.run(self.root, sorted(self.ws.turn_files)) if AC.mode() != "off" else ""
+                            except Exception:  # noqa: BLE001
+                                bad = ""
+                            if bad:
+                                self.messages.append({"role": "user", "content": bad})
+                                continue
                         if not g.get("mutation_done"):
                             g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
                             fb = self._mutation_feedback()
@@ -1726,6 +1802,10 @@ class Agent:
             self.emit({"type": "interrupted", "text": "Stopped. " + (
                 "What you added wasn't answered yet; it goes along with your next message." if added
                 else "Send a message to continue.")})
+        except usage.BudgetExceeded as e:           # the spending limit: end the turn here, nothing is lost
+            self._repair("Not run: the spending limit was reached before this call ran.")
+            self.budget_stopped = True
+            self.emit({"type": "error", "text": str(e) + " Raise the limit in Settings or send a message to continue."})
         except Exception as e:
             self._repair("Not run: the turn ended on an error before this call ran. Run it again if still needed.")
             self.unfinished = True                   # the next message picks the task up where it stopped
@@ -1762,6 +1842,11 @@ class Agent:
             self._in_turn = False
             if getattr(self, "_plan_next", None) is not None:          # a plan-mode change made during the turn applies now
                 self.plan = self._plan_next
+            try:
+                self._absorb_usage(turn)
+            except Exception:  # noqa: BLE001
+                pass
+            self._end_usage()
             try:
                 rec = self.receipt()
                 self.last_receipt = rec
@@ -1850,11 +1935,7 @@ class Agent:
             self.ws.commands[g.get("cmd0", 0):][-6:]
 
     def _grade_usage(self, res: dict, turn: dict) -> None:
-        u = res.get("usage") or {}
-        for k in ("in", "cached", "out", "calls"):
-            turn[k] += int(u.get(k, 0) or 0)
-            self.usage[k] += int(u.get(k, 0) or 0)
-        self.emit({"type": "usage", "aux": True, **{k: int(u.get(k, 0) or 0) for k in ("in", "cached", "out", "calls")}})
+        self._absorb_usage(turn)                       # the grader's own calls are in the task already (source grader)
 
     def _grade_gate(self, g: dict, turn: dict, final: str, force: bool = False) -> tuple[bool, str]:
         """At the final answer of a big task: an independent review. Returns (True, final) when the findings were sent
@@ -1894,7 +1975,7 @@ class Agent:
                     self.messages[-1].get("content"), str) and not force:
                 self.messages[-1]["content"] += "\n\n" + text
             return False, (final + "\n\n" + text) if not force else final
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception as e:  # noqa: BLE001 - the check must never break the turn
             try:
@@ -1924,7 +2005,9 @@ class Agent:
             self.emit(ev)
             return ev
         self.last_review = None
-        self._grade_gate(g, turn, final, force=True)
+        self._task = usage.start_task(chat=self.id, label="grade")
+        with usage.bind(self._task, "chat"):
+            self._grade_gate(g, turn, final, force=True)
         return getattr(self, "last_review", None) or {}
 
     def _plan_start(self, route, g: dict):
@@ -2177,6 +2260,7 @@ class Agent:
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
         # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
         cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        shots = [(n, {**im, **_shrunk(im)}) for n, im in shots]       # a huge screenshot is made smaller, not dropped
         big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
         shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
         if big:
@@ -2189,7 +2273,7 @@ class Agent:
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
         for _, im in shots[-2:]:
-            parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
+            parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
 
     def _model_is_blind(self) -> bool:
@@ -2310,7 +2394,15 @@ class Agent:
         model = self.current_model()
         prov = PV.split(model)[0]
         base, key = PV.endpoint(prov) if prov != "chatgpt" else ("", "")
-        return CTX.window(model, base, key)
+        win = CTX.window(model, base, key)
+        try:                                       # a window an earlier chat learned from this endpoint's replies
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(base, PV.split(model)[1])
+            if c.source.get("window") == "learned" and 512 <= c.window < win:
+                win = c.window
+        except Exception:  # noqa: BLE001
+            pass
+        return win
 
     def _fit_body(self, body: dict) -> None:
         """Keep the request inside the model's window: compact tool schemas, capped instructions, elided old output,
@@ -2335,7 +2427,7 @@ class Agent:
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
-        msgs, body = apply(prof, _pair_tool_results(list(self.messages)), body, "worker")
+        msgs, body = apply(prof, repair_tool_pairs(list(self.messages))[0], body, "worker")   # outgoing copy only
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
@@ -2343,8 +2435,10 @@ class Agent:
                for p in m["content"] if isinstance(p, dict) and p.get("type") == "image_url") > keep:
             # Only the latest images go with a request; the chat keeps all of them. A month-old chat full of
             # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
-            msgs = [dict(m) if isinstance(m.get("content"), list) else m for m in msgs]
-            _drop_images(msgs, keep=keep)
+            from meshpool_harness.core import compat as _CP
+            msgs = _CP.cap_images(msgs, keep)           # the cut moves in steps, so the cacheable prefix stays put
+        from meshpool_harness.core import compat as _CP2
+        msgs = _CP2.shrink_images(msgs)                 # an old chat holding a huge image (length check; no decoding)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         if self._model_is_blind() and _has_images(msgs):     # the history keeps the images; this model never gets them
@@ -2373,7 +2467,91 @@ class Agent:
                     body.pop(f, None)
         except Exception:  # noqa: BLE001
             pass
-        return body
+        return self._prepare(body, caps, prof)
+
+    def _prepare(self, body: dict, caps=None, prof=None) -> dict:
+        """compat.prepare with what this endpoint+model taught (refused fields, token cap, roles, tool ids, schemas)."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import compat as _CP
+            model = self.current_model()
+            caps = caps or self._caps(model, prof)
+            return _CP.prepare(body, caps, PV.endpoint(PV.split(model)[0])[0] or "")
+        except Exception:  # noqa: BLE001 - shaping is an adaptation: never stop the turn over it
+            return body
+
+    def _prompt_cut(self, resp: dict, body: dict, base: str, turn: dict) -> bool:
+        """H-02: a local server (Ollama) may cut a too-long prompt without an error. When the reply's prompt_tokens are far
+        below what was sent, learn the real window, tell the user how to raise it, and report True (resend, fitted)."""
+        try:
+            from meshpool_harness.core import context as CTX
+            from meshpool_harness.core import modelcaps as MC
+            u = resp.get("usage") or {}
+            n_in = u.get("prompt_tokens", 0) or 0
+            sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
+            if not (n_in >= 512 and sent > 1500 and sent > n_in * 1.6):
+                return False
+            win = int(n_in * 1.05)
+            if win >= self._ctx_window():
+                return False
+            CTX.learn(self.current_model(), win)
+            MC.learn(base, body.get("model", ""), window=win)
+            for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
+                turn[k] += v                           # the discarded reply was paid for
+                self.usage[k] += v
+            how = ("raise the server's context size (for Ollama: set OLLAMA_CONTEXT_LENGTH, or num_ctx in a Modelfile, "
+                   "then restart Ollama)" if _is_local_base(base) else "raise the server's context size")
+            self.emit({"type": "status", "text": f"The server read only about {n_in:,} tokens of this conversation (its "
+                                                 f"real context window is about {win:,}). To use a larger window, {how}. "
+                                                 "The conversation is shortened to fit and sent again."})
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _text_tools(self, msg: dict) -> dict:
+        """On an endpoint that cannot take tools, read <tool_call> blocks in the reply as ordinary tool calls."""
+        try:
+            if msg.get("tool_calls") or not self._caps(self.current_model()).no_tools:
+                return msg
+            from meshpool_harness.core import compat as _CP
+            rest, calls = _CP.parse_text_tool_calls(msg.get("content") or "")
+            return {**msg, "content": rest, "tool_calls": calls} if calls else msg
+        except Exception:  # noqa: BLE001
+            return msg
+
+    def _tls_text(self, base: str, msg: str) -> str:
+        from meshpool_harness.core import refusals as RF
+        return (f"The connection to {base or 'the endpoint'} failed: its TLS certificate is not trusted. "
+                + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
+
+    def _diagnose(self, kind: str, msg: str, body: dict):
+        """refusals.diagnose for a 4xx the request itself caused (None for anything else or when nothing is named)."""
+        if kind not in ("bad_request", "vision", "context"):
+            return None
+        try:
+            from meshpool_harness.core import refusals as RF
+            return RF.diagnose(msg, body)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _apply_fix(self, fix: dict, fixed: set, base: str, body: dict) -> bool:
+        """Remember what a refusal taught (per endpoint+model, on disk). False when this fix was already applied in this
+        call: the same refusal came back, so the request cannot be fixed that way."""
+        from meshpool_harness.core import context as CTX
+        from meshpool_harness.core import modelcaps as MC
+        key = (fix["action"], tuple(fix.get("fields") or ()) or fix.get("max_output") or "")
+        if key in fixed:
+            return False
+        fixed.add(key)
+        model = str(body.get("model") or "")
+        MC.learn(base, model, **(fix.get("learn") or {}))
+        win = fix.get("context_window")
+        if win:
+            try:
+                CTX.learn(self.current_model(), int(win))
+            except Exception:  # noqa: BLE001
+                pass
+        return True
 
     def _keeps_reasoning(self) -> bool:
         """Whether this model passes reasoning_content back inside a tool-call turn (caps.keep_reasoning) and has not
@@ -2391,7 +2569,11 @@ class Agent:
         from meshpool_harness import providers as PV
         from meshpool_harness.core import modelcaps as MC
         prov, bare = PV.split(model)
-        return MC.resolve(PV.endpoint(prov)[0], bare, prof)
+        base, key = PV.endpoint(prov)
+        if prov != "chatgpt":
+            from meshpool_harness.core import context as CTX
+            CTX.note_models(base, key)               # /models says "no tools": known before the first request
+        return MC.resolve(base, bare, prof)
 
     def _chat(self, turn: dict) -> tuple[dict, bool]:
         body = self._body()
@@ -2417,12 +2599,19 @@ class Agent:
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
         rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
         self._first_scale = 1.0
+        fixed: set = set()                                 # (action, field) refusals already fixed in this call
+        cut_resent = False                                 # a silently cut prompt is resent once per call (H-02)
+        task = self._ensure_task()
         while True:
             attempt += 1
             if attempt >= 8:                               # every attempt waited or withheld: report the last error
                 raise last or RuntimeError("HTTP 0: the model call did not go through")
             self._check_stop()
+            res = None
             try:
+                # the spending limit: refuse before the call; the call that crosses it is still used
+                res = usage.reserve(body["model"], request_chars=_context_size(body["messages"]),
+                                    max_tokens=body.get("max_tokens") or 0, base=base, task=task)
                 if wire == "chatgpt":                  # the user's ChatGPT sign-in (core/chatgpt.py)
                     from meshpool_harness.core import chatgpt as CG
                     from meshpool_harness.core.wire import from_responses
@@ -2446,17 +2635,24 @@ class Agent:
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
                         raise _EndpointDown("HTTP 0: the model endpoint did not come back")
                     slot = h.acquire(self._check_stop, self.emit)
-                    ok = False
-                    try:
-                        resp, streamed = self._wait(self._post, base, key, body, stream)
-                        ok = True
-                    finally:
-                        h.release(ok, slot)
+                    tok: dict = {}                         # the worker gives the slot back when the request ends
+                    resp, streamed = self._wait(self._post_slotted, h, slot, base, key, body, stream, tok,
+                                                on_abandon=lambda: tok.__setitem__("abort", True))
+                usage.record(body["model"], (resp or {}).get("usage"), base="" if wire == "chatgpt" else base,
+                             source=self._src(), task=task, reservation=res,
+                             request_chars=_context_size(body["messages"]), reply_chars=_reply_chars(resp))
                 self._key_ok = key                         # this key has been accepted: a later 401 may be spurious
                 bad = _bad_reply(resp)
                 if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
                     raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
                 self._first_scale = 1.0
+                if not cut_resent and self._prompt_cut(resp, body, base, turn):
+                    cut_resent = True                  # the server cut the prompt: the reply is discarded, resend fitted
+                    if streamed:
+                        self.emit({"type": "stream_reset"})
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    continue
                 break
             except (Interrupted, KeyboardInterrupt):
                 raise
@@ -2480,6 +2676,19 @@ class Agent:
                 if type(e).__name__ == "NotSignedIn":     # no sign-in: retrying cannot help
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
+                if kind == "tls":                          # an untrusted certificate: no probe, no waiting (S-11)
+                    raise RuntimeError(self._tls_text(base, msg))
+                fix = self._diagnose(kind, msg, body)
+                if fix:
+                    if not self._apply_fix(fix, fixed, base, body):
+                        raise                              # the same refusal after its fix: report it
+                    body = self._body()
+                    body["model"] = PV.split(body["model"])[1]
+                    if fix["action"] == "max_out":         # W-03: only the reply was too long; never compact for it
+                        k = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+                        body[k] = min(int(body.get(k) or fix["max_output"]), fix["max_output"])
+                    self.emit({"type": "status", "text": fix["note"]})
+                    continue
                 if kind == "auth":
                     # A gateway under load answers a good key with a spurious 401 now and then. A key that worked
                     # earlier in this chat gets two short retries; any key gets one, so a bad key still fails fast.
@@ -2522,6 +2731,10 @@ class Agent:
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
                     # so a screenshot the user just attached still goes with the retry. Older steps are summarized
                     # first, so the task keeps its thread.
+                    if self._shrink_big_images(msg):
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        continue
                     self.compact_now()
                     _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
@@ -2567,11 +2780,17 @@ class Agent:
                     if cleaned:
                         raise
                     cleaned = True                         # control characters in a tool output: clean and retry
+                    changed = False
                     for m in body["messages"]:
                         if isinstance(m.get("content"), str):
-                            m["content"] = clean(m["content"])
-                    continue
+                            c = clean(m["content"])
+                            changed, m["content"] = changed or c != m["content"], c
+                    if changed:
+                        continue
+                    raise                                  # nothing to fix: a resend would fail the same way (W-04)
                 if kind == "rate_limit":
+                    if wire == "chat":                     # the provider says too many: fewer calls at once (P-12)
+                        GW.health(base, key, body["model"]).gate.throttled()
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
                         raise RuntimeError(msg + f" [rate limited for {_dur(rl_waited)}]")
@@ -2624,6 +2843,10 @@ class Agent:
                         # Up for a small probe, failing for this big request: the real gateway answers an oversized
                         # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
                         shrunk = True
+                        if self._shrink_big_images("HTTP 413"):      # images first (OSS-23), then the text cuts
+                            body = self._body()
+                            body["model"] = PV.split(body["model"])[1]
+                            continue
                         _shrink_context(self.messages, 0, hard=True, keep_images=2)
                         lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
                         if len(json.dumps(self._body())) > lim:
@@ -2698,15 +2921,13 @@ class Agent:
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
+            finally:
+                if res is not None:
+                    res.close()                            # a failed attempt holds no part of the budget
         self.emit({"type": "model_end"})
         self._n429 = 0
         u = resp.get("usage") or {}
-        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
-        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
-             "calls": 1}
-        for k, v in d.items():
-            turn[k] += v
-            self.usage[k] += v
+        d_in = u.get("prompt_tokens", 0) or 0
         if not hasattr(self, "_meter"):
             from meshpool_harness.core.metrics import CacheMeter
             self._meter = CacheMeter()
@@ -2722,7 +2943,7 @@ class Agent:
                                    u, self._ctx_window(), base)
         except Exception:  # noqa: BLE001
             pass
-        self.emit({"type": "usage", **d})
+        self._absorb_usage(turn)                           # this call's record, and any helper's since the last one
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
@@ -2738,24 +2959,30 @@ class Agent:
         body = {"model": model, "max_tokens": max_tokens, "temperature": 0,
                 "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
         _apply_refused(body)
+        body = self._prepare(body)
         resp = None
+        task = self._ensure_task()
+        h = GW.health(base, key, model)
+        if h.is_down():                                    # a side call never waits out an outage
+            raise _EndpointDown("HTTP 0: the model endpoint is down; the review was skipped")
         for _ in range(3):
+            res = usage.reserve(model, request_chars=len(system) + len(user), max_tokens=max_tokens, base=base, task=task)
             try:
-                resp, _s = self._wait(self._post, base, key, body, False)
+                slot = h.acquire(self._check_stop, self.emit)
+                tok: dict = {}
+                resp, _s = self._wait(self._post_slotted, h, slot, base, key, body, False, tok,
+                                      on_abandon=lambda: tok.__setitem__("abort", True))
+                usage.record(model, resp.get("usage"), base=base, source="review", task=task, reservation=res,
+                             request_chars=len(system) + len(user), reply_chars=_reply_chars(resp))
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):
                     raise
+            finally:
+                res.close()
         if resp is None:
             raise RuntimeError("no reply")
-        u = resp.get("usage") or {}
-        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
-        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
-             "calls": 1}
-        for k, v in d.items():
-            turn[k] += v
-            self.usage[k] += v
-        self.emit({"type": "usage", "aux": True, **d})   # a side call (review): not the chat's context size
+        self._absorb_usage(turn)                           # a side call (review): shown as aux, not the chat's context
         return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
     def _trace_note(self, tool: str, arg: str) -> None:
@@ -2799,7 +3026,7 @@ class Agent:
             n = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s", f)) or 1
             self._trace_note("review", f"{n} findings" if f else "LGTM")
             return RV.INJECT + f if f else ""
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception:  # noqa: BLE001 - a reviewer error must never break the turn
             return ""
@@ -2827,6 +3054,25 @@ class Agent:
             raise
         except Exception:  # noqa: BLE001
             return ""
+
+    def _shrink_big_images(self, msg: str) -> bool:
+        """A 413 / too-large reply with images in the chat: text cuts cannot help, so make the images smaller first
+        (a quarter of the byte budget), then keep only the newest one. True when something changed (OSS-23)."""
+        if not _has_images(self.messages) or not (
+                re.search(r"HTTP 413|(?:entity|payload|request) too large", msg or "", re.I)):
+            return False
+        from meshpool_harness.core import compat as _CP
+        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+        before = len(json.dumps(self.messages))
+        quarter = max(50_000, int(os.environ.get("MH_IMAGE_MAX_BYTES", "1500000")) // 4)
+        self.messages[:] = _CP.shrink_images(self.messages, quarter)
+        if len(json.dumps(self._body())) > lim:
+            _drop_images(self.messages, keep=1)
+        if len(json.dumps(self.messages)) >= before:
+            return False
+        self.emit({"type": "status", "text": "The images in this chat were too big for the endpoint, so they were "
+                                             "made smaller before trying again."})
+        return True
 
     def _size_with(self, messages: list) -> int:
         """How big the request would be with these messages (the body _post sends)."""
@@ -2883,7 +3129,20 @@ class Agent:
             self._check_stop()
             time.sleep(0.25)
 
-    def _post(self, base: str, key: str, body: dict, stream: bool) -> tuple[dict, bool]:
+    def _post_slotted(self, h, slot, base: str, key: str, body: dict, stream: bool, tok: dict):
+        """_post, then give the gate slot back when the request really ends. It runs in _wait's worker, so a Stop
+        that abandons the call does not free the slot while the request is still on its way (MH_MAX_INFLIGHT)."""
+        ok = False
+        _ABORT.set(tok)                                    # _post reads it (it keeps its four-argument calls)
+        try:
+            out = self._post(base, key, body, stream)
+            ok = True
+            return out
+        finally:
+            h.release(ok, slot)
+
+    def _post(self, base: str, key: str, body: dict, stream: bool, tok: dict | None = None) -> tuple[dict, bool]:
+        tok = tok if tok is not None else _ABORT.get()    # Stop's token: set when the call was abandoned
         b = dict(body)
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
@@ -2914,6 +3173,11 @@ class Agent:
         # long task the same way ("The read operation timed out").
         idle = float(os.environ.get("MH_AGENT_IDLE_S", "120"))
         first = max(idle, float(os.environ.get("MH_AGENT_FIRST_BYTE_S", "120"))) * getattr(self, "_first_scale", 1.0)
+        _bare = _PV.split(b.get("model", ""))[1]
+        first = _MC.first_byte_timeout(base, _bare, first)     # a local server loads the model first (H-06)
+        if _MC.is_local(base):
+            idle = max(idle, float(os.environ.get("MH_LOCAL_IDLE_S", "300")))
+        t_sent = time.time()
         got_text = False
         gen = getattr(self, "_gen", 0)
         live = []
@@ -2924,13 +3188,20 @@ class Agent:
             connect = c.connect
 
             def checked_connect():                       # Stop while connecting: close before sending anything
+                if tok and tok.get("abort"):
+                    c.close()
+                    raise ConnectionAbortedError("stopped before connecting")
                 connect()
-                if getattr(c, "_mh_abort", False):
+                if getattr(c, "_mh_abort", False) or (tok and tok.get("abort")):
                     c.close()
                     raise ConnectionAbortedError("stopped while connecting")
             c.connect = checked_connect
         try:
+            if tok and tok.get("abort"):                 # Stop came before the request went out: never send it
+                raise ConnectionAbortedError("stopped before the request was sent")
             with _urlopen(req, first, sink) as r:
+                if stream or _MC.is_local(base):
+                    _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
                 thinking = []                            # one "Thinking…" status per call, before any text
 
                 def on_text(t):
@@ -2944,7 +3215,7 @@ class Agent:
                         self.emit({"type": "status", "text": "Thinking…"})
 
                 def check():
-                    if self._stop or getattr(self, "_gen", 0) != gen:
+                    if self._stop or getattr(self, "_gen", 0) != gen or (tok and tok.get("abort")):
                         raise Interrupted()
 
                 def lines():
@@ -2995,7 +3266,7 @@ class Agent:
 
     # ---------- tools ------------------------------------------------------------------------------------------
     def _outside(self, name: str, args: dict) -> str:
-        """Why a read-only call still needs a yes in Supervised and Auto-accept edits: it reads outside the project
+        """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
         if name in ("read_file", "grep"):
             p = os.path.expanduser(str(args.get("path") or "."))
@@ -3072,6 +3343,10 @@ class Agent:
         if _rule_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
+        if self.mode == "auto" and _destructive(args):        # OSS-18: Full access still asks about these ...
+            if _rule_hit(rules["allow"], name, args):
+                return True, ""                               # ... unless the user allowlisted this command
+            risky = risky or "destructive"
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
@@ -3281,7 +3556,7 @@ class Agent:
             elif is_mcp and name in getattr(self, "_lazy_hidden", ()) and name not in self._lazy.active:
                 out = self._lazy.stub(name, getattr(self, "_lazy_all", [])) or "tool not loaded"
             elif is_mcp:
-                out, err = self._wait(self.mcp.call, name, args)
+                out, err = self._wait(self.mcp.call, name, args, on_stop=getattr(self.mcp, "abort_calls", None))
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
                 post += self._repeat_note(name, args, ok)
@@ -3361,7 +3636,7 @@ class Agent:
                     ok = out.startswith("[exit 0]")
         except ToolError as e:
             out, ok = f"ERROR: {e}", False
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
@@ -3478,18 +3753,35 @@ class Agent:
             return f"ERROR: office_task refused, nothing was built: {why}", False
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
+        task = self._ensure_task()                # the engine's calls go to a child task: this chat's usage and limit
+        child = usage.start_task(chat=self.id, parent=task, label="office:" + engine)
         jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id,
-                                 model=self.model or None)   # the user's pick; else the engine resolves MH_MODEL / settings   # one request, one engine run
+                               model=self.model or None,   # the user's pick; else the engine resolves MH_MODEL / settings
+                               env_extra=usage.child_env(child, "engine:" + engine))   # one request, one engine run
         if reused == "refused":
             return OJ.refusal_text(jid, rel_to=self.root), True
         if reused != "done":
             self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
+        seen = {"at": 0.0, "over": None}
+        turn = getattr(self, "_turn_usage", None)
+
+        def should_stop() -> bool:                # polled every 0.5 s: follow the engine's usage and the limit
+            if time.time() - seen["at"] >= 2:
+                seen["at"] = time.time()
+                if isinstance(turn, dict):
+                    self._absorb_usage(turn)
+                seen["over"] = next((t for t in task.chain() if t.budget > 0 and t.spent() >= t.budget), None)
+            return bool(self._stop or seen["over"])
         if reused == "running":              # the same request is already building (a parallel call): wait for it
             while not OJ.JOBS[jid]["event"].wait(0.5):
                 if self._stop:
                     raise Interrupted()
         elif not reused:
-            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
+            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=should_stop)
+        if isinstance(turn, dict):
+            self._absorb_usage(turn)
+        if seen["over"] is not None and not self._stop:
+            raise usage.BudgetExceeded(seen["over"].id, seen["over"].budget, seen["over"].spent())
         if OJ.JOBS[jid].get("stopped"):
             raise Interrupted()
         text, failed = OJ.report(jid, rel_to=self.root, reused=reused)
@@ -3562,13 +3854,22 @@ class Agent:
                     SS.append_journal(self.dir, pn, msgs[pn:], meta)
                 self._persist_n, self._persist_dir = n, str(self.dir)
                 self._persist_fp = fp(msgs[-1]) if n else ""
-        except OSError:
-            pass            # the previous files are intact (atomic writes); the next save tries again
+        except OSError as e:
+            # the previous files are intact (atomic writes); the next save tries again, and the user is told once
+            first = not getattr(self, "save_error", None)
+            self.save_error = e.strerror or str(e) or "write failed"
+            if first:
+                self.emit({"type": "status", "save_error": True, "text": (
+                    f"Couldn't save this chat ({self.save_error}). Free some disk space; Meshpool keeps trying.")})
+        else:
+            if getattr(self, "save_error", None):
+                self.save_error = None
+                self.emit({"type": "status", "text": "Saved again."})
 
     @classmethod
     def resume(cls, workdir: str, session_id: str | None = None, **kw) -> "Agent | None":
         root = str(Path(workdir).expanduser().resolve())
-        best = None
+        best, best_dir = None, None
         if SESSIONS.exists():
             for p in SESSIONS.glob("*/session.json"):
                 if p.parent.name.startswith("sub-"):     # a sub-agent's, never the user's chat
@@ -3583,7 +3884,7 @@ class Agent:
                 if d.get("harness") not in (None, "meshpool-code", "meshpool-work"):
                     continue
                 if best is None or d.get("updated", 0) > best.get("updated", 0):
-                    best = d
+                    best, best_dir = d, p.parent
         if not best:
             return None
         kw.setdefault("profile", "work" if best.get("harness") == "meshpool-work" else "code")
@@ -3597,7 +3898,8 @@ class Agent:
                 a.messages = [{"role": "system", "content": a.system_prompt()}]
             except TypeError:
                 a.route = None
-        a.messages = [a.messages[0]] + best.get("messages", [])
+        saved = SS.resolve_refs(best_dir, best.get("messages", []))      # images back from their blob files
+        a.messages = [a.messages[0]] + repair_tool_pairs(saved, "Not run: the app closed before this call finished.")[0]
         a.usage = best.get("usage") or a.usage
         a.title = best.get("title", "")
         a.created = best.get("created", a.created)

@@ -178,6 +178,15 @@ def child(task_json: str, arm: str, out_path: str) -> None:
            "trace": res.get("trace") or [], **{
                k: res.get("usage", {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
                                                             "model_calls")}}
+    try:                                               # this run's own call ledger (the temp MESHPOOL_HOME): nested calls too
+        from meshpool_harness.core import usage as U
+        U.flush()
+        led = U.summarize(U.read_records())
+        if led["calls"]:
+            row.update(prompt_tokens=led["in"], cached_tokens=led["cached"], completion_tokens=led["out"],
+                       model_calls=led["calls"], usd_ledger=round(led["cost"], 6), unpriced_calls=led["unpriced_calls"])
+    except Exception:  # noqa: BLE001
+        pass
     if meta:                                           # the router's pick and its classifier call (tokens included above)
         row.update(meta_harness=meta["harness"], meta_category=meta["category"], meta_reason=meta["reason"],
                    meta_stage=meta["stage"])
@@ -345,6 +354,10 @@ def cap_left(model: str) -> float | None:
 
 
 def cost(row: dict, prices: dict) -> float:
+    """USD of one run: the run's own ledger cost (each call priced for its model) when every call had a known price
+    and no meter replaced the tokens, else the per-model prices times the row's tokens."""
+    if row.get("usd_ledger") is not None and not row.get("unpriced_calls") and not row.get("metered"):
+        return float(row["usd_ledger"])
     prices = (prices.get("by_model") or {}).get(row.get("model") or "", prices)
     fresh = max(0, row.get("prompt_tokens", 0) - row.get("cached_tokens", 0))
     return (fresh * prices["in"] + row.get("cached_tokens", 0) * prices["cached"]

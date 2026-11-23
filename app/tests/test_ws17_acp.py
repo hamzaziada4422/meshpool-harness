@@ -246,6 +246,18 @@ def test_acp_prompt_usage_reaches_the_turn_and_the_chat(fake_acp):
     assert a.usage["in"] == 140 and a.usage["out"] == 20
 
 
+def test_ws04_one_ledger_row_per_acp_turn(fake_acp):
+    """The harness's usage is in the chat's own counts (ws17) and in the usage ledger (ws04): once each, not twice."""
+    from meshpool_harness.core import usage
+    make, _, _ = fake_acp
+    a = make(mode="auto", events=[])
+    a.usage_task = usage.start_task(chat="ws04-acp", label="turn")
+    assert a.send("USAGE please") == "counted"
+    t = a.usage_task.totals()
+    assert sum(b["calls"] for b in t["by_source"].values()) == 1
+    assert a.usage["in"] == 140 and a.usage["out"] == 20      # not doubled by the ledger row
+
+
 def test_m05_05_undo_gives_the_harness_a_session_without_the_undone_turns(fake_acp):
     from meshpool_harness.ui import agent_api as A
     make, calls, manifest = fake_acp
@@ -648,3 +660,60 @@ def test_m03_02_a_message_queued_after_stop_runs_and_its_chip_clears(fake_acp, m
         assert [e for e in s.events if e.get("type") == "queued"][-1]["n"] == 0   # the chip clears
     finally:
         s.close()
+
+
+
+# ---------- ws22: OSS-09 watchdog, OSS-02 Codex sandbox failure, OSS-36 CODEX_HOME pruning, OSS-29 harness log ------
+
+def test_oss09_a_hung_harness_ends_the_turn_and_restarts_next_time(fake_acp, monkeypatch):
+    make, calls, _ = fake_acp
+    monkeypatch.setenv("MH_ACP_IDLE_S", "1.5")
+    evs = []
+    a = make(events=evs)
+    t0 = time.time()
+    a.send("SLOW forever")                                        # the fake never answers this prompt
+    assert time.time() - t0 < 15
+    assert any(e.get("type") == "error" and "sent nothing" in e["text"] for e in evs)
+    assert a.send("again") == "fresh:again"                      # the next message restarts it
+
+
+def test_oss09_default_idle_limit_is_300_seconds(monkeypatch):
+    monkeypatch.delenv("MH_ACP_IDLE_S", raising=False)
+    assert ACPAgent._idle_s() in (300.0, float(C.read().get("MH_ACP_IDLE_S") or 300))
+
+
+def test_oss36_old_codex_homes_are_pruned(home):
+    from meshpool_harness import harnesses as H
+    base = H.codex_home() / "chats"
+    sess = C.runs_dir() / "sessions"
+    for name in ("alive", "gone", "old"):
+        (base / name).mkdir(parents=True)
+        (base / name / "config.toml").write_text("x")
+    (sess / "alive").mkdir(parents=True)
+    (sess / "old").mkdir(parents=True)
+    t = time.time() - 40 * 86400
+    os.utime(base / "old", (t, t))
+    assert sorted(H.prune_codex_homes()) == ["gone", "old"]
+    assert [d.name for d in base.iterdir()] == ["alive"]
+
+
+def test_oss02_codex_sandbox_failure_is_explained():
+    from meshpool_harness.harnesses import codex_sandbox_failure as f
+    win = f("windows sandbox: CreateRestrictedToken failed", "win32")
+    assert win and "Windows" in win and "Full access" in win
+    note = f("bwrap: No permissions to create new namespace", "linux")
+    assert note and "Full access" in note and "bubblewrap" in note
+    assert f("error: file not found", "linux") is None
+
+
+def test_oss29_harness_stderr_is_logged_without_secrets(fake_acp):
+    import io
+    make, calls, manifest = fake_acp
+    a = make()
+    key = "sk-" + "Zz9y" * 8
+
+    class P:
+        stderr = [f"boom OPENAI_API_KEY=abcdefgh12345 and {key}\n".encode()]
+    log = io.StringIO()
+    a._pump_stderr(P, log)
+    assert key not in log.getvalue() and "abcdefgh12345" not in log.getvalue() and "boom" in log.getvalue()

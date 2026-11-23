@@ -125,27 +125,31 @@ def save_settings(body: dict) -> dict:
 
 def assistant_view() -> dict:
     from meshpool_harness import assistant as AS
-    rows = [dict(t, describe=AS.describe(t)) for t in AS.tasks()]
-    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows}
+    rows = [dict(t, describe=AS.describe(t), status=AS.status(t)) for t in AS.tasks()]
+    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows,
+            "tasks_problem": AS.tasks_problem()}
 
 
 def assistant_action(b: dict) -> dict:
     from meshpool_harness import assistant as AS
     act = b.get("action")
     if act == "instructions":
-        AS.set_instructions(b.get("text", ""))
+        AS.set_instructions(b.get("text", ""), base=b.get("base"))
     elif act == "memory":
-        AS.set_memory(b.get("text", ""))
+        AS.set_memory(b.get("text", ""), base=b.get("base"))
     elif act == "settings":
         AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
     elif act == "task_add":
         AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                     b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
-                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")))
+                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
+                    b.get("skip_if_missed_h"))
     elif act == "task_update":
         AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
                                                                    "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change")})
+                                                                   "only_on_change", "skip_if_missed_h")})
+    elif act == "tasks_reset":
+        AS.reset_tasks()
     elif act == "task_delete":
         AS.delete_task(b.get("id", ""))
     elif act == "task_run":
@@ -534,6 +538,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
                 from meshpool_harness import chat_import as CI
                 return self._send(200, CI.scan_local())
+            if u.path == "/api/import-status":        # the background read of an export's context: working, done or failed
+                from meshpool_harness import chat_import as CI
+                return self._send(200, CI.context_status())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -639,7 +646,11 @@ class Handler(BaseHTTPRequestHandler):
                     A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
                 return self._send(200, out)
             if u.path == "/api/usage":
-                return self._send(200, W.usage())
+                try:
+                    since = float(q.get("since") or 0)
+                except ValueError:
+                    since = 0.0
+                return self._send(200, W.usage(since))
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
             if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
@@ -901,10 +912,16 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import importer as IM
 
                 def learn(path=tf.name):
+                    CI.set_context_status("working")
                     try:
-                        IM.import_export(path)
-                    except Exception:  # noqa: BLE001
-                        pass
+                        got = IM.import_export(path)
+                        bad = [x for x in got.get("skipped", []) if str(x).startswith("context from conversations")]
+                        if bad:                            # the model call failed or answered badly: say so (M21-04)
+                            CI.set_context_status("failed", error=str(bad[0]).split(": ", 1)[-1], result=got)
+                        else:
+                            CI.set_context_status("done", result=got)
+                    except Exception as e:  # noqa: BLE001
+                        CI.set_context_status("failed", error=f"{type(e).__name__}: {str(e)[:200]}")
                     finally:
                         os.unlink(path)
                 threading.Thread(target=learn, daemon=True).start()
@@ -1225,7 +1242,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif act == "grade":
                     s.grade()
                 elif act == "answer":
-                    s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
+                    s.answer(str(b.get("id", "")), b.get("decision", "no"), b.get("note", ""))
                 elif act == "compact":
                     if s.state in ("working", "waiting"):
                         raise ValueError("Wait for the task to finish or stop it, then compact.")
@@ -1278,12 +1295,7 @@ def _open_web(url: str) -> bool:
     return False
 
 
-def _client_error(e: Exception) -> str:
-    if isinstance(e, zipfile.BadZipFile):
-        return "That file is not a valid zip file."
-    if isinstance(e, (TypeError, AttributeError)):
-        return f"The request has a missing or wrong value ({e})."
-    return str(e).strip("'\"")
+from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the terminal says the same)
 
 
 class _Server(ThreadingHTTPServer):
@@ -1325,6 +1337,11 @@ def _watchdog(idle_s: float):
 
 
 def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on_ready=None) -> int:
+    try:                                                       # OSS-36: old per-chat Codex folders
+        from meshpool_harness.harnesses import prune_codex_homes
+        prune_codex_homes()
+    except Exception:  # noqa: BLE001
+        pass
     global DESKTOP
     DESKTOP = desktop
     RUNS.mkdir(parents=True, exist_ok=True)
@@ -1356,6 +1373,12 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.purge_due, daemon=True).start()          # chats deleted before the last close
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
+    try:
+        from meshpool_harness.agent import mcp as _M
+        _M.raise_file_limit()                       # 30 chats = hundreds of pipes; macOS allows 256 by default
+        _M.start_reaper()                           # helpers of chats reopened after a restart are reaped when idle
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
     threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left

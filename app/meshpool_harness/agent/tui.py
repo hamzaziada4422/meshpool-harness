@@ -14,6 +14,7 @@ the same events come out as plain lines; NO_COLOR keeps the layout and drops the
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -37,7 +38,17 @@ COMMANDS = [
     ("compact", "", "shorten old tool output to free context"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
-    ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
+    ("auto", "[ask|accept-edits|full-access]", "set what the agent may do without asking"),
+    ("plan", "[on|off]", "investigate and reply with a plan before changing anything"),
+    ("goal", "[text|off]", "keep working until this is done"),
+    ("style", "[id]", "pick how the agent writes"),
+    ("agent", "[id]", "switch the agent for this chat"),
+    ("mode", "code|work", "switch this chat between Code and Work"),
+    ("undo", "[turn]", "undo the file changes of a turn and everything after it"),
+    ("diff", "[turn]", "show what a turn (or the whole chat) changed"),
+    ("rewind", "[turn]", "undo to a turn and edit its message"),
+    ("attach", "PATH...", "send files or pictures with your next message"),
+    ("resume", "[search]", "switch to another chat"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("trust", "", "trust this folder's .meshpool hooks and allow rules"),
@@ -47,7 +58,7 @@ COMMANDS = [
     ("setup", "", "first-run walkthrough: key, folder, skills"),
     ("exit", "", "quit"),
 ]
-ALIASES = {"quit": "exit", "q": "exit", "mode": "auto", "cost": "tokens"}
+ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "tokens"}
 MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
@@ -348,6 +359,15 @@ class Terminal:
             self._flush_text()
             lines = [ln for ln in str(ev.get("text", "")).splitlines() if ln.strip()]
             self.scroll([""] + ["  " + st.dim(R.clip(ln, self.width - 4)) for ln in lines])
+        elif t == "checks_line":
+            self._flush_text()
+            self.p(st.dim("  Checked: " + str(ev.get("text", ""))))
+        elif t == "task_receipt":
+            self._flush_text()
+            from meshpool_harness import receipts as RC
+            line = RC.line(ev)
+            if line:
+                self.p(st.dim("  " + line))
         elif t == "review":
             self._flush_text()
             self.scroll([""] + self._review_lines(ev))
@@ -582,7 +602,9 @@ class Terminal:
         """One message or /command from the input box. None: the user is leaving (Ctrl+D, or Ctrl+C twice)."""
         if not self.raw_ok():
             return self._read_plain()
-        s = {"buf": "", "cur": 0, "sel": 0, "note": "", "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)]}
+        pre, self.prefill = getattr(self, "prefill", ""), ""        # /rewind: the earlier message, to edit
+        s = {"buf": pre, "cur": len(pre), "sel": 0, "note": "",
+             "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)]}
         h = len(self.history)
         draft = ""
         last_c = 0.0
@@ -794,7 +816,8 @@ class Terminal:
 
     def approve(self, kind: str, title: str, detail: str, options=None, scope: str = ""):
         if not (sys.stdin.isatty() or self.keys_factory):
-            return "no", "No terminal to ask in. Run with --auto."
+            return "no", ("No terminal to ask in, so this was not allowed. Re-run with --auto, --permission-mode edits, or "
+                          "--allowed-tools.")
         if self.stopping:
             return "no", ""
         if not hasattr(self, "_approve_lock"):
@@ -1007,11 +1030,19 @@ def _mcp_status(term: Terminal, mcp):
 
 # ---------- the session: commands and the turn loop --------------------------------------------------------------
 
-class Session:
-    """One interactive session: the input loop, the slash commands and sending a message to the agent."""
+from meshpool_harness.agent.tui_session import SharedCommands, TermFrontend  # noqa: E402
 
-    def __init__(self, term: Terminal, agent, mcp=None, sub: str | None = None):
+
+class Session(SharedCommands):
+    """One interactive session: the input loop, the slash commands and sending a message to the agent.
+    With `front` (a TermFrontend) the chat is the app's Session and everything goes through it; without, `agent` is
+    driven directly (tests, embedders)."""
+
+    def __init__(self, term: Terminal, agent, mcp=None, sub: str | None = None, front: TermFrontend | None = None):
         self.term, self.agent, self.mcp, self.sub = term, agent, mcp, sub
+        self.front = front
+        self.s = front.s if front else None
+        self.pending_attach = None
         self.ctx = True                                    # your instructions and memory go with the first message
         term.agent = agent
         term.on_mode = self.set_mode
@@ -1020,6 +1051,13 @@ class Session:
     # -- sending
     def send(self, text: str):
         term, agent, st = self.term, self.agent, self.term.st
+        if self.front:                                     # the shared chat adds memory, style and checkpoints itself
+            images = None
+            if self.pending_attach:
+                extra, images = self.pending_attach
+                self.pending_attach = None
+                text = (text + "\n\n" + extra) if extra else text
+            return self.front.send(text, images)
         if self.ctx:
             self.ctx = False
             block = _context()
@@ -1040,6 +1078,9 @@ class Session:
             term.refresh_facts(agent)
 
     def set_mode(self, mode: str):
+        if self.s is not None:
+            self.s.set_mode(mode)                          # also remembered with the chat, as in the app
+            mode = self.s.mode
         self.agent.mode = mode
         self.term.mode = mode
         if hasattr(self.agent, "apply_mode"):             # Codex & co. have their own modes: switch them too
@@ -1101,6 +1142,8 @@ class Session:
         t.scroll(rows + [""] + ["  " + st.dim(x) for x in HELP_TIPS])
 
     def cmd_clear(self, arg):
+        if self.s is not None:
+            return SharedCommands.cmd_clear(self, arg)
         t = self.term
         self.agent.reset()
         self.ctx = True
@@ -1113,8 +1156,9 @@ class Session:
 
     def cmd_auto(self, arg):
         t, st = self.term, self.term.st
-        if arg and arg not in t.modes:
-            return t.p(st.amber(f"  Modes: {', '.join(t.modes)}"))
+        arg = C.normalize_mode(arg, None) if arg else ""
+        if arg is None or (arg and arg not in t.modes):
+            return t.p(st.amber("  Modes: " + ", ".join({"ask": "ask", "edits": "accept-edits", "auto": "full-access"}[m] for m in t.modes)))
         mode = arg or ("ask" if t.mode == "auto" else "auto")
         self.set_mode(mode)
         t.p(st.dim("  " + {"ask": "Edits and commands are asked first.",
@@ -1170,6 +1214,8 @@ class Session:
             t.p(st.dim("  New sessions use it."))
 
     def cmd_grade(self, arg):
+        if self.s is not None:
+            return SharedCommands.cmd_grade(self, arg)
         t, st = self.term, self.term.st
         if self.sub or not hasattr(self.agent, "grade_now"):
             return t.p(st.dim("  /grade is not available for this agent."))
@@ -1235,7 +1281,9 @@ class Session:
         return ids, note
 
     def set_model(self, mid: str):
-        if self.sub:
+        if self.s is not None:
+            self.s.set_model(mid)
+        elif self.sub:
             self.agent.set_model(mid)
         else:
             self.agent.model = mid
@@ -1317,11 +1365,28 @@ def _notices(agent, mcp) -> list[str]:
     return out
 
 
+def _resume_target(wd: str, session: str | None) -> str | None:
+    """The chat -c / --resume means: the id given, or the newest chat of this folder (the app's own listing)."""
+    from pathlib import Path
+
+    from meshpool_harness import chats
+    if session:
+        return session
+    root = str(Path(wd).expanduser().resolve())
+    return next((r["id"] for r in chats.listing() if r.get("workdir") == root), None)
+
+
+_KINDS = {"code": "code", "work": "cowork", "cowork": "cowork", "auto": None}
+
+
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
-         json_out: bool = False) -> int:
-    from meshpool_harness.agent.core import Agent
-    from meshpool_harness.agent.mcp import Manager
+         json_out: bool = False, mode: str | None = None, agent: str | None = None, project: str | None = None,
+         incognito: bool = False, attach: list | None = None, output_last_message: str | None = None,
+         model: str | None = None, worktree_id: str | None = None) -> int:
+    """The terminal. A chat is the app's chat (meshpool_harness.chats, the same Session the web page uses): this only
+    draws it, answers its questions at the prompt, and reports the outcome. Exit codes: 0 done, 1 failed, 3 done but
+    something was not allowed (-p cannot ask)."""
     C.load_into_env()
     term = Terminal(print_mode=prompt is not None)
     if json_out:
@@ -1340,94 +1405,74 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             if sys.stdin.isatty():              # not a terminal: ask_key already said it
                 term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
-    # The terminal runs MeshPool Code, or the official Codex when it is set as the default.
-    hid = HR.default_for("code")
+    os.environ["MESHPOOL_FRONTEND"] = "terminal"        # the app's desktop notifications stay quiet: this is the prompt
+    from meshpool_harness import chats
+    pm = C.normalize_mode(os.environ.get("MH_PERMISSION_MODE"), "")   # old names accepted (F-19)
+    mode_kind = mode or ("work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")
+    if mode_kind not in _KINDS:
+        term.p(st.red(f"Unknown mode {mode_kind}. Use code, work or auto."))
+        return 1
+    body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
+            "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
+            "plan": True if pm == "plan" else None, "incognito": incognito, "project_id": project or "",
+            "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or ""}
+    if mode_kind == "auto":
+        body["harness"] = "meshpool-auto"
+    elif agent:
+        body["harness"] = agent
+    if worktree_id:
+        body["worktree_id"] = worktree_id
+    body = {k: v for k, v in body.items() if v not in (None, "")}
+    sid = None
     try:
-        h = HR.get(hid)
-    except (KeyError, ValueError) as e:
-        term.p(st.red(str(e)))
-        return 1
-    if not h.get("ready", True):
-        term.p(st.red(f"{h['name']} cannot run yet. {h.get('setup') or ''} Run: meshpool setup"))
-        return 1
-    sub = h["id"] if h.get("type") == "acp" else None
-    mcp = None
-    if not no_mcp and not sub:                   # an ACP agent gets the MCP servers through ACP itself
-        if prompt is None:
-            term.spin.start("Starting MCP servers")
-        try:
-            from meshpool_harness.harnesses.acp import office_extra
-            extra = office_extra(wd)                 # the same office tools the app's agents have
-        except Exception:  # noqa: BLE001
-            extra = None
-        mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
-        term.spin.stop()
-    pm = os.environ.get("MH_PERMISSION_MODE", "")
-    mode = "auto" if auto else (pm if pm in ("ask", "edits") else None)
-    kw = dict(mcp=mcp, emit=term.emit, approve=term.approve, mode=mode,
-              profile="work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")   # --profile work: Cowork
-    if sub:
-        from meshpool_harness.harnesses.acp import ACPAgent
         if resume or session:
-            term.p(st.amber(f"Resuming is not available with {h['name']} in the terminal yet. Starting a new session."))
-        try:
-            agent = ACPAgent(h, wd, emit=term.emit, approve=term.approve, mode=mode)
-        except (ValueError, KeyError) as e:
-            term.p(st.red(str(e)))
-            return 1
-    else:
-        agent = (Agent.resume(wd, session, **kw) if (resume or session) else None)
-        if (resume or session) and agent is None:
-            term.p(st.amber("No earlier session for this folder. Starting a new one."))
-        try:
-            agent = agent or Agent(wd, **kw)
-        except ValueError as e:
-            term.p(st.red(str(e)))
-            return 1
-    term.agent = agent
-    agent.headless = prompt is not None and not sub     # one request, no one to answer questions
-    if pm == "plan" and hasattr(agent, "plan"):
-        agent.plan = True                        # read only: investigate, then reply with a plan
-    agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
-    sess = Session(term, agent, mcp, sub)
+            sid = _resume_target(wd, session)
+            if sid is None:
+                term.p(st.amber("No earlier session for this folder. Starting a new one."))
+            else:
+                s = chats.get(sid, no_mcp=no_mcp)
+        if sid is None:
+            s = chats.get(chats.create(body)["id"], no_mcp=no_mcp)
+    except (ValueError, KeyError) as e:           # a missing folder, an agent that cannot run, a chat open elsewhere
+        term.p(st.red(str(e).strip("'\"")))
+        return 1
+    if not s.harness.get("ready", True):
+        term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
+        return 1
+    headless = prompt is not None
+    front = TermFrontend(s, term, headless=headless, stream=json_out == "stream-json")
+    front.body = body
+    sess = Session(term, s.agent, s.mcp, front.sub, front=front)
     try:
-        if prompt is not None:
-            if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
-                import contextlib
-                import json as _json
-                if json_out == "stream-json":     # one event per line while it works, then the final object
-                    _emit = agent.emit
-
-                    def _stream(ev, _emit=_emit):
-                        _emit(ev)
-                        if isinstance(ev, dict) and ev.get("type") not in ("token", "delta", "thinking"):
-                            sys.__stdout__.write(_json.dumps(ev, ensure_ascii=False, default=str) + "\n")
-                            sys.__stdout__.flush()
-                    agent.emit = _stream
-                with contextlib.redirect_stdout(sys.stderr):
-                    sess.send(prompt)
-                reply = next((m.get("content") for m in reversed(agent.messages) if m.get("role") == "assistant"
-                              and isinstance(m.get("content"), str) and m.get("content").strip()), "")
-                out = {"type": "result", "ok": not term.failed, "result": reply, "session_id": agent.id,
-                       "usage": dict(agent.usage), "steps": len([m for m in agent.messages if m.get("role") == "tool"])}
-                rv = getattr(agent, "last_review", None)
-                if rv:                                # the independent check of a big task (agent/grader.py)
-                    out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
-                sys.__stdout__.write(_json.dumps(out, ensure_ascii=False, default=str) + "\n")
+        if headless:
+            text, images = prompt, None
+            if attach:
+                from meshpool_harness.agent.tui_session import collect_attachments
+                extra, images = collect_attachments(attach, s.workdir)
+                text = prompt + ("\n\n" + extra if extra else "")
+            import contextlib
+            with contextlib.redirect_stdout(sys.stderr) if json_out else contextlib.nullcontext():
+                front.send(text, images)
+            failed = bool(term.failed)
+            note = front.denial_note()
+            if note:
+                print(note, file=sys.stderr)
+            if output_last_message:
+                from pathlib import Path
+                Path(output_last_message).expanduser().write_text(front.reply(), encoding="utf-8")
+            if json_out:
+                sys.__stdout__.write(json.dumps(front.result(failed), ensure_ascii=False, default=str) + "\n")
                 sys.__stdout__.flush()            # a piped stdout is block buffered: the caller must see the result now
-                return 1 if term.failed else 0
-            sess.send(prompt)
-            return 1 if term.failed else 0
-        term.notices = _notices(agent, mcp)
+            return 1 if failed else (3 if front.denied else 0)
+        front.wait_ready()
+        sess.mcp = s.mcp
+        term.notices = _notices(s.agent, s.mcp)
         term.startup()
         sess.loop(first)
     finally:
         term.spin.stop()
-        if mcp:
-            mcp.close()
-        if sub:
-            agent.close()
-    if prompt is None and not sub:
+        front.detach()
+        s.close()
+    if prompt is None:
         term.p(st.dim("  Session saved. Resume it with: meshpool --continue"))
     return 0
-

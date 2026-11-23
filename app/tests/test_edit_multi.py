@@ -75,14 +75,14 @@ def test_multi_file_failure_writes_nothing(tmp_path):
 
 def test_multi_file_write_failure_rolls_back(tmp_path, monkeypatch):
     ws = _ws(tmp_path, {"a.py": "a = 1\n", "b.py": "b = 1\n"})
-    from pathlib import Path
-    real = Path.write_bytes
+    from meshpool_harness import fsio
+    real = fsio.atomic_write_bytes
 
-    def flaky(self, data, *a, **k):
-        if self.name == "b.py":
+    def flaky(path, data, *a, **k):
+        if path.name == "b.py":
             raise OSError("disk full")
-        return real(self, data, *a, **k)
-    monkeypatch.setattr(Path, "write_bytes", flaky)
+        return real(path, data, *a, **k)
+    monkeypatch.setattr(fsio, "atomic_write_bytes", flaky)
     with pytest.raises(ToolError, match="restored"):
         ws.edit(changes=[{"path": "a.py", "old": "a = 1", "new": "a = 2"},
                          {"path": "b.py", "old": "b = 1", "new": "b = 2"}])
