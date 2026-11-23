@@ -91,6 +91,7 @@ def agent(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONFIG", str(tmp_path / "meshpool.config"))
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.setenv("MH_MODEL", "today-model")
+    monkeypatch.setenv("MH_CONTEXT_WINDOW", "200000")   # these tests are about the gateway's size limit, not a small window
     return K.Agent(str(tmp_path), mode="auto")
 
 
