@@ -1,5 +1,6 @@
 """G-08: one reasoning-effort setting (MH_REASONING_EFFORT, --effort, /effort, per chat) reaching every wire."""
 import json
+import os
 
 import pytest
 
@@ -103,11 +104,11 @@ def test_cli_flag_reaches_the_chat_body_and_the_environment(monkeypatch):
     from meshpool_harness.agent import tui
     monkeypatch.setattr(tui, "main", lambda *a, **k: got.update(k) or 0)
     monkeypatch.setenv("MH_EFFORT", "medium")                       # the old name still works
+    monkeypatch.setenv("MH_REASONING_EFFORT", "")                   # so monkeypatch restores what cli.main sets
+    assert cli.main(["-p", "hi"]) == 0
+    assert os.environ["MH_REASONING_EFFORT"] == "medium"
     assert cli.main(["-p", "hi", "--effort", "high"]) == 0
-    assert got["effort"] == "high"
-    import os
-    assert os.environ["MH_REASONING_EFFORT"] == "high"
-    monkeypatch.delenv("MH_REASONING_EFFORT")
+    assert got["effort"] == "high" and os.environ["MH_REASONING_EFFORT"] == "high"
 
 
 def test_codex_model_id_uses_the_effort_level():

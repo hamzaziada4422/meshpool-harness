@@ -241,11 +241,12 @@ def main(argv: list[str]) -> int:
     ap.add_argument("target", nargs="?", help="a connector name (see the list) or a server's https:// address")
     ap.add_argument("--name", default="", help="a name for a server added by address")
     ap.add_argument("--token", default="", help="a token or API key (Header-Name: value for another header)")
+    ap.add_argument("--list", action="store_true", help="show the connectors and which are connected")
     a = ap.parse_args(argv)
     if os.environ.get("MESHPOOL_HOME"):
         from meshpool_harness import config as C
         C.ensure_home()
-    if not a.target:
+    if not a.target or a.list:
         return listing()
     ok, _ = connect(a.target, a.name, a.token)
     return 0 if ok else 1

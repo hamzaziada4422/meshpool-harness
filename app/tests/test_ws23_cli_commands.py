@@ -222,6 +222,35 @@ def test_meshpool_help_names_every_command(capsys):
     assert "permissions" in out and "effort" in cli._HELP["agent"]
 
 
+def test_connect_list_and_instructions(monkeypatch, capsys):
+    from meshpool_harness import assistant as AS
+    from meshpool_harness.agent import connect_cli
+    shown = []
+    monkeypatch.setattr(connect_cli, "listing", lambda: shown.append(1) or 0)
+    assert cli.main(["connect", "--list"]) == 0 and shown
+    assert run(capsys, "settings", "instructions", "Always", "reply", "briefly")[0] == 0
+    assert AS.instructions().strip() == "Always reply briefly"
+
+
+def test_slash_commands_run_the_same_handlers_as_the_cli(monkeypatch, capsys):
+    from meshpool_harness.agent.tui_session import SharedCommands
+    shown = []
+    St = type("St", (), {"amber": staticmethod(str), "dim": staticmethod(str)})
+    fake = type("F", (), {"term": type("Tm", (), {"st": St, "scroll": lambda self, rows: shown.extend(rows)})(),
+                          "_cli": SharedCommands._cli, "s": type("S", (), {"id": "sid1"})(),
+                          "_need_shared": lambda self: True})()
+    seen = []
+    monkeypatch.setattr(cli_app, "main", lambda argv: seen.append(argv) or print("ok-output") or 0)
+    SharedCommands.cmd_skills(fake, "enable abc")
+    SharedCommands.cmd_memory(fake, "add I like tea")
+    SharedCommands.cmd_project(fake, "use p_1234567890")
+    SharedCommands.cmd_settings(fake, "MH_REASONING_EFFORT high")
+    SharedCommands.cmd_rename(fake, "New title")
+    assert seen == [["skills", "enable", "abc"], ["memory", "add", "I like tea"], ["chats", "move", "sid1", "p_1234567890"],
+                    ["settings", "set", "MH_REASONING_EFFORT=high"], ["chats", "rename", "sid1", "New title"]]
+    assert any("ok-output" in x for x in shown)
+
+
 # ---------- 7. /worktree forwards to the worktree CLI ------------------------------------------------------------------------
 def test_worktree_slash_forwards_args(monkeypatch):
     from meshpool_harness import worktrees as WT

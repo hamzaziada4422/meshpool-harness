@@ -33,7 +33,7 @@ HELP = {
     "agents": "Usage: meshpool agents list | default ID [--mode code|work]\nThe agents a chat can run on (/agent in a session).",
     "models": "Usage: meshpool models list [--refresh] | default ID | favorite ID [--off]",
     "usage": "Usage: meshpool usage [--days N] [--json]\nWhat the app's Usage page shows, from the one usage ledger.",
-    "settings": "Usage: meshpool settings get [KEY] | set KEY=VALUE...\nSecret values are shown only as 'set'. "
+    "settings": "Usage: meshpool settings get [KEY] | set KEY=VALUE... | instructions [TEXT]\nSecret values are shown only as 'set'. "
                 "Observability: MH_OTEL=1 MH_OTEL_ENDPOINT=URL (MH_OTEL_CONTENT=1 adds prompt text).",
     "help": "Usage: meshpool help [COMMAND | telemetry]",
     "login": "Usage: meshpool login\nAsk for your API key and save it.",
@@ -413,6 +413,12 @@ def _settings(a):
     if sub == "get":
         rows = [r for r in SA.values() if not pos or r["key"] in pos]
         _out(rows, js, [f"{r['key']}={('(set)' if r.get('set') else '') if 'set' in r else r['value']}" for r in rows])
+    elif sub == "instructions":                   # the Instructions page: what every chat is told about you
+        from meshpool_harness import assistant as AS
+        if pos:
+            AS.api_action({"action": "instructions", "text": " ".join(pos)})
+        text = AS.api_view()["instructions"]
+        _out({"instructions": text}, js, [text or "(none)"])
     elif sub == "set":
         vals = {}
         for x in _need(pos, 1, "settings"):
