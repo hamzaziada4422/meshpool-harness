@@ -73,7 +73,36 @@ def _codex_prompt() -> str:
         text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
     except OSError:
         return "You are a coding agent. Use the shell and apply_patch tools to complete the user's task."
-    return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
+    text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S)
+    return text if os.environ.get("MH_CODEX_PROMPT") == "full" else _trim_codex(text)
+
+
+_TRIM = (
+    # (start heading, end heading, replacement): what the model does not need on every call. The examples of
+    # preambles and plans and the long answer-formatting rules cost about 2.5k tokens per call and made the model
+    # write a sentence before each tool call and long final answers.
+    ("# AGENTS.md spec\n", "## Responsiveness\n",
+     "# AGENTS.md\nA project's AGENTS.md (any folder) holds its conventions and is binding for the files you touch; "
+     "the one at the project root is already included below.\n\n"),
+    ("## Responsiveness\n", "## Planning\n",
+     "## Responsiveness\nDo not write a sentence before tool calls: just call the tools. Write only the final "
+     "answer.\n\n"),
+    ("### Examples\n", "## Task execution\n", ""),
+    ("## Sharing progress updates\n", "## Presenting your work and final message\n", ""),
+    ("### Final answer structure and style guidelines\n", "# Sandbox and approvals\n",
+     "### Final answer style\nPlain text. At most 10 lines: what changed and how you checked it, nothing else. "
+     "Do not restate the task, list every edit, or paste code you wrote. Use `-` bullets and backticks for "
+     "commands, paths and identifiers; no headers for short answers.\n\n"),
+)
+
+
+def _trim_codex(text: str) -> str:
+    for a, b, new in _TRIM:
+        i = text.find(a)
+        j = text.find(b, i + len(a)) if i >= 0 else -1
+        if i >= 0 and j > i:
+            text = text[:i] + new + text[j:]
+    return text
 
 T.SCHEMAS.setdefault("ask_user", ASK.SCHEMA)
 from meshpool_harness.agent import planning as _PLAN  # noqa: E402
