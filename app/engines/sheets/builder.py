@@ -2096,7 +2096,7 @@ def capital_allocation(ws, row, years, names=None, prefix="ca_", growth_step=0.0
     r += 1
     for i, c in enumerate(cols[1:], 1):    # now that closing cash exists, link each later opening balance to it
         _f(ws, f"{c}{rows['open']}", f"={cols[i - 1]}{rows['close']}", "usd")
-    line("retired", "Shares retired", "={c}{buyback}/-" + N["price"], fmt="num")
+    line("retired", "Shares retired", "=IF(" + N["price"] + "=0,0,{c}{buyback}/-" + N["price"] + ")", fmt="num")
     rows["sh_close"] = r
     ws.cell(row=r, column=1, value="Closing shares")
     for c in cols:

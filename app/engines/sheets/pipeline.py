@@ -226,7 +226,7 @@ def build(task: str, ws, client, model: str, task_id: str = "sheets") -> dict:
         B._f(out, f"B{i}", expr, fmt)
     B.widths(out, {"A": 46, "B": 22, "C": 14, "D": 14, "E": 14, "F": 14, "G": 14})
     B.widths(wb["Model"], default=14, first=40)
-    safe = re.sub(r"[^A-Za-z0-9]+", "_", company).strip("_") or "Company"
+    safe = re.sub(r"[^\w]+", "_", company).strip("_")[:60] or "Company"
     path = Path(ws.root) / f"{safe}_capital_allocation_model.xlsx"
     wb.save(path)
     notes = [f"Built by the capital-allocation recipe in code: {len(CA_INPUTS)} sourced inputs, {n} forecast years "

@@ -207,7 +207,7 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
                           "EBITDA cannot be computed. Add one of them and run again."}
     res = A.analyse(fin, loan, pol)
     from engines.credit import memo, workbook
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", fin.name).strip("_")[:40] or "borrower"
+    stem = re.sub(r"[^\w]+", "_", fin.name).strip("_")[:40] or "borrower"
     xl = str(wd / f"credit_{stem}.xlsx")
     workbook.build(fin, loan, pol, xl, date=time.strftime("%Y-%m-%d"))
     com = {}
