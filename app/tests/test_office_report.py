@@ -107,8 +107,8 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
         text, ok = a._office({"engine": "sheets", "request": "a model"})
         assert ok and "flagged" in text and "checks passed" not in text
         assert "- Meshpool outputs/" in text and "rules failing: X3." in text
-        for _ in range(OJ.REBUILD_LIMIT - 1):
-            text, _ = a._office({"engine": "sheets", "request": "a model"})
+        for i in range(OJ.REBUILD_LIMIT - 1):             # distinct requests: the same one is returned, not rebuilt
+            text, _ = a._office({"engine": "sheets", "request": f"a model of topic {i}"})
         assert "stop here" in text
         text, ok = a._office({"engine": "sheets", "request": "x", "files": ["missing.csv"]})
         assert not ok and "missing.csv" in text
