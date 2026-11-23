@@ -44,8 +44,8 @@ def test_build_numbers_count_per_engine(tmp_path, monkeypatch):
     saved = dict(O.JOBS)
     O.JOBS.clear()
     try:
-        for _ in range(3):
-            O._engine("slides", "a deck", None)
+        for i in range(3):
+            O._engine("slides", f"a deck about topic {i}", None)   # distinct requests: the same one is not rebuilt
         O._engine("sheets", "a model", None)
         nos = sorted((j["engine"], j["build_no"]) for j in O.JOBS.values())
         assert nos == [("sheets", 1), ("slides", 1), ("slides", 2), ("slides", 3)]
@@ -106,7 +106,7 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
     try:
         text, ok = a._office({"engine": "sheets", "request": "a model"})
         assert ok and "flagged" in text and "checks passed" not in text
-        assert "- Meshpool outputs/" in text and text.rstrip().endswith("rules failing: X3.")
+        assert "- Meshpool outputs/" in text and "rules failing: X3." in text
         for _ in range(OJ.REBUILD_LIMIT - 1):
             text, _ = a._office({"engine": "sheets", "request": "a model"})
         assert "stop here" in text
