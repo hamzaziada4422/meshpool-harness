@@ -155,7 +155,7 @@ def files_changed(root, since: float, turn_files=(), limit: int = 60) -> list[st
             seen[str(f)] = 1.0
     try:
         for dp, dns, fns in os.walk(root):
-            dns[:] = [d for d in dns if d not in _IGNORE_DIRS and not d.endswith(".egg-info")]
+            dns[:] = [d for d in dns if not _skip_dir(dp, d)]
             for fn in fns:
                 p = os.path.join(dp, fn)
                 try:
@@ -168,6 +168,12 @@ def files_changed(root, since: float, turn_files=(), limit: int = 60) -> list[st
     except OSError:
         pass
     return sorted(seen)[:limit]
+
+
+def _skip_dir(parent: str, name: str) -> bool:
+    """Folders nobody reviews: caches and vendored code, and the picture renders the viewing tools make."""
+    return (name in _IGNORE_DIRS or name.endswith(".egg-info")
+            or (name == "views" and os.path.basename(parent) == "Meshpool outputs"))
 
 
 def large(info: dict) -> str:
@@ -406,7 +412,7 @@ def _snapshot(root: Path, cap_files: int = 4000, keep: int = 262144, budget: int
     """{relpath: (size, mtime_ns, bytes or None)} of the project, to undo and report anything the grader touched."""
     snap, used = {}, 0
     for dp, dns, fns in os.walk(root):
-        dns[:] = [d for d in dns if d not in _IGNORE_DIRS and not d.endswith(".egg-info")]
+        dns[:] = [d for d in dns if not _skip_dir(dp, d)]
         for fn in fns:
             if len(snap) >= cap_files:
                 return snap
@@ -457,7 +463,13 @@ def command_allowed(cmd: str) -> bool:
         return False
     if T.read_only(c):
         return True
-    return bool(_TEST_CMD.match(c)) and not re.search(r"[;&|`$<>\n]", re.sub(r"^cd\s+\S+\s*&&\s*", "", c))
+    c = re.sub(r"\s*2>&1", "", c)                                    # stderr into stdout is not a write
+    c = re.sub(r"^(?:[A-Z_][A-Z0-9_]*=\S+\s+)+", "", c)               # PYTHONPATH=. pytest
+    head, *rest = c.split("|")                                       # pytest ... | tail -20
+    head = head.strip()
+    if rest and not all(T.read_only(r.strip()) for r in rest):
+        return False
+    return bool(_TEST_CMD.match(head)) and not re.search(r"[;&`$<>\n]", re.sub(r"^cd\s+\S+\s*&&\s*", "", head))
 
 
 class _Mcp:

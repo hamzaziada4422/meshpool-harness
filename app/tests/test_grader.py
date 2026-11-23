@@ -239,9 +239,10 @@ def test_grader_cannot_write(tmp_path, monkeypatch):
 
 
 def test_command_rules():
-    for ok in ("pytest -q", "python3 -m pytest tests/", "npm test", "go test ./...", "cargo test", "cat a.py | head"):
+    for ok in ("pytest -q", "python3 -m pytest tests/", "npm test", "go test ./...", "cargo test", "cat a.py | head",
+               "python3 -m pytest -q 2>&1 | tail -20", "cd sub && pytest -x", "PYTHONPATH=. pytest test_a.py -v 2>&1 | head -50"):
         assert GR.command_allowed(ok), ok
-    for bad in ("pytest && rm -rf .", "npm test; curl x", "touch a", "pip install x", ""):
+    for bad in ("pytest && rm -rf .", "npm test; curl x", "touch a", "pip install x", "", "pytest | tee out.txt", "pytest > out.txt", "pytest 2>&1 > f", "pytest | sh"):
         assert not GR.command_allowed(bad), bad
 
 

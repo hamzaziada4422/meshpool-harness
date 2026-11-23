@@ -1,5 +1,8 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.11**
+- **A second pair of eyes on big jobs.** Before Meshpool tells you a big task is done, a separate reviewer that did not do the work checks it against what you asked for, in code, documents, decks, spreadsheets and research. If something is missing it goes back to be fixed, and the reply ends with a short "Independent check" in plain words. It is on by default, only runs on big tasks, and you can turn it off in Settings or check any reply yourself with "Check this" (or `/grade` in the terminal).
+
 **New in 0.0.10**
 - **See what Meshpool knows.** A new Memory page shows every fact, filed by category, with where it came from and which chats it was given to. Edit, pin, move or archive any of them, and every change has Undo.
 - **Meshpool asks before it remembers.** Facts it notices wait in a "Meshpool thinks" tray. Nothing reaches an agent until you say yes. Two facts that disagree are shown side by side.
