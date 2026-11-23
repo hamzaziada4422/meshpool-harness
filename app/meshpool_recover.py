@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import time
 
 JOURNAL = ".update-journal.json"
@@ -44,6 +45,29 @@ def _alive(pid: int) -> bool:
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def boot_time() -> float | None:
+    """Unix time the system last booted, or None when it cannot be found. A journal written before it belongs to a
+    process that cannot be running now, even if its pid has been handed to something else after a reboot."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            return time.time() - ctypes.windll.kernel32.GetTickCount64() / 1000.0   # type: ignore[attr-defined]
+        if os.path.exists("/proc/stat"):
+            with open("/proc/stat", "r", encoding="ascii", errors="replace") as f:
+                for line in f:
+                    if line.startswith("btime "):
+                        return float(line.split()[1])
+        if os.uname().sysname == "Darwin":
+            out = subprocess.run(["sysctl", "-n", "kern.boottime"], capture_output=True, text=True, timeout=2).stdout
+            import re
+            m = re.search(r"sec\s*=\s*(\d+)", out)
+            if m:
+                return float(m.group(1))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def _rm(p: str) -> None:
@@ -97,8 +121,11 @@ def recover(app_dir) -> str | None:
         if not isinstance(j, dict):
             j = {}
         pid = j.get("pid")
-        if isinstance(pid, int) and _alive(pid) and time.time() - float(j.get("time") or 0) < FRESH:
-            return None                               # another process is swapping right now
+        t = float(j.get("time") or 0)
+        if isinstance(pid, int) and _alive(pid) and time.time() - t < FRESH:
+            boot = boot_time()
+            if boot is None or t >= boot:             # written before the last boot: the pid is a stranger's now
+                return None                           # another process is swapping right now
         for pair in reversed(j.get("pairs") or []):
             try:
                 _restore(pair)

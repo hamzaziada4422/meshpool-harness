@@ -469,3 +469,25 @@ def test_timeout_raised_by_the_body_is_not_reported_as_busy():
             raise TimeoutError("timed out")
     with U.install_lock():                                               # and the lock was released
         pass
+
+
+def test_journal_written_before_the_last_boot_is_stale(tmp_path, monkeypatch):
+    # after a power cut the pid in the journal may belong to an unrelated process: boot time decides
+    import meshpool_recover as R
+    app = tmp_path / "app"
+    app.mkdir()
+    now = time.time()
+    monkeypatch.setattr(R, "boot_time", lambda: now - 30)
+    jp = app / R.JOURNAL
+    jp.write_text(json.dumps({"pairs": [], "tag": "v1", "pid": os.getppid(), "time": now - 60}))   # before boot
+    assert R.recover(app) and not jp.exists()
+    jp.write_text(json.dumps({"pairs": [], "tag": "v1", "pid": os.getppid(), "time": now - 10}))   # after boot
+    assert R.recover(app) is None and jp.exists()
+    monkeypatch.setattr(R, "boot_time", lambda: None)                    # unknown boot time: old behaviour
+    assert R.recover(app) is None and jp.exists()
+
+
+def test_boot_time_is_found_here():
+    import meshpool_recover as R
+    b = R.boot_time()
+    assert b is None or 0 < b <= time.time()
