@@ -214,6 +214,7 @@ def test_C_02_source_tree_home_is_migrated(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     monkeypatch.setattr(C.sys, "platform", "linux")
     h = C.ensure_home()
+    assert h != old and old not in h.parents
     assert C.read(h / "meshpool.config").get("MH_MODEL") == "kept"
     assert (h / "runs" / "r1").exists()
     assert (old / "meshpool.config").exists()                         # copied, never moved
