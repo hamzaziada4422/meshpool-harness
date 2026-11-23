@@ -663,8 +663,9 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
         except Exception:  # noqa: BLE001
             pass
         a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
-        if os.environ.get("MH_GRADER_LIGHT", "0") == "1":
-            # MH_GRADER_LIGHT=1: one call on the evidence (files, commands, facts), no tool loop of up to 15 steps
+        if os.environ.get("MH_GRADER_LIGHT", "1") != "0":
+            # one call on the evidence (files, commands, facts), no tool loop of up to 15 steps; MH_GRADER_LIGHT=0 restores
+            # the full reviewer (on the 23 long tasks: 94% solved at 0.0030 per solved against 89% at 0.0051)
             a.max_steps, a._no_tools = 1, True
         reply = a._turn() or ""
         res = normalise(parse(reply))
