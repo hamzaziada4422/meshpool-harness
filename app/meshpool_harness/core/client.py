@@ -91,22 +91,51 @@ def classify_error(msg: str) -> str:
     return "fatal"
 
 
-def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None = None) -> float:
-    """Seconds to wait after the n-th 429 in a row: the reset time when the message gives one (up to cap), else
-    3, 6, 12 ... 60 s (backoff; "please slow down" 429s clear in seconds) or 65 s (a token window). With no cap a
-    retry-after is held to 300 s and a reset time to 120 s; the app agent passes what is left of its wait budget."""
+def stated_wait(msg: str) -> float | None:
+    """The wait (seconds, uncapped, >= 0) the server stated in an error text, or None when it stated nothing:
+    `[retry-after-ms: N]`, `[retry-after: N]` (delta seconds), `[retry-after: <HTTP-date>]`, or the gateway's
+    "resets at: YYYY-MM-DD HH:MM:SS" (UTC, converted to seconds from now, plus 3 s of slack)."""
     import calendar
     import re
     import time
+    text = msg or ""
+    try:
+        ms = re.search(r"\[retry-after-ms:\s*(\d+(?:\.\d+)?)\s*\]", text, re.I)
+        if ms:
+            return float(ms.group(1)) / 1000.0
+        ra = re.search(r"\[retry-after:\s*([^\]]+?)\s*\]", text, re.I)
+        if ra:
+            val = ra.group(1)
+            if re.fullmatch(r"\d+(?:\.\d+)?", val):
+                return float(val)
+            from email.utils import parsedate_to_datetime
+            from datetime import timezone
+            dt = parsedate_to_datetime(val)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return max(0.0, dt.timestamp() - time.time())
+        mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", text)
+        if mt:
+            reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
+            return max(0.0, reset - time.time() + 3)
+    except (ValueError, TypeError, OverflowError, IndexError):
+        return None
+    return None
+
+
+def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None = None) -> float:
+    """Seconds to wait after the n-th 429 in a row: the stated wait when the message gives one (see stated_wait; up to
+    cap), else 3, 6, 12 ... 60 s (backoff; "please slow down" 429s clear in seconds) or 65 s (a token window). With
+    no cap a retry-after is held to 300 s and a reset time to 120 s; the app agent passes what is left of its wait
+    budget."""
+    import re
     wait = min(60, 3 * 2 ** (max(1, n429) - 1)) if backoff else 65
-    ra = re.search(r"\[retry-after: (\d+(?:\.\d+)?)\]", msg or "")   # the gateway said how long
-    if ra:
-        return max(1.0, min(300.0 if cap is None else max(1.0, cap), float(ra.group(1))))
-    mt = re.search(r"resets at: (\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", msg or "")
-    if mt:
-        reset = calendar.timegm(time.strptime(mt.group(1), "%Y-%m-%d %H:%M:%S"))
-        wait = max(5, min(120.0 if cap is None else max(5.0, cap), reset - time.time() + 3))
-    return wait
+    stated = stated_wait(msg)
+    if stated is None:
+        return wait
+    if re.search(r"\[retry-after(?:-ms)?:", msg or "", re.I):   # the gateway said how long
+        return max(1.0, min(300.0 if cap is None else max(1.0, cap), stated))
+    return max(5.0, min(120.0 if cap is None else max(5.0, cap), stated))
 
 
 MAIN_PHASES = ("phase_2_build",)             # the user's own turn; every other phase is a side call
@@ -163,7 +192,15 @@ class LiveClient:
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
-        for attempt in range(attempts or (3 if side else 25)):  # sporadic 502s (backoff) and 429 token-window limits (wait for reset)
+        # The attempts (3 for a side call, 25 otherwise) are for failures that are not rate limits (sporadic 502s,
+        # rejected requests). A 429 never uses one up: it is bounded by the per-call wait budget, so a long but
+        # in-budget wait cannot end the loop early, and an endless 429 stream ends when the budget is spent.
+        try:
+            rl_budget = max(0.0, float(os.environ.get("MH_RATE_LIMIT_WAIT_S", "1800")))
+        except ValueError:
+            rl_budget = 1800.0
+        waited, attempt, stripped_reasoning = 0.0, 0, False
+        while attempt < (attempts or (3 if side else 25)):
             try:
                 send, sent_tools, out_tok = CTX.fit(messages, ex.get("tools"), win, max_tokens, tighten)
                 ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
@@ -178,6 +215,15 @@ class LiveClient:
                 last = e
                 msg = str(e)
                 kind = classify_error(msg)
+                cur = attempt
+                if kind != "rate_limit":
+                    attempt += 1
+                if kind == "bad_request" and "reasoning_content" in msg and not stripped_reasoning:
+                    stripped_reasoning = True                  # the server refuses the field: drop it, retry once
+                    for m in messages:
+                        if isinstance(m, dict):
+                            m.pop("reasoning_content", None)
+                    continue
                 if kind == "context":                              # too long: learn the real window, shrink, retry now
                     shrinks += 1
                     said = CTX.parse_limit(msg)
@@ -188,14 +234,14 @@ class LiveClient:
                     if shrinks > 4:
                         raise
                     continue
-                if kind in ("bad_request", "vision", "gateway_reject") and attempt == 0:
+                if kind in ("bad_request", "vision", "gateway_reject") and cur == 0:
                     from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
                         if isinstance(m.get("content"), str):
                             m["content"] = clean(m["content"])
                     continue
-                if kind == "gateway_reject" and attempt < 4:      # gateway rejects valid requests at random
-                    time.sleep(2 * attempt)                        # (GATEWAY_ISSUES #10): retry the same request
+                if kind == "gateway_reject" and cur < 4:      # gateway rejects valid requests at random
+                    time.sleep(2 * cur)                        # (GATEWAY_ISSUES #10): retry the same request
                     continue
                 if (kind == "gateway_reject" and os.environ.get("MH_400_WITHHOLD") == "1"
                         and _withhold_latest_output(messages)):
@@ -205,16 +251,28 @@ class LiveClient:
                     continue
                 if kind == "rate_limit":                    # meshpool team token limit: wait for the window to reset
                     self._n429 = getattr(self, "_n429", 0) + 1
-                    wait = rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1")
+                    left = rl_budget - waited
+                    stated = stated_wait(msg)
+                    if stated is not None:                      # the server said when the window resets: wait that
+                        wait = max(1.0, stated)
+                        if wait > left:
+                            raise RuntimeError(f"{msg} [rate limit: it resets in {wait:.0f}s, after the {rl_budget:.0f}s "
+                                               f"wait budget (MH_RATE_LIMIT_WAIT_S); {left:.0f}s left]") from e
+                    else:
+                        if left <= 0:
+                            raise RuntimeError(f"{msg} [rate limit: the {rl_budget:.0f}s wait budget "
+                                               f"(MH_RATE_LIMIT_WAIT_S) is spent]") from e
+                        wait = min(left, rate_limit_wait(msg, self._n429, os.environ.get("MH_429_BACKOFF") == "1"))
                     if side and (wait > SIDE_BUDGET_S or time.time() - t_start + wait > SIDE_BUDGET_S):
                         raise
+                    waited += wait
                     time.sleep(wait)
                     continue
                 if kind != "transient":
                     raise
-                wait = min(30, 2 ** (attempt + 1))
+                wait = min(30, 2 ** (cur + 1))
                 budget = SIDE_BUDGET_S if side else CONNECT_BUDGET_S
-                if side and attempt >= 1 or time.time() - t_start + wait > budget:
+                if side and cur >= 1 or time.time() - t_start + wait > budget:
                     raise                                       # out of budget: the user sees the real error now
                 if not told and not side:
                     told = True

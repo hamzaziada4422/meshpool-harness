@@ -41,6 +41,7 @@ class ModelCaps:
     reliability: str = "medium"
     usage_cached: bool = False
     usage_reasoning: bool = False
+    keep_reasoning: bool = False                     # send reasoning_content back inside a tool-call turn (DeepSeek, Kimi thinking)
     source: dict = field(default_factory=dict)       # field -> where it came from (for docs and debugging)
 
     def effort(self, lane: str = "task", override: str = "") -> str:
@@ -101,7 +102,7 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
     # 1. conservative defaults (above), then the name-pattern table
     for row in _hints():
         if re.search(row["match"], bare.lower()):
-            for f in ("reasoning", "parallel_tools", "reliability", "max_output"):
+            for f in ("reasoning", "parallel_tools", "reliability", "max_output", "keep_reasoning"):
                 if f in row:
                     put(f, row[f], "name")
             if "efforts" in row:

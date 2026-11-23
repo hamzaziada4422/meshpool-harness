@@ -100,11 +100,12 @@ def test_git_test_changes_handles_spaces(tmp_path):
 
 
 # ---- retry-after
-def test_retry_after_in_error_text():
+@pytest.mark.parametrize("sent, shown", [("2", "2"), ("600", "600")])   # no 60 s cap: the caller decides
+def test_retry_after_in_error_text(sent, shown):
     class H(BaseHTTPRequestHandler):
         def do_POST(self):
             self.send_response(429)
-            self.send_header("Retry-After", "2")
+            self.send_header("Retry-After", sent)
             self.send_header("Content-Length", "2")
             self.end_headers()
             self.wfile.write(b"{}")
@@ -118,7 +119,7 @@ def test_retry_after_in_error_text():
     with pytest.raises(RuntimeError) as e:
         led.chat(model="m", messages=[{"role": "user", "content": "x"}], retries=0)
     srv.shutdown()
-    assert "[retry-after: 2.0]" in str(e.value)
+    assert f"[retry-after: {shown}]" in str(e.value)
 
 
 # ---- wires

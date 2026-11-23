@@ -405,6 +405,8 @@ def test_the_chat_agent_speaks_the_messages_wire_to_an_anthropic_style_endpoint(
         {"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"}]}, True)
     srv.shutdown()
     assert got["path"] == "/v1/messages" and got["hdr"]["x-api-key"] == "sk-good-key-1234"
-    assert "authorization" not in got["hdr"] and "stream" not in got["body"]
-    assert got["body"]["system"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
+    # the agent now streams the Messages wire; this server answers plain JSON anyway, which is still read (one call)
+    assert "authorization" not in got["hdr"] and got["body"]["stream"] is True
+    assert got["hdr"]["accept"] == "text/event-stream"
+    assert got["body"]["system"][0]["text"] == "be brief" and got["body"]["messages"][0]["role"] == "user"
     assert resp["choices"][0]["message"]["content"] == "hello" and streamed is False
