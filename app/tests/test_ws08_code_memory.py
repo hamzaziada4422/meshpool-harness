@@ -58,3 +58,20 @@ def test_manager_passes_chat_to_the_assistant_server():
     spec = {"command": sys.executable, "args": ["-m", "meshpool_harness.agent.assistant_mcp_server"]}
     assert m._with_chat(spec)["env"]["MH_CHAT_ID"] == "abc-1"
     assert "env" not in m._with_chat({"command": "x", "args": ["other"]})
+
+
+def test_outside_code_agents_schedule_in_code_mode(home, monkeypatch, tmp_path):
+    """Codex/OpenCode (ACP) get the chat id on the assistant server; Pi, a Code-only agent, gets kind=code."""
+    import shutil
+    from meshpool_harness import config as C
+    from meshpool_harness.harnesses import acp, pi_rpc
+    M.config_file().parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(C.APP / "defaults" / "mcp.json", M.config_file())   # the built-in servers, as on first run
+    env = lambda row: {e["name"]: e["value"] for e in row.get("env") or []}   # noqa: E731
+    rows = {r["name"]: r for r in acp.mcp_servers_for_acp([str(tmp_path)], "chat-x")}
+    assert env(rows["meshpool-assistant"]).get("MH_CHAT_ID") == "chat-x"
+    pi = pi_rpc._mcp_for_pi(tmp_path)["mcpServers"]
+    assert pi["meshpool-assistant"]["env"].get("MH_CHAT_KIND") == "code"
+    monkeypatch.setenv("MH_CHAT_KIND", "code")
+    S.schedule_task("nightly lint", "daily")
+    assert {t["prompt"]: t["kind"] for t in A.tasks()}["nightly lint"] == "code"

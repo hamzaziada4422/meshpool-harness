@@ -41,10 +41,10 @@ def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", d
                   minutes: int = 60, folder: str = "", mode: str = "", only_on_change: bool = False) -> str:
     import os
     if not mode:                                     # a task made in a Code chat runs in Code mode
-        mode = "cowork"
+        mode = "code" if os.environ.get("MH_CHAT_KIND") == "code" else "cowork"
         try:
             from meshpool_harness.ui.agent_api import read_meta
-            if read_meta(os.environ.get("MH_CHAT_ID", "")).get("kind") == "code":
+            if os.environ.get("MH_CHAT_ID") and read_meta(os.environ["MH_CHAT_ID"]).get("kind") == "code":
                 mode = "code"
         except Exception:  # noqa: BLE001
             pass

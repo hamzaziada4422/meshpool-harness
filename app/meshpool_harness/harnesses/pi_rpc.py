@@ -95,6 +95,8 @@ def _mcp_for_pi(root: Path) -> dict:
                     "exposure": "deferred"}
         else:
             env = {e["name"]: e["value"] for e in s.get("env") or []}
+            if name == "meshpool-assistant":
+                env["MH_CHAT_KIND"] = "code"             # Pi is a Code agent: what it schedules runs in Code mode
             spec = {"command": s["command"], "args": s.get("args") or [], "env": env,
                     "timeout": 1800 if name == "meshpool-assistant" else 300,
                     "exposure": "direct"}
