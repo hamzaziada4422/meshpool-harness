@@ -48,9 +48,10 @@ _CONTEXT_RX = None
 
 def classify_error(msg: str) -> str:
     """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
-    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    'tls' (the endpoint's certificate is not trusted: retrying cannot help), 'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
     at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
-    context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
+    context), 'vision' (a 4xx about images or content types), 'bad_request' (any other 4xx not named above: 400, 405, 409,
+    415, 422 ...; the request itself is wrong, so it is not retried unchanged), 'transient' (5xx,
     connection lost, timeout) or 'fatal'."""
     global _CONTEXT_RX
     import re
@@ -60,6 +61,9 @@ def classify_error(msg: str) -> str:
                                   r"token limit", re.I),
                        re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
     m = msg or ""
+    from meshpool_harness.core import refusals as RF
+    if RF.is_tls_error(m):
+        return "tls"
     if "HTTP 401" in m or "HTTP 403" in m:
         return "auth"
     if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
@@ -80,7 +84,7 @@ def classify_error(msg: str) -> str:
         return "rate_limit"
     if "rejected as invalid" in m:
         return "gateway_reject"
-    if "HTTP 400" in m:
+    if re.search(r"HTTP 4\d\d", m):
         if _CONTEXT_RX[0].search(m):
             return "context"
         if _CONTEXT_RX[1].search(m):
@@ -160,6 +164,7 @@ class LiveClient:
         win = CTX.window(model, base_url, getattr(self.ledger, "api_key", "") or "")
         CTX.tell_once(model, win, self.notify or _tell_retry)
         tighten, shrinks = 1.0, 0
+        adapted: set = set()                     # refusals already answered by changing the request (once each)
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
@@ -188,6 +193,28 @@ class LiveClient:
                     if shrinks > 4:
                         raise
                     continue
+                if kind == "bad_request":                          # the endpoint named what it cannot take: fix, not resend
+                    body = dict(ex, model=model, messages=messages, max_tokens=max_tokens)
+                    if temperature is not None:
+                        body["temperature"] = temperature
+                    fix = self._adapt_refusal(msg, body, model, adapted)
+                    if fix:
+                        if fix.get("action") == "max_out":
+                            max_tokens = min(max_tokens, int(fix["max_output"]))
+                            if "max_completion_tokens" in ex:
+                                ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "max_tokens_param":
+                            ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "no_tools":
+                            ex.pop("tools", None)
+                            ex.pop("tool_choice", None)
+                        elif fix.get("action") == "drop_field":
+                            for f in fix["fields"]:
+                                if f == "temperature":
+                                    temperature = None
+                                else:
+                                    ex.pop(f, None)
+                        continue
                 if kind in ("bad_request", "vision", "gateway_reject") and attempt == 0:
                     from meshpool_harness.core.tools import clean      # invalid request: clean every message once
                     for m in messages:
@@ -222,6 +249,32 @@ class LiveClient:
                                                  f"{int(budget)} s.")
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last
+
+    @staticmethod
+    def _adapt_refusal(msg: str, body: dict, model: str, adapted: set) -> dict | None:
+        """refusals.diagnose for the request-fixable actions, once per field/action in one call; what it shows is
+        remembered per endpoint+model (modelcaps.learn). None: nothing to change, fall through to the old handling."""
+        from meshpool_harness.core import modelcaps as MC
+        from meshpool_harness.core import refusals as RF
+        d = RF.diagnose(msg, body)
+        if not d or d["action"] not in ("drop_field", "max_tokens_param", "max_out", "no_tools"):
+            return None
+        if d["action"] == "drop_field":
+            d["fields"] = [f for f in d["fields"] if ("drop", f) not in adapted]
+            if not d["fields"]:
+                return None
+            adapted.update(("drop", f) for f in d["fields"])
+            d["learn"] = {"refused": list(d["fields"])}
+        else:
+            if (d["action"],) in adapted:
+                return None
+            adapted.add((d["action"],))
+        try:
+            from meshpool_harness import providers as PV
+            MC.learn(PV.key_base(), model, **d["learn"])
+        except Exception:  # noqa: BLE001
+            pass
+        return d
 
     def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
         """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far
