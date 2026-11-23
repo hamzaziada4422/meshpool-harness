@@ -370,7 +370,7 @@ def observe_silent_cut(model: str, sent_tokens: int, usage: dict, win: int, base
 
 class CompactGuard:
     """Compaction must not become a loop: it may run again only after the conversation has grown 30% since the last
-    one, and after two compactions with no file changed in between it stops (the task carries on or finishes)."""
+    one, and after two compactions that shrank nothing much and changed no file it stops (the task carries on or finishes)."""
 
     def __init__(self):
         self.last_size = 0
@@ -384,8 +384,10 @@ class CompactGuard:
             return False
         return True
 
-    def record(self, size_after: int, edits: int = 0) -> None:
-        self.idle = self.idle + 1 if edits == self.last_edits else 0
+    def record(self, size_after: int, edits: int = 0, size_before: int | None = None) -> None:
+        """A compaction that cut the conversation by less than 30% and changed no file counts as idle."""
+        useless = size_before is None or size_after > 0.7 * size_before
+        self.idle = self.idle + 1 if (edits == self.last_edits and useless) else 0
         self.last_size, self.last_edits = size_after, edits
 
 

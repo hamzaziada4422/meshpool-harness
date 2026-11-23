@@ -2261,7 +2261,7 @@ class Agent:
             self.emit({"type": "status", "text": "Older tool outputs were shortened to keep the context small."})
             if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
                 self.compact_now()
-            guard.record(_context_size(self.messages), edits)
+            guard.record(_context_size(self.messages), edits, size)
 
     def compact_now(self):
         """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""

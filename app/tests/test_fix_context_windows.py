@@ -254,12 +254,12 @@ def test_learn_ignores_guesses_below_the_floor_but_believes_an_error():
 def test_compact_guard_breaks_the_loop():
     g = CTX.CompactGuard()
     assert g.allow(100_000, 0)
-    g.record(30_000, 0)
+    g.record(30_000, 0, 100_000)
     assert not g.allow(35_000, 0)                                      # not 30% bigger yet
     assert g.allow(40_000, 0)
-    g.record(30_000, 0)
+    g.record(30_000, 0, 40_000)                                        # cut only 25%: idle
     assert g.allow(40_000, 0)
-    g.record(30_000, 0)
+    g.record(30_000, 0, 40_000)
     assert not g.allow(500_000, 0)                                     # two idle compactions: stop compacting
     assert g.allow(500_000, 3)                                         # files changed since: working again
 

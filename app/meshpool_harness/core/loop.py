@@ -240,7 +240,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
             if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars and CTX.is_small(win):
                 from meshpool_harness.agent import compaction as _CP     # still over 70% of a small window: summarize
                 _CP.compact_history(messages, client=client, model=model, win=win)
-            _cguard.record(sum(len(json.dumps(m)) for m in messages), ws.edits)
+            _cguard.record(sum(len(json.dumps(m)) for m in messages), ws.edits, _sz)
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()
