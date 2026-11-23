@@ -272,3 +272,12 @@ def test_headless_run_has_no_ask_user_tool(tmp_path):
     b, seen = _agent(tmp_path, [{"content": "hi"}])
     b.send("hello")
     assert "ask_user" in _names(seen[0])                    # an interactive session keeps it
+
+
+def test_the_same_lookup_three_times_gets_a_note(tmp_path):
+    same = {"content": "", "tool_calls": [_call(1, "glob", {"pattern": "*.nothing"})]}
+    other = {"content": "", "tool_calls": [_call(2, "glob", {"pattern": "*.other"})]}
+    a, seen = _agent(tmp_path, [same, other, same, other, same, {"content": "stopped"}])
+    a.send("look around")
+    notes = [m for m in a.messages if m.get("role") == "user" and "same glob call three times" in str(m.get("content"))]
+    assert len(notes) == 1

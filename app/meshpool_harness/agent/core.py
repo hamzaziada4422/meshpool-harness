@@ -1583,6 +1583,19 @@ class Agent:
         for c in calls:
             f = c.get("function", {})
             g["hist"].append(f.get("name", "") + ":" + str(f.get("arguments", ""))[:500])
+        if E2E:                                          # the same lookup over and over, spread among other calls
+            seen = g.setdefault("dups", {})
+            for c in calls:
+                f = c.get("function", {})
+                if f.get("name") in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write",
+                                     "update_plan", "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+                    continue
+                k = f.get("name", "") + ":" + str(f.get("arguments", ""))[:500]
+                seen[k] = seen.get(k, 0) + 1
+                if seen[k] == 3:
+                    notes.append(f"You have made the same {f.get('name')} call three times; the result does not "
+                                 "change. Use what you already have, or ask a different question (another query, "
+                                 "page or source).")
         g["n_calls"] = g.get("n_calls", 0) + len(calls)
         h = g["hist"] = g["hist"][-12:]
         hit = len(h) >= 3 and h[-1] == h[-2] == h[-3]
