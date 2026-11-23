@@ -107,6 +107,7 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+_SEEN_SERVER: set = set()          # local endpoints that answered an Ollama / LM Studio route with real data
 _NO_SHOW: set = set()             # endpoints that answered a plain 404 to Ollama/LM Studio style routes
 
 
@@ -168,6 +169,8 @@ def probe(base: str, model: str, key: str = "") -> int | None:
     if not _route_absent(base, "no_show"):
         try:
             d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
+            if isinstance(d, dict) and (d.get("parameters") or d.get("model_info") or d.get("details")):
+                _SEEN_SERVER.add(base)
             params = str(d.get("parameters") or "")
             m = re.search(r"\bnum_ctx\s+(\d+)", params)
             if m:
@@ -182,6 +185,8 @@ def probe(base: str, model: str, key: str = "") -> int | None:
     if not _route_absent(base, "no_v0"):
         try:
             d = _http_json(root + "/api/v0/models/" + model, None, key)
+            if isinstance(d, dict) and (d.get("loaded_context_length") or d.get("max_context_length") or d.get("arch")):
+                _SEEN_SERVER.add(base)
             for k in ("loaded_context_length", "context_length", "max_context_length"):
                 if isinstance(d.get(k), int) and d[k] > 0:
                     return d[k]
@@ -284,7 +289,14 @@ def window_info(model: str, base: str | None = None, key: str = "", probe_endpoi
     hint = _name_hint(bare)
     if hint:
         return hint, "table"
-    return (DEFAULT_LOCAL if local else DEFAULT_HOSTED), "default"
+    # A small default is for a model server on this computer (Ollama, LM Studio: seen answering their routes, or on
+    # their usual ports). A local proxy or mock in front of a hosted model says nothing about the window: assume large.
+    try:
+        port = urlparse(base or "").port
+    except ValueError:
+        port = None
+    server = local and (base in _SEEN_SERVER or port in (11434, 1234))
+    return (DEFAULT_LOCAL if server else DEFAULT_HOSTED), "default"
 
 
 def window(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> int:
@@ -398,6 +410,7 @@ def forget() -> None:
         _LISTS.clear()
         _FAILED.clear()
         _NO_SHOW.clear()
+        _SEEN_SERVER.clear()
         _SILENT.clear()
         _TOLD.clear()
 
@@ -444,7 +457,8 @@ def compact_chars(win: int, fixed_tokens: int, limit: int) -> int:
     """The conversation size (chars) at which compaction starts: 70% of the window less the schemas, system prompt
     and reply; never above `limit` (the profile's own number)."""
     room = target(win) - fixed_tokens - max_output(win, None) * 0.5
-    return int(max(1500, min(limit, room * CHARS_PER_TOKEN)))
+    floor = 1500 if win <= 16_384 else 12_000          # a window that holds a real conversation never compacts at 1.5k
+    return int(max(floor, min(limit, room * CHARS_PER_TOKEN)))
 
 
 def is_small(win: int) -> bool:

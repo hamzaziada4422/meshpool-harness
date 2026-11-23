@@ -12,3 +12,11 @@ checks that each everyday grader fails on the untouched inputs and passes on a r
 Arms: **Meshpool** = `python -m meshpool_harness -p ... --auto` from a fresh worktree of HEAD (bf040146), private home, no MH_*
 switch except MH_MODEL. **Codex CLI** 0.171.0 = `codex exec --json`, stdin closed, Responses wire. **Pi** = bench.py's pi arm
 (Pi 1.5.2 through Meshpool's Pi integration, pi_child.py). Same per-task timeout (swe/office 900 s, everyday 600 s).
+
+Run notes: 2 runs per arm, 40 task-runs each, all 120 complete (no budget cut, no HTTP 429). Metered spend $2.50 at
+prices.json (incl. a $0.02 smoke run) of the $3 cap. Two grader bugs found during run 1 were fixed and run 1 was re-graded
+from the kept workspaces (testkit/realworld/regrade.py; rows carry `regraded_from`): pdf_facts flagged "succeeded Johan
+Berg" as naming the wrong CEO (hit all three arms), and csv_sales q1 is an exact half-cent tie (511253.075), so .07 and
+.08 are both accepted. The runner process died once during office run 1; Meshpool's pdf_report run 1 was still looping
+(418 calls) and was stopped by hand, recorded as a 900 s timeout with its metered cost (a lower bound). Raw data:
+results.jsonl, meter.jsonl, run.json next to this file; traces in /tmp/claude-0/rw/run/logs.

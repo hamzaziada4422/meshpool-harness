@@ -123,7 +123,7 @@ def test_unknown_local_model_learns_window_from_the_error(tmp_path, monkeypatch)
     srv = Fake(4096, STEPS)
     monkeypatch.setenv("MESHPOOL_BASE_URL", srv.url)
     monkeypatch.setenv("MH_PROBE_CONTEXT", "0")
-    assert CTX.window("mystery-model", srv.url) == CTX.DEFAULT_LOCAL      # local, unknown: conservative 8k
+    assert CTX.window("mystery-model", srv.url) == CTX.DEFAULT_HOSTED      # a local proxy/mock says nothing: large
     ws = project(tmp_path)
     cl = LiveClient("phase_2_build")
     cl.notify = lambda t: None
@@ -493,3 +493,33 @@ def test_refused_fields_have_one_source(tmp_path, monkeypatch):
     A._REFUSED.clear()
     assert A._REFUSED.get("kimi-x", ()) == () and not MC.refused(PV.key_base(), "kimi-x")
     MC.reset()
+
+
+def test_local_proxy_with_a_path_prefix_and_unsized_models_list_is_not_a_small_window():
+    """ws20: base http://127.0.0.1:<port>/m/<task>/<arm>/<run>/v1 in front of a hosted model, /models without sizes."""
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _r(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            if self.path.endswith("/models"):
+                out, code = json.dumps({"data": [{"id": "mp-work"}, {"id": "deepseek-v4.1-flash"}]}).encode(), 200
+            else:
+                out, code = json.dumps({"error": {"message": "not found"}}).encode(), 404
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+        do_GET = do_POST = _r
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}/m/pptx_chart/mp-work/1/v1"
+    for model in ("deepseek-v4.1-flash", "mp-work", "some-unlisted-alias"):
+        win, src = CTX.window_info(model, base)
+        assert win >= 200_000, (model, win, src)
+        assert CTX.compact_chars(win, 8000, 160_000) == 160_000       # no compaction at 11k tokens
+    srv.shutdown()
+    assert CTX.window("x", "http://localhost:11434/v1", probe_endpoint=False) == CTX.DEFAULT_LOCAL   # Ollama's port: small
+    assert CTX.compact_chars(32768, 20000, 160_000) >= 12_000                # a floor, never 1.5k
