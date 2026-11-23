@@ -178,6 +178,6 @@
 .rev010 .rv-list{list-style:none;margin:6px 0;padding:0;display:flex;flex-direction:column;gap:6px}
 .rev010 .rv-list li{line-height:1.4;overflow-wrap:anywhere}
 .rev010 .rv-list small{display:block;color:var(--ink-3);margin-top:1px}
-.rev010 .rv-s{display:inline-block;min-width:5.5em;font-weight:600;color:var(--ink-2)}
+.rev010 .rv-s{display:inline-block;min-width:8em;font-weight:600;color:var(--ink-2)}
 .rev010 li.not_met .rv-s{color:var(--warn)}
 @media (max-width:520px){.rev010 .rv-s{display:block}}
