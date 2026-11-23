@@ -17,6 +17,9 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     monkeypatch.setenv("MH_GRADER", "1")
+    monkeypatch.setenv("MH_GRADER_SMALL", "1")        # these tests are about the review itself, not the cost gates
+    monkeypatch.setenv("MH_GRADER_LOCAL", "0")
+    monkeypatch.setenv("MH_GRADER_TODO_CALLS", "0")
     monkeypatch.delenv("MH_MODEL_FAST", raising=False)
 
 
