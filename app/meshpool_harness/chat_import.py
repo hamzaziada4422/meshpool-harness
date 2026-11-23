@@ -22,6 +22,7 @@ from datetime import datetime
 from pathlib import Path
 
 from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 
 MAX_MSG = 20000                     # characters kept per message
 MAX_MSGS = 400                      # messages kept per conversation (the most recent)
@@ -306,7 +307,7 @@ def write_threads(convs: list[dict]) -> dict:
             "id": tid, "workdir": cv["workdir"] or folder, "title": cv["title"], "created": cv["created"],
             "updated": cv["updated"], "model": None, "model_choice": None, "plan": False,
             "harness": "meshpool-code" if code else "meshpool-work", "kind": "code" if code else "cowork",
-            "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "messages": cv["messages"],
+            "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "messages": repair_tool_pairs(cv["messages"])[0],
             "imported": {"source": cv["source"], "id": cv["id"]}})
         (d / "meta.json").write_text(json.dumps({"imported": cv["source"]}), encoding="utf-8")
         os.utime(d / "session.json", (cv["updated"], cv["updated"]))

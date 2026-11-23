@@ -16,9 +16,13 @@ All writes go through ``fsio``.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
+import hashlib
 import json
 import os
+import re
+import time
 import shutil
 import threading
 import uuid
@@ -96,6 +100,131 @@ def _gen_of(d: Path) -> str | None:
     return g
 
 
+# ---- images out of line (OSS-05) ------------------------------------------------------------------------------------
+BLOB_PREFIX = "meshpool-blob:"
+BLOB_GC_AGE = 600.0
+_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+_MIME = {v: k for k, v in _EXT.items()}
+_DATA_RE = re.compile(r"^data:(image/[a-z+.-]+);base64,(.*)$", re.S)
+_REF_RE = re.compile(r"meshpool-blob:([0-9a-f]{64}\.[a-z]{3,4})")
+_NAME_RE = re.compile(r"^[0-9a-f]{64}\.[a-z]{3,4}$")
+HEAD = "session.head.json"
+
+
+def _store_blob(d: Path, url: str):
+    """The ref for a data URL (the image written once, content-addressed), or None to leave it inline."""
+    m = _DATA_RE.match(url)
+    ext = _EXT.get(m.group(1)) if m else None
+    if not ext:
+        return None
+    try:
+        raw = base64.b64decode(m.group(2), validate=True)
+    except ValueError:
+        return None
+    if base64.b64encode(raw).decode("ascii") != m.group(2):     # only what round-trips byte for byte
+        return None
+    name = hashlib.sha256(raw).hexdigest() + "." + ext
+    p = d / "blobs" / name
+    if p.exists():
+        with contextlib.suppress(OSError):
+            os.utime(p, None)                                    # still in use: keeps it out of the GC window
+    else:
+        fsio.atomic_write_bytes(p, raw, fsync=False)
+    return BLOB_PREFIX + name
+
+
+def externalize(d: Path, messages: list) -> list:
+    """``messages`` with inline image data URLs replaced by blob refs; the input is never mutated."""
+    out = None
+    for i, m in enumerate(messages):
+        c = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(c, list):
+            continue
+        parts = None
+        for k, part in enumerate(c):
+            iu = part.get("image_url") if isinstance(part, dict) and part.get("type") == "image_url" else None
+            url = iu.get("url") if isinstance(iu, dict) else None
+            if isinstance(url, str) and url.startswith("data:"):
+                ref = _store_blob(d, url)
+                if ref:
+                    if parts is None:
+                        parts = list(c)
+                    parts[k] = {"type": "image_url", "image_url": {"url": ref}}
+        if parts is not None:
+            if out is None:
+                out = list(messages)
+            out[i] = dict(m, content=parts)
+    return messages if out is None else out
+
+
+def resolve_refs(d, messages: list) -> list:
+    """The inverse of ``externalize``; a missing blob becomes a text part. Returns a new list when anything changed."""
+    d = Path(d)
+    out = None
+    for i, m in enumerate(messages):
+        c = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(c, list):
+            continue
+        parts = None
+        for k, part in enumerate(c):
+            iu = part.get("image_url") if isinstance(part, dict) and part.get("type") == "image_url" else None
+            url = iu.get("url") if isinstance(iu, dict) else None
+            if isinstance(url, str) and url.startswith(BLOB_PREFIX):
+                name = url[len(BLOB_PREFIX):]
+                new = {"type": "text", "text": "[image no longer available]"}
+                if _NAME_RE.match(name):
+                    try:
+                        raw = (d / "blobs" / name).read_bytes()
+                        new = {"type": "image_url", "image_url": {
+                            "url": "data:%s;base64,%s" % (_MIME.get(name.rsplit(".", 1)[1], "image/png"),
+                                                          base64.b64encode(raw).decode("ascii"))}}
+                    except OSError:
+                        pass
+                if parts is None:
+                    parts = list(c)
+                parts[k] = new
+        if parts is not None:
+            if out is None:
+                out = list(messages)
+            out[i] = dict(m, content=parts)
+    return messages if out is None else out
+
+
+def _gc_blobs(d: Path, snapshot_json: str) -> None:
+    bd = d / "blobs"
+    if not bd.is_dir():
+        return
+    used = set(_REF_RE.findall(snapshot_json))
+    try:
+        jr = (d / "session.journal").read_text("utf-8", "ignore")
+        used |= set(_REF_RE.findall(jr))
+    except OSError:
+        pass
+    now = time.time()
+    for p in bd.iterdir():
+        try:
+            if p.name not in used and not p.name.startswith(".") and now - p.stat().st_mtime > BLOB_GC_AGE:
+                p.unlink()
+        except OSError:
+            continue
+
+
+def _head_of(data: dict, count: int) -> dict:
+    h = {k: data.get(k) for k in ("id", "workdir", "title", "created", "updated", "model", "harness", "kind",
+                                  "imported", "unfinished")}
+    h["count"] = count
+    return h
+
+
+def read_head(d) -> dict | None:
+    """The small listing record of a chat, or None when there is none (an older chat) or it is unreadable."""
+    try:
+        h = fsio.read_json(Path(d) / HEAD, None)
+    except fsio.CorruptFile:
+        return None
+    return h if isinstance(h, dict) and isinstance(h.get("id"), str) and h["id"] else None
+
+
 def write_snapshot(d, data: dict) -> None:
     """Write the whole chat. The previous snapshot is kept as ``session.json.bak``; the journal it superseded goes."""
     d = Path(d)
@@ -103,13 +232,21 @@ def write_snapshot(d, data: dict) -> None:
     sj = d / "session.json"
     gen = uuid.uuid4().hex[:12]
     with fsio.file_lock(sj):
+        msgs = data.get("messages")
+        slim = dict(data, messages=externalize(d, msgs)) if isinstance(msgs, list) else data
         if sj.exists():
             _backup(sj, d / "session.json.bak")
-        fsio.atomic_write_json(sj, dict(data, _jgen=gen), indent=None, default=str)
+        fsio.atomic_write_json(sj, dict(slim, _jgen=gen), indent=None, default=str)
+        with contextlib.suppress(OSError):
+            fsio.atomic_write_json(d / HEAD, _head_of(data, len(msgs) if isinstance(msgs, list) else 0),
+                                   indent=None, fsync=False, default=str)
         with _GENS_GUARD:
             _GENS[str(d)] = (_sj_stat(d), gen)
         with contextlib.suppress(OSError):
             os.unlink(d / "session.journal")
+        with contextlib.suppress(Exception):
+            if (d / "blobs").is_dir():
+                _gc_blobs(d, json.dumps(slim.get("messages"), ensure_ascii=False, default=str))
 
 
 def journal_size(d) -> int:
@@ -135,11 +272,17 @@ def _append_line(p: Path, line: str) -> None:
 def append_journal(d, start: int, messages: list, meta: dict) -> None:
     d = Path(d)
     with fsio.file_lock(d / "session.json"):
-        rec = {"from": start, "messages": messages, "meta": meta}
+        rec = {"from": start, "messages": externalize(d, messages), "meta": meta}
         gen = _gen_of(d)
         if gen:
             rec["gen"] = gen
         _append_line(d / "session.journal", _dumps(rec) + "\n")
+        h = read_head(d)
+        if h is not None:                              # keep the listing record current without reading the chat
+            h.update({k: meta[k] for k in ("title", "updated", "model", "unfinished") if k in meta})
+            h["count"] = start + len(messages)
+            with contextlib.suppress(OSError):
+                fsio.atomic_write_json(d / HEAD, h, indent=None, fsync=False, default=str)
 
 
 def _read_snapshot(d: Path):
@@ -195,20 +338,23 @@ def _replay(d: Path, data: dict) -> dict:
     return data
 
 
-def read(d) -> dict | None:
+def read(d, resolve_blobs: bool = False) -> dict | None:
     """The chat as last saved, or ``None`` when nothing usable exists. A damaged snapshot is quarantined and the
-    backup is used; the journal is replayed on top."""
+    backup is used; the journal is replayed on top. Images are blob refs unless ``resolve_blobs`` (what goes to a
+    model); listings and search keep the refs."""
     d = Path(d)
     data, primary = _read_snapshot(d)
     if data is None:
         return None
     data = _replay(d, data)
     data.pop("_jgen", None)
+    if resolve_blobs and isinstance(data.get("messages"), list):
+        data["messages"] = resolve_refs(d, data["messages"])
     return data
 
 
-def read_path(p) -> dict | None:
-    return read(Path(p).parent)
+def read_path(p, resolve_blobs: bool = False) -> dict | None:
+    return read(Path(p).parent, resolve_blobs)
 
 
 def stamp(d) -> tuple:
