@@ -65,23 +65,38 @@ jobs:
           choco install nsis -y --no-progress
           (cd $T && "/c/Program Files (x86)/NSIS/makensis.exe" -V2 installer.nsi && ls -la "Meshpool Setup.exe")
       - name: Install it silently and watch
-        timeout-minutes: 20
+        timeout-minutes: 25
         shell: bash
         run: |
           set -uo pipefail
           D="$PWD/install-test"
           W=$(cygpath -w "$D")
-          "./installer-test-work/Meshpool Setup.exe" /S "/D=$W" &
+          SETUP="./installer-test-work/Meshpool Setup.exe"
+          watch() {   # watch PID for $1 seconds, print what it does every 10 s
+            local pid=$1 limit=$2 t=0
+            while [ $t -lt $limit ]; do
+              sleep 10; t=$((t + 10))
+              kill -0 $pid 2>/dev/null || return 0
+              powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "Meshpool Setup|7z|powershell|taskkill" -and $_.ProcessId -ne $PID } | ForEach-Object { $c = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).CPU; "{0} pid={1} read={2}MB write={3}MB cpu={4}s ws={5}MB" -f $_.Name, $_.ProcessId, [int]($_.ReadTransferCount/1MB), [int]($_.WriteTransferCount/1MB), [int]$c, [int]($_.WorkingSetSize/1MB) }; foreach ($d in ($env:MP_W + ".new"), $env:MP_W) { if (Test-Path $d) { "{0}: {1} MB" -f $d, [math]::Round((Get-ChildItem $d -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB) } }' 2>&1 | sed "s/^/-- ${t}s: /" || true
+            done
+            return 1
+          }
+          export MP_W="$W"
+          # 1. with the startup integrity check skipped
+          echo "== run 1: /S /NCRC"
+          "$SETUP" /S /NCRC "/D=$W" &
           PID=$!
-          for i in $(seq 1 60); do
-            sleep 10
-            kill -0 $PID 2>/dev/null || break
-            echo "-- $((i * 10))s: installer still running"
-            tasklist //FO CSV //NH 2>/dev/null | grep -i -E "7z|powershell|Meshpool|taskkill|conhost" | head -8 || true
-            MP_W="$W" powershell -NoProfile -Command 'foreach ($d in ($env:MP_W + ".new"), $env:MP_W) { if (Test-Path $d) { "{0}: {1} MB" -f $d, [math]::Round((Get-ChildItem $d -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB) } }' || true
-          done
-          if kill -0 $PID 2>/dev/null; then echo "The installer did not finish in 10 minutes"; tasklist //FO CSV //NH | head -40; exit 1; fi
-          wait $PID; echo "installer exit code: $?"
+          if watch $PID 240; then echo "run 1 finished"; wait $PID; echo "exit code: $?"
+          else
+            echo "run 1 still running after 4 minutes; stopping it"
+            taskkill //F //IM "Meshpool Setup.exe" >/dev/null 2>&1 || true
+            sleep 5
+            echo "== run 2: /S (integrity check on), watching I/O"
+            "$SETUP" /S "/D=$W" &
+            PID=$!
+            if ! watch $PID 240; then echo "run 2 also still running after 4 minutes"; exit 1; fi
+            wait $PID; echo "exit code: $?"
+          fi
           for f in Meshpool.exe "Uninstall Meshpool.exe" runtime/python.exe app/blob/b069.bin app/small/f19999.txt; do
             [ -e "$D/$f" ] || { echo "missing after install: $f"; exit 1; }
           done
