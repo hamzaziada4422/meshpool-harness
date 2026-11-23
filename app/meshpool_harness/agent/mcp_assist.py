@@ -112,9 +112,36 @@ def classify(out: str, is_error: bool, was_paged: bool = False) -> tuple[str, st
     if soft_failure(out):
         return "", SOFT_HINT, False
     hint = page_hint(out)
-    if not hint and was_paged and _json(str(out)[:400000]) is not None:
+    d = _json(str(out)[:400000])
+    if not hint and (was_paged or _empty_listing(d)) and d is not None:
         return "", LAST_PAGE, True
     return "", hint, True
+
+
+def _empty_listing(d) -> bool:
+    """A JSON object whose list values are all empty and that has no next page: nothing more to fetch."""
+    if not isinstance(d, dict):
+        return False
+    lists = [v for v in d.values() if isinstance(v, list)]
+    return bool(lists) and all(not v for v in lists)
+
+
+SAME_NOTE = ("\n[Meshpool] This tool has now returned the same result {n} times in a row. It has nothing new to give: "
+             "stop calling it, do not try more cursors or pages, and continue the task with what you already have.")
+
+
+def same_result(history: dict, name: str, out: str) -> tuple[str, bool]:
+    """Track identical results of one tool in a row. (note, replace): from 4 in a row a note, from 8 the result itself
+    is replaced by the note, so a model that keeps probing an empty listing cannot loop for ever."""
+    h = hash(out)
+    last, n = history.get(name, (None, 0))
+    n = n + 1 if last == h else 1
+    history[name] = (h, n)
+    if n >= 8:
+        return SAME_NOTE.format(n=n), True
+    if n >= 4:
+        return SAME_NOTE.format(n=n), False
+    return "", False
 
 
 def annotate(out: str, is_error: bool) -> tuple[str, bool]:

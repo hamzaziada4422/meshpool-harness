@@ -301,3 +301,25 @@ def test_read_like_names():
         assert MA.read_like(n), n
     for n in ("mcp__x__inv2_create", "mcp__x__cal_book", "mcp__x__tix_set_status", "mcp__x__send_message"):
         assert not MA.read_like(n), n
+
+
+def test_an_empty_page_says_stop_even_without_a_next_cursor_before_it():
+    _, post, ok = MA.classify('{"tickets": []}', False)
+    assert ok and "last page" in post
+    assert MA.classify('{"tickets": [{"id": 1}]}', False)[1] == ""
+
+
+def test_the_same_result_over_and_over_is_cut_off():
+    h = {}
+    notes = [MA.same_result(h, "t", '{"tickets": []}') for _ in range(8)]
+    assert notes[2] == ("", False) and notes[3][0] and not notes[3][1] and notes[7][1]
+    assert MA.same_result(h, "t", "something new") == ("", False)
+
+
+def test_an_agent_that_probes_an_empty_listing_is_stopped(tmp_path):
+    mcp = FakeMcp({"mcp__x__list": "list"}, {"mcp__x__list": ('{"tickets": []}', False)})
+    calls = [{"content": "", "tool_calls": [_call(i, "mcp__x__list", {"page": str(i)})]} for i in range(1, 10)]
+    a, _ = _agent(tmp_path, calls + [{"content": "done"}], mcp)
+    a.send("list")
+    last = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
+    assert "same result" in last and "tickets" not in last

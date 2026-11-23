@@ -2566,6 +2566,12 @@ class Agent:
                 paged = self.__dict__.setdefault("_paged", set())
                 pre, post, ok = MA.classify(str(out), bool(err), name in paged)
                 post += self._repeat_note(name, args, ok)
+                if ok and MA.assist_on():
+                    note, replace = MA.same_result(self.__dict__.setdefault("_same_out", {}), name, str(out))
+                    if replace:
+                        out = note.strip()
+                    else:
+                        post += note
                 (paged.add if (ok and MA.page_hint(str(out))) else paged.discard)(name)
                 out = pre + self.ws._cap(str(out), "mcp") + post    # head and tail; the full output goes to a file
             elif name == "fetch_url":
