@@ -229,11 +229,13 @@ class LazyTools:
 
     def find_schema(self, hidden: list) -> dict:
         lines = []
+        n = len(hidden)
+        cap = 70 if n <= 100 else 45 if n <= 200 else 28 if n <= 400 else 0   # a long list gets shorter lines
         for s in hidden:
             f = s["function"]
             d = re.sub(r"^\[MCP server '[^']*'\]\s*", "", f.get("description") or "")
             d = " ".join(d.split())
-            lines.append(f"{f['name']}: {d[:70]}" if len(hidden) <= 400 else f["name"])
+            lines.append(f"{f['name']}: {d[:cap]}" if cap and d else f["name"])
         sch = json.loads(json.dumps(FIND_SCHEMA))
         sch["function"]["description"] += "\n\nIndex of tools not loaded yet:\n" + "\n".join(lines)
         return sch
