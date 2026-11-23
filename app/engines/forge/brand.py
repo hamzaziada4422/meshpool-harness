@@ -511,6 +511,9 @@ def make_master(deck_path: str, out_path: str) -> tuple[bool, str, float | None]
     prs = open_pptx(deck_path)                            # a .potx too
     if abs(prs.slide_width - WIDE[0]) > WIDE[0] * 0.003 or abs(prs.slide_height - WIDE[1]) > WIDE[1] * 0.003:
         w, h = prs.slide_width / EMU, prs.slide_height / EMU
+        if abs(w / h - 16 / 9) < 0.01:
+            return False, (f"its slides are 16:9 but {w:.2f} x {h:.2f} in; the forge layouts are drawn for "
+                           "13.33 x 7.5 in (resize the deck to Widescreen 13.33 x 7.5 in to use its master)"), None
         return False, (f"its slides are {w:.2f} x {h:.2f} in; the forge layouts need 16:9 widescreen "
                        "(13.33 x 7.5 in)"), None
     try:

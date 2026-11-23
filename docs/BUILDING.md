@@ -11,23 +11,26 @@ The repository holds Meshpool's own code. The installers also bundle third-party
 | `rt-mac/python` | Python 3.12 for Apple silicon, with the packages in `packaging/requirements-cli.txt` (the same list `install.sh` uses: office formats and PDF readers) | [python-build-standalone](https://github.com/astral-sh/python-build-standalone) `aarch64-apple-darwin` install_only, then `pip install` |
 | `rt-macx64/python` | The same for Intel Macs | `x86_64-apple-darwin` build |
 | `rt-win/python` | The same for Windows | `x86_64-pc-windows-msvc` build |
-| `node-mac-arm64`, `node-mac-x64`, `node-win` | Node.js 24 | [nodejs.org/dist](https://nodejs.org/dist/) |
+| `node-mac-arm64`, `node-mac-x64`, `node-win`, `node-linux-x64` | Node.js 22 (the Mac builds need 22; 24 fails the macOS 11 check) | [nodejs.org/dist](https://nodejs.org/dist/) |
 | `pi/node_modules` | The Pi coding agent | `npm install @earendil-works/pi-coding-agent` |
 | `vendor-hermes` | Hermes Agent 0.21.2 with `packaging/hermes-acp-server.patch` applied. Hermes runs from source and refuses to build as a package, so install only its dependencies: `python packaging/hermes_requirements.py <hermes folder> > req.txt`, then `pip install -r req.txt` (its `acp` and `mcp` extras are included; without `mcp`, Hermes connects to no MCP servers) | [NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent), then `patch -p1 < packaging/hermes-acp-server.patch` |
 | `ocr-models` | PP-OCRv5 recognition models for RapidOCR | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) model releases |
+| `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
+| `rt-linux/python` | The same for Linux (`x86_64-unknown-linux-gnu`), with the packages in `packaging/requirements-cli.txt` | python-build-standalone, then `pip install` |
 | `git-win` | MinGit for Windows (Git and Bash) | [git-for-windows](https://github.com/git-for-windows/git/releases) |
 | `git-mac-arm64`, `git-mac-x64` | Git for the Mac apps (optional: built by `packaging/mac/build_git.sh` on a Mac when missing) | pinned source tarball, checksum in `packaging/bundled_tools.py` |
 | `download-cache` | Created by the build: the verified LibreOffice downloads | The Document Foundation, pins in `packaging/bundled_tools.py` |
 
 Also inside every installer, installed by `build_all.py` from the repo (no deps folder): LibreOffice (`app/vendor/libreoffice`), pruned to headless conversion by `packaging/lo_prune.py`, and Chromium (`app/vendor/browsers`, from `playwright install chromium --no-shell`, English only). Codex and OpenCode are not shipped. See `docs/plan/BUNDLED_TOOLS.md`.
-| `win/Meshpool` | `Meshpool.exe` | Build `packaging/win/launcher` with Go: `GOOS=windows GOARCH=amd64 go build -ldflags=-H=windowsgui -o Meshpool.exe` (the icon and version come from `rsrc_windows_amd64.syso`) |
 
 ## Build
+
+The published releases are built by `.github/workflows/release.yml` (it also writes `update-manifest.json` and attaches the Linux download); the steps below are the manual path.
 
 1. Assemble the app trees:
 
    ```sh
-   python packaging/build_all.py
+   python packaging/build_all.py            # Mac and Windows; add --only=linux for the Linux folder
    ```
 
    This writes `dist-src/app-mac-arm64`, `dist-src/app-mac-x64` and `dist-src/app-win`. It fills the version from `app/meshpool_harness/__init__.py` into `Info.plist` and `installer.nsi`, and the oldest macOS each Mac app opens on into `Info.plist` (`MIN_MACOS`: 11.0 for both Apple silicon and Intel; the release build compiles the launcher for the same and checks every bundled file with `packaging/mac/check_minos.py`), and stops if `packaging/win/launcher/winres/winres.json` (the version inside `Meshpool.exe`) does not match (see [RELEASING.md](RELEASING.md)).

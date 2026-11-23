@@ -297,7 +297,10 @@ def _extended_page(pg, spans, title_sp, dr, W, H):
 
 
 def measure(path: str, pages: str | None = None, extended: bool = False) -> dict:
-    import pymupdf as fitz
+    try:
+        import pymupdf as fitz
+    except ImportError as e:
+        raise RuntimeError("Measuring a PDF needs the optional PyMuPDF package (AGPL, not shipped): pip install pymupdf") from e
     doc = fitz.open(path)
     sha = sha256(path)
     per = []

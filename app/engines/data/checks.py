@@ -53,6 +53,8 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
         v, pct = _num(tok)
         if v is None:
             continue
+        if not pct and re.match(r"\s*(?:percent|per cent|pct)\b", answer[m.end():], re.I):
+            pct = True                                 # "45 percent" is 45%
         i0 = m.start()
         if (tok[0] in "-−" and i0 > 0 and answer[i0 - 1].isalnum()) or \
                 (tok[0] not in "-−" and i0 > 1 and answer[i0 - 1] in "-−" and answer[i0 - 2].isalpha()):
@@ -97,6 +99,9 @@ def check_quotes(answer: str, sources: dict[str, str]) -> list[dict]:
         q = re.sub(r"\s*\.\.\.\s*|\s*…\s*", "\u0000", q)  # ellipsis: each fragment must match, in order
         parts = [p for p in q.split("\u0000") if p]
         hit = None
+        if not parts:                                  # only ellipses: nothing to verify, so not verified
+            bad.append({"check": "fabricated_quote", "detail": m.group(1)[:120]})
+            continue
         for k, src in normed.items():
             pos, ok = 0, True
             for p in parts:

@@ -2776,7 +2776,8 @@ def fallback(s: dict) -> dict:
         return s
     if s.get("archetype") in ("table_focus", "table_highlight") and isinstance(s.get("table"), dict):
         t = s["table"]
-        keep = [r for r in t.get("rows") or [] if not any("[GAP" in str(c) for c in r[1:])]
+        keep = [r for r in t.get("rows") or [] if isinstance(r, (list, tuple)) and r
+                and not any("[GAP" in str(c) for c in r[1:])]
         s["blocks"] = [{"text": (s.get("takeaway") or {}).get("text", ""), "bullets": [
             {"text": f"**{r[0]}**: " + "; ".join(f"{h} {v}" for h, v in zip(t["columns"][1:], r[1:]))} for r in keep[:6]]}]
         s["archetype"] = "argument_only"
@@ -4687,6 +4688,28 @@ def plan_forms(slides: list) -> list:
 CHART_SIDE = ("bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge")
 
 
+def _tag_list(s: dict) -> list[str]:
+    t = s.get("tags")
+    if not isinstance(t, (list, tuple)):
+        return []
+    return [x for x in (str(v).strip() for v in t if isinstance(v, (str, int, float))) if x]
+
+
+def _finite(s: dict) -> dict:
+    """NaN/Infinity (json.loads accepts them) in chart numbers would abort chart drawing: they become 0."""
+    import math
+
+    def fix(v):
+        if isinstance(v, float) and not math.isfinite(v):
+            return 0.0
+        if isinstance(v, list):
+            return [fix(x) for x in v]
+        if isinstance(v, dict):
+            return {k: fix(x) for k, x in v.items()}
+        return v
+    return dict(s, chart=fix(s["chart"])) if isinstance(s.get("chart"), (dict, list)) else s
+
+
 def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
     _register_diagram_archetypes()
     _register_library_archetype()
@@ -4698,25 +4721,48 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx = Ctx({})
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
-    queue = plan_forms(list(slides))
+    try:
+        queue = plan_forms(list(slides))
+    except Exception:                                      # noqa: BLE001 - one bad slide must not lose the deck
+        queue = []
+        for s0 in slides:
+            try:
+                queue += plan_forms([s0])
+            except Exception as e:                         # noqa: BLE001
+                errors.append(f"slide {len(queue) + 1}: could not plan its form ({type(e).__name__}: {e}); drawn as given")
+                queue.append(s0)
     ctx.sections = agenda_sections([s0 for s0 in slides if isinstance(s0, dict)])   # the cover lists them
     n = 0
     from collections import Counter
-    used = Counter(str(t) for s0 in slides if s0.get("archetype") not in DIVIDERS
-                   for t in set(s0.get("tags") or []) if str(t).strip())
+    used = Counter(t for s0 in slides if isinstance(s0, dict) and s0.get("archetype") not in DIVIDERS
+                   for t in set(_tag_list(s0)))
     deck_stamps = [t for t, k in used.most_common() if k >= 2][:2]   # "Preliminary" marks the deck: every slide (P19)
     while queue:
         s = queue.pop(0)
         mode = set_density(s.get("density") or DENSITY.get("deck"))
-        own = [str(t) for t in s.get("tags") or [] if str(t).strip() and str(t) not in deck_stamps]
+        own = [t for t in _tag_list(s) if t not in deck_stamps]
         ctx.stamps = (deck_stamps + own)[:2]               # a slide's own qualifier stays on that slide
-        s = dict(condense(normalize(s), mode), tags=[])
+        raw = s
+        try:
+            s = dict(condense(normalize(_finite(s)), mode), tags=[])
+            bad = None
+        except Exception as e:                             # noqa: BLE001 - a wrong-typed field costs this slide only
+            s, bad = dict(raw, tags=[]), f"{type(e).__name__}: {e}"
         spec = s.pop("_design", None)                      # a design-first layout spec (design.py), if any
         n += 1
         ctx.carry = None
-        if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
-            errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in schema_errors(s)]
-            s = fallback(s)
+        try:
+            serr = ([f"missing or malformed field: {bad}"] if bad else []) or (
+                schema_errors(s) if s.get("archetype") not in DIVIDERS and not s.get("_cont") else [])
+        except Exception as e:                             # noqa: BLE001
+            serr = [f"missing or malformed field: {type(e).__name__}: {e}"]
+        if serr:
+            errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in serr]
+            try:
+                s = fallback(s)
+            except Exception:                              # noqa: BLE001
+                s = dict(s, archetype="argument_only", chart=None, table=None, blocks=[{"text": _txt(s.get("title")),
+                         "bullets": []}], bullets=[])
             if spec:
                 ctx.design[n] = {"path": "archetype", "why": "the slide failed its schema; the archetype fallback "
                                  "draws it"}

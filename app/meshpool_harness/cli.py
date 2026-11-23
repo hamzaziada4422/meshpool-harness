@@ -208,6 +208,10 @@ def main(argv=None):
         _bundled_tools()             # the shell, Git and browser engine that ship inside the app
     except Exception:
         pass
+    if argv and argv[0] in ("--version", "-V"):
+        from meshpool_harness import __version__
+        print(f"meshpool {__version__}")
+        return 0
     if not argv or argv[0] not in COMMANDS:
         if argv and argv[0] == "agent":
             argv = argv[1:]
@@ -303,6 +307,9 @@ def main(argv=None):
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
     if argv[0] == "login":
+        if any(x in ("-h", "--help") for x in argv[1:]):
+            print("usage: meshpool login\n\nAsk for your Meshpool API key and save it in the settings file.")
+            return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
     if argv[0] == "mcp":
@@ -423,7 +430,13 @@ def _check(live: bool) -> int:
     print(f"Ready to use  : {', '.join(names) if names else 'nothing yet (run: meshpool setup)'}")
     print()
     for row in _config.system_check():
-        print(f"  [{'ok' if row['ok'] else '--'}] {row['name']:<15} {row['detail']}")
+        detail = row["detail"]
+        if row["name"] == "LibreOffice" and not row["ok"]:
+            from meshpool_harness import office_runtime
+            if not office_runtime.is_packaged():
+                detail = ("not included in this terminal install. Decks are not rendered for review and workbook "
+                          "formulas are not recalculated; the Meshpool desktop app (or the Linux download) has it.")
+        print(f"  [{'ok' if row['ok'] else '--'}] {row['name']:<15} {detail}")
         if not row["ok"]:
             print(f"       {row['fix']}")
     if live:

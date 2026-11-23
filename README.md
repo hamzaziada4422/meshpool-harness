@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/mai
 Macs, Apple silicon and Intel, need macOS 11 or later (browser use needs macOS 13). Meshpool is not yet signed by Apple or Microsoft, which is why your computer asks you to confirm it once. The pictures of the macOS and Windows prompts are illustrations; the wording on your computer may differ slightly.
 
 
-**Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser.
+**Command line** (macOS, Linux, Windows). One command installs it and runs setup; then type `meshpool` in any project folder, or `meshpool ui` for the full app in your browser. The terminal install does not include LibreOffice, so decks are not rendered for review and workbook formulas are not recalculated; the desktop app has both.
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/install.sh | sh
@@ -102,7 +102,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 
 - **Work and Code modes.** Work is a chat with a live progress panel and the files the task made. Code adds diff, terminal, Git, pull request and CI panels.
 - **Agents:** Meshpool Auto, Meshpool Code, Meshpool Work, Pi, Hermes, Codex and OpenCode, or your own, on your Meshpool key, any OpenAI-compatible key, or your ChatGPT plan ([providers](docs/PROVIDERS.md)).
-- **Files in and out:** PDF (scans included, with offline OCR), Word, Excel, PowerPoint, Power BI, CSV and images in; Word, Excel, PowerPoint and PDF out.
+- **Files in and out:** PDF, Word, Excel, PowerPoint, Power BI (the model schema; the data model needs `pip install pbixray`), CSV and images in; Word, Excel, PowerPoint and PDF out. Reading text in scanned PDFs and pictures (OCR) is optional and not included: run `pip install rapidocr onnxruntime` (macOS 13 or later, Windows, Linux) in the Python Meshpool uses; without it you get the file's own text only.
 - **Web research** across many sources, with links you can check, and **browser use** that works out of the box (it opens pages, reads the elements, clicks and types; Playwright and Chromium set themselves up on first use).
 - **58 connectors** (GitHub, Linear, Jira, Slack, Notion, Google Drive, HubSpot, Stripe and more) plus any remote MCP server. Sign-in goes straight from your computer to the app.
 - **About 100 skills**, and the skills, MCP servers, memories and instructions you already have in Claude Code, Codex, Cursor, OpenClaw, Hermes and others, imported in a click with a preview (`meshpool import agents --dry-run`). Logins are never read.

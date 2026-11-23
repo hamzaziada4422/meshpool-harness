@@ -177,7 +177,13 @@ def split_passages(text: str) -> list[tuple[str, int | None, str | None]]:
         t = re.sub(r"[ \t]+", " ", buf).strip()
         while len(t) > PASSAGE_CHARS[1]:
             cut = t.rfind(". ", PASSAGE_CHARS[0], PASSAGE_CHARS[1])
-            cut = cut + 1 if cut > 0 else PASSAGE_CHARS[1]
+            if cut > 0:
+                cut += 1
+            else:                                   # no sentence end: cut on a line break or space, never mid-word
+                lo, hi = PASSAGE_CHARS[0], PASSAGE_CHARS[1]
+                cut = max(t.rfind("\n", lo, hi), t.rfind(" ", lo, hi))
+                if cut <= 0:
+                    cut = hi
             out.append((t[:cut].strip(), page, sect))
             t = t[cut:].strip()
         if t:

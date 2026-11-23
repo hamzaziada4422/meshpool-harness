@@ -594,7 +594,7 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
                     tags.add(cell.tag)
                 else:
                     continue
-                B.define_name(wb, nm(key, y), f"'{ws.title}'!${c}${r}")
+                B.define_name(wb, nm(key, y), f"{B._q(ws.title)}!${c}${r}")
             if key in DERIVED:
                 src = "Derived: " + DERIVED[key][3]
             elif tags:
@@ -636,7 +636,7 @@ def write_spread(ws, row: int, sp: Spread, order=("IS", "BS", "CF"), name_prefix
             ok_years.append(c)
         if ok_years and "Checks" in wb.sheetnames:
             B.add_check(wb, f"Historicals: {label[7:].split(',')[0].split(' minus')[0]} ({len(ok_years)} years)",
-                        "=" + "+".join(f"ABS('{ws.title}'!{c}{r})" for c in ok_years))
+                        "=" + "+".join(f"ABS({B._q(ws.title)}!{c}{r})" for c in ok_years))
         check_rows.append(r)
         r += 1
     if sp.gaps:

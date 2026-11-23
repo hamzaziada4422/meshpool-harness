@@ -35,6 +35,7 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
 
 
+MAX_SCAN_ROWS = 20000
 PLACEHOLDER = re.compile(r"\{[A-Za-z_][A-Za-z0-9_]*\}")
 
 
@@ -55,10 +56,12 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
                        "detail": f"Could not recalculate the workbook to check its values ({type(e).__name__}); "
                                  "formulas and structure were checked, values were not."})
     n_formula = n_numeric_const = n_ph = 0
-    for ws in wb_f.worksheets:
-        wv = wb_v[ws.title] if wb_v is not None else None
+    for si, ws in enumerate(wb_f.worksheets):
+        wv = None
+        if wb_v is not None:                          # LibreOffice truncates long sheet names: fall back to position
+            wv = wb_v[ws.title] if ws.title in wb_v.sheetnames else wb_v.worksheets[si]
         is_calc = bool(CALC_SHEETS.search(ws.title)) and not INPUT_SHEETS.search(ws.title)
-        for row in ws.iter_rows():
+        for row in ws.iter_rows(max_row=min(ws.max_row, MAX_SCAN_ROWS)):   # huge data tabs are sampled
             for c in row:
                 v = c.value
                 if v is None:

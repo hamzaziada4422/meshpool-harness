@@ -202,7 +202,11 @@ def finish_check(answer, artifacts, ws, report=None):
         p = a if os.path.isabs(a) else str(ws.root / a)
         if not os.path.exists(p):
             return f"ENGINE CHECK: artifact not found: {a}"
-        r = check(p)
+        try:
+            r = check(p)
+        except Exception as e:  # noqa: BLE001 - BadZipFile (a csv or half-saved file named .xlsx), KeyError, ...
+            return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
+                    "openpyxl (wb.save) as a real workbook, then finish again.")
         if "Checks" in r["stats"]["sheets"]:
             try:                               # the copy check() already recalculated: no second LibreOffice run
                 rc = r["stats"].get("recalculated_copy")

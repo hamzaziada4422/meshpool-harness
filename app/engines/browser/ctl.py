@@ -134,8 +134,13 @@ SNAP_JS = """(mark) => {
     }
     out.push('[' + n + '] ' + role + ' "' + name + '"' + extra);
   }
+  const frames = Array.from(document.querySelectorAll('iframe,frame')).filter(f => f.getBoundingClientRect().width > 0);
+  const shown = out.slice(0, 150);
+  if (frames.length) shown.push('(note: ' + frames.length + ' iframe(s) on this page, contents not listed above: ' +
+    frames.slice(0, 3).map(f => (f.getAttribute('title') || f.getAttribute('name') || f.getAttribute('src') || 'frame').slice(0, 60)).join('; ') +
+    '. Their buttons and fields are not numbered; try {"text": ...} targets or goto the frame URL.)');
   const text = (document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n').slice(0, 3000);
-  return {title: document.title, url: location.href, elements: out.slice(0, 150), text};
+  return {title: document.title, url: location.href, elements: shown, text};
 }"""
 
 
@@ -489,7 +494,11 @@ def main(argv=None):
         return 0
     if a[0] == "screenshot" and len(a) > 1:
         a[1] = os.path.abspath(a[1])              # relative to where the command runs, not the daemon
-    print(render(call(a[0], *a[1:])))
+    try:
+        print(render(call(a[0], *a[1:])))
+    except (FileNotFoundError, ConnectionError, urllib.error.URLError):
+        print("ERROR: the browser is not running. Start it first: ctl start <folder>")
+        return 1
     return 0
 
 

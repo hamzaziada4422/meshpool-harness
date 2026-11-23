@@ -44,6 +44,18 @@ def discover(host_root: str, container: str | None, cdir: str | None) -> str:
     elif (root / "bin" / "test").exists() and (root / "sympy").is_dir():
         lines.append("This is SymPy: run tests with `bin/test <path/to/test_file.py> -k <name>` "
                      "(pytest may also work: check once).")
+    if not lines and not any((root / f).exists() for f in ("setup.py", "pyproject.toml", "setup.cfg", "pytest.ini",
+                                                          "tox.ini", "requirements.txt")):
+        other = [(("go.mod",), "Go: run tests with `go test ./...` (or `go test ./pkg -run TestName`)."),
+                 (("package.json",), "Node: run tests with `npm test` (see the scripts in package.json for the "
+                                     "runner, e.g. jest or vitest, to run one file)."),
+                 (("pom.xml",), "Maven: run tests with `mvn test` (one class: `mvn test -Dtest=ClassName`)."),
+                 (("build.gradle", "build.gradle.kts"), "Gradle: run tests with `./gradlew test` (one class: "
+                                                        "`--tests ClassName`)."),
+                 (("Cargo.toml",), "Rust: run tests with `cargo test` (one test: `cargo test name`).")]
+        for names, msg in other:
+            if any((root / n).exists() for n in names):
+                return msg
     rc = run("import pytest")
     has_pytest = rc == 0
     if rc is None:                                   # could not run python at all: say so, do not claim pytest is absent

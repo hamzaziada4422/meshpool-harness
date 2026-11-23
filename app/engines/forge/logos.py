@@ -68,11 +68,14 @@ def fetch(name: str) -> Path | None:
     """The cached SVG of the company's mark, fetching it once; None when there is none or fetching is off."""
     if not name or os.environ.get("MH_FETCH_LOGOS", "1") == "0":
         return None
-    cands = slugs(name)
+    cands = [c for c in slugs(name) if len(c) <= 64]       # a sentence is not a company: no 255+ char file names
     for s in cands:
-        p = cache_dir() / f"{s}.svg"
-        if p.is_file() and p.stat().st_size > 0:
-            return p
+        try:
+            p = cache_dir() / f"{s}.svg"
+            if p.is_file() and p.stat().st_size > 0:
+                return p
+        except OSError:
+            continue
     for s in cands:                                      # 1. the full-colour logo
         if s in _MISS:
             continue
