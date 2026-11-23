@@ -51,10 +51,25 @@ def route(request: str, files: list[str] | None = None, output_format: str | Non
     used = False
     if conf < 0.6 and client is not None:
         used = True
-        try:
-            eng2, conf2, why2 = _classify(request, files, client, model)
-        except Exception as e:  # noqa: BLE001  the hint is optional; the rules already picked an engine
+        import threading
+        box: dict = {}
+
+        def _work():
+            try:
+                box["r"] = _classify(request, files, client, model)
+            except Exception as e:  # noqa: BLE001
+                box["e"] = e
+
+        limit = float(os.environ.get("MH_ROUTER_HINT_S", "20"))
+        th = threading.Thread(target=_work, daemon=True)
+        th.start()
+        th.join(timeout=limit)         # the hint is optional: bound its wall-clock, not just its retries
+        if th.is_alive():
+            return Route(eng, conf, why + f"; routing hint timed out after {limit:g}s", used)
+        if "e" in box:                 # the rules already picked an engine
+            e = box["e"]
             return Route(eng, conf, why + f"; routing hint failed ({type(e).__name__}: {str(e)[:80]})", used)
+        eng2, conf2, why2 = box["r"]
         if conf2 >= 0.5:
             eng, conf, why = eng2, conf2, why2 + f" (rules said {eng} @ {conf})"
         elif conf < 0.5:

@@ -25,6 +25,21 @@ def test_failed_hint_keeps_rules_engines():
     assert "routing hint failed" in r.reason and "RuntimeError" in r.reason
 
 
+def test_slow_hint_times_out(monkeypatch):
+    monkeypatch.setenv("MH_ROUTER_HINT_S", "0.3")
+
+    class Slow:
+        def chat(self, **kw):
+            time.sleep(5)
+            return {"choices": [{"message": {"content": "{}"}}]}
+
+    t0 = time.time()
+    r = router.route(VAGUE, client=Slow())
+    assert time.time() - t0 < 2
+    assert r.engines == decide(VAGUE, [], None, None)[0]
+    assert r.used_model_call and "timed out" in r.reason
+
+
 def test_failed_hint_on_live_client_is_bounded(monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
     c = LiveClient()
