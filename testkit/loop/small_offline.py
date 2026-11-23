@@ -174,7 +174,7 @@ def check_budgets(results: dict, budgets: dict | None = None) -> list[str]:
 
 
 def render(results: dict, codex: dict | None) -> str:
-    rows = [("lane", "route", "tools", "system", "tools tok", "fixed", "call1", "callN", "growth", "calls", "side", "run $")]
+    rows = [("lane", "profile", "tools", "system", "tools tok", "fixed", "call1", "callN", "growth", "calls", "side", "run $")]
     for l in LANES:
         r = results.get(l) or {}
         if not r.get("calls"):

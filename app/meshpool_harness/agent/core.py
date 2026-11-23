@@ -1201,6 +1201,8 @@ class Agent:
                     self.messages.append({"role": "user", "content": PACE.WRAP})
                     self._no_tools = True
                 self._finish = None
+                if g.pop("hard_wrap", False):
+                    self._no_tools = True                 # stuck for good: best-effort answer instead of more calls
                 try:
                     msg, streamed = self._chat(turn)
                 finally:
@@ -1556,6 +1558,11 @@ class Agent:
             notes.append(f"{step - g['last']} steps without progress (no file changed, no new command succeeded). "
                          "Your current approach is not converging. In one sentence, state a different hypothesis or "
                          "a simpler route, then try it.")
+        elif step - g["last"] >= int(os.environ.get("MH_STUCK_STEPS", "36")) and self.profile == "code" \
+                and not g.get("hard_wrap_done"):
+            g["hard_wrap_done"] = g["hard_wrap"] = True   # once: the next call has no tools and must answer
+            notes.append("You have made no progress for a long time. Stop here: say what works, what does not, and "
+                         "what you would try next. Do not call another tool.")
         if self.max_steps >= 30 and step == self.max_steps - 15:
             notes.append("15 steps left in this turn. Make sure what the user asked for exists and works now; refine "
                          "it afterwards if steps remain.")

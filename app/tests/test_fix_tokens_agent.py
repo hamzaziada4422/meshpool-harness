@@ -139,3 +139,15 @@ def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_pat
         a._repeat_guard(call, g)
         a._repeat_guard(other, g)
     assert len(runs) == 3 + 10
+
+
+def test_a_long_run_without_progress_ends_with_a_best_effort_answer(tmp_path):
+    a = _agent(tmp_path)
+    g = {"hist": [], "doom_at": -10, "seen": set(), "edits": a.ws.edits, "edits0": a.ws.edits, "last": 0}
+    note = ""
+    for step in range(1, 40):
+        note = a._v3_notes(step, [{"function": {"name": "shell", "arguments": f'{{"n": {step}}}'}}], g) or note
+        if g.get("hard_wrap"):
+            break
+    assert g.get("hard_wrap") and "Do not call another tool" in note
+    assert step == 36                                 # not before 36 steps without a changed file
