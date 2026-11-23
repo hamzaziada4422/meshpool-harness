@@ -85,7 +85,7 @@ SUB = [  # (sub, pattern, weight). Checked in order; the heaviest total wins.
 _SUB = [(s, re.compile(p, re.I | re.M), w) for s, p, w in SUB]
 
 FAMILY_WORDS = {
-    "browser": r"\b(click|fill (in|out) (the|a|this) form|log ?in to|sign ?in to|on (the )?website|in the browser|"
+    "browser": r"\b(click|fill (in|out) (the|a|this)( \w+)? form|log ?in to|sign ?in to|on (the )?website|in the browser|"
                r"browse to|navigate to|scrape|book (a|the) |submit (the|a) form)\b",
     "research": r"\b(research\w*|sources?|citations?|cite|look up|find out|latest|news|market (size|share|map)|"
                 r"competitors?|landscape|due diligence|literature|papers?|arxiv|study|studies|10-k|filings?)\b",
@@ -96,11 +96,16 @@ FAMILY_WORDS = {
     "automation": r"\b(every (day|morning|week|monday|hour)|schedule\w*|remind me|each (day|week)|daily|weekly|"
                   r"when (a|an|new) .{0,30}(arrives|comes in|is added)|watch (the|this|my) folder|automat\w+)\b",
     "writing": r"\b(rewrite|rephrase|reword|proofread|polish|shorten|tighten|translate|tone|friendlier|more formal|"
-               r"summari[sz]e (this|the following|it)|tl;?dr|draft (an?|the|my) (email|reply|message|post|tweet|bio)|"
+               r"summari[sz]e (this|the following|it)|tl;?dr|draft (an?|the|my)( \w+){0,2} (email|reply|message|post|tweet|bio)|"
                r"reply to (this|the|her|him|them)|write (an?|the|my) (email|reply|message|post|tweet|caption|bio))\b",
     "code": r"\b(code|repo(sitory)?|function|class|method|module|script|compile\w*|tests?|unit test|api|endpoint|"
-            r"bug|stack ?trace|traceback|refactor|pull request|commit|lint|type ?error|npm|pip|cargo|git)\b",
+            r"bug|stack ?trace|traceback|refactor|pull request|commit|lint|type ?error|npm|pip|cargo|git|cli|"
+            r"memory leak|github actions|dockerfile|docker|ci/cd)\b|(?<![\w-])--[a-z][\w-]*",
 }
+# explicit navigation to a site or web app (Cowork browser work): decisive, so it counts double
+_NAV = re.compile(r"\b(?:go to|open|visit|head to|log ?in to|sign ?in to)\s+(?:the |my |a )?(?:[\w-]+\.(?:com|org|io|net|ai|co)\b|"
+                  r"amazon|gmail|google|linkedin|twitter|facebook|youtube|github|website|site|portal|dashboard|inbox)\b|"
+                  r"\b(?:check|read|open) my (?:gmail|e-?mail|inbox|calendar)\b|\bcontact form\b", re.I)
 _FAM = {k: re.compile(v, re.I) for k, v in FAMILY_WORDS.items()}
 
 MAX_TEXT_CHARS = 8000
@@ -253,12 +258,23 @@ def families(text: str, files: list[str] | None = None) -> dict[str, float]:
         n = len(rx.findall(text or ""))
         if n:
             w[fam] = w.get(fam, 0) + n
+    nav = len(_NAV.findall(text or ""))
+    if nav:
+        w["browser"] = w.get("browser", 0) + 2 * min(nav, 2)
+    ss = len(re.findall(r"\b(?:spreadsheet|excel|xlsx|workbook)\b", text or "", re.I))
+    if ss and w.get("data"):             # a chart, forecast or analysis of a spreadsheet is data work, not a document
+        w["docs"] = w.get("docs", 0) - ss
+        w["data"] += ss
+        if w["docs"] <= 0:
+            w.pop("docs")
     named = re.findall(r"[\w./-]{1,200}\.(?:csv|tsv|parquet|jsonl|sav|dta)\b", text or "", re.I)
     if named and not files:              # "orders.csv", "events.jsonl" named in the question: a data file, as attached
         w["data"] = w.get("data", 0) + 2
     for f in files or []:
         ext = Path(f).suffix.lower()
-        if ext in OFFICE_EXT:
+        if ext in (".xlsx", ".xlsm", ".xls") and w.get("data"):
+            w["data"] += 2                  # data words plus a spreadsheet: the data method, not the document one
+        elif ext in OFFICE_EXT:
             w[OFFICE_EXT[ext]] = w.get(OFFICE_EXT[ext], 0) + 2
         elif EXT_LANG.get(ext):
             w["code"] = w.get("code", 0) + 2

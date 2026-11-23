@@ -100,7 +100,10 @@ def _decide(text: str, files: list[str], workdir: str | None, kind: str) -> Rout
             other.pop("docs", None)        # "the sales report is wrong" in a code project is code, not a document
             other.pop("automation", None)  # "the daily job runs at the wrong time": the code's domain, not a schedule
         top = max(other, key=other.get) if other else ""
-        if top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
+        no_code = not (repo or langs or fams.get("code") or any(S.EXT_LANG.get(Path(f).suffix) for f in files))
+        if top and no_code:                # translate / draft / summarise in a Code chat, with nothing about code
+            fam, why, conf = top, f"{top} words, no code in the request", 0.7
+        elif top and other[top] >= 2 and other[top] > fams.get("code", 0) + 1:
             fam, why, conf = top, f"{top} words in a Code chat", 0.7
         else:
             fam, why, conf = "code", "Code mode", 0.8 if (fams.get("code") or langs or repo) else 0.6

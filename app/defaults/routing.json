@@ -30,7 +30,12 @@
         "sql",
         "migration",
         "script",
-        "lint"
+        "lint",
+        "implement",
+        "algorithm",
+        "closure",
+        "validation",
+        "debug"
       ],
       "scores": {
         "hermes": 94,
@@ -104,7 +109,6 @@
         "click",
         "fill in",
         "fill out",
-        "form",
         "log in",
         "login",
         "sign up",
@@ -112,7 +116,10 @@
         "book a",
         "checkout",
         "navigate",
-        "web app"
+        "web app",
+        "web form",
+        "contact form",
+        "sign-up form"
       ],
       "scores": {
         "meshpool-work": 95,
@@ -139,19 +146,20 @@
         "research",
         "find out",
         "look up",
-        "search",
         "compare",
         "competitors",
         "market",
         "news",
         "sources",
         "who is",
-        "what is",
         "latest",
         "trends",
         "landscape",
         "summarize the web",
-        "investigate"
+        "investigate",
+        "search the web",
+        "web search",
+        "search for"
       ],
       "scores": {
         "meshpool-work": 80,
@@ -177,7 +185,6 @@
         "word document",
         "google docs",
         "powerpoint",
-        "word",
         "docx",
         "report",
         "memo",
@@ -216,7 +223,14 @@
         "pbix",
         "dataset",
         "numbers",
-        "table"
+        "table",
+        "regression",
+        "outlier",
+        "outliers",
+        "churn",
+        "jsonl",
+        "correlation",
+        "calculate"
       ],
       "scores": {
         "meshpool-work": 84,
@@ -242,7 +256,8 @@
         "campaign",
         "icp",
         "pipeline",
-        "sales"
+        "sales outreach",
+        "sales leads"
       ],
       "scores": {
         "meshpool-work": 82,

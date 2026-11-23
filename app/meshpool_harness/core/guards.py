@@ -65,6 +65,25 @@ def key_error_line(output: str) -> str | None:
     return hits[-1] if hits else None
 
 
+_DELIV_VERB = re.compile(r"\b(?:write|save|create|produce|output|generate)s?\b(?P<mid>[^.\n;]{0,60}?)"
+                         r"(?<![\w\-./])(?P<f>(?:[\w\-]{1,40}/){0,6}[\w\-]{1,80}\.(?:json|txt|csv|xlsx|pptx|png|md))\b", re.I)
+_DELIV_NEG = re.compile(r"(?:n't|\b(?:not|never|without|avoid|no|instead of))\s+(?:\w+\s+){0,2}$", re.I)
+_DELIV_INPUT = re.compile(r"\b(?:that|which|who|parses?|reads?|loads?|opens?|from|using|takes?|accepts?|given|input|with|"
+                          r"for)\b", re.I)
+
+
+def deliverable_names(task_text: str) -> set[str]:
+    """Files the task asks to be written: the object of write/save/create/produce/output, not an input file the new
+    code reads ("write a function that parses data/in.csv") and not something the user said not to make."""
+    names: set[str] = set()
+    for clause in re.split(r"[;\n]|\.(?=\s|$)", (task_text or "")[:20000]):
+        for m in _DELIV_VERB.finditer(clause):
+            if _DELIV_NEG.search(clause[:m.start()]) or _DELIV_INPUT.search(m.group("mid")):
+                continue
+            names.add(m.group("f"))
+    return names
+
+
 class Guards:
     def __init__(self, ctx: dict, ws, allow_test_edits: bool = False, require_check: bool = True):
         self.ctx, self.ws = ctx, ws
@@ -225,7 +244,9 @@ class Guards:
         if not enabled("deliverables"):
             return None
         import json as _json
-        names = set(re.findall(r"\b(?:[Ww]rite|[Ss]ave|[Cc]reate|[Pp]roduce|[Oo]utput)\b[^.\n]{0,60}?\b([\w\-]+\.(?:json|txt|csv|xlsx|pptx|png|md))\b", task_text))
+        if getattr(self, "_deliv_refused", 0) >= 2:      # a wrong guess must not hold finish forever
+            return None
+        names = deliverable_names(task_text)
         missing, bad = [], []
         for n in sorted(names):
             p = self.ws.root / n
@@ -239,6 +260,7 @@ class Guards:
                 except ValueError as e:
                     bad.append(f"{n} ({e})")
         if missing or bad:
+            self._deliv_refused = getattr(self, "_deliv_refused", 0) + 1
             log_failure(self.ctx, "missing_deliverable", True, ", ".join(missing + bad))
             return ("GUARD deliverables: the task asks for " + ", ".join(sorted(names)) + ". "
                     + (f"Missing in {self.ws.root}: {', '.join(missing)}. " if missing else "")
@@ -264,12 +286,20 @@ class Guards:
 
     def _git_test_changes(self) -> list[str] | None:
         try:
-            r = self._git(["-c", "core.fsmonitor=false", "status", "--porcelain"])
+            r = self._git(["-c", "core.fsmonitor=false", "status", "--porcelain", "-z"])
             if r.returncode != 0:
                 return None
-            names = [l[3:].strip() for l in r.stdout.splitlines()]
+            ents, parts = [], r.stdout.split("\0")
+            i = 0
+            while i < len(parts):                       # -z: unquoted paths; a rename is "XY new" then "old"
+                e = parts[i]
+                i += 1
+                if len(e) > 3:
+                    ents.append((e[:2], e[3:]))
+                    if e[0] in "RC":
+                        i += 1
             # only modified/deleted tracked tests count; new test files the agent adds are allowed
-            mod = [l[3:].strip() for l in r.stdout.splitlines() if l[:2].strip() in ("M", "D", "MM", "AM", "R")]
+            mod = [n for st, n in ents if st.strip() in ("M", "D", "MM", "AM", "R")]
             tests = [n for n in mod if TEST_PATH.search(n)]
             if test_guard_mode() == "additive":         # only removed or changed existing lines count as tampering
                 kept = []

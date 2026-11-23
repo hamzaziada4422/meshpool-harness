@@ -80,12 +80,19 @@ def _sanitize_calls(calls: list) -> list:
     for i, c in enumerate(calls):
         c = json.loads(json.dumps(c))
         f = c.setdefault("function", {})
+        a = f.get("arguments")
+        if isinstance(a, dict):                      # some OpenAI-compatible servers send an object
+            f["arguments"] = json.dumps(a)
+            a = f["arguments"]
+        if a is None:
+            f["arguments"] = a = "{}"
         try:
-            ok = isinstance(json.loads(f.get("arguments") or "{}"), dict)
+            ok = isinstance(json.loads(a or "{}"), dict)
         except (ValueError, TypeError):
             ok = False
         if not ok:
-            f["arguments"] = "{}"
+            # the reply was cut off or merged: validate() tells the model so, not "missing required argument"
+            f["arguments"] = '{"__truncated__": true}' if isinstance(a, str) and a.strip().startswith("{") else "{}"
         if not c.get("id"):
             c["id"] = f"call_{i}"
         c["type"] = "function"
@@ -193,6 +200,7 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     guards = Guards(ctx, ws, allow_test_edits=allow_test_edits, require_check=require_check)
     res = LoopResult(ok=False, prefix_sha=sha)
     bad_format = 0
+    last_text = ""
     import os as _os
     if not caps.max_seconds and _os.environ.get("MH_MAX_SECONDS"):
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
@@ -243,8 +251,11 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                         + (msg.get("reasoning_content") or "")[-3000:])
         if not calls:
             bad_format += 1
+            if (msg.get("content") or "").strip():
+                last_text = msg["content"].strip()
             if bad_format >= 3:
                 res.reason = "model stopped calling tools"
+                res.answer = res.answer or last_text           # what the model wrote is still its answer
                 log_failure(ctx, "no_tool_call", False, (msg.get("content") or "")[:200])
                 return res
             messages.append({"role": "user", "content": "Use the tools to continue. When done, call finish with "

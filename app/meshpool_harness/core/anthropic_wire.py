@@ -51,13 +51,19 @@ def to_request(body: dict) -> dict:
         else:
             msgs.append({"role": role, "content": list(blocks)})
 
+    pending, nsyn = [], 0                            # ids made up for tool calls that came without one
     for m in body.get("messages") or []:
         role = m.get("role")
         if role == "system":
             system.append(_text_of(m.get("content")))
         elif role == "tool":
-            push("user", [{"type": "tool_result", "tool_use_id": m.get("tool_call_id", ""),
-                           "content": _text_of(m.get("content")) or "(no output)"}])
+            c = m.get("content")
+            tid = m.get("tool_call_id") or (pending.pop(0) if pending else "toolu_unknown")
+            if isinstance(c, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in c):
+                res = _blocks(c) or "(no output)"        # screenshots and charts the tool returned reach the model
+            else:
+                res = _text_of(c) or "(no output)"
+            push("user", [{"type": "tool_result", "tool_use_id": tid, "content": res}])
         elif role == "assistant":
             blocks = _blocks(m.get("content"))
             for c in m.get("tool_calls") or []:
@@ -66,7 +72,12 @@ def to_request(body: dict) -> dict:
                     args = json.loads(f.get("arguments") or "{}")
                 except ValueError:
                     args = {}
-                blocks.append({"type": "tool_use", "id": c.get("id", ""), "name": f.get("name", ""),
+                cid = c.get("id")
+                if not cid:
+                    nsyn += 1
+                    cid = f"toolu_synth_{nsyn}"
+                    pending.append(cid)
+                blocks.append({"type": "tool_use", "id": cid, "name": f.get("name", ""),
                                "input": args if isinstance(args, dict) else {}})
             push("assistant", blocks)
         else:

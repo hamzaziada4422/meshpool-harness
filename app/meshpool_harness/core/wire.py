@@ -21,7 +21,7 @@ def to_responses(body: dict) -> dict:
         role = m.get("role")
         if role == "tool":
             items.append({"type": "function_call_output", "call_id": m.get("tool_call_id", ""),
-                          "output": str(m.get("content") or "")})
+                          "output": c if isinstance(c := (m.get("content") or ""), str) else json.dumps(c)})
             continue
         if m.get("content"):
             c = m["content"]
@@ -198,7 +198,7 @@ class SimpleLedger:
                                               "X-Harness-Task-Id": task_id,
                                               **({"session_id": task_id.split("-esc")[0]}
                                                  if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
-        status, raw = 0, b""
+        status, raw, retry_after = 0, b"", ""
         for attempt in range(retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -207,6 +207,11 @@ class SimpleLedger:
                            else r.read())
             except urllib.error.HTTPError as e:
                 raw, status = e.read(), e.code
+                ra = (getattr(e, "headers", None) or {}).get("Retry-After") if getattr(e, "headers", None) else None
+                try:                                     # seconds (an HTTP-date is ignored); never wait more than a minute
+                    retry_after = f" [retry-after: {min(60.0, max(1.0, float(str(ra).strip())))}]" if ra else ""
+                except ValueError:
+                    retry_after = ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
                 raw, status = f"timed out or connection lost: {e}".encode(), 0   # HTTPException: IncompleteRead
             if status in (200, 429) or attempt == retries:
@@ -214,7 +219,7 @@ class SimpleLedger:
             time.sleep(1.5 * (attempt + 1))
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
-            raise RuntimeError(f"meshpool HTTP {status}: {payload}")
+            raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
         if anthropic:
             return AW.from_response(payload)
         return from_responses(payload) if wire == "responses" else payload

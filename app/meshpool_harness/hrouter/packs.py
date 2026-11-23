@@ -350,7 +350,20 @@ def diagnostics(ws, paths: list[str] | None = None, language: str | None = None,
             label = f"python {v} syntax" if v else label
         ran.append(label)
         body = out.split("\n", 1)[1] if out.startswith("[exit") else out
-        locs = errctx.locations(body)
+        if "TS18003" in body:                    # tsconfig with nothing to compile: not a problem in the code
+            body = "\n".join(l for l in body.splitlines() if "TS18003" not in l)
+            if code not in (0, None) and not body.strip():
+                code = 0
+        sp_locs = []                             # paths with spaces: errctx's patterns stop at the first space
+        keep = []
+        for l in body.splitlines():
+            m = re.match(r"^(\S[^:\n]*? [^:\n]*\.\w{1,6}):(\d+):(\d+):? ?(.*)$", l)
+            if m and (ws.root / m.group(1)).exists():
+                sp_locs.append((m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)))
+            else:
+                keep.append(l)
+        body = "\n".join(keep) if sp_locs else body
+        locs = errctx.locations(body) + sp_locs
         if not locs and code not in (0, None) and body.strip() and "checked" not in body.strip().splitlines()[-1]:
             raw_tail.append(f"[{label}]\n" + body.strip()[-800:])
         blines = body.splitlines()
@@ -364,6 +377,8 @@ def diagnostics(ws, paths: list[str] | None = None, language: str | None = None,
             except (OSError, ValueError):
                 pass
             problems.append((path, line, col, msg.strip()))
+    has_other = {os.path.normpath(p[0]) for p in problems if not p[3].startswith("E902")}
+    problems = [p for p in problems if not (p[3].startswith("E902") and os.path.normpath(p[0]) in has_other)]
     seen, uniq = set(), []
     for p in problems:
         syntax = "syntax" in p[3].lower()          # the compiler and Ruff both report it: keep the compiler's

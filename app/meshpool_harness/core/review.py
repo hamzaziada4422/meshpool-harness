@@ -81,6 +81,6 @@ def build_user(request: str, change: str, last_cmd: dict | None) -> str:
 def findings(reply: str) -> str:
     """The reviewer's findings, or '' when it found nothing (LGTM, empty)."""
     r = (reply or "").strip()
-    if not r or r.upper().startswith("LGTM"):
+    if not r or re.fullmatch(r"(?i)lgtm[\s.!]*", r):
         return ""
     return r[:2500]

@@ -14,6 +14,36 @@ import time
 from pathlib import Path
 
 
+OUTPUT_HEAD, OUTPUT_TAIL, OUTPUT_KILL_CHARS = 200_000, 200_000, 64_000_000
+
+
+class _Capped:
+    """A command's output kept as its first and last characters only, so a runaway producer cannot fill memory."""
+
+    def __init__(self):
+        self.head, self.tail, self.total, self.dropped = [], "", 0, 0
+        self._hn = 0
+
+    def add(self, chunk: str):
+        self.total += len(chunk)
+        if self._hn < OUTPUT_HEAD:
+            take = chunk[:OUTPUT_HEAD - self._hn]
+            self.head.append(take)
+            self._hn += len(take)
+            chunk = chunk[len(take):]
+        if chunk:
+            self.tail += chunk
+            if len(self.tail) > 2 * OUTPUT_TAIL:
+                self.dropped += len(self.tail) - OUTPUT_TAIL
+                self.tail = self.tail[-OUTPUT_TAIL:]
+
+    def text(self) -> str:
+        head = "".join(self.head)
+        if not self.dropped:
+            return head + self.tail
+        return head + f"\n... [{self.dropped} characters of output dropped] ...\n" + self.tail
+
+
 def _bash():
     from meshpool_harness.config import find_bash
     return find_bash()
@@ -355,6 +385,9 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
                         f"Send a single JSON object.")
     if not isinstance(args, dict):
         raise ToolError(f"arguments for {name} must be a JSON object")
+    if args.get("__truncated__") is True:
+        raise ToolError(f"your {name} call was cut off before its arguments were complete (the reply hit the output "
+                        f"limit). Send it again with shorter arguments.")
     if (name == "write_file" and isinstance(args.get("content"), (dict, list))
             and str(args.get("path", "")).lower().endswith(".json")):
         args["content"] = json.dumps(args["content"], indent=2, ensure_ascii=False) + "\n"   # models often send JSON as an object
@@ -1049,9 +1082,40 @@ class Workspace:
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
         box: dict = {}
+        bufs = {"out": _Capped(), "err": _Capped()}
+        over = threading.Event()
+
+        def drain(stream, buf):
+            try:
+                while True:
+                    chunk = stream.read(65536)
+                    if not chunk:
+                        break
+                    buf.add(chunk)
+                    if bufs["out"].total + bufs["err"].total > OUTPUT_KILL_CHARS:
+                        over.set()                       # an endless producer: end it, keep head and tail
+                        break
+            except (OSError, ValueError):
+                pass
 
         def pump():
-            box["out"], box["err"] = p.communicate()
+            ts = [threading.Thread(target=drain, args=(p.stdout, bufs["out"]), daemon=True),
+                  threading.Thread(target=drain, args=(p.stderr, bufs["err"]), daemon=True)]
+            for t in ts:
+                t.start()
+            while any(t.is_alive() for t in ts) and not over.is_set():
+                for t in ts:
+                    t.join(0.1)
+            if over.is_set():
+                try:
+                    os.killpg(p.pid, 9) if os.name != "nt" else p.kill()
+                except Exception:  # noqa: BLE001
+                    p.kill()
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            box["out"], box["err"] = bufs["out"].text(), bufs["err"].text()
         th = threading.Thread(target=pump, daemon=True)
         th.start()
         end = time.time() + timeout_s
@@ -1077,6 +1141,8 @@ class Workspace:
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
         rc = 130 if why == "stopped" else p.returncode
+        if over.is_set():
+            err = (err + f"\n[output stopped after {OUTPUT_KILL_CHARS // 1_000_000} million characters]").lstrip()
         if why == "stopped":
             err = (err + "\n[stopped by the user]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
