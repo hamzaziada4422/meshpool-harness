@@ -239,7 +239,7 @@ def test_M19_03_concurrent_first_reads_agree(home):
 class FakeSession:
     made: list = []
 
-    def __init__(self, workdir=None, resume_id=None, mode=None, harness=None, kind="code", model=None, plan=False):
+    def __init__(self, workdir=None, resume_id=None, mode=None, harness=None, kind="code", model=None, plan=False, **_kw):
         self.id = f"fs{len(FakeSession.made)}"
         (A.SESSIONS / self.id).mkdir(exist_ok=True)
         self.workdir, self.kind, self.state, self.harness = workdir, kind, "idle", {"id": harness or "meshpool-work"}
