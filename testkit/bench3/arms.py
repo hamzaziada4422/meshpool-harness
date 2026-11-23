@@ -87,11 +87,10 @@ def run_codex(*, prompt, workdir, home, base_url, model, timeout, log, **_) -> d
     import small_codex                        # Codex refuses to build helper binaries under /tmp: use its cache dir
     small_codex.CACHE.mkdir(parents=True, exist_ok=True)
     ch = Path(tempfile.mkdtemp(prefix="codex-home-", dir=str(small_codex.CACHE)))
+    last = ch / "last.txt"
     (ch / "config.toml").write_text(
         f'model = "{model}"\nmodel_provider = "meter"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n\n'
         f'[model_providers.meter]\nname = "meter"\nbase_url = "{base_url}"\nenv_key = "METER_KEY"\nwire_api = "responses"\n')
-    last = home / "codex_last.txt"
-    last.unlink(missing_ok=True)
     codex = codex_cmd()
     cmd = codex + ["exec", "--skip-git-repo-check", "--output-last-message", str(last), prompt]
     r = run_proc(cmd, cwd=workdir, env=_env({"CODEX_HOME": str(ch), "METER_KEY": "dummy"}), timeout=timeout, log=log)
@@ -247,10 +246,47 @@ def run_mp_code(**kw) -> dict:
     return _run_mp_app("meshpool-code", "code", **kw)
 
 
-def run_mp_on_pi(task_kind="code", **kw) -> dict:
+PI_PKG = "@earendil-works/pi-coding-agent@1.5.2"          # the version the app ships (THIRD_PARTY_NOTICES.md)
+_PI_LOCK = __import__("threading").Lock()
+
+
+def pi_mp_src(mp_src, cache: Path | None = None) -> Path:
+    """The app's Pi harness needs the vendored Pi (app/vendor/pi), which source checkouts do not contain. Return mp_src
+    itself when it has Pi; otherwise a copy of it with vendor/pi pointing at a cached npm install (the checkout under
+    test is never modified). The copy is made once per cache dir and mp_src path."""
+    import hashlib
+    import shutil
+    mp_src = Path(mp_src).resolve()
+    rel = Path("node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
+    if (mp_src / "vendor" / "pi" / rel).is_file() or (mp_src.parent / "pi" / rel).is_file():
+        return mp_src
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "loop"))
+    import small_codex
+    cache = cache or small_codex.CACHE / "bench3"
+    with _PI_LOCK:
+        pi = cache / "pi"
+        if not (pi / rel).is_file():
+            pi.mkdir(parents=True, exist_ok=True)
+            subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--prefix", str(pi), PI_PKG], check=True,
+                           capture_output=True, text=True, timeout=600)
+        shadow = cache / "src" / hashlib.sha1(str(mp_src).encode()).hexdigest()[:10] / "app"
+        if not (shadow / "vendor" / "pi").exists():
+            shutil.rmtree(shadow.parent, ignore_errors=True)
+            shutil.copytree(mp_src, shadow, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            (shadow / "vendor").mkdir(exist_ok=True)
+            (shadow / "vendor" / "pi").symlink_to(pi)
+    return shadow
+
+
+def run_mp_on_pi(task_kind="code", mp_src="app", **kw) -> dict:
     """The Meshpool app driving Pi (harness "pi"). Its models.json comes from the app's endpoint setting, which is the
     per-run meshpool.config, so Pi's calls land on the meter path."""
-    return _run_mp_app("pi", "cowork" if task_kind == "office" else "code", **kw)
+    try:
+        src = pi_mp_src(mp_src)
+    except Exception as e:  # noqa: BLE001
+        return {"reply": "", "secs": 0.0, "rc": None, "timed_out": False, "log": str(kw.get("log", "")),
+                "error": f"cannot provide Pi for the app: {e}"}
+    return _run_mp_app("pi", "cowork" if task_kind == "office" else "code", mp_src=src, **kw)
 
 
 def run_mp_on_codex(task_kind="code", **kw) -> dict:
