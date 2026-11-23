@@ -25,6 +25,7 @@ _SMALLTALK = re.compile(r"^\s*(?:hi|hello|hey|yo|thanks?(?: you)?(?: so much)?|t
                         r"awesome|perfect|got it|sounds good|lgtm|good (?:morning|afternoon|evening))\W*$", re.I)
 PRIORITY = ["docs", "data", "browser", "automation", "research", "code", "writing"]   # tie-break between families
 CONFIDENT = 0.6
+MAX_CLASSIFY_CHARS = 8000
 
 
 @dataclass
@@ -172,6 +173,9 @@ def route(text: str, files: list[str] | None = None, workdir: str | None = None,
     """The route for a new task. force: a spec id the user picked (e.g. from /debug or the route chip)."""
     t0 = time.perf_counter()
     files = files or []
+    if text and len(text) > MAX_CLASSIFY_CHARS:    # a huge paste: the start and the end say what is asked
+        h = MAX_CLASSIFY_CHARS // 2
+        text = text[:h] + "\n" + text[-h:]
     if force and force in SPECS:
         r = _decide(text, files, workdir, kind)
         sp = get(force)
