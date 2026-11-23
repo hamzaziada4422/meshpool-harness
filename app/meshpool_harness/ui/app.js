@@ -370,17 +370,17 @@ function projMenu(e, pid) {
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
-// A delete still waiting out its undo window is sent when the page goes away, so a reload never brings the chat back.
-addEventListener("pagehide", () => { for (const id of S.delFlush?.keys() || []) { try { fetch(`/api/threads/${id}`, {method: "POST", keepalive: true, headers: {"X-Meshpool-Token": MP.token, "Content-Type": "application/json"}, body: JSON.stringify({action: "delete"})}); } catch (e) { /* page is closing */ } } });
 async function threadAct(id, action) {
-  if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
+  if (action === "delete") {                         // the server does the delete (and its grace period) itself
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
-    if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
+    try { await post(`/api/threads/${id}`, {action: "delete"}); }
+    catch (e) { S.pendingDelete.delete(id); renderSide(); return toast(e.message); }
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); S.delFlush?.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    (S.delFlush = S.delFlush || new Map()).set(id, t);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); S.delFlush?.delete(id); renderSide(); toast("Chat restored"); }});
+    toast("Chat deleted", 6000, {label: "Undo", fn: async () => {
+      try { await post(`/api/threads/${id}`, {action: "undelete"}); S.pendingDelete.delete(id); await loadThreads(); toast("Chat restored"); }
+      catch (e) { toast(e.message); }
+    }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -547,24 +547,19 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
-  let created = null;
+  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
       const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
       S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot() || created?.workdir || "";          // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image);
-    if (files.length) {
-      const saved = [];
-      for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
-    }
+    const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
+    const files = atts.filter(a => !a.image).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
-    const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
+    const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
     S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
     if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
@@ -576,6 +571,13 @@ async function sendNow(interrupt) {
     S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
+    if (created) {                                  // a brand-new chat whose first message failed: no empty chat is left behind
+      try { await post(`/api/threads/${created.id}`, {action: "discard"}); } catch (e2) { /* it may already be gone */ }
+      if (S.cur?.id === created.id) newThread();
+      S.draft.project = draft0.project; S.draft.pid = draft0.pid;
+      const i2 = $("#input"); if (i2) { i2.value = typed; i2.dispatchEvent(new Event("input")); }
+      S.attachments = atts; renderAttach(); loadThreads();
+    }
     toast(e.message, 4000);
   }
 }
