@@ -677,3 +677,85 @@ def test_w02_models_without_tools_parameter_sends_no_tools_first(env, tmp_path, 
     assert make_agent(tmp_path).send("hello") == "plain"
     rs = srv.chats()
     assert len(rs) == 1 and not has_tools(rs[0])                    # zero refused requests
+
+
+# ----------------------------------------------------------------------------------------------------- OSS-23 (huge images)
+
+def _big_png_url(w=6000, h=4000):
+    import base64
+    import io
+    import os
+    from PIL import Image
+    im = Image.frombytes("RGB", (w // 4, h // 4), os.urandom(w // 4 * h // 4 * 3)).resize((w, h), Image.NEAREST)
+    buf = io.BytesIO()
+    im.save(buf, "PNG", compress_level=1)
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+@pytest.fixture(scope="module")
+def big_url():
+    u = _big_png_url()
+    assert len(u) > 3_000_000
+    return u
+
+
+def test_oss23_shrink_image_url(big_url):
+    import base64
+    import io
+    from PIL import Image
+    from meshpool_harness.core import compat
+    out = compat.shrink_image_url(big_url)
+    assert out != big_url and len(out) < 1_500_000 + 100
+    assert out == compat.shrink_image_url(big_url)                  # deterministic
+    im = Image.open(io.BytesIO(base64.b64decode(out.split(",", 1)[1])))
+    im.load()
+    assert max(im.size) <= 2048 and out.startswith("data:image/jpeg;base64,")
+    small = "data:image/png;base64," + base64.b64encode(
+        (lambda b: (Image.new("RGB", (40, 30), "red").save(b, "PNG"), b.getvalue())[1])(io.BytesIO())).decode()
+    assert compat.shrink_image_url(small) == small
+    assert compat.shrink_image_url("https://example.com/a.png") == "https://example.com/a.png"
+    junk = "data:image/png;base64," + "QUJD" * 500_000
+    assert compat.shrink_image_url(junk) == junk
+    assert compat.shrink_image_url("data:image/png;base64,!!!") == "data:image/png;base64,!!!"
+    msgs = [{"role": "user", "content": [{"type": "text", "text": "t"}, {"type": "image_url", "image_url": {"url": big_url}}]},
+            {"role": "user", "content": "plain"}]
+    got = compat.shrink_images(msgs)
+    assert got[1] is msgs[1] and got[0]["content"][1]["image_url"]["url"] == out and msgs[0]["content"][1]["image_url"]["url"] == big_url
+
+
+def test_oss23_attach_stores_a_shrunk_image(env, tmp_path, monkeypatch, big_url):
+    srv = env(lambda body, n: reply("seen"))
+    a = make_agent(tmp_path)
+    data = big_url.split(",", 1)[1]
+    assert a.send("look at this", images=[{"name": "p.png", "mime": "image/png", "data": data}]) == "seen"
+    stored = [p["image_url"]["url"] for m in a.messages if isinstance(m.get("content"), list)
+              for p in m["content"] if p.get("type") == "image_url"]
+    assert len(stored) == 1 and len(stored[0]) < 1_600_000
+    a._attach_images([("screenshot", {"mime": "image/png", "data": data})])
+    assert all(len(p["image_url"]["url"]) < 1_600_000 for m in a.messages if isinstance(m.get("content"), list)
+               for p in m["content"] if p.get("type") == "image_url")
+    assert "left out" not in json.dumps(a.messages[-1])
+
+
+def test_oss23_413_from_images_is_recovered_by_shrinking(env, tmp_path, monkeypatch, big_url):
+    monkeypatch.setenv("MH_BIG_REQUEST", "100000000")               # only the server's own 2 MB limit applies
+    seen = []
+
+    def chat(body, n):
+        size = len(json.dumps(body))
+        seen.append(size)
+        if size > 2_000_000:
+            return 413, "Request Entity Too Large"
+        return reply("ok")
+    srv = env(chat)
+    a = make_agent(tmp_path)
+    for i in range(2):                                               # history holding huge images, bypassing attach
+        a.messages.append({"role": "user", "content": [{"type": "text", "text": f"old {i}"},
+                                                       {"type": "image_url", "image_url": {"url": big_url}}]})
+        a.messages.append({"role": "assistant", "content": "seen"})
+    assert a.send("MARKER-TEXT-INTACT and now?") == "ok"
+    ok = [r for r in srv.chats() if len(json.dumps(r)) <= 2_000_000][-1]
+    assert "MARKER-TEXT-INTACT" in json.dumps(ok)
+    srv.reqs.clear()
+    assert a.send("next") == "ok"
+    assert len(srv.chats()) == 1

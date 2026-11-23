@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 from typing import Any
 
@@ -370,6 +371,105 @@ def cap_images(messages: list, keep: int = 4, step: int | None = None) -> list:
         else:
             msgs[i]["content"] = " ".join(p.get("text", "") for p in new if p.get("type") == "text") + _SHOT_NOTE
     return msgs
+
+
+# ---------------------------------------------------------------- 4b. huge images (OSS-23)
+
+_SHRUNK: dict = {}                                    # (sha1 of url, limits) -> shrunk url; small, newest last
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return max(1, int(float(os.environ.get(name) or default)))
+    except ValueError:
+        return default
+
+
+def _shrink(url: str, max_bytes: int, max_side: int) -> str:
+    import base64
+    import io
+    from PIL import Image, ImageOps
+    head, _, b64 = url.partition(";base64,")
+    im = Image.open(io.BytesIO(base64.b64decode(b64, validate=False)))
+    if getattr(im, "is_animated", False) or getattr(im, "n_frames", 1) > 1:
+        return url
+    w, h = im.size
+    if len(b64) <= max_bytes and max(w, h) <= max_side:
+        return url
+    im = ImageOps.exif_transpose(im)
+    im.load()
+    alpha = im.mode in ("RGBA", "LA", "PILA") or (im.mode == "P" and "transparency" in im.info)
+    base = im.convert("RGBA") if alpha or im.mode in ("P", "LA") else im.convert("RGB")
+    side = min(max_side, max(base.size))
+    last = url
+    while True:
+        cur = base.copy()
+        cur.thumbnail((side, side), Image.LANCZOS)
+        if alpha:
+            buf = io.BytesIO()
+            cur.save(buf, "PNG", optimize=True)
+            last = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+            if len(last) - len("data:image/png;base64,") <= max_bytes:
+                return last
+        flat = cur
+        if cur.mode == "RGBA":
+            flat = Image.new("RGB", cur.size, (255, 255, 255))
+            flat.paste(cur, mask=cur.getchannel("A"))
+        for q in (85, 70, 55):
+            buf = io.BytesIO()
+            flat.save(buf, "JPEG", quality=q, optimize=True)
+            last = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+            if len(last) - len("data:image/jpeg;base64,") <= max_bytes:
+                return last
+        if side < 256 * 2:
+            return last                               # as small as it gets: send the smallest try
+        side //= 2
+
+
+def shrink_image_url(url: str, max_bytes: int | None = None, max_side: int | None = None) -> str:
+    """A data:image URL over max_bytes of base64 (MH_IMAGE_MAX_BYTES, 1.5 MB) or with a side over max_side
+    (MH_IMAGE_MAX_SIDE, 2048 px) is downscaled and re-encoded (JPEG, or PNG when it has transparency and fits).
+    Anything else, or anything Pillow cannot read, comes back unchanged. Never raises; the same input gives the same
+    output (the cacheable prefix stays put)."""
+    try:
+        if not isinstance(url, str) or not url.startswith("data:image/") or ";base64," not in url[:80]:
+            return url
+        mb = max_bytes or _env_int("MH_IMAGE_MAX_BYTES", 1_500_000)
+        ms = max_side or _env_int("MH_IMAGE_MAX_SIDE", 2048)
+        key = (hashlib.sha1(url.encode("ascii", "ignore")).hexdigest(), mb, ms)
+        if key in _SHRUNK:
+            return _SHRUNK[key]
+        out = _shrink(url, mb, ms)
+        if len(_SHRUNK) >= 16:
+            _SHRUNK.pop(next(iter(_SHRUNK)))
+        _SHRUNK[key] = out
+        return out
+    except Exception:  # noqa: BLE001 - an image we cannot read is sent as it is
+        return url
+
+
+def shrink_images(messages: list, max_bytes: int | None = None) -> list:
+    """Every image_url part through shrink_image_url. Only messages that change are new objects; a request with no
+    big image costs a length check per image and no decoding."""
+    cheap = max_bytes or _env_int("MH_IMAGE_MAX_BYTES", 1_500_000)
+    out = list(messages)
+    for i, m in enumerate(out):
+        c = m.get("content") if isinstance(m, dict) else None
+        if not isinstance(c, list):
+            continue
+        new, changed = [], False
+        for p in c:
+            u = p.get("image_url") if _is_image(p) else None
+            url = u.get("url") if isinstance(u, dict) else u
+            if isinstance(url, str) and len(url) > cheap:
+                nu = shrink_image_url(url, max_bytes)
+                if nu != url:
+                    p = {**p, "image_url": {**u, "url": nu} if isinstance(u, dict) else nu}
+                    changed = True
+            new.append(p)
+        if changed:
+            out[i] = {**m, "content": new}
+    return out
 
 
 # ---------------------------------------------------------------- 5. no-tools endpoints (W-02)

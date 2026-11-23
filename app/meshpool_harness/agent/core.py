@@ -643,6 +643,21 @@ def _args_ok(call: dict) -> bool:
         return False
 
 
+def _image_part(im: dict) -> dict:
+    """An image_url part for an attached or returned image, shrunk when it is huge (OSS-23: one 12 MB photo must not
+    brick a chat). The file on disk is untouched; the chat stores the smaller one."""
+    from meshpool_harness.core import compat as _CP
+    return {"type": "image_url", "image_url": {"url": _CP.shrink_image_url(
+        f"data:{im.get('mime') or 'image/png'};base64,{im['data']}")}}
+
+
+def _shrunk(im: dict) -> dict:
+    """{"mime", "data"} of an image after shrink_image_url (the same ones when it is within limits)."""
+    url = _image_part(im)["image_url"]["url"]
+    head, _, data = url.partition(";base64,")
+    return {"mime": head[5:], "data": data}
+
+
 def _has_images(messages: list) -> bool:
     return any(isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"])
                for m in messages)
@@ -1175,9 +1190,7 @@ class Agent:
         for text, images in items:
             body = "[Added by the user while you were working] " + text
             if images:
-                parts = [{"type": "text", "text": body}] + [
-                    {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                    for im in images[:6]]
+                parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
                 self.messages.append({"role": "user", "content": parts})
             else:
                 self.messages.append({"role": "user", "content": body})
@@ -1240,9 +1253,7 @@ class Agent:
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
         if images:
-            parts = [{"type": "text", "text": body}] + [
-                {"type": "image_url", "image_url": {"url": f"data:{im.get('mime') or 'image/png'};base64,{im['data']}"}}
-                for im in images[:6]]
+            parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})
         else:
             self.messages.append({"role": "user", "content": body})
@@ -1884,6 +1895,7 @@ class Agent:
         # A screenshot bigger than the endpoint takes (a full-size Retina or 4K PNG) would fail every request and
         # be dropped each step, leaving the model acting blind without knowing why: leave it out and say so.
         cap = int(os.environ.get("MH_BIG_REQUEST", "3000000")) * 2 // 3
+        shots = [(n, {**im, **_shrunk(im)}) for n, im in shots]       # a huge screenshot is made smaller, not dropped
         big = [n for n, im in shots if len(str(im.get("data") or "")) > cap]
         shots = [(n, im) for n, im in shots if len(str(im.get("data") or "")) <= cap]
         if big:
@@ -1896,7 +1908,7 @@ class Agent:
         _drop_images(self.messages, keep=max(0, 2 - len(shots)))
         parts = [{"type": "text", "text": "Image returned by " + ", ".join(sorted({n for n, _ in shots})) + ":"}]
         for _, im in shots[-2:]:
-            parts.append({"type": "image_url", "image_url": {"url": f"data:{im['mime']};base64,{im['data']}"}})
+            parts.append(_image_part(im))
         self.messages.append({"role": "user", "content": parts})
 
     # ---------- model ------------------------------------------------------------------------------------------
@@ -2043,6 +2055,8 @@ class Agent:
             # screenshots otherwise resends megabytes every turn and the gateway refuses it (413).
             from meshpool_harness.core import compat as _CP
             msgs = _CP.cap_images(msgs, keep)           # the cut moves in steps, so the cacheable prefix stays put
+        from meshpool_harness.core import compat as _CP2
+        msgs = _CP2.shrink_images(msgs)                 # an old chat holding a huge image (length check; no decoding)
         if os.environ.get("MH_TEMPERATURE"):
             body["temperature"] = float(os.environ["MH_TEMPERATURE"])
         body["messages"] = msgs
@@ -2315,6 +2329,10 @@ class Agent:
                     # Too long, or too big a request (413): elide older outputs and all but the latest two images,
                     # so a screenshot the user just attached still goes with the retry. Older steps are summarized
                     # first, so the task keeps its thread.
+                    if self._shrink_big_images(msg):
+                        body = self._body()
+                        body["model"] = PV.split(body["model"])[1]
+                        continue
                     self.compact_now()
                     _shrink_context(self.messages, 0, hard=True, keep_images=2)
                     body = self._body()
@@ -2395,6 +2413,10 @@ class Agent:
                         # Up for a small probe, failing for this big request: the real gateway answers an oversized
                         # body with a plain 502, not a 413. Treat it as too big: keep the latest two images, trim.
                         shrunk = True
+                        if self._shrink_big_images("HTTP 413"):      # images first (OSS-23), then the text cuts
+                            body = self._body()
+                            body["model"] = PV.split(body["model"])[1]
+                            continue
                         _shrink_context(self.messages, 0, hard=True, keep_images=2)
                         lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
                         if len(json.dumps(self._body())) > lim:
@@ -2600,6 +2622,25 @@ class Agent:
             raise
         except Exception:  # noqa: BLE001
             return ""
+
+    def _shrink_big_images(self, msg: str) -> bool:
+        """A 413 / too-large reply with images in the chat: text cuts cannot help, so make the images smaller first
+        (a quarter of the byte budget), then keep only the newest one. True when something changed (OSS-23)."""
+        if not _has_images(self.messages) or not (
+                re.search(r"HTTP 413|(?:entity|payload|request) too large", msg or "", re.I)):
+            return False
+        from meshpool_harness.core import compat as _CP
+        lim = int(os.environ.get("MH_BIG_REQUEST", "3000000"))
+        before = len(json.dumps(self.messages))
+        quarter = max(50_000, int(os.environ.get("MH_IMAGE_MAX_BYTES", "1500000")) // 4)
+        self.messages[:] = _CP.shrink_images(self.messages, quarter)
+        if len(json.dumps(self._body())) > lim:
+            _drop_images(self.messages, keep=1)
+        if len(json.dumps(self.messages)) >= before:
+            return False
+        self.emit({"type": "status", "text": "The images in this chat were too big for the endpoint, so they were "
+                                             "made smaller before trying again."})
+        return True
 
     def _size_with(self, messages: list) -> int:
         """How big the request would be with these messages (the body _post sends)."""
