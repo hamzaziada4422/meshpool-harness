@@ -52,7 +52,7 @@ class _Handler(BaseHTTPRequestHandler):
             return self._error(401, "Missing or wrong relay token.", "authentication_error")
         if self.path.rstrip("/") in ("/v1/models", "/models"):
             from meshpool_harness import providers as PV
-            model = PV.split(os.environ.get("MH_MODEL") or "")[1] or PV.DEFAULT_MODEL
+            model = PV.split(PV._cfg("MH_MODEL"))[1] or PV.DEFAULT_MODEL
             return self._json(200, {"object": "list", "data": [{"id": model, "object": "model", "owned_by": "azure"}]})
         self._error(404, "Not found.")
 

@@ -153,9 +153,9 @@ def direct_agent_ok(hid: str) -> str:
     """"" when the agent can run on the key endpoint as set up; otherwise why not, in words for the settings page."""
     from meshpool_harness.core import endpoint as EP
     kind = key_kind()
-    if hid == "codex" and EP.is_azure(kind) and kind != "azure-v1":
-        return ("Codex talks to the Responses API, which Meshpool can only reach directly on the Azure v1 address "
-                "(https://NAME.openai.azure.com/openai/v1). Use that address, or another agent for this endpoint.")
+    if hid == "codex" and kind in ("azure-foundry", "azure-anthropic"):
+        return ("Codex needs the OpenAI Responses API, which this Azure address does not serve. Use an "
+                "https://NAME.openai.azure.com address or the /openai/v1 address for Codex, or another agent here.")
     return ""
 
 

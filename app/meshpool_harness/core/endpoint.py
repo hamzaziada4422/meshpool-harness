@@ -100,7 +100,7 @@ CAPS: dict[str, dict] = {
                       "note": "Address https://NAME.openai.azure.com. The model is your deployment name.",
                       "env": ("AZURE_OPENAI_API_KEY",)},
     "azure-v1": {**_B, "label": "Azure OpenAI (v1 route)", "auth": "api-key", "deployment": True, "reasoning": True,
-                 "lists": False, "relay": True,
+                 "lists": False,
                  "key_hint": "Key 1 or Key 2 from the Azure portal, your resource, Keys and Endpoint.",
                  "note": "Address https://NAME.openai.azure.com/openai/v1 (or NAME.services.ai.azure.com/openai/v1). "
                          "No api-version needed. The model is your deployment name."},

@@ -99,7 +99,12 @@ async function providerPage(b, close) {
   let cur, lg;
   try { [cur, lg] = await Promise.all([api("/api/provider"), api("/api/provider/logins").catch(() => ({logins: []})), loadSettings()]); }
   catch (e) { b.innerHTML = `${close}<h3>Models and providers</h3><div class="res bad">${esc(e.message)}</div>`; return; }
-  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false};
+  const cat = cur.catalog || [];
+  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false,
+              kind: "", version: cur.api_version || "", dep: cur.deployment ? (cur.default_model || "") : "", seen: cur.kind || ""};
+  const AZ = /\.(openai|cognitiveservices|services\.ai)\.azure\.(com|us|cn)(\/|$|:)/i;
+  const isAz = () => (st.kind || st.seen || "").startsWith("azure") || AZ.test(st.base);
+  const catKind = id => cat.find(c => c.id === (st.kind || st.seen));
   const logins = (lg.logins || []);
   const row = (title, text, btn, id, badge) => `<li><span class="tg"><b>${title}</b><small>${text}</small></span>${badge ? `<span class="badge added">${badge}</span>` : ""}${btn ? `<button class="btn ${badge ? "" : "primary"}" id="${id}">${btn}</button>` : ""}</li>`;
   const found = [];
@@ -116,12 +121,26 @@ async function providerPage(b, close) {
     ${found.length ? `<h4 class="sr-h first">Use an existing login</h4><ul class="rows2">${found.join("")}</ul>` : ""}
     <h4 class="sr-h ${found.length ? "" : "first"}">Connection</h4>
     <div class="provnow">${cur.provider === "chatgpt" ? "Using your ChatGPT sign-in." : cur.default_model ? `Using <b>${esc(cur.default_model)}</b> on ${esc(cur.host || PV_host(cur.base_url))}.` : "No default model chosen yet."}</div>
+    <label class="field"><span>Provider</span><select id="pvKind"><option value="">Detect from the address</option>${cat.map(c => `<option value="${esc(c.id)}">${esc(c.label)}</option>`).join("")}</select><small id="pvKindNote">Pick one to see what to paste, or paste an address and Meshpool recognises it.</small></label>
     <label class="field"><span>Base URL</span><input id="pvBase" spellcheck="false" autocomplete="off" value="${esc(st.base)}" placeholder="https://api.example.com/v1"><small>The address of your model service. It usually ends in /v1.</small></label>
+    <div id="pvAz" hidden><label class="field"><span id="pvDepLbl">Deployment name</span><input id="pvDep" spellcheck="false" autocomplete="off" placeholder="the name you gave the model in Azure" value="${esc(st.dep)}"><small>Azure runs your own named deployments. Type the deployment name exactly as it appears in Azure AI Foundry, Deployments (not the model's own name).</small></label>
+      <label class="field" id="pvVerRow"><span>API version</span><input id="pvVer" spellcheck="false" autocomplete="off" placeholder="2024-10-21" value="${esc(st.version)}"><small>Leave it as is unless Azure tells you a version is not supported. A version pasted inside the address is picked up too.</small></label></div>
     <div class="field"><span>API key</span><span class="keyrow" id="pvKeyRow">${st.changeKey ? `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="pvShow" type="button">Show</button>` : `<input id="pvMask" value="${esc(keyHint)}" readonly aria-label="Saved key"><button class="btn" id="pvChange" type="button">Change</button>`}</span></div>
     <div class="pvact"><button class="btn primary" id="pvTest">Test connection</button><span class="pvres" id="pvRes" role="status"></span></div>
     <div id="pvModels" hidden></div>
+    <div class="pnote" id="pvAgentNote" hidden></div>
     <div class="pvact"><button class="btn primary" id="pvSave" disabled>Save</button><span class="pvres" id="pvSaveRes" role="status"></span></div>`;
   const say = (id, cls, t) => { const el = $("#" + id, b); el.className = "pvres " + cls; el.textContent = t; };
+  const syncKind = () => {
+    const c = catKind(), az = isAz() || !!(c && (c.deployment || c.lists === false));
+    $("#pvAz", b).hidden = !az;
+    $("#pvVerRow", b).hidden = !((st.kind || st.seen) === "azure-classic" || (st.kind || st.seen) === "azure-foundry" || (!st.kind && !st.seen && AZ.test(st.base)));
+    $("#pvDepLbl", b).textContent = c && c.deployment || AZ.test(st.base) ? "Deployment name" : "Model name";
+    $("#pvKindNote", b).textContent = c ? `${c.note || ""} Key: ${c.key_hint || ""}`.trim() : "Pick one to see what to paste, or paste an address and Meshpool recognises it.";
+    const an = $("#pvAgentNote", b), notes = Object.values(cur.agent_notes || {});
+    an.hidden = !(notes.length && (st.kind || st.seen).startsWith("azure")); an.textContent = notes.join(" ");
+  };
+  $("#pvKind", b).value = ""; $("#pvKind", b).onchange = e => { st.kind = e.target.value; const c = catKind(); if (c && c.base && !st.base) { st.base = c.base; $("#pvBase", b).value = st.base; } if (c && c.base) $("#pvBase", b).placeholder = c.base; touched(); syncKind(); };
   const key = () => ($("#pvKey", b)?.value || "").trim();
   const drawModels = () => {
     const box = $("#pvModels", b); box.hidden = !st.models;
@@ -137,7 +156,9 @@ async function providerPage(b, close) {
   };
   const gate = () => { $("#pvSave", b).disabled = !(st.ok && (st.models?.length ? st.picked : st.typed)); };
   const touched = () => { st.ok = false; st.models = null; st.picked = ""; $("#pvModels", b).hidden = true; $("#pvRes", b).textContent = ""; gate(); };
-  $("#pvBase", b).oninput = e => { st.base = e.target.value.trim(); st.env = ""; touched(); };
+  $("#pvBase", b).oninput = e => { st.base = e.target.value.trim(); st.env = ""; st.seen = ""; touched(); syncKind(); };
+  b.addEventListener("input", e => { if (e.target.id === "pvDep") { st.dep = e.target.value.trim(); touched(); } if (e.target.id === "pvVer") { st.version = e.target.value.trim(); touched(); } });
+  syncKind();
   b.addEventListener("input", e => { if (e.target.id === "pvKey") touched(); });
   b.addEventListener("click", e => {
     if (e.target.closest("#pvChange")) { st.changeKey = true; $("#pvKeyRow", b).innerHTML = `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the new key"><button class="btn" id="pvShow" type="button">Show</button>`; $("#pvKey", b).focus(); touched(); }
@@ -147,10 +168,13 @@ async function providerPage(b, close) {
     if (!st.base) { $("#pvBase", b).focus(); return say("pvRes", "bad", "Enter the base URL first."); }
     const btn = $("#pvTest", b); btn.disabled = true; say("pvRes", "", "Testing…");
     try {
-      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, ...(st.env ? {env: st.env} : {})});
-      if (!r.ok) { st.ok = false; st.models = null; drawModels(); say("pvRes", "bad", r.error || "That didn't work."); }
+      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, ...(st.env ? {env: st.env} : {}),
+        model: st.dep, api_version: st.version, kind: st.kind});
+      if (r.kind) { st.seen = r.kind; if (r.api_version && !st.version && (r.kind === "azure-classic" || r.kind === "azure-foundry")) { st.version = r.api_version; $("#pvVer", b).value = st.version; } if (r.model && !st.dep) { st.dep = r.model; $("#pvDep", b).value = st.dep; } syncKind(); }
+      if (!r.ok) { st.ok = false; st.models = null; drawModels(); say("pvRes", "bad", r.error || "That didn't work."); if (r.needs_model) $("#pvDep", b).focus(); }
       else {
         st.ok = true; st.base = r.base_url || st.base; st.wire = r.wire || st.wire; st.models = r.models || []; $("#pvBase", b).value = st.base;
+        if (r.deployment && st.models.length === 1) st.picked = st.models[0].id;
         if (st.picked && !st.models.some(m => m.id === st.picked)) st.picked = "";
         say("pvRes", "ok", `Connected in ${r.latency_ms} ms.${st.models.length ? ` ${st.models.length} models available.` : ""}`);
         drawModels();
@@ -164,7 +188,7 @@ async function providerPage(b, close) {
     if (st.env) { if (!await ask({title: `Use ${st.env} from your environment?`, text: `Meshpool saves this key in its settings on this computer, and sends it only to ${PV_host(st.base)}.`, ok: "Use this key"})) return; confirm_env = true; }
     const btn = $("#pvSave", b); btn.disabled = true; say("pvSaveRes", "", "Saving…");
     try {
-      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length, ...(st.env ? {env: st.env, confirm_env} : {})});
+      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length || st.models.length === 1 && st.models[0].id === st.dep, api_version: st.version, kind: st.kind || st.seen, ...(st.env ? {env: st.env, confirm_env} : {})});
       await loadSettings(); await loadModels(true); await loadHarnesses(); S.draft.model = S.models.default; store("model", S.draft.model); renderBar(); renderHero?.();
       toast("Saved. New chats use " + model + "."); providerPage(b, close);
     } catch (err) { say("pvSaveRes", "bad", err.message); btn.disabled = false; }
@@ -175,6 +199,7 @@ async function providerPage(b, close) {
   $("#lgChatgptIn", b)?.addEventListener("click", async () => { try { const r = await post("/api/harness-login", {id: "codex"}); toast(r.message || "Finish signing in in the Browser panel.", 6000); setTimeout(() => { if ($("#pvBase", b)) providerPage(b, close); }, 6000); } catch (err) { toast(err.message, 6000); } });
   for (const l of logins.filter(x => x.kind === "env_key" && x.found)) $("#lgEnv-" + l.env, b)?.addEventListener("click", () => {
     st.env = l.env; st.base = l.base_url || st.base; st.wire = l.wire || "auto"; $("#pvBase", b).value = st.base;
+    st.seen = l.provider || ""; if (l.deployment) { st.dep = l.deployment; $("#pvDep", b).value = st.dep; } if (l.api_version) { st.version = l.api_version; $("#pvVer", b).value = st.version; } syncKind();
     $("#pvKeyRow", b).innerHTML = `<input id="pvMask" value="${esc(l.env)}: ${esc(l.key_hint || "••••")}" readonly aria-label="Key from your environment"><span class="pvnote">from your environment</span>`;
     st.ok = false; st.models = null; $("#pvModels", b).hidden = true; $("#pvTest", b).click();
   });
