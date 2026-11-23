@@ -530,7 +530,9 @@ class SimpleLedger:
         if status != 200:
             raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
         from meshpool_harness import provider_setup as _PS
-        if not _PS._is_reply("anthropic" if anthropic else "responses" if wire == "responses" else "openai", payload):
+        shape = ("openai" if anthropic and sse_reply                  # a streamed Anthropic reply is assembled as chat
+                 else "anthropic" if anthropic else "responses" if wire == "responses" else "openai")
+        if not _PS._is_reply(shape, payload):
             txt = payload.get("raw") if isinstance(payload, dict) and "raw" in payload else _PS._not_reply_msg(payload)
             if isinstance(payload, dict) and not payload.get("error") and "raw" not in payload:
                 txt = json.dumps(payload)[:200]
