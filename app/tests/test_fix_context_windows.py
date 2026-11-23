@@ -298,3 +298,62 @@ def test_describe_and_check_row(monkeypatch):
     from meshpool_harness import config as C
     row = [r for r in C.system_check() if r["name"] == "Context window"][0]
     assert "1,000k" in row["detail"]
+
+
+def _models_server(state):
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            state["hits"] += 1
+            if state["hits"] <= state["fail_first"]:
+                self.send_response(500)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            out = json.dumps({"data": [{"id": "claude-haiku-5.5", "max_input_tokens": 200000},
+                                       {"id": "gpt-5.6-luna", "max_input_tokens": 922000},
+                                       {"id": "gpt-oss-120b"}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}/v1"
+
+
+def test_failed_models_fetch_is_not_remembered(monkeypatch):
+    state = {"hits": 0, "fail_first": 1}
+    srv, base = _models_server(state)
+    monkeypatch.setattr(CTX, "RETRY_AFTER_S", 0.0)
+    monkeypatch.setattr(CTX, "_is_local", lambda b: False)           # a remote gateway: only /models is asked
+    first = CTX.window_info("claude-haiku-5.5", base)
+    assert first == (1_000_000, "table")                                # the fetch failed: the table answers meanwhile
+    assert CTX.window_info("claude-haiku-5.5", base) == (200_000, "provider")   # retried, now the provider's number
+    assert CTX.window_info("gpt-5.6-luna", base) == (922_000, "provider")      # not the table's 400k
+    assert CTX.window_info("gpt-oss-120b", base)[1] == "table"       # listed without a size: the table fills in
+    assert CTX.window_info("gpt-oss-120b", base)[0] in (128_000, 131_072)
+    srv.shutdown()
+
+
+def test_failure_blocks_retries_for_a_minute(monkeypatch):
+    state = {"hits": 0, "fail_first": 99}
+    srv, base = _models_server(state)
+    monkeypatch.setattr(CTX, "_is_local", lambda b: False)
+    for _ in range(5):
+        CTX.window_info("claude-haiku-5.5", base)
+    srv.shutdown()
+    assert state["hits"] == 1                                         # no hammering while it is down
+
+
+def test_ollama_style_probes_only_for_local_endpoints(monkeypatch):
+    seen = []
+    monkeypatch.setattr(CTX, "probe", lambda b, m, k="": seen.append(b) or None)
+    monkeypatch.setattr(CTX, "_listed", lambda b, k: {})
+    CTX.window_info("some-model", "https://llm.example.com/v1")
+    assert seen == []
+    CTX.window_info("some-model", "http://localhost:11434/v1")
+    assert seen == ["http://localhost:11434/v1"]
+    assert CTX.PROBE_TIMEOUT_S >= 8

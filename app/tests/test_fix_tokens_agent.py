@@ -339,3 +339,77 @@ def test_finish_check_rule_is_opt_in(monkeypatch):
     assert "Before you finish" not in core._codex_prompt()
     monkeypatch.setenv("MH_FINISH_CHECK", "1")
     assert "Before you finish" in core._codex_prompt()
+
+
+def _server_with(statuses, seen):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            code = statuses.pop(0) if statuses else 200
+            seen.append(code)
+            body = (json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                                "usage": {"prompt_tokens": 5, "completion_tokens": 1}}) if code == 200
+                    else '{"error":{"message":"Authentication Error"}}').encode()
+            self.send_response(code)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _chat_against(tmp_path, monkeypatch, statuses):
+    seen = []
+    srv = _server_with(statuses, seen)
+    monkeypatch.setenv("MESHPOOL_BASE_URL", f"http://127.0.0.1:{srv.server_port}/v1")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MH_STREAM", "0")
+    a = _agent(tmp_path)
+    a.messages.append({"role": "user", "content": "hi"})
+    a.emit = lambda ev: None
+    a._sleep = lambda s: None
+    return a, seen, srv
+
+
+def test_a_spurious_401_is_retried_but_a_bad_key_still_fails_fast(tmp_path, monkeypatch):
+    a, seen, srv = _chat_against(tmp_path, monkeypatch, [401])
+    try:
+        msg, _ = a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        assert msg["content"] == "ok" and seen.count(401) == 1                 # one retry for any key
+    finally:
+        srv.shutdown()
+    a, seen, srv = _chat_against(tmp_path, monkeypatch, [401, 401, 401, 401])
+    try:
+        with pytest.raises(RuntimeError, match="rejected the API key"):
+            a._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        assert 2 <= seen.count(401) <= 3                  # a key never accepted: one retry (plus the health probe), then say so
+    finally:
+        srv.shutdown()
+
+
+def test_a_key_that_worked_earlier_gets_two_retries(tmp_path, monkeypatch):
+    a2, seen2, srv2 = _chat_against(tmp_path, monkeypatch, [401, 401])
+    try:
+        a2._key_ok = "k"
+        msg, _ = a2._chat({"in": 0, "cached": 0, "out": 0, "calls": 0})
+        assert msg["content"] == "ok" and seen2.count(401) == 2
+    finally:
+        srv2.shutdown()
+
+
+def test_hosted_endpoints_are_not_probed_with_local_server_urls(monkeypatch):
+    from meshpool_harness.core import context as CX
+    urls = []
+    monkeypatch.setattr(CX, "_http_json", lambda url, body=None, key="": urls.append(url) or {})
+    CX.probe("https://llm.meshpool.ai/v1", "deepseek-v4.1-flash", "k")
+    assert urls == ["https://llm.meshpool.ai/v1/models"]
+    urls.clear()
+    CX.probe("http://localhost:11434/v1", "llama3", "k")
+    assert any(u.endswith("/api/show") for u in urls)

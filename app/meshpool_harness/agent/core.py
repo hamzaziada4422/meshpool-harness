@@ -1841,7 +1841,7 @@ class Agent:
         resp, streamed, cleaned, shrunk, last = None, False, False, False, None
         ctx_shrinks = 0
         self._ctx_tighten = 1.0
-        attempt, recoveries, swapped = -1, 0, False
+        attempt, recoveries, swapped, auth_tries = -1, 0, False, 0
         # Rate limits are waited out on their own clock, not counted as failed attempts: a long task that hits the
         # key's limit carries on when the limit resets instead of ending the turn after a few minutes.
         rl_waited, rl_budget, rl_told = 0.0, _rate_limit_budget(), -1e9
@@ -1881,6 +1881,7 @@ class Agent:
                         ok = True
                     finally:
                         h.release(ok, slot)
+                self._key_ok = key                         # this key has been accepted: a later 401 may be spurious
                 bad = _bad_reply(resp)
                 if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
                     raise RuntimeError("HTTP 0: the model endpoint sent no usable reply (" + bad + ")")
@@ -1909,6 +1910,12 @@ class Agent:
                     raise
                 kind = classify_error(msg)                 # the same reading as LiveClient.chat (core/client.py)
                 if kind == "auth":
+                    # A gateway under load answers a good key with a spurious 401 now and then. A key that worked
+                    # earlier in this chat gets two short retries; any key gets one, so a bad key still fails fast.
+                    auth_tries += 1
+                    if auth_tries <= (2 if getattr(self, "_key_ok", None) == key else 1):
+                        self._sleep(auth_tries)
+                        continue
                     raise RuntimeError("The endpoint rejected the API key. Check it in settings. " + msg[:200])
                 if kind == "model_missing":
                     # A chat from weeks ago on a model the endpoint has dropped: continue on today's default for

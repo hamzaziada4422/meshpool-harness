@@ -82,7 +82,11 @@ def _name_hint(model: str) -> int | None:
     return None
 
 
-def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float = 2.0):
+PROBE_TIMEOUT_S = 8.0
+RETRY_AFTER_S = 60.0              # a failed lookup is tried again after this long, never remembered for good
+
+
+def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float | None = None):
     import urllib.request
     h = {"Content-Type": "application/json"}
     if key and "anthropic.com" in url:
@@ -91,7 +95,7 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         h["Authorization"] = f"Bearer {key}"
     req = urllib.request.Request(url, data=json.dumps(body).encode() if body is not None else None, headers=h,
                                  method="POST" if body is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout or PROBE_TIMEOUT_S) as r:
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
@@ -101,7 +105,10 @@ def probe(base: str, model: str, key: str = "") -> int | None:
     if not base:
         return None
     root = re.sub(r"/v\d+/?$", "", base.rstrip("/"))
+    local = _is_local(base)              # /api/show (Ollama) and /api/v0 (LM Studio) exist only on a local server
     try:
+        if not local:
+            raise ValueError("hosted endpoint")
         d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
         params = str(d.get("parameters") or "")
         m = re.search(r"\bnum_ctx\s+(\d+)", params)
@@ -113,7 +120,7 @@ def probe(base: str, model: str, key: str = "") -> int | None:
             return min(full, 4096)         # no num_ctx set: Ollama serves its small default, not the model's maximum
     except Exception:  # noqa: BLE001 - not Ollama
         pass
-    for url in (root + "/api/v0/models/" + model, base.rstrip("/") + "/models"):
+    for url in ((root + "/api/v0/models/" + model,) if local else ()) + (base.rstrip("/") + "/models",):
         try:
             d = _http_json(url, None, key)
         except Exception:  # noqa: BLE001
@@ -132,13 +139,30 @@ def probe(base: str, model: str, key: str = "") -> int | None:
 
 
 _LISTS: dict[str, dict] = {}
+_FAILED: dict = {}                # key -> time of the last failed lookup
+
+
+def _recently_failed(k) -> bool:
+    import time
+    with _LOCK:
+        t = _FAILED.get(k)
+    return t is not None and time.time() - t < RETRY_AFTER_S
+
+
+def _failed(k) -> None:
+    import time
+    with _LOCK:
+        _FAILED[k] = time.time()
 
 
 def _listed(base: str, key: str) -> dict:
-    """{model id: context tokens} from the endpoint's /models list, fetched once per endpoint ({} when it has none)."""
+    """{model id: context tokens} from the endpoint's /models list. Kept once it has been read; a failed read is not
+    remembered (it is retried after a minute), so a slow start never pins the wrong windows for the whole run."""
     with _LOCK:
         if base in _LISTS:
             return _LISTS[base]
+    if _recently_failed(("list", base)):
+        return {}
     out: dict = {}
     try:
         d = _http_json(base.rstrip("/") + "/models?limit=1000", None, key)
@@ -146,14 +170,17 @@ def _listed(base: str, key: str) -> dict:
         for it in items or []:
             if not isinstance(it, dict):
                 continue
-            for k in ("loaded_context_length", "context_length", "context_window", "max_context", "max_context_length",
-                      "max_input_tokens", "inputTokenLimit"):
+            for k in ("max_input_tokens", "loaded_context_length", "context_length", "context_window", "max_context",
+                      "max_context_length", "inputTokenLimit"):
                 v = it.get(k) or (it.get("top_provider") or {}).get(k)
                 if isinstance(v, int) and v > 0:
                     out[str(it.get("id") or it.get("name") or "")] = v
                     break
-    except Exception:  # noqa: BLE001 - no list, or not reachable
-        pass
+        if not isinstance(items, list):
+            raise ValueError("no model list")
+    except Exception:  # noqa: BLE001 - unreachable, slow or no list: try again later
+        _failed(("list", base))
+        return {}
     with _LOCK:
         _LISTS[base] = out
     return out
@@ -184,11 +211,14 @@ def window_info(model: str, base: str | None = None, key: str = "", probe_endpoi
         k = (base, bare)
         with _LOCK:
             known = _PROBED.get(k)
-        if known is None:
-            got = (probe(base, bare, key) if local else 0) or _listed(base, key).get(bare) \
-                or _listed(base, key).get(bare.split("/")[-1]) or 0
-            with _LOCK:
-                _PROBED[k] = known = got
+        if known is None and not _recently_failed(k):
+            lst = _listed(base, key)
+            got = (probe(base, bare, key) if local else 0) or lst.get(bare) or lst.get(bare.split("/")[-1]) or 0
+            if got:
+                with _LOCK:
+                    _PROBED[k] = known = got
+            elif lst or local:                      # the endpoint answered but does not list this model: ask again later
+                _failed(k)
         if known:
             return known, "provider"
     try:                                                     # a profile that states its model family's window
@@ -252,6 +282,7 @@ def forget() -> None:
         _LEARNED.clear()
         _PROBED.clear()
         _LISTS.clear()
+        _FAILED.clear()
         _TOLD.clear()
 
 
