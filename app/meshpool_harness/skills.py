@@ -300,7 +300,14 @@ def add_files(files: list[tuple[str, bytes]]) -> list[dict]:
         if name.lower().endswith((".zip", ".skill")):
             added += _from_zip(data)
         elif name.endswith("SKILL.md") and "/" not in name:
-            meta, _ = parse(data.decode("utf-8", "replace"))
+            text = data.decode("utf-8", "replace")
+            meta, body = parse(text)
+            if not meta.get("description"):                  # no front matter: name and describe it from its own text
+                first = next((ln.strip("# \t") for ln in body.splitlines() if ln.strip()), "skill")
+                meta_name = meta.get("name") or first[:40] or "skill"
+                text = front_matter(name=slug(meta_name), description=first[:120]) + f"\n{body}"
+                meta = {"name": meta_name}
+                data = text.encode("utf-8")
             sid = slug(meta.get("name") or "skill")
             d = folder() / sid
             d.mkdir(parents=True, exist_ok=True)

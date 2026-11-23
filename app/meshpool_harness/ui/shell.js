@@ -52,7 +52,7 @@ function shell() {
         <div class="composer" id="composer">
           <div class="attach-row" id="attachRow"></div>
           <label class="sr" for="input">Message</label>
-          <textarea id="input" rows="1" placeholder="Message Meshpool"></textarea>
+          <textarea id="input" dir="auto" rows="1" placeholder="Message Meshpool"></textarea>
           <div class="cbar" id="cbar"></div>
           <input type="file" id="fileIn" multiple hidden>
         </div>
@@ -369,7 +369,10 @@ async function prCard(ic) {
 }
 
 /* ================================== pages ================================== */
+/* The Memory and Project pages bind handlers on the persistent #col; drop them whenever the column is reused. */
+function clearColHandlers() { const c = $("#col"); if (c) for (const k of ["onclick", "onkeydown", "ondrop", "ondragover", "ondragleave", "ondragstart"]) c[k] = null; c?.classList.remove("drag"); const i = $("#input"); if (i) i.disabled = false; }
 function goPage(name) {
+  clearColHandlers(); window.navPush?.("page:" + name);
   leaveChat(S.cur); S.cur = null; setWorking(null);
   S.view = "page"; S.page = name; S.pjId = "";
   S.attachments = []; renderAttach?.();
@@ -562,7 +565,7 @@ function exportMenu(e) {
   if (!S.cur) return;
   ctxMenu({type: "click", currentTarget: e.currentTarget}, [
     {label: "Copy as Markdown", icon: ICON.copy, fn: () => navigator.clipboard.writeText(chatMarkdown()).then(() => toast("Chat copied"), () => toast("Could not copy. Save it as a file instead."))},
-    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: (S.cur.view.title || "chat").replace(/[^\w -]+/g, "").trim().slice(0, 60) + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
+    {label: "Save as a file", icon: ICON.dl, fn: () => { const a = Object.assign(document.createElement("a"), {href: URL.createObjectURL(new Blob([chatMarkdown()], {type: "text/markdown"})), download: ((S.cur.view.title || "chat").replace(/[\\/:*?"<>|\x00-\x1f]+/g, "").trim().slice(0, 60) || "chat") + ".md"}); document.body.appendChild(a); a.click(); a.remove(); }},
   ]);
 }
 async function renderBranch() {
@@ -595,3 +598,45 @@ function curMode() { return S.cur?.view?.kind || "cowork"; }
 function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
+
+/* ---------- modal focus: Tab stays inside the open dialog, and focus goes back to what opened it ---------- */
+(() => {
+  const FOC = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  const top = () => { const all = document.querySelectorAll("body > .scrim"); return all[all.length - 1] || null; };
+  const openers = new WeakMap();
+  new MutationObserver(ms => {
+    for (const m of ms) {
+      for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) openers.set(n, m.target === document.body ? lastFocus : null);
+      for (const n of m.removedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) { const o = openers.get(n); if (o && o.isConnected && !top()) setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) o.focus?.({preventScroll: true}); }, 0); }
+    }
+  }).observe(document.body, {childList: true});
+  let lastFocus = null;
+  document.addEventListener("focusin", e => { if (!e.target.closest?.(".scrim")) lastFocus = e.target; }, true);
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Tab") return;
+    const sc = top(); if (!sc) return;
+    const f = [...sc.querySelectorAll(FOC)].filter(x => x.offsetParent !== null || x === document.activeElement);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1], a = document.activeElement;
+    if (!sc.contains(a)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && a === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && a === last) { e.preventDefault(); first.focus(); }
+  }, true);
+})();
+
+/* ---------- Back / Forward move between pages and chats ---------- */
+(() => {
+  let restoring = false, lastKey = "";
+  window.navPush = key => {
+    if (restoring || key === lastKey) return; lastKey = key;
+    try { history.pushState({mp: key}, "", location.pathname + location.search + (/^#settings/.test(location.hash) ? "" : location.hash)); } catch (e) { /* sandboxed frames */ }
+  };
+  addEventListener("popstate", e => {
+    const k = e.state?.mp; if (!k || typeof k !== "string") return;
+    restoring = true; lastKey = k;
+    try {
+      const [t, id] = [k.slice(0, k.indexOf(":")), k.slice(k.indexOf(":") + 1)];
+      if (t === "chat") openThread(id); else if (t === "page") goPage(id); else if (t === "project") openProject(id); else if (t === "new") newThread();
+    } finally { setTimeout(() => { restoring = false; }, 0); }
+  });
+})();

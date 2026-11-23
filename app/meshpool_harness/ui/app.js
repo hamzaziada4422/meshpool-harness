@@ -21,9 +21,9 @@ function routeMenu(anchor) {
   anchor.appendChild(m);
   const close = e => { if (!m.contains(e.target)) { m.remove(); document.removeEventListener("mousedown", close); } };
   setTimeout(() => document.addEventListener("mousedown", close), 0);
-  m.addEventListener("keydown", e => { if (e.key === "Escape") m.remove(); });
+  m.addEventListener("keydown", e => { if (e.key === "Escape") { m.remove(); document.removeEventListener("mousedown", close); } });
   m.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    m.remove();
+    m.remove(); document.removeEventListener("mousedown", close);
     const c = S.cur; if (!c) return;
     try { await post(`/api/agent/${c.id}/route`, {spec: b.dataset.spec, since: 1e9}); clearTimeout(c.pollT); poll(); }
     catch (e) { toast(e.message); }
@@ -178,14 +178,24 @@ function toast(text, ms = 5000, action) {
 
 
 /* In-app confirm and prompt: native webviews do not always show window.confirm or window.prompt. */
-function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false}) {
+// Grow the message box with its text. Reading scrollHeight forces a layout of the whole page, so a single short line
+// (the common keystroke) skips it, and the rest is done at most once per frame.
+let fitRaf = 0;
+function fitInput(inp) {
+  const v = inp.value;
+  if (v.length < 40 && v.indexOf("\n") < 0) { if (inp.dataset.fit !== "1") { inp.dataset.fit = "1"; inp.style.height = ""; } return; }
+  inp.dataset.fit = "";
+  if (fitRaf) return;
+  fitRaf = requestAnimationFrame(() => { fitRaf = 0; inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; });
+}
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
     sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
-    const val = () => input ? ($("#dlgIn", sc).value.trim() || null) : true;
+    const val = () => input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
     const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
@@ -360,14 +370,17 @@ function projMenu(e, pid) {
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
+// A delete still waiting out its undo window is sent when the page goes away, so a reload never brings the chat back.
+addEventListener("pagehide", () => { for (const id of S.delFlush?.keys() || []) { try { fetch(`/api/threads/${id}`, {method: "POST", keepalive: true, headers: {"X-Meshpool-Token": MP.token, "Content-Type": "application/json"}, body: JSON.stringify({action: "delete"})}); } catch (e) { /* page is closing */ } } });
 async function threadAct(id, action) {
   if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
     if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); renderSide(); toast("Chat restored"); }});
+    const t = setTimeout(async () => { S.pendingDelete.delete(id); S.delFlush?.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
+    (S.delFlush = S.delFlush || new Map()).set(id, t);
+    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); S.delFlush?.delete(id); renderSide(); toast("Chat restored"); }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -456,7 +469,7 @@ function setupComposer() {
   const inp = $("#input");
   inp.addEventListener("input", () => { try { sessionStorage.setItem("mp_draft_" + (S.cur?.id || "new"), inp.value); } catch (e) {} });
   inp.addEventListener("input", () => { clearTimeout(S.suggT); S.suggT = setTimeout(suggestNow, 450); });
-  inp.addEventListener("input", () => { inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
+  inp.addEventListener("input", () => { fitInput(inp); menuFromInput(); const ib = $("#intrBtn"); if (ib && !S.stopping) ib.disabled = !inp.value.trim() && !S.attachments.length; });
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
     if (pop && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(e.key)) { e.preventDefault(); popKey(e.key); return; }
@@ -534,13 +547,14 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
+  let created = null;
   try {
     if (!S.cur) {
-      const v = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
       S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
+    const cur = S.cur, root = curRoot() || created?.workdir || "";          // before any wait: the user may open another chat meanwhile
     const files = atts.filter(a => !a.image);
     if (files.length) {
       const saved = [];
@@ -559,7 +573,7 @@ async function sendNow(interrupt) {
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
     S.pendingGoal = null;
-    S.stopping = false; renderBar();
+    S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
     toast(e.message, 4000);
@@ -570,7 +584,7 @@ async function sendNow(interrupt) {
 const SLASH = [
   ["/new", "Start a new chat", () => newThread()],
   ["/model", "Choose the model", () => modelPop($("#mPill"))],
-  ["/agent", "Choose the agent", () => harnessPop($("#oPill"))],
+  ["/agent", "Choose the agent", () => harnessPop($("#mPill"))],
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
@@ -800,10 +814,12 @@ function restoreDraft() {
 // folder. With {pid}: a chat in that project (its page, with the message box at the bottom).
 function newThread(opt) {
   if (opt && typeof opt === "object" && opt.pid) return openProject(opt.pid, {focus: true});
+  clearColHandlers(); window.navPush?.("new:");
   leaveChat(S.cur);
   S.view = "chat"; S.pjId = "";
   S.draft.project = typeof opt === "string" ? opt : "";
-  S.draft.pid = "";
+  S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
+  { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
   S.draft.harness = modeHarness();
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
@@ -825,7 +841,7 @@ const STARTERS = [
 const CACHE = new Map();                         // chat id -> {log, total, next, epoch, view}: reopening replays it, then fetches only what is new
 const colEl = () => S.cur?.stage || $("#col");
 function stashChat(cur) {
-  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 4000) return;
+  if (!cur || cur.stage || !cur.log || !cur.log.length || cur.log.length > 12000) return;
   try { flushQ(cur); } catch (e) { return; }
   const view = Object.assign({}, cur.view); delete view.events; delete view.prefill;
   CACHE.delete(cur.id); CACHE.set(cur.id, {log: cur.log.slice(), total: cur.total, next: cur.next || 0, epoch: cur.epoch, view, turn: cur.turn});
@@ -849,6 +865,7 @@ function commitStage(cur) {
   if (cur.live) easeStart(cur.live);
 }
 function openThread(id, fresh) {
+  clearColHandlers(); window.navPush?.("chat:" + id);
   const seen = S.threads.find(t => t.id === id);
   if (seen?.unread) { seen.unread = false; post(`/api/threads/${id}`, {action: "seen"}).catch(() => {}); }
   store("last_chat", id);
@@ -884,17 +901,23 @@ async function poll() {
     if (/not found/i.test(e.message)) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad">This chat is gone.</div>`); commitStage(cur); return; }
     cur.fails = (cur.fails || 0) + 1;            // keep trying: one dropped request must not freeze a running chat
     let n = $("#pollErr"); if (!n && cur.fails > 1) { colEl().insertAdjacentHTML("beforeend", `<div class="note bad" id="pollErr"></div>`); n = $("#pollErr"); }
-    if (n) n.textContent = `${e.message} Retrying…`;
+    if (n) { n.textContent = `${e.message} Retrying… `; if (!$("button", n)) { const b = document.createElement("button"); b.className = "linkbtn"; b.textContent = "Reload"; b.onclick = () => location.reload(); n.appendChild(b); } }
+    if (cur.fails > 1 && S.stopping) { S.stopping = false; renderBar(); }
     cur.pollT = setTimeout(poll, Math.min(15000, 500 * 2 ** cur.fails));
     return;
   }
   if (S.cur !== cur) return;
   if (cur.fails) { cur.fails = 0; $("#pollErr")?.remove(); }
+  const before = cur.total;
   const again = ingest(cur, v);
   if (again) return poll();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   if (busy) startStream(cur);
-  cur.pollT = setTimeout(poll, cur.es && cur.es.readyState === 1 ? 4000 : busy ? 400 : document.hidden ? 15000 : 3000);
+  // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
+  cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
+  const delay = busy ? (document.hidden ? 2000 : cur.es && cur.es.readyState === 1 ? 4000 : 400)
+    : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
+  cur.pollT = setTimeout(poll, delay);
 }
 // Take one view of the chat (from a poll or the stream): queue its new events and update the chrome around them.
 function ingest(cur, v) {
@@ -912,6 +935,7 @@ function ingest(cur, v) {
     if (ev.type === "tool_start") { const raw = ev.name || ""; const nm = ev.mcp ? raw.split("__").slice(2).join("__") : raw; ev.label = TOOL_LABEL[nm] || nm.replace(/_/g, " "); }
     cur.q.push(ev); got++;
   }
+  if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
   if (got || prevState !== v.state) progressSoon();
@@ -957,16 +981,23 @@ function drainQ(cur, all) {
 }
 function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
 function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+// The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
+// Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
+let frameR = 0, frameT = 0;
+function wakeFrame() { if (frameT) { clearTimeout(frameT); frameT = 0; } if (!frameR) frameR = requestAnimationFrame(frame); }
 function frame() {
-  requestAnimationFrame(frame);
+  frameR = 0; frameT = 0;
   const cur = S.cur;
   if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
   easeAll(); workTick(cur);
+  const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
+  if (active && !document.hidden) frameR = requestAnimationFrame(frame);
+  else frameT = setTimeout(frame, document.hidden ? 2000 : cur?.working || S.sendHold > Date.now() ? 250 : 1000);
 }
 // The reply grows by easing its box open to the height of its text (a line is revealed in a few frames), so the page
 // scrolls with it smoothly instead of stepping a whole line at a time.
 const EASE = new Set();
-function easeStart(node) { if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
+function easeStart(node) { wakeFrame(); if (!node || EASE.has(node)) return; node.classList.add("rv"); if (!node.style.height) node.style.height = Math.round(node.firstElementChild?.offsetHeight || 0) + "px"; EASE.add(node); }
 function easeEnd(node) { if (node) node.dataset.done = "1"; }
 function easeAll() {
   for (const n of EASE) {
@@ -1003,7 +1034,7 @@ function setupScroll() {
   jd.onclick = () => { S.pinned = true; conv.scrollTop = conv.scrollHeight; jd.hidden = true; $("#input")?.focus({preventScroll: true}); };
   conv.addEventListener("scroll", () => { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; S.pinned = gap < 80; jd.hidden = gap < 160 || S.view !== "chat" || !S.cur; }, {passive: true});
   if (window.ResizeObserver) new ResizeObserver(() => { if (S.view !== "chat" || !S.cur) { jd.hidden = true; return; } if (S.pinned) conv.scrollTop = conv.scrollHeight; else { const gap = conv.scrollHeight - conv.scrollTop - conv.clientHeight; jd.hidden = gap < 160; } }).observe(col);
-  requestAnimationFrame(frame);
+  wakeFrame();
 }
 
 /* ---------- markdown ---------- */
@@ -1038,7 +1069,7 @@ function mdRender(node, text) {
 function inline(s) {
   return s.replace(/`([^`\n]+)`/g, "<code>$1</code>").replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
 function md(src) {
   const parts = String(src || "").split(/```/);
@@ -1049,7 +1080,7 @@ function md(src) {
       return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
     }
     const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
-    p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
+    p = p.replace(/(^|\n)([ \t]*)\$\$([\s\S]+?)\$\$/g, (_, pre, sp, t) => `${pre}${sp}\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
       .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
     const flushP = () => { if (para.length) { out += `<p>${inline(para.join("<br>"))}</p>`; para = []; } };
@@ -1102,7 +1133,7 @@ const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
 function applyEv(ev) {
   const cur = S.cur, col = colEl();
-  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.innerHTML = html; col.appendChild(d); return d; };
+  const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
@@ -1114,7 +1145,7 @@ function applyEv(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
-      add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1124,7 +1155,7 @@ function applyEv(ev) {
       { const txt = stripGoal(ev.text);
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
-      cur.lastText = ev.text || cur.lastText;
+      cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
       const g = workGroup();
@@ -1168,7 +1199,7 @@ function applyEv(ev) {
         catch (e) { $$("button", d).forEach(x => x.disabled = false); toast(e.message); }
       });
       scrollConv(true); break; }
-    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /waiting/.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
+    case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
       const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
@@ -1354,7 +1385,7 @@ function setupPanelResize() {
   });
 }
 function fitPanel() {
-  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 980 && !S.keepSide;   // only where both cannot fit
+  const want = (!!S.panel || (typeof PVX !== "undefined" && PVX.open)) && innerWidth < 1180 && innerWidth > 760 && !S.keepSide;   // only where both cannot fit
   if ($("#app").classList.contains("autoside") !== want) { $("#app").classList.toggle("autoside", want); renderTop(); }
 }
 function renderPanel() {
@@ -2399,7 +2430,9 @@ function permStep(host) {
     } catch (e) { res.className = "res bad"; res.textContent = e.message; }
   });
   $("#oAll", card).onclick = async () => { $("#oAll", card).disabled = true; await draw({id: "all"}); $("#oAll", card).disabled = false; $("#oAll", card).textContent = "Ask again"; };
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && $("#onbPerm")) draw(); });
+  if (window._permVis) document.removeEventListener("visibilitychange", window._permVis);
+  window._permVis = () => { if (!document.hidden && $("#onbPerm")) draw(); };
+  document.addEventListener("visibilitychange", window._permVis);
   $("#oDone", card).onclick = () => setupStep(o, card);
   if (!S.projects.length) { const later = $("[data-scope=later]", card); later.setAttribute("aria-checked", true); $("#oScope", card).className = "res"; $("#oScope", card).textContent = "Tasks start in your Meshpool Projects folder. Add your own folders any time from the sidebar."; }
   draw();
@@ -2532,7 +2565,10 @@ async function restartApp() {
   window.addEventListener("focus", () => { loadPj().then(renderSide); });
   setupScroll();
   { const h = /^#settings\/([\w-]+)/.exec(location.hash); if (h && S.settings.ready) openSettings(h[1]); }      // a link to a settings page opens it
-  setInterval(() => { if (S.threads.some(t => ["working", "waiting"].includes(t.state))) loadThreads(); }, 4000);
+  // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
+  let thT = 0;
+  setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */
@@ -2653,7 +2689,7 @@ async function prDetail() {
   $("#prvRev").onclick = () => { closePRView(); sendCmd(`Review pull request #${p.number} (${p.url}): ${p.head} into ${p.base}. Read its diff (git fetch, then git diff origin/${p.base}...origin/${p.head}, or the GitHub tools) and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.`); };
   $("#prvAll").onclick = () => $$(".prv-file", M).forEach(d => d.open = true);
   $("#prvMerge")?.addEventListener("click", async () => {
-    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. Its checks passed.`, ok: "Merge"})) return;
+    if (!await ask({title: `Merge #${p.number}?`, text: `Squash and merge ${p.head} into ${p.base} on GitHub. ${p.verdict === "none" ? "No checks have run." : "Its checks passed."}`, ok: "Merge"})) return;
     try { await post("/api/git/pr", {root: PRV.root, action: "merge", pr: p.number}); toast("Pull request merged"); prLoad(true); } catch (e) { toast(e.message, 6000); }
   });
   $("#prvCmGo")?.addEventListener("click", async () => {

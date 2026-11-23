@@ -75,7 +75,9 @@ def inventory(path: str) -> dict:
 # ------------------------------------------------------------------ inheritance helpers
 def _theme(prs) -> dict:
     master = prs.slide_masters[0]
-    theme_part = next(r.target_part for r in master.part.rels.values() if r.reltype.endswith("/theme"))
+    theme_part = next((r.target_part for r in master.part.rels.values() if r.reltype.endswith("/theme")), None)
+    if theme_part is None:                                 # no theme part: say so instead of failing the measure
+        return {"name": None, "colors": {}, "major": None, "minor": None, "note": "no theme"}
     t = etree.fromstring(theme_part.blob)
     colors = {}
     cs = t.find(".//a:clrScheme", NS)

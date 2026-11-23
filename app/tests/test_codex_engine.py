@@ -408,7 +408,8 @@ def test_no_review_mutation_or_plan_rounds_and_no_verify_nudge(tmp_path, monkeyp
         str(m.get("content")) for m in a.messages if m["role"] == "user")
 
 
-def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path):
+def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_COMPACT_MODEL", "0")                            # no summary call to the dead gateway
     a = _agent(tmp_path)
     _script(a, [_call("shell", {"command": ["echo", "same"]}, f"c{i}") for i in range(4)]
             + [{"role": "assistant", "content": "ok"}])

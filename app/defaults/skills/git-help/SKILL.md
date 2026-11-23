@@ -1,6 +1,6 @@
 ---
 name: git-help
-description: Do git work: commit, branch, merge, undo a mistake, resolve a conflict or write a pull request. Use when the user asks about git or a repository history.
+description: 'Do git work: commit, branch, merge, undo a mistake, resolve a conflict or write a pull request. Use when the user asks about git or a repository history.'
 ---
 
 # Git help

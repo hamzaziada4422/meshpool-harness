@@ -96,6 +96,7 @@ function Install-App {
 
   # Invoke-WebRequest does not set the Mark-of-the-Web, but be sure: without it Windows has nothing to warn about.
   $ExeDir = Join-Path $env:LOCALAPPDATA "Programs\Meshpool"
+  try { $reg = (Get-ItemProperty -Path "HKCU:\Software\Meshpool" -ErrorAction Stop).InstallDir; if ($reg -and (Test-Path $reg)) { $ExeDir = $reg } } catch {}
   if (Test-Path $ExeDir) {
     Get-ChildItem -Path $ExeDir -Recurse -File -ErrorAction SilentlyContinue |
       Unblock-File -ErrorAction SilentlyContinue
@@ -239,4 +240,4 @@ Say ""
 } finally {
   if (Test-Path $Tmp) { Remove-Item -Recurse -Force $Tmp -ErrorAction SilentlyContinue }
 }
-}
+} @args

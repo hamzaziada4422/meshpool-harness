@@ -21,8 +21,39 @@ sys.path.insert(0, str(ROOT))
 
 from engines.credit import analysis as A  # noqa: E402
 
-AMOUNT = re.compile(r"(?:\$|usd\s?)\s?(\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?"
-                    r"(k|m|mm|mn|million|bn|b|billion)?\b", re.I)
+AMOUNT = re.compile(r"(?P<cur>[$\u20ac\u00a3]|\b(?:usd|eur|gbp)\s?)?\s?"
+                    r"(?P<n>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)\s?"
+                    r"(?P<sc>k|m|mm|mn|million|bn|b|billion)?\b", re.I)
+LOAN_WORDS = re.compile(r"(?i)\b(?:loan|facility|term loan|borrow\w*|financing|credit line|line of credit|revolver|"
+                        r"request\w*|refinanc\w*|lend\w*|advance|mortgage|capex line)\b")
+FIN_WORDS = re.compile(r"(?i)\b(?:revenue|revenues|sales|ebitda|income|assets|profit|turnover|cash|equity|debt)\b")
+NOT_TICKERS = {"USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "SOFR", "LIBOR", "EURIBOR", "LLC", "LP", "LLP",
+               "LTD", "INC", "PLC", "CORP", "CO", "SA", "AG", "NV", "BV", "GMBH", "TTM", "LTM", "EBITDA", "DSCR",
+               "FCCR", "TNW", "LTV", "ABL", "RCF", "TL", "USA", "US", "UK", "EU", "CEO", "CFO", "FY", "YOY"}
+SCALE = {"k": 1e-3, "m": 1, "mm": 1, "mn": 1, "million": 1, "bn": 1e3, "b": 1e3, "billion": 1e3}
+
+
+def _amount(text: str):
+    """The loan amount in millions: the figure sitting next to loan/facility words, never revenue-type figures."""
+    best, best_score, n_cand = None, None, 0
+    for m in AMOUNT.finditer(text):
+        sc = (m.group("sc") or "").lower()
+        if not m.group("cur") and sc not in ("m", "mm", "mn", "million", "bn", "b", "billion"):
+            continue                                       # a bare number is not an amount ("7 years", "2024")
+        n_cand += 1
+        before, after = text[max(0, m.start() - 40):m.start()], text[m.end():m.end() + 30]
+        score = 0
+        if LOAN_WORDS.search(before) or LOAN_WORDS.search(after):
+            score += 2
+        tail = re.sub(r"^\s*(?:(?:of|in|from|annual|net|total|operating|gross|annual)\s+)+", "", after, flags=re.I)
+        if FIN_WORDS.match(tail):
+            score -= 3                                     # "$50m of revenue", "$5m in sales"
+        if best_score is None or score > best_score:
+            best, best_score = m, score
+    if best is None or (best_score <= 0 and n_cand > 1):
+        return None                                        # ambiguous: do not guess which figure is the loan
+    v, sc = float(best.group("n").replace(",", "")), (best.group("sc") or "").lower()
+    return v * SCALE.get(sc, 1e-6)
 PCT = re.compile(r"(\d+(?:\.\d+)?)\s?%")
 # a percentage is the interest rate only when rate words sit next to it ("7% interest", "at 6.5%", "rate of 8%"),
 # never when it is a loan-to-value, an advance rate or a share ("80% LTV", "100% of debt")
@@ -49,11 +80,9 @@ def parse_request(text: str) -> dict:
     """Loan fields from plain words. Amounts are returned in $m."""
     out: dict = {}
     t = text.lower()
-    m = AMOUNT.search(text)
-    if m:
-        v, sc = float(m.group(1).replace(",", "")), (m.group(2) or "").lower()
-        out["amount"] = v * {"k": 1e-3, "m": 1, "mm": 1, "mn": 1, "million": 1, "bn": 1e3, "b": 1e3,
-                             "billion": 1e3}.get(sc, 1e-6)
+    amt = _amount(text)
+    if amt is not None:
+        out["amount"] = amt
     r = _rate(t)
     if r is not None:
         out["rate"] = r
@@ -74,9 +103,14 @@ def parse_request(text: str) -> dict:
             out["amort_years"] = float(a.group(1))
     if re.search(r"\brefinanc", t):
         out["refinance_existing"] = True
-    if re.search(r"\bfixed[- ]rate\b|\bfixed\b", t):
+    if re.search(r"\bfixed[- ]rate\b|\bfixed[- ]interest\b", t):
         out["floating"] = False
-    tk = re.search(r"\b(?:ticker|nyse|nasdaq)[:\s]+([A-Z]{1,5})\b", text) or re.search(r"\(([A-Z]{1,5})\)", text)
+    tk = re.search(r"(?:\b[Tt]icker|\bNYSE|\bNASDAQ|\bNasdaq)\s*[:=]?\s*\(?([A-Z]{1,5})\)?\b", text)
+    if not tk:                                      # "Acme Corp (ACME)": but not currencies, rates or entity suffixes
+        for pm in re.finditer(r"\(([A-Z]{1,5})\)", text):
+            if pm.group(1) not in NOT_TICKERS:
+                tk = pm
+                break
     if tk:
         out["ticker"] = tk.group(1)
     p = re.search(r"\bto (fund|finance|acquire|buy|build|refinance|expand)\b([^.,;(\n]{0,60})", t)   # one line:
@@ -143,20 +177,37 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
         fin = A.from_table(tables[0], name=req.get("borrower"))
     elif req.get("ticker"):
         from engines.sheets import spreading as S
-        fin = A.from_spread(S.spread(S.fetch_companyfacts(S.cik_for_ticker(req["ticker"]),
-                                                          cache_dir=str(wd / ".edgar")), 3))
+        try:
+            fin = A.from_spread(S.spread(S.fetch_companyfacts(S.cik_for_ticker(req["ticker"]),
+                                                              cache_dir=str(wd / ".edgar")), 3))
+        except KeyError as e:
+            return {"ok": False, "answer": "", "artifacts": [], "turns": 0, "usage": {},
+                    "reason": f"{e.args[0] if e.args else e}. Attach the borrower's financial statements (xlsx or "
+                              "csv) or give the public company's exact ticker."}
     else:
         return {"ok": False, "answer": "", "artifacts": [], "turns": 0, "usage": {},
                 "reason": "Attach the borrower's financial statements (xlsx or csv: line items down, years across) "
                           "or give a public company's ticker, e.g. 'ticker: ACME'."}
-    loan = A.Loan(amount=float(req.get("amount") or 0), rate=float(req.get("rate") or 0.07),
+    try:
+        amount = float(req.get("amount") or 0)
+    except (TypeError, ValueError):
+        amount = 0.0
+    if amount <= 0:
+        return {"ok": False, "answer": "", "artifacts": [], "turns": 0, "usage": {},
+                "reason": "State the loan amount, e.g. 'a $10m term loan'; I will not assume one."}
+    defaulted = tuple(k for k in ("rate", "amort_years") if not req.get(k))
+    loan = A.Loan(amount=amount, defaulted=defaulted, rate=float(req.get("rate") or 0.07),
                   amort_years=float(req.get("amort_years") or 7), term_years=req.get("term_years"),
                   floating=req.get("floating", True),
                   refinance_existing=bool(req.get("refinance_existing")), purpose=req.get("purpose") or "")
     pol = A.Policy()
+    if A.ebitda(fin, fin.years[-1]) is None:
+        return {"ok": False, "answer": "", "artifacts": [], "turns": 0, "usage": {},
+                "reason": f"The statements for {fin.years[-1]} have no operating income (or pretax income) row, so "
+                          "EBITDA cannot be computed. Add one of them and run again."}
     res = A.analyse(fin, loan, pol)
     from engines.credit import memo, workbook
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", fin.name).strip("_")[:40] or "borrower"
+    stem = re.sub(r"[^\w]+", "_", fin.name).strip("_")[:40] or "borrower"
     xl = str(wd / f"credit_{stem}.xlsx")
     workbook.build(fin, loan, pol, xl, date=time.strftime("%Y-%m-%d"))
     com = {}
@@ -167,12 +218,20 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
             com = {}
     md = str(wd / f"credit_memo_{stem}.md")
     memo.write(res, fin, md, com)
-    (wd / f"credit_{stem}.json").write_text(json.dumps(res, indent=1, default=str))
+    (wd / f"credit_{stem}.json").write_text(json.dumps(res, indent=1, default=str), encoding="utf-8")
     rec, why = memo.recommendation(res)
     pf, cap = res["pro_forma"], res["capacity"]
     answer = (f"{rec}: {why} Pro forma DSCR {memo._x(pf['dscr'])} (minimum {pol.min_dscr:.2f}x), funded debt / "
               f"EBITDA {memo._x(pf['leverage'])} (maximum {pol.max_leverage:.2f}x), debt capacity "
               f"{memo.money(cap['max_loan'], fin.unit)} vs {memo.money(cap['requested'], fin.unit)} requested.")
+    notes = []
+    if defaulted:
+        names = {"rate": "interest rate 7%", "amort_years": "7-year amortisation"}
+        notes.append("Assumed because the request did not state them: " + ", ".join(names[k] for k in defaulted) + ".")
+    if fin.v(fin.years[-1], "da") is None:
+        notes.append("No depreciation and amortisation row: EBITDA equals operating income.")
+    if notes:
+        answer += " " + " ".join(notes)
     arts = [xl, md, str(Path(md).with_suffix(".docx")), str(wd / f"credit_{stem}.json")]
     return {"ok": True, "answer": answer, "artifacts": [a for a in arts if os.path.exists(a)],
             "evidence": [f"computed in code in {time.time() - t0:.1f}s"], "turns": 1, "reason": "", "usage": {}}

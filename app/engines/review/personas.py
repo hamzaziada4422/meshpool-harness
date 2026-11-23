@@ -276,6 +276,17 @@ def passes(persona: str, target: str, scores: dict, ov, issues: list, bar: dict 
     return ok, cal
 
 
+def _is_num(v) -> bool:
+    """A score as a number or a numeric string ("9", "8.5"); not bool, nan or inf."""
+    if isinstance(v, bool):
+        return False
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return False
+    return f == f and f not in (float("inf"), float("-inf"))
+
+
 def parse_review(text: str, persona: str, target: str, bar: dict | None = None) -> dict:
     """The reviewer's reply, normalised; the verdict is recomputed from the bar (a reviewer cannot sign off below it,
     and a reply that scores above it with a blocker is a revise)."""
@@ -286,7 +297,7 @@ def parse_review(text: str, persona: str, target: str, bar: dict | None = None) 
                 "scores": {}, "issues": [], "research_requests": [], "headline": "", "strengths": [], "to_8": [],
                 "raw": (text or "")[:500]}
     scores = {k: max(1.0, min(10.0, float(v))) for k, v in (d.get("scores") or {}).items()
-              if isinstance(v, (int, float))}
+              if _is_num(v)}
     issues = []
     for it in d.get("issues") or []:
         if not isinstance(it, dict) or not str(it.get("issue") or "").strip():

@@ -114,7 +114,7 @@ def run(jid: str, timeout: float | None = None, should_stop=None) -> None:
                                    f"The engine took longer than {round(timeout / 60)} minutes and was stopped.")
                     return
         try:
-            j["result"] = json.loads(out[out.find("{"):]) if "{" in out else {}
+            j["result"] = _last_json(out)
         except ValueError:
             j["result"] = {}
         j["stderr"] = (err or "")[-1500:]
@@ -177,3 +177,18 @@ def report(jid: str, rel_to: Path | None = None) -> tuple[str, bool]:
                      "check results, stop here: rebuilding again rarely clears the rest. Deliver the best build so "
                      "far and tell the user which checks remain. Build again only for a new request from the user.")
     return "\n".join(lines), not made
+
+
+def _last_json(out: str) -> dict:
+    """The result object the engine printed last: log or progress lines (which may contain braces) can come before it."""
+    out = (out or "").rstrip()
+    dec = json.JSONDecoder()
+    starts = [m.start() for m in re.finditer(r"^\{", out, flags=re.M)]
+    for i in reversed(starts):
+        try:
+            obj, end = dec.raw_decode(out[i:])
+        except ValueError:
+            continue
+        if not out[i + end:].strip() and isinstance(obj, dict):
+            return obj
+    return json.loads(out[out.find("{"):]) if "{" in out else {}

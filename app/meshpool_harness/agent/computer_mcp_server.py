@@ -39,6 +39,11 @@ def _parse_combo(combo: str) -> tuple[list[str], str]:
     if not parts:
         raise ToolFailed("Give a key, for example enter, tab, cmd+c or ctrl+shift+t.")
     mods = [MODS[p] for p in parts[:-1] if p in MODS]
+    if os.name == "nt":                                   # cmd+c is copy: on Windows that is ctrl+c, not Win+C
+        asked = parts[:-1]
+        mods = ["ctrl" if m == "cmd" and p in ("cmd", "command", "meta") else m for m, p in
+                zip(mods, [x for x in asked if x in MODS])]
+        mods = list(dict.fromkeys(mods))
     unknown = [p for p in parts[:-1] if p not in MODS]
     if unknown:
         raise ToolFailed(f"Unknown modifier {unknown[0]}. Use cmd, ctrl, alt or shift.")

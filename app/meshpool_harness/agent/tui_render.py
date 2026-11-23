@@ -71,6 +71,16 @@ class Style:
 
 # ---------- width --------------------------------------------------------------------------------------------------
 
+_UNSAFE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b\[[0-?]*[ -/]*[@-~]?|"
+                     r"\x1b[ -/]*[0-~]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def safe_text(s: str) -> str:
+    """Text from the model or a tool for the terminal: no escape sequences (clipboard writes, screen clears, titles,
+    links) and no control characters except new line and tab."""
+    return _UNSAFE.sub("", s) if isinstance(s, str) else s
+
+
 def strip(s: str) -> str:
     return ANSI.sub("", s)
 
@@ -279,7 +289,7 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
                 limit: int = 10, ok: bool = True) -> tuple[list[str], int]:
     """A shell call as a full-width block: bold `$ command` (with dim metadata at the end of the last line), a blank
     line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count)."""
-    inner = max(10, width - 2)
+    inner = max(4, width - 2)
     fill = st.on_bg(FILL) if st.on else st
     cmd_lines = []
     first = True
@@ -307,6 +317,7 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
     if took is not None:
         rows += ["", fill.dim(fmt_took(took))]
     pad_row = ""
+    rows = [clip(r, max(1, width - 2)) for r in rows]          # a very narrow window: never wider than the screen
     rows = [pad_row] + rows + [pad_row]
     if not st.on:                                 # no color: no fill, the block is set off by blank lines and indent
         return [""] + ["  " + strip(r) if r else "" for r in rows[1:-1]] + [""], hidden

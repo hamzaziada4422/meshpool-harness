@@ -336,7 +336,14 @@ def read_stream(lines, on_text=None) -> dict:
         elif t in ("response.failed", "error"):
             err = (ev.get("response") or {}).get("error") or ev.get("error") or ev
     if err and not done:
-        raise RuntimeError(f"chatgpt HTTP 500: {json.dumps(err)[:400]}")
+        body = json.dumps(err)[:400]
+        low = body.lower()
+        code = 500                                   # an error event after HTTP 200: its code says whether a retry can help
+        if any(w in low for w in ("rate_limit", "usage_limit", "insufficient_quota", "quota_exceeded")):
+            code = 429
+        elif any(w in low for w in ("context_length", "invalid_request", "invalid_prompt", "string_above_max")):
+            code = 400
+        raise RuntimeError(f"chatgpt HTTP {code}: {body}")
     done = done or {}
     if not done.get("output"):
         done["output"] = items or ([{"type": "message", "content": [{"type": "output_text", "text": "".join(text)}]}]

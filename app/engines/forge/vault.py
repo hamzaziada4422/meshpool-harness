@@ -216,14 +216,15 @@ def search(text: str, limit: int = 5, private: bool = True) -> list[dict]:
             if 'type: "map"' in t or p.name == "index.md":
                 continue
             low = t.lower()
-            use = re.search(r"Use when(?: the title says)?: (.*)", t)
+            use = re.search(r"(?:Use when(?: the title says)?|When to use): (.*)", t)
             head = re.search(r"^# (.*)", t, re.M)
             u, h = (use.group(1).lower() if use else ""), (head.group(1).lower() if head else "")
             score = sum(3 if re.search(rf"\b{w}", u) else 2 if re.search(rf"\b{w}", h) else
                         1 if re.search(rf"\b{w}", low) else 0 for w in words)
             score = round(score / (1 + 0.15 * len(u.split())) * 4, 1) if score else 0   # long notes match by chance
             if score:
-                out.append({"vault": vault, "note": str(p), "name": p.stem,
+                out.append({"vault": vault, "note": str(p),
+                            "name": head.group(1).strip() if head and p.parent.name == "layouts" else p.stem,
                             "use_when": use.group(1).strip() if use else "", "score": score})
     out.sort(key=lambda x: (-x["score"], x["vault"] != "public", x["name"]))
     return out[:limit]

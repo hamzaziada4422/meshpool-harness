@@ -38,6 +38,21 @@ class LoopResult:
     usage: dict = field(default_factory=lambda: {"prompt_tokens": 0, "completion_tokens": 0})
 
 
+
+def _budget_prices(model: str) -> tuple[float, float, float]:
+    """USD per million tokens (uncached input, cached input, output) for the MH_BUDGET_USD cap. DeepSeek's list prices
+    for DeepSeek models; a conservative frontier-model price for any other model; MH_BUDGET_PRICES="in,cached,out"
+    overrides both."""
+    raw = os.environ.get("MH_BUDGET_PRICES", "")
+    try:
+        a, b, c = (float(x) for x in raw.split(","))
+        return a, b, c
+    except ValueError:
+        pass
+    if "deepseek" in (model or "").lower():
+        return 0.15, 0.003, 0.6
+    return 3.0, 0.3, 15.0
+
 def build_prefix(system_text: str, tool_names: list[str], skill_index: dict[str, str]) -> tuple[str, list, str]:
     """Byte-stable: no timestamps, ids, or file listings. Same engine+profile -> same bytes -> cache hits."""
     idx = "\n".join(f"- {k}: {v.splitlines()[0][:120]}" for k, v in sorted(skill_index.items()))
@@ -65,12 +80,19 @@ def _sanitize_calls(calls: list) -> list:
     for i, c in enumerate(calls):
         c = json.loads(json.dumps(c))
         f = c.setdefault("function", {})
+        a = f.get("arguments")
+        if isinstance(a, dict):                      # some OpenAI-compatible servers send an object
+            f["arguments"] = json.dumps(a)
+            a = f["arguments"]
+        if a is None:
+            f["arguments"] = a = "{}"
         try:
-            ok = isinstance(json.loads(f.get("arguments") or "{}"), dict)
+            ok = isinstance(json.loads(a or "{}"), dict)
         except (ValueError, TypeError):
             ok = False
         if not ok:
-            f["arguments"] = "{}"
+            # the reply was cut off or merged: validate() tells the model so, not "missing required argument"
+            f["arguments"] = '{"__truncated__": true}' if isinstance(a, str) and a.strip().startswith("{") else "{}"
         if not c.get("id"):
             c["id"] = f"call_{i}"
         c["type"] = "function"
@@ -172,12 +194,23 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
+    from . import context as CTX
+    _led = getattr(client, "ledger", None)
+    win = CTX.window(model, getattr(_led, "base_url", "") or "", getattr(_led, "api_key", "") or "")
+    ws.max_tool_chars = CTX.tool_output_chars(win)
+    caps.max_output_tokens = CTX.max_output(win, caps.max_output_tokens)
+    caps.compact_chars = CTX.compact_chars(win, CTX.estimate(tools) + CTX.estimate(sys_msg), caps.compact_chars)
+    if CTX.is_small(win):                                # LiveClient tells the user once; the window shrinks the rest
+        caps.keep_recent = min(caps.keep_recent, 4 if win <= 16_384 else 6)
+        sys_msg = CTX.head_tail(sys_msg, int(win * 0.25 * CTX.CHARS_PER_TOKEN), "from the instructions to fit the window")
+        tools = CTX.compact_tools(tools, win)
     messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": task_text}]
     if _box is not None:
         _box["messages"] = messages
     guards = Guards(ctx, ws, allow_test_edits=allow_test_edits, require_check=require_check)
     res = LoopResult(ok=False, prefix_sha=sha)
     bad_format = 0
+    last_text = ""
     import os as _os
     if not caps.max_seconds and _os.environ.get("MH_MAX_SECONDS"):
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
@@ -191,6 +224,9 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
             return res
         if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars:
             messages = _compact(messages, caps.keep_recent)
+            if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars and CTX.is_small(win):
+                from meshpool_harness.agent import compaction as _CP     # still over 70% of a small window: summarize
+                _CP.compact_history(messages, client=client, model=model, win=win)
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()
@@ -209,8 +245,9 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
         if _budget:
             _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio
-            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * 0.15
-                           + res.usage["cached_tokens"] * 0.003 + res.usage["completion_tokens"] * 0.6) / 1e6
+            _pi, _pc, _po = _budget_prices(model)
+            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * _pi
+                           + res.usage["cached_tokens"] * _pc + res.usage["completion_tokens"] * _po) / 1e6
             if _spent > _budget:
                 res.reason = f"task budget ${_budget:.2f} reached"
                 log_failure(ctx, "budget_cap", False, res.reason)
@@ -227,8 +264,11 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                         + (msg.get("reasoning_content") or "")[-3000:])
         if not calls:
             bad_format += 1
+            if (msg.get("content") or "").strip():
+                last_text = msg["content"].strip()
             if bad_format >= 3:
                 res.reason = "model stopped calling tools"
+                res.answer = res.answer or last_text           # what the model wrote is still its answer
                 log_failure(ctx, "no_tool_call", False, (msg.get("content") or "")[:200])
                 return res
             messages.append({"role": "user", "content": "Use the tools to continue. When done, call finish with "

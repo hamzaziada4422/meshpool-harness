@@ -182,6 +182,13 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
         if "rejected the API key" in msg or "401" in msg or "403" in msg:
             _p(st.red("    That key did not work. Check you copied all of it, then paste it again."))
             continue
+        import re
+        m = re.search(r"HTTP (\d{3})", msg)
+        if m and m.group(1) != "000" and int(m.group(1)) != 0:
+            # The endpoint answered, so the network is fine: a wrong model id or address, or no quota. Do not save it.
+            _p(st.red(f"    The endpoint answered with an error (HTTP {m.group(1)}): {msg[:200]}"))
+            _p(st.dim("    Check the model name and address, then try again."))
+            continue
         # The key may be fine and the network is the problem: keep it, say what happened.
         C.write(save)
         _use("custom" if custom else "meshpool")
@@ -312,6 +319,8 @@ def _where_step(st, start: Path) -> Path | None:
             v = _ask(st, "Folder path")
             if v is None:
                 return None
+            if not v.strip():
+                continue                                  # nothing typed: ask again, do not pick the current folder
             folder = Path(os.path.expandvars(v.strip().strip("'\""))).expanduser()
             if folder.is_dir():
                 break

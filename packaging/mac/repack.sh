@@ -46,7 +46,7 @@ bash "$REPO/packaging/mac/sign.sh" sign "$W"
 for a in $ARCHS; do
   APP="$W/app-mac-$a/Meshpool.app"
   # Without the Developer ID secrets sign.sh did nothing, so the app is still ad hoc signed here, as before.
-  if [ -z "${MAC_SIGN_IDENTITY:-}" ] || [ -z "${MAC_CERT_P12_BASE64:-}" ]; then
+  if [ -z "${MAC_SIGN_IDENTITY:-}" ] || [ -z "${MAC_CERT_P12_BASE64:-}" ] || [ -z "${MAC_CERT_PASSWORD:-}" ] || [ -z "${APPLE_ID:-}" ] || [ -z "${APPLE_APP_PASSWORD:-}" ] || [ -z "${APPLE_TEAM_ID:-}" ]; then
     codesign --force --deep --sign - "$APP" 2>&1 | grep -v "replacing existing" | tail -2
   fi
   # A broken signature must stop the release: the auto-updater refuses an app that fails this exact check.

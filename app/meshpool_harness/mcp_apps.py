@@ -800,4 +800,14 @@ def github_device_poll() -> dict:
 def github_token() -> str:
     """The token Meshpool uses for GitHub: the saved one, else a login found on this computer."""
     t = os.environ.get("GITHUB_TOKEN") or C.read().get("GITHUB_TOKEN", "")
-    return t or github_found().get("token", "")
+    if t:
+        return t
+    hit = _FOUND_TOKEN
+    if hit and time.time() - hit[0] < 600:             # the lookup runs two subprocesses: not on every screen
+        return hit[1]
+    tok = github_found().get("token", "")
+    hit[:] = [time.time(), tok]
+    return tok
+
+
+_FOUND_TOKEN: list = []

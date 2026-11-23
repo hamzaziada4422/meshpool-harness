@@ -646,7 +646,8 @@ def validate(path: str, rules: dict | None = None, brief: dict | None = None, pr
                 t = sh["text"]
                 found = sorted({m.group(1).lower() for m in ban_re.finditer(t)}) if ban_re else []
                 if found:
-                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{'\", \"'.join(found)}\" "
+                    banned = '", "'.join(found)
+                    failures.append(F("P21", "banned_phrase", f"Slide {n}, {sh['name']}: \"{banned}\" "
                                       "reads as machine-written; say it plainly.", slide=n, shape=sh["name"]))
                 if L.get("forbid_em_dash", True) and "\u2014" in t:
                     failures.append(F("P21", "em_dash", f"Slide {n}, {sh['name']}: em dash; use a comma, colon or "

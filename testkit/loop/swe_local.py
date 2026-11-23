@@ -17,7 +17,8 @@ import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-CACHE = Path.home() / ".cache" / "meshpool-swe"
+import os
+CACHE = Path(os.environ.get("MESHPOOL_SWE_DIR") or (Path.home() / ".cache" / "meshpool-swe"))
 REPO = CACHE / "sympy"
 VENV_BIN = CACHE / "venv" / "bin"
 
@@ -43,8 +44,8 @@ def prepare(n: int, seed: int, min_version: str) -> list[dict]:
             "prompt": ("Resolve this GitHub issue in the repository in the current folder (SymPy). Make the change in "
                        "the library code; do not add or edit tests.\n\n<issue>\n" + r["problem_statement"].strip()
                        + "\n</issue>"),
-            "repo": {"path": str(REPO), "commit": r["base_commit"]},
-            "path_prepend": str(VENV_BIN),
+            "repo": {"path": "${MESHPOOL_SWE_DIR}/sympy", "commit": r["base_commit"]},
+            "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",    # expanded by bench.load_suites
             "max_steps": 60,
             "grade": {"swe": {"test_patch": r["test_patch"], "test_files": files,
                               "f2p": _list(r["FAIL_TO_PASS"]), "p2p": _list(r["PASS_TO_PASS"])},

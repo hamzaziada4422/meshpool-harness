@@ -263,7 +263,7 @@ class PiAgent:
         sess.mkdir(parents=True, exist_ok=True)
         args = [node, str(cli), "--mode", "rpc", "--session-dir", str(sess), "--no-approve",
                 "-e", str(Path(__file__).with_name("pi_gate.js"))]
-        if self.resume and any(sess.glob("*.jsonl")):
+        if any(sess.glob("*.jsonl")):             # also after a crash: Pi's own session files hold the tool history
             args.append("--continue")
         elif any(e.get("type") in ("user", "assistant") for e in _before_turn(self)):
             self._carry = True                   # Pi's own session is gone (an old chat): carry the history over
@@ -287,7 +287,7 @@ class PiAgent:
         self._p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._err,
                                    cwd=str(self.root), env=env, **kw)
         self._alive = True
-        threading.Thread(target=self._reader, daemon=True).start()
+        threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
         st = self._request({"type": "get_state"}, timeout=120)
         try:
             ms = self._request({"type": "get_available_models"}, timeout=30).get("models") or []
@@ -297,10 +297,10 @@ class PiAgent:
             pass
         self._apply_model(initial=(st.get("model") or {}).get("id"))
 
-    def _reader(self):
+    def _reader(self, proc):
         buf = b""
         while True:
-            chunk = self._p.stdout.read1(65536) if hasattr(self._p.stdout, "read1") else self._p.stdout.read(65536)
+            chunk = proc.stdout.read1(65536) if hasattr(proc.stdout, "read1") else proc.stdout.read(65536)
             if not chunk:
                 break
             buf += chunk
@@ -318,6 +318,8 @@ class PiAgent:
                 except Exception as e:  # noqa: BLE001  a bad event must not stop the reader
                     print(f"Pi event error: {e}", file=sys.stderr)
         with self._cv:
+            if self._p is not proc:                # a late EOF from an earlier process must not end the new one
+                return
             self._alive = False
             self._cv.notify_all()
         self._done.set()

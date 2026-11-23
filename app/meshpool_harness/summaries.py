@@ -39,6 +39,12 @@ def sdir() -> Path:
     return d
 
 
+def _nosys(msgs) -> list:
+    """A saved chat's messages without a leading system prompt (Agent.save() already leaves it out)."""
+    msgs = list(msgs or [])
+    return msgs[1:] if msgs and isinstance(msgs[0], dict) and msgs[0].get("role") == "system" else msgs
+
+
 def _A():
     from meshpool_harness.ui import agent_api as A
     return A
@@ -113,7 +119,7 @@ def chat_digest(sid: str) -> dict | None:
     if not d:
         return None
     users, replies = [], []
-    for m in (d.get("messages") or [])[1:]:
+    for m in _nosys(d.get("messages")):
         c = m.get("content")
         if isinstance(c, list):
             c = " ".join(x.get("text", "") for x in c if isinstance(x, dict) and x.get("type") == "text")

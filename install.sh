@@ -61,8 +61,10 @@ logo() {
 # ---------- python -----------------------------------------------------------------------------------------------
 find_python() {
   for c in python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$c" >/dev/null 2>&1 &&
-       "$c" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    c_path="$(command -v "$c" 2>/dev/null)" || continue
+    # on a Mac without the Command Line Tools /usr/bin/python3 is a stub that opens an install dialog: never run it
+    if [ "$(uname -s)" = Darwin ] && [ "$c_path" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then continue; fi
+    if "$c" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
       command -v "$c"; return 0
     fi
   done
