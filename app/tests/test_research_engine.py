@@ -389,3 +389,153 @@ def test_grid_excel_keeps_formula_text_as_text(tmp_path):
     g.cells[(0, 0)] = G.Cell("=WEBSERVICE(\"http://evil.example\")", [f"{s.id}.p1"], True)
     ws = load_workbook(G.to_excel(g, c, str(tmp_path / "g.xlsx")))["Grid"]
     assert all(ws[x].data_type == "s" for x in ("B1", "B2"))
+
+
+# ---- M31-01: a run that stops without finish still delivers a report that passes the gate
+def _stopped_run(tmp_path, body_fn):
+    """An earlier turn already wrote the corpus and report; the model then answers in prose three times and the loop
+    stops on 'model stopped calling tools'."""
+    from engines.research import engine as E
+    from meshpool_harness.core.client import MockClient
+    c = corpus(tmp_path)
+    _report(c, body_fn(c))
+    client = MockClient([{"role": "assistant", "content": "I think that is done."}] * 3)
+    return E.solve("Research Nvidia data center revenue", workdir=str(tmp_path), task_id="t-salvage", client=client)
+
+
+def test_stopped_run_with_a_passing_report_is_delivered(tmp_path):
+    out = _stopped_run(tmp_path, good_body)
+    assert out["ok"] is True, out
+    assert [Path(a).name for a in out["artifacts"]] == ["report.md", "report.docx", "sources.json"]
+    assert all(Path(a).is_absolute() and Path(a).exists() for a in out["artifacts"])
+    assert "193.7 billion" in out["answer"] and "[S1.p1" in out["answer"] and "stopped" in out["answer"]
+    assert "## Answer" not in out["answer"] and "What drives" not in out["answer"]
+    assert out["evidence"] == ["engine finish check on report.md: pass"]
+    assert out["reason"].endswith("; delivered report.md, checks pass")
+
+
+def test_stopped_run_with_a_failing_report_lists_the_failures(tmp_path):
+    out = _stopped_run(tmp_path, lambda c: good_body(c).replace("$193.7 billion in FY2026", "$201 billion in FY2026"))
+    assert out["ok"] is False
+    assert out["artifacts"] and Path(out["artifacts"][0]).name == "report.md"
+    assert "does not pass" in out["answer"] and "R2 number not in cited" in out["answer"]
+    assert "fail" in out["reason"]
+
+
+def test_stopped_run_without_a_report_says_nothing_was_written(tmp_path):
+    from engines.research import engine as E
+    from meshpool_harness.core.client import MockClient
+    client = MockClient([{"role": "assistant", "content": "done"}] * 3)
+    out = E.solve("Research X", workdir=str(tmp_path), task_id="t-none", client=client)
+    assert out["ok"] is False and out["answer"].strip() and "report.md" in out["answer"]
+
+
+def test_a_checker_crash_does_not_lose_the_report(tmp_path, monkeypatch):
+    from engines.research import engine as E
+    c = corpus(tmp_path)
+    _report(c, good_body(c))
+    monkeypatch.setattr(E, "finish_check", lambda *a, **k: 1 / 0)
+    from meshpool_harness.core.client import MockClient
+    out = E.solve("Research", workdir=str(tmp_path), task_id="t-crash",
+                  client=MockClient([{"role": "assistant", "content": "done"}] * 3))
+    assert out["ok"] is False and out["artifacts"] and "crash" in out["answer"]
+
+
+def test_cli_chain_continues_after_a_salvaged_research_step(tmp_path, monkeypatch):
+    from meshpool_harness import cli
+    from engines.research import engine as E
+    from meshpool_harness.core.client import MockClient
+    seen = {}
+
+    def research_solve(task, *, workdir, task_id, client=None, **kw):
+        c = corpus(Path(workdir))
+        _report(c, good_body(c))
+        return E.solve(task, workdir=workdir, task_id=task_id,
+                       client=MockClient([{"role": "assistant", "content": "done"}] * 3))
+
+    def slides_solve(task, *, workdir, task_id, client=None, **kw):
+        seen.update(kw, task=task)
+        return {"ok": True, "answer": "deck", "artifacts": ["deck.pptx"]}
+    mods = {"research": SimpleNamespace(solve=research_solve), "slides": SimpleNamespace(solve=slides_solve)}
+    monkeypatch.setattr(cli, "_engine", lambda name: mods[name])
+    monkeypatch.chdir(tmp_path)
+    out = cli.run_request("Research Nvidia and build a deck", [], str(tmp_path / "out"), engine="research,slides",
+                          client=SimpleNamespace())
+    assert [s["engine"] for s in out["steps"]] == ["research", "slides"] and out["ok"]
+    assert "report.md" in [Path(f).name for f in seen["files"]]
+
+
+# ---- M31-03: sources.json is written atomically and a damaged one is quarantined, not fatal
+def test_interrupted_save_keeps_the_previous_sources(tmp_path, monkeypatch):
+    import os
+    c = corpus(tmp_path)
+    c.save()
+    n = len(c.sources)
+    c.add_text("extra", "Another source with enough words to be a passage of its own. " * 5)
+    assert len(c.sources) == n + 1
+    orig = Path.write_text
+
+    def half_write(self, text, *a, **k):               # old code: the file is truncated, then the write dies
+        orig(self, text[: len(text) // 2], *a, **k)
+        raise OSError("disk full")
+
+    def no_fsync(fd):                                  # new code: the death comes before the rename
+        raise OSError("disk full")
+    monkeypatch.setattr(Path, "write_text", half_write)
+    monkeypatch.setattr(os, "fsync", no_fsync)
+    with pytest.raises(OSError):
+        c.save()
+    monkeypatch.undo()
+    again = R.Corpus(str(tmp_path))
+    assert getattr(again, "load_error", None) is None and len(again.sources) == n
+    assert not [p for p in tmp_path.iterdir() if p.name.endswith(".tmp")]
+
+
+def test_damaged_sources_json_is_quarantined_and_named_by_the_check(tmp_path):
+    from engines.research.engine import finish_check
+    c = corpus(tmp_path)
+    c.save()
+    raw = (tmp_path / "sources.json").read_text()
+    (tmp_path / "sources.json").write_text(raw[: len(raw) // 2])
+    (tmp_path / "report.md").write_text(good_body(c))
+    msg = finish_check("x [S1.p1]", ["report.md"], SimpleNamespace(root=tmp_path))
+    assert "could not be read" in msg and "Collect the sources again" in msg and "sources.json.corrupt-" in msg
+    assert not (tmp_path / "sources.json").exists()
+    (tmp_path / "sources.json").write_text(raw[: len(raw) // 2])
+    again = R.Corpus(str(tmp_path))                      # a second damaged copy: loads empty, does not raise
+    assert again.sources == {} and again.load_error and "sources.json" in again.load_error
+    kept = sorted(tmp_path.glob("sources.json.corrupt-*"))
+    assert kept and kept[-1].name in again.load_error
+
+
+def test_check_cli_names_a_damaged_corpus(tmp_path):
+    import subprocess
+    (tmp_path / "report.md").write_text("# R\n\n## Answer\n\nx [S1.p1].\n")
+    (tmp_path / "sources.json").write_text("")
+    r = subprocess.run([sys.executable, "-m", "engines.research.check", str(tmp_path / "report.md")],
+                       capture_output=True, text=True, cwd=str(ROOT))
+    assert r.returncode != 0 and "could not be read" in (r.stdout + r.stderr)
+
+
+def test_stopped_run_with_an_empty_report_is_not_ok_and_does_not_crash(tmp_path):
+    from engines.research import engine as E
+    from meshpool_harness.core.client import MockClient
+    (tmp_path / "report.md").write_text("", encoding="utf-8")
+    client = MockClient([{"role": "assistant", "content": "done"}] * 3)
+    out = E.solve("Research X", workdir=str(tmp_path), task_id="t-empty", client=client)
+    assert out["ok"] is False and "empty" in out["answer"] and out["artifacts"]
+
+
+def test_a_locked_sources_json_is_never_moved_aside(tmp_path, monkeypatch):
+    """A sharing violation (Windows: another process holds the file) is not damage: the file stays where it is."""
+    from engines.research import library as R
+    from meshpool_harness import fsio
+    c = corpus(tmp_path)
+    c.save()
+
+    def locked(path, default=None):
+        raise fsio.CorruptFile(path, PermissionError(13, "The process cannot access the file"))
+    monkeypatch.setattr(fsio, "read_json", locked)
+    with pytest.raises(fsio.CorruptFile):
+        R.Corpus(str(tmp_path))
+    assert (tmp_path / "sources.json").exists() and not list(tmp_path.glob("sources.json.corrupt-*"))

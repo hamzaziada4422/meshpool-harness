@@ -10,6 +10,10 @@ if __name__ == "__main__":
         sys.exit("usage: python -m engines.research.check <report.md>")
     p = Path(sys.argv[1])
     c = Corpus(str(p.resolve().parent))
+    if c.load_error:
+        print(f"ENGINE CHECK: sources.json could not be read: {c.load_error}. Collect the sources again "
+              "(c.search_and_read / c.add_*), then R.finalize.")
+        sys.exit(1)
     probs = check(p.read_text(encoding="utf-8"), c)
     if probs:
         print(report_text(probs, 40))

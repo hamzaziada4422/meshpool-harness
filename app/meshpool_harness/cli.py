@@ -45,7 +45,7 @@ def _engine(name):
 
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
-                client=None, output_format: str | None = None) -> dict:
+                client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -62,7 +62,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         raise SystemExit(f"error: no API key. Put MESHPOOL_API_KEY=... in {_config.config_path()}")
     client = client or LiveClient("phase_2_build")
     task_id = "req-" + uuid.uuid4().hex[:8]
-    r = route(request, files, output_format, workdir, client=client, engine=engine, task_id=task_id)
+    model = model or os.environ.get("MH_MODEL")      # the model the caller (or the app chat) picked
+    r = route(request, files, output_format, workdir, client=client, engine=engine, model=model, task_id=task_id)
     outdir = Path(out).resolve()
     outdir.mkdir(parents=True, exist_ok=True)
     inputs = [str(Path(f).resolve()) for f in files]
@@ -86,8 +87,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         kw = {"files": inputs} if name in ("data", "sheets", "research", "credit") else {}
         if name == "slides" and (researched or request.lstrip().startswith("[add to deck:")):
             kw = {"files": inputs}                   # research facts, or the user's own deck (by its real path)
-        if os.environ.get("MH_MODEL"):           # the model chosen in settings, for every engine
-            kw["model"] = os.environ["MH_MODEL"]
+        if model:                                # the model chosen in settings or in the chat, for every engine
+            kw["model"] = model
         saved = dict(os.environ)
         if name in ("code", "browser"):
             for k, v in ENGINE_FLAGS.items():     # explicit MH_* settings win
@@ -352,6 +353,7 @@ def main(argv=None):
         p.add_argument("--format", dest="output_format")
         if c == "run":
             p.add_argument("--out", default="./mh_out")
+            p.add_argument("--model", help="model id for every engine (e.g. chatgpt:gpt-6.1-sol); default: MH_MODEL / settings")
     w = sub.add_parser("work", help="fetch a task from a connector (github:, jira:, http:, file:, custom), run it, report back")
     w.add_argument("source", help="e.g. github:owner/repo#12, jira:PROJ-7, http:https://..., file:task.md")
     w.add_argument("--workdir", default=".")
@@ -406,7 +408,8 @@ def main(argv=None):
         eng, conf, why = decide(a.request, a.files, a.output_format, a.workdir)
         print(json.dumps({"engines": eng, "confidence": conf, "reason": why}, indent=1))
         return 0
-    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format)
+    res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format,
+                      **({"model": a.model} if getattr(a, "model", None) else {}))
     print(json.dumps(res, indent=1))
     return 0 if res["ok"] else 1
 

@@ -138,13 +138,17 @@ Use ONLY the findings; never infer a change they do not state. Return ONLY JSON:
 
 def build_dossier(brief: str, facts: list[dict], *, client, models: list[str], out_dir: str, rules: dict | None = None,
                   now: str | None = None, search_fn=None, fetch_fn=None, task_id: str = "dossier",
-                  max_questions: int | None = None) -> dict:
-    """Research the brief's company before planning. Never raises: a failed step is recorded and skipped."""
+                  max_questions: int | None = None, require_company: bool = False) -> dict:
+    """Research the brief's company before planning. Never raises: a failed step is recorded and skipped.
+    require_company: when identify() finds no company, return an empty dossier at once (no web research, nothing written)."""
     from engines.forge import research as RS
     t0 = time.time()
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
     ident = identify(brief, client, models, task_id)
+    if require_company and not ident.get("companies"):     # nothing to research: no questions, no files
+        return {"identity": ident, "questions": [], "facts": [], "changes": [], "open": [],
+                "seconds": round(time.time() - t0, 1), "failures": []}
+    out.mkdir(parents=True, exist_ok=True)
     qs = questions_for(ident, now, int(max_questions or os.environ.get("MH_DOSSIER_QUESTIONS") or 14))
     for q in qs:
         q["queries"] = _queries(q, ident)
