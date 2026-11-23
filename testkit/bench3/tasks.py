@@ -547,11 +547,10 @@ def _make_rs_grader(tid):
     def grade(workdir, reply):
         fx = FIX / "code" / tid
         expected = _rust_expected(tid)
-        tgt = os.environ.get("BENCH_CARGO_TARGET")
-        own_tgt = None
-        if not tgt:
-            own_tgt = tempfile.mkdtemp(prefix="bench3-target-")
-            tgt = own_tgt
+        # fresh target dir per call (outside the workspace): a reused one can serve a stale binary
+        # because cargo's freshness check trusts file mtimes that a copy preserves
+        own_tgt = tempfile.mkdtemp(prefix="bench3-target-", dir=os.environ.get("BENCH_CARGO_TARGET") or None)
+        tgt = own_tgt
         try:
             with gk.scratch_copy(workdir) as w:
                 if not (w / "src" / "lib.rs").exists():
@@ -563,11 +562,10 @@ def _make_rs_grader(tid):
                     if p.name != "lib.rs":
                         shutil.copy2(p, w / "src" / p.name)
                 rc, out = gk.run(["cargo", "test", "--color", "never", "--", "--include-ignored"], cwd=w, timeout=600,
-                                 env={"CARGO_NET_OFFLINE": "true", "CARGO_TARGET_DIR": f"{tgt}/{tid}",
+                                 env={"CARGO_NET_OFFLINE": "true", "CARGO_TARGET_DIR": tgt,
                                       "CARGO_TERM_COLOR": "never"})
         finally:
-            if own_tgt:
-                shutil.rmtree(own_tgt, ignore_errors=True)
+            shutil.rmtree(own_tgt, ignore_errors=True)
         c = gk.count_tests(out)
         ok = c["failed"] == 0 and c["errors"] == 0 and c["passed"] == expected
         note = " [agent changed tests/; pristine copy was used]" if changed else ""

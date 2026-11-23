@@ -122,18 +122,28 @@ def grade(task: dict, answer: str, workdir: str) -> tuple[bool, str]:
     for pat in g.get("must_not", []):
         if re.search(pat, answer or "", re.I | re.S):
             return False, f"has /{pat}/"
-    for rel, body in (g.get("hidden") or {}).items():   # tests the agent never saw: written only now
-        hp = Path(workdir) / rel
-        hp.parent.mkdir(parents=True, exist_ok=True)
-        hp.write_text(body)
-    if g.get("check"):
-        try:
-            r = subprocess.run(g["check"], shell=True, cwd=workdir, capture_output=True, text=True,
-                               timeout=g.get("timeout", 120))
-        except subprocess.TimeoutExpired:
-            return False, f"check timed out after {g.get('timeout', 120)}s"
-        if r.returncode != 0:
-            return False, "check failed: " + (r.stdout + r.stderr).strip()[-300:]
+    if g.get("hidden") or g.get("check"):
+        # hidden tests and the check run on a scratch COPY: grading never writes into the workspace under test
+        sys.path.insert(0, str(HERE.parent))
+        import gradekit as GK
+        with GK.scratch_copy(workdir) as w:
+            for rel, body in (g.get("hidden") or {}).items():   # tests the agent never saw: written only now
+                hp = w / rel
+                hp.parent.mkdir(parents=True, exist_ok=True)
+                hp.write_text(body)
+            if g.get("check"):
+                try:
+                    r = subprocess.run(g["check"], shell=True, cwd=w, capture_output=True, text=True,
+                                       timeout=g.get("timeout", 120))
+                except subprocess.TimeoutExpired:
+                    return False, f"check timed out after {g.get('timeout', 120)}s"
+                out = (r.stdout or "") + (r.stderr or "")
+                if r.returncode != 0:
+                    return False, "check failed: " + out.strip()[-300:]
+                cnt = GK.count_tests(out)               # a chained `pytest ...; true` must not hide a red line
+                if cnt["failed"] or cnt["errors"]:
+                    return False, (f"check reported {cnt['failed']} failed / {cnt['errors']} errors despite exit 0: "
+                                   + out.strip()[-200:])
     for rel, pat in (g.get("file_must") or {}).items():
         p = Path(workdir) / rel
         if not p.exists() or not re.search(pat, p.read_text(errors="replace"), re.S):
