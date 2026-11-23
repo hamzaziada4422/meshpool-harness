@@ -160,8 +160,8 @@ def test_goal_continuations_share_the_task_and_a_new_message_gets_a_new_one(serv
     seen = []
     orig = s._start_turn
 
-    def spy(text, images, cont=False):
-        orig(text, images, cont)
+    def spy(text, images, token=None, cont=False):
+        orig(text, images, token, cont=cont)
         seen.append((cont, s.agent.usage_task))
     s._start_turn = spy
     s.set_goal("three parts")

@@ -8,6 +8,7 @@ import re
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -94,7 +95,15 @@ RESUME_WAIT_S = 30
 RESUME_TRIES = 5
 
 _KEEP = {"user", "assistant", "tool_end", "interrupted", "error", "turn_end", "approval", "approval_done",
-         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review"}
+         "checkpoint", "status", "plan", "check", "checks_line", "task_receipt", "insight", "review", "retry_ok"}
+# Transient "trying again" notices (core.py): tagged retry:true; a retry_ok event follows once the model answers.
+_RETRY_RE = re.compile(r"Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming|"
+                       r"^Usage limit reached")
+_RETRY_DONE = ("usage", "model_end", "text_delta", "assistant", "tool_start")
+_BUSY = ("working", "waiting")
+# Turn state machine (Session._set_state): the only moves a chat's state may make.
+_MOVES = {("starting", "idle"), ("starting", "working"), ("idle", "working"), ("working", "waiting"),
+          ("waiting", "working"), ("working", "idle"), ("waiting", "idle")}
 
 
 def _transcript(sid: str) -> dict | None:
@@ -282,6 +291,51 @@ def _last_reply(agent) -> str:
         pass
     return ""
 
+class _Always(set):
+    """The "Allow ... in this chat" set of an agent, saved to the chat's meta.json whenever it changes, so the choice
+    survives the reaper closing the chat, a restart and a handoff to another agent."""
+
+    def __init__(self, items=(), on_change=None):
+        super().__init__(items)
+        self._cb = on_change
+
+    def _changed(self):
+        cb = getattr(self, "_cb", None)
+        if cb:
+            try:
+                cb(set(self))
+            except Exception:  # noqa: BLE001 - failing to save a choice never stops the turn
+                pass
+
+    def add(self, x):
+        new = x not in self
+        super().add(x)
+        if new:
+            self._changed()
+
+    def update(self, *others):
+        n = len(self)
+        super().update(*others)
+        if len(self) != n:
+            self._changed()
+
+    def discard(self, x):
+        had = x in self
+        super().discard(x)
+        if had:
+            self._changed()
+
+    def remove(self, x):
+        super().remove(x)
+        self._changed()
+
+    def clear(self):
+        had = bool(self)
+        super().clear()
+        if had:
+            self._changed()
+
+
 UNATTENDED_NOTE = ("This is an unattended scheduled run, so nothing can be approved. Do what you can without it "
                    "and say in your summary what needed the user.")
 
@@ -293,6 +347,11 @@ class Session:
     listeners = ()             # front ends that watch the events (the terminal): callables taking the stored event
     _saved_mtime = 0.0
     _ck_run, _ck_n, _ck_stop = "", 0, None
+    _turn_id = 0               # the token of the current turn (see _claim_turn / _end_turn)
+    _stop_req = False          # Stop was pressed for the current turn
+    _interrupting = None       # the token of the turn a "send now" message is stopping
+    _after_stop = None         # messages sent once Stop was pressed: they run as their own turn (list, made lazily)
+    _retry_open = False        # a retry notice is showing: the next good model event resolves it
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
@@ -381,6 +440,7 @@ class Session:
         self.id, self.workdir = self.agent.id, str(self.agent.root)
         if not resume_id:
             write_meta(self.id, ctx_pending=True)
+        self._bind_always(self.agent)
         if self.harness["type"] not in ("acp", "pi"):
             # ask_user waits for this page's answer; a scheduled run has no one watching, so it takes the defaults
             self.agent.interactive = lambda: not self.scheduled and not getattr(self, "deleted", False)
@@ -396,6 +456,10 @@ class Session:
                                "text": "Meshpool closed while this was running, so it stopped. Your message is kept: "
                                        "send it again to continue."})
                     self._persist(running=False)
+            try:                                     # an approval, question or step left open when the app closed
+                self._close_open_items(turns=bool(tr and tr.get("events")))
+            except Exception:  # noqa: BLE001 - never blocks reopening a chat
+                pass
         else:
             write_meta(self.id, kind=self.kind, mode=self.mode)   # Cowork or Code, and its permission mode
         if model:
@@ -415,7 +479,7 @@ class Session:
         if not outside:
             self.agent.checkpoint = self.cp          # the agent books what its own tools wrote (core._run_tool)
         if self.harness["type"] in ("acp", "pi"):
-            self.state = "idle"
+            self._set_state("idle", expect=("starting",))
             name = self.harness["name"]
             if not self.events:
                 self.emit({"type": "status", "text": f"{name} is ready. "
@@ -438,6 +502,47 @@ class Session:
             self._saved_mtime = (SESSIONS / self.id / "session.json").stat().st_mtime
         except (OSError, AttributeError):
             pass
+
+    def _close_open_items(self, turns: bool = True):
+        """A chat reopened after the app closed: whatever was open then can never be answered or finished. Appends,
+        once, what closes it: approval_done / question_done / tool_end for each, and a synthetic turn_end when the
+        last user message has no end. Running it again adds nothing. Ids may be ints (old transcripts) or strings."""
+        with self.lock:
+            evs = list(self.events)
+        done = {"approval": set(), "question": set(), "tool": set()}
+        for e in evs:
+            t = e.get("type")
+            if t == "approval_done":
+                done["approval"].add(str(e.get("id")))
+            elif t == "question_done":
+                done["question"].add(str(e.get("id")))
+            elif t == "tool_end":
+                done["tool"].add(str(e.get("id")))
+        out, seen = [], set()
+        last_end = max((n for n, e in enumerate(evs) if e.get("type") == "turn_end"), default=-1)
+        for n, e in enumerate(evs):
+            t, i = e.get("type"), str(e.get("id"))
+            if e.get("id") is None or (t, i) in seen:
+                continue
+            if t == "approval" and i not in done["approval"]:
+                out.append({"type": "approval_done", "id": e["id"], "decision": "stopped", "closed": True})
+            elif t == "question" and e.get("timeout_s") and i not in done["question"]:
+                out.append({"type": "question_done", "id": e["id"], "source": "stopped", "answers": [],
+                            "text": "Meshpool closed before you answered.", "closed": True})
+            elif t == "tool_start" and i not in done["tool"] and n > last_end:   # steps of finished turns stay as they were
+                out.append({"type": "tool_end", "id": e["id"], "name": e.get("name", ""), "ok": False,
+                            "stopped": True, "output": "Not run: Meshpool closed before this step finished."})
+            else:
+                continue
+            seen.add((t, i))
+        if turns or any(e.get("type") == "turn_end" for e in evs):
+            last = max((n for n, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")), default=None)
+            if last is not None and not any(e.get("type") in ("turn_end", "interrupted") for e in evs[last + 1:]):
+                out.append({"type": "turn_end", "synthetic": True})
+        for ev in out:
+            self.emit(ev)
+        if out:
+            self._persist(running=False)
 
     def _start_mcp(self):
         try:
@@ -474,14 +579,54 @@ class Session:
             if isinstance(e, OSError) and e.errno in (errno.EMFILE, errno.ENFILE):
                 self.emit({"type": "error", "text": "This chat could not start its tools: the computer's limit of open "
                                                     "files was reached. Close chats you are not using and try again."})
-        if self.state == "starting":
-            self.state = "idle"
+        self._set_state("idle", expect=("starting",))     # a turn that started meanwhile keeps "working"
+
+    # ---- the turn state machine. Every move of self.state goes through _claim_turn / _set_state / _end_turn, under
+    # self.lock, tied to the token of the turn it belongs to (self._turn_id).
+    def _claim_turn_locked(self):
+        if getattr(self, "state", "idle") in _BUSY:
+            return None
+        with GATE:                                   # an update is being installed: no turn may start (M11-02)
+            if QUIESCING[0]:
+                raise ValueError(_GATE_MSG)
+            self.state = "working"
+        self._turn_id += 1
+        self._stop_req = False
+        self.t_turn = time.time()
+        return self._turn_id
+
+    def _claim_turn(self):
+        """Idle/starting -> working under the lock: the token of the new turn, or None when a turn already runs."""
+        with self.lock:
+            return self._claim_turn_locked()
+
+    def _set_state(self, to: str, token=None, expect=None) -> bool:
+        """Move to `to` when allowed. Refused when `token` is not the current turn, when the state is not one of
+        `expect`, or when the move is not one of the allowed ones. Returns whether it moved."""
+        with self.lock:
+            cur = getattr(self, "state", None)
+            if token is not None and token != self._turn_id:
+                return False
+            if expect is not None and cur not in expect:
+                return False
+            if cur != to and (cur, to) not in _MOVES:
+                return False
+            self.state = to
+            return True
 
     def emit(self, ev: dict):
         self._question_state(ev)
-        if ev.get("type") == "interrupted" and getattr(self, "_interrupting", False):
-            self._interrupting = False               # the new message is being answered: do not say "send a message"
+        t = ev.get("type")
+        if (t == "interrupted" and self._interrupting is not None and self._interrupting == self._turn_id
+                and getattr(self, "state", None) in _BUSY):
+            self._interrupting = None                # the new message is being answered: do not say "send a message"
             ev = dict(ev, text="Stopped the previous request.")
+        if t == "status" and _RETRY_RE.search(str(ev.get("text") or "")):
+            ev = dict(ev, retry=True)                # a transient notice: resolved by retry_ok once the call works
+            self._retry_open = True
+        elif self._retry_open and t in _RETRY_DONE:
+            self._retry_open = False
+            self.emit({"type": "retry_ok"})
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
@@ -561,6 +706,44 @@ class Session:
                 self._persist_err = None
                 self.emit({"type": "status", "text": "Saved again."})
 
+    @staticmethod
+    def _acp_key(kind, title=""):
+        """edit and bash are remembered per kind; any other tool only for that one tool (its title)."""
+        if kind in ("edit", "bash"):
+            return "acp:" + str(kind)
+        return "acp:" + str(kind) + ":" + str(title or "").strip()[:200]
+
+    def _acp_always_pick(self, kind, detail, options, title=""):
+        """"Allow always" chosen once on an ACP harness's card for this kind of request (saved in meta.json): the
+        next ask of that kind is answered with its allow option, without a card. Never for a destructive command."""
+        if not options or not getattr(self, "id", None):
+            return None
+        try:
+            if self._acp_key(kind, title) not in (read_meta(self.id).get("always") or []):
+                return None
+            if kind == "bash":
+                from meshpool_harness.agent.core import _destructive
+                if _destructive({"command": detail}):
+                    return None
+            pick = (next((o for o in options if o.get("kind") == "allow_once"), None)
+                    or next((o for o in options if o.get("kind") == "allow_always"), None))
+            return pick["id"] if pick else None
+        except Exception:  # noqa: BLE001 - when in doubt, ask
+            return None
+
+    def _bind_always(self, agent):
+        """The agent's "Allow in this chat" set (built-in Agent.always, Pi _always) becomes a set that saves itself
+        to meta.json["always"] and starts from what was saved: it outlives the reaper, a restart and a handoff."""
+        attr = "always" if hasattr(agent, "always") else "_always" if hasattr(agent, "_always") else ""
+        sid = getattr(self, "id", None)
+        if not attr or not sid:
+            return
+        try:
+            seed = set(read_meta(sid).get("always") or []) | set(getattr(agent, attr) or ())
+            setattr(agent, attr, _Always(seed, lambda items, sid=sid: write_meta(sid, always=sorted(items))))
+        except Exception:  # noqa: BLE001 - the choice just stays in memory
+            pass
+
     def approve(self, kind, title, detail, options=None, scope=""):
         sid = getattr(self, "id", None)
         gone = bool(getattr(self, "deleted", False) or getattr(getattr(self, "agent", None), "deleted", False) or (sid and sid in DELETED))
@@ -570,20 +753,24 @@ class Session:
             note = UNATTENDED_NOTE if not gone else ("This chat was deleted, so nothing can be approved. Stop here "
                                                       "and do not retry the action.")
             if hasattr(self, "lock") and hasattr(self, "events"):   # a live chat: the card shows it, already closed
-                with self.lock:
-                    self._n = getattr(self, "_n", 0) + 1
-                    n = self._n
-                self.emit({"type": "approval", "id": n, "kind": kind, "title": title, "detail": detail,
+                aid = "ap-" + uuid.uuid4().hex[:10]
+                self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
                            "options": options, "scope": scope})
-                self.emit({"type": "approval_done", "id": n, "decision": "no", "reason": note})
+                self.emit({"type": "approval_done", "id": aid, "decision": "no", "reason": note})
             return "no", note
+        auto = self._acp_always_pick(kind, detail, options, title)
+        if auto:
+            return auto, ""
         with self.lock:
-            self._n += 1
-            p = {"id": self._n, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
-                 "decision": "no", "note": "", "options": options}
-            self.pendings[p["id"]] = p
-        self.state = "waiting"
-        self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
+            tok = self._turn_id
+            running = getattr(self, "state", "idle") in _BUSY     # an ask outside a turn never changes the state
+            aid = "ap-" + uuid.uuid4().hex[:10]
+            p = {"id": aid, "kind": kind, "title": title, "detail": detail, "ev": threading.Event(),
+                 "decision": "no", "note": "", "options": options, "token": tok, "in_turn": running}
+            self.pendings[aid] = p
+        if running:
+            self._set_state("waiting", token=tok, expect=_BUSY)
+        self.emit({"type": "approval", "id": aid, "kind": kind, "title": title, "detail": detail,
                    "options": options, "scope": scope})
         if time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
@@ -594,7 +781,7 @@ class Session:
         t_end = time.time() + limit if limit > 0 else None
         timed_out = False
         while not p["ev"].wait(0.5 if t_end is None else max(0.01, min(0.5, t_end - time.time()))):
-            if self.agent._stop:
+            if getattr(self.agent, "_stop", False):
                 break
             if t_end is not None and time.time() >= t_end:
                 timed_out = True
@@ -604,16 +791,24 @@ class Session:
             p["note"] = (f"No answer within {mins} minute{'s' if mins != 1 else ''}, so this was not done. "
                          "Ask again when you are back.")
         with self.lock:
-            self.pendings.pop(p["id"], None)
-            if not self.pendings:
-                self.state = "working"
+            self.pendings.pop(aid, None)
+            others = any(q.get("in_turn") and q.get("token") == tok for q in self.pendings.values())
+        if running and not others:
+            self._set_state("working", token=tok, expect=("waiting",))   # not when the turn ended meanwhile
         shown = p["decision"] if p.get("answered") else ("timeout" if timed_out else "stopped")
-        self.emit({"type": "approval_done", "id": p["id"], "decision": shown})
+        if p.get("answered") and options and getattr(self, "id", None):
+            try:                                      # "allow always" on an ACP card: remembered for this chat
+                if next((o.get("kind") for o in options if o.get("id") == p["decision"]), "") == "allow_always":
+                    cur = set(read_meta(self.id).get("always") or [])
+                    write_meta(self.id, always=sorted(cur | {self._acp_key(kind, title)}))
+            except Exception:  # noqa: BLE001
+                pass
+        self.emit({"type": "approval_done", "id": aid, "decision": shown})
         return p["decision"], p["note"]
 
-    def answer(self, aid: int, decision: str, note: str = ""):
-        p = self.pendings.get(aid)
-        if not p:
+    def answer(self, aid, decision: str, note: str = ""):
+        p = self.pendings.get(str(aid))
+        if not p or p.get("closed"):
             raise ValueError("That approval is no longer waiting.")
         allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
@@ -625,12 +820,14 @@ class Session:
         """ask_user: the thread waits for the user while a question is open (like an approval)."""
         t = ev.get("type")
         if t == "question" and ev.get("timeout_s"):
-            self.state = "waiting"
+            self._set_state("waiting", token=self._turn_id, expect=("working", "waiting"))
             if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
                 qs = ev.get("questions") or [{}]
                 _notify(f"{self.agent.title or 'A task'} has a question for you", str(qs[0].get("question", ""))[:200])
-        elif t == "question_done" and self.state == "waiting" and not self.pendings:
-            self.state = "working"
+        elif t == "question_done":
+            with self.lock:
+                if not getattr(self, "pendings", None):
+                    self._set_state("working", token=self._turn_id, expect=("waiting",))
 
     def reply(self, question_id: str, answers) -> None:
         """The user answered an ask_user question (POST /api/agent/<id>/reply)."""
@@ -669,10 +866,15 @@ class Session:
             raise ValueError("That style does not exist any more.")
         write_meta(self.id, style=style_id or ST.NORMAL)
 
+    _STOPPED_NOTE = ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
+                     "answer this message instead.")
+
     def send(self, text: str, images: list | None = None, interrupt: bool = False, files: list | None = None) -> dict:
         """Start a turn. While the agent works, the message is added to the current task instead: the built-in
         agent and Pi read it before their next step; other harnesses get it as soon as the current turn ends.
-        interrupt=True stops the current work first and sends the message as a new turn."""
+        interrupt=True stops the current work and sends the message as the next turn (it does not wait for the stop
+        to land); so does any message sent once Stop was pressed. Which of these happens is decided under the lock
+        the turn state changes under, so two messages can never both start a turn."""
         if not text.strip() and not images and not files:
             raise ValueError("Type a message first.")
         if self.scheduled and not getattr(self, "_system_send", False):           # the person has taken over: someone is here now (M18-06)
@@ -680,52 +882,72 @@ class Session:
         if files:                                    # saved first: if it fails, nothing was emitted or started
             text = self._save_files(text, files)
         self.touched = time.time()
-        if self.state in ("working", "waiting") and interrupt:
-            self._interrupting = True
-            with self.lock:                          # messages waiting in the queue go with the new one, not lost
-                queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
-                qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
-            if queued:
-                text = "\n\n".join([*queued, text])
-                images = [*qimgs, *(images or [])] or None
-            self.stop()
-            end = time.time() + 15
-            while self.state in ("working", "waiting") and time.time() < end:
-                time.sleep(0.1)
-            if self.harness.get("type") == "acp":
-                # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and carry
-                # on with the old task. Say plainly that it was stopped; the note is hidden in the chat (after \u200b).
-                text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
-                               "answer this message instead.")
-        if (getattr(self, "_was_stopped", False) and not interrupt and self.harness.get("type") == "acp"
-                and self.state not in ("working", "waiting")):
-            # After Stop, ACP agents (Hermes, the subscriptions) can pick the stopped request back up. Say plainly
-            # that it was stopped; the note is hidden in the chat (after \u200b).
-            text = text + ("\n\n\u200b[Meshpool] I stopped your previous request. Do not continue it; "
-                           "answer this message instead.")
-        if self.state not in ("working", "waiting"):
-            self._was_stopped = False
+        acp = self.harness.get("type") == "acp"
+        if interrupt:
+            tok = None
+            with self.lock:
+                if getattr(self, "state", "idle") in _BUSY:
+                    tok = self._turn_id
+                    queued = [q[0] if isinstance(q, (list, tuple)) else str(q) for q in self.queue]
+                    qimgs = [im for q in self.queue if isinstance(q, (list, tuple)) for im in (q[1] or [])]
+                    if queued:                       # messages waiting in the queue go with the new one, not lost
+                        text = "\n\n".join([*queued, text])
+                        images = [*qimgs, *(images or [])] or None
+                    self._interrupting = tok          # set for this turn only: its end clears it
+            if tok is not None:
+                if acp:
+                    # ACP agents (Hermes, the subscriptions) can merge the cancelled message into the new one and
+                    # carry on with the old task. Say plainly that it was stopped; hidden in the chat (after \u200b).
+                    text = text + self._STOPPED_NOTE
+                self.stop()
+                with self.lock:
+                    same = self._turn_id == tok and getattr(self, "state", "idle") in _BUSY
+                    if same:
+                        if self._after_stop is None:
+                            self._after_stop = []
+                        self._after_stop.append((text, images))
+                        n = len(self._after_stop)
+                    elif self._interrupting == tok:
+                        self._interrupting = None
+                if same:
+                    self.emit({"type": "queued", "text": text, "n": n, "after_stop": True})
+                    return {"queued": True, "after_stop": True}
+                # the turn ended before the lock was taken: this message starts the next one, below
         q = self.agent.pending_question() if hasattr(self.agent, "pending_question") else None
         if q and not interrupt and text.strip():
             self.agent.reply(q["id"], text)              # typed in the message box: the answer to the open question
             return {"queued": False, "answered": q["id"]}
-        if self.state in ("working", "waiting"):
-            if (hasattr(self.agent, "steer") and self.harness["type"] != "acp"
-                    and not getattr(self.agent, "_stop", False)):   # after Stop: queued, it runs once the turn ends
-                with self.lock:                      # the turn may be ending: decide under the lock it ends under
-                    if self.state in ("working", "waiting"):
-                        self.agent.steer(self._body(text, images), images=images)
-                        from meshpool_harness import pace as PACE
-                        if PACE.classify(text, bool(images)) != "quick":
-                            self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
-                        return {"queued": False, "added": True}
-                self._start_turn(text, images)       # it ended meanwhile: this message starts the next turn
-                return {"queued": False}
-            with self.lock:
+        token, queued_as, n = None, "", 0
+        with self.lock:
+            if getattr(self, "state", "idle") not in _BUSY:
+                if getattr(self, "_was_stopped", False) and not interrupt and acp:
+                    # After Stop, ACP agents can pick the stopped request back up: say plainly that it was stopped.
+                    text = text + self._STOPPED_NOTE
+                self._was_stopped = False
+                token = self._claim_turn_locked()
+            elif self._stop_req or interrupt:        # Stop was pressed: this message is its own turn, after it
+                if acp and not interrupt:
+                    text = text + self._STOPPED_NOTE
+                if self._after_stop is None:
+                    self._after_stop = []
+                self._after_stop.append((text, images))
+                queued_as, n = "after", len(self._after_stop)
+            elif hasattr(self.agent, "steer") and not acp:
+                self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
+                from meshpool_harness import pace as PACE
+                if PACE.classify(text, bool(images)) != "quick":
+                    self._quick_off = getattr(self, "t_turn", None)   # a real task joined: no quick wrap (Pi)
+                return {"queued": False, "added": True}
+            else:
                 self.queue.append((text, images))
-            self.emit({"type": "queued", "text": text, "n": len(self.queue)})
+                queued_as, n = "queue", len(self.queue)
+        if queued_as == "after":
+            self.emit({"type": "queued", "text": text, "n": n, "after_stop": True})
+            return {"queued": True, "after_stop": True}
+        if queued_as:
+            self.emit({"type": "queued", "text": text, "n": n})
             return {"queued": True}
-        self._start_turn(text, images)
+        self._start_turn(text, images, token)
         return {"queued": False}
 
     def _save_files(self, text: str, files: list) -> str:
@@ -833,6 +1055,7 @@ class Session:
                     a.model = model
             except Exception:  # noqa: BLE001
                 pass
+        self._bind_always(a)                         # "Allow in this chat" goes with the chat, not the agent
         self.agent, self.harness = a, new
         if self.cp:                                   # Meshpool's agent books by its tools, an outside agent by scan
             a_out = new["type"] in ("acp", "pi")
@@ -1000,41 +1223,42 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
 
-    def _start_turn(self, text: str, images: list | None, cont: bool = False):
-        """Start a turn. `cont` is a continuation (goal next turn, resume after an outage): it keeps the usage task
-        of the message that began the work, so the spending limit covers the whole goal. A new message starts a task."""
-        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits);
-            _claim_working(self)                    # refused while an update installs: the chat stays as it was
-        self._stop_req = False
-        C.load_into_env(override=True)              # newest settings (model, key) for this turn
-        try:                                        # a masked or mangled key: one clear message for every agent
+    def _key_problem(self) -> str:
+        """A masked or mangled key: one clear message for every agent ("" when the key looks usable)."""
+        try:
             from meshpool_harness import providers as PV
             if self.harness.get("type") != "auto" and PV.split(getattr(self.agent, "model", None) or "")[0] == "key":
-                bad = PV.key_problem(PV.key())
-                if bad:
-                    self.emit({"type": "user", "text": text, "images": []})
-                    self.emit({"type": "error", "text": bad})
-                    self.emit({"type": "turn_end"})
-                    self.state = "idle"
-                    return
+                return PV.key_problem(PV.key())
         except Exception:  # noqa: BLE001
             pass
-        try:
-            caps = self._capability_turn(text)
-        except BaseException:
-            self.state = "idle"
-            raise
+        return ""
+
+    def _wait_mcp(self, token: int):
+        """A message sent while the MCP servers still start (up to 45 s) is accepted; its turn waits here, on the turn's
+        own thread, until they are up, so the agent has its tools. Stop ends the wait."""
+        if self.harness.get("type") in ("acp", "pi"):
+            return
+        ready = getattr(self, "_mcp_ready", None)
+        if ready is None or ready.is_set():
+            return
+        end = time.time() + float(os.environ.get("MH_MCP_START_S", "45")) + 5
+        while not ready.wait(0.2):
+            if self._stop_req or self._turn_id != token or time.time() > end:
+                break
+
+    def _start_turn(self, text: str, images: list | None, token: int | None = None, cont: bool = False):
+        """Run one turn (`cont`: a continuation - goal next turn, resume after an outage - keeps the usage task of the
+        message that began the work, so the spending limit covers the whole goal). Run one turn on its own thread. `token` is the turn this message was given by _claim_turn (send, or
+        _end_turn handing over to the next message); everything slow (key check, capability wait, MCP wait,
+        checkpoint) happens inside it, and every way out of the thread ends it with _end_turn."""
+        if token is None:
+            token = self._claim_turn()
+            if token is None:
+                return
         if not (cont and getattr(self, "_usage_task", None)):
             self._usage_task = usage.start_task(chat=self.id, label="scheduled" if self.scheduled else "task")
         if hasattr(self.agent, "usage_task"):
-            self.agent.usage_task = self._usage_task      # the agent (or harness) records its calls in this task
-        if hasattr(self.agent, "plan"):
-            changed = bool(self.agent.plan) != self.plan
-            self.agent.plan = self.plan
-            if changed and hasattr(self.agent, "apply_mode"):
-                self.agent.apply_mode()              # an agent with its own modes (Codex): the mode the turn runs in
-
-        self.t_turn = time.time()
+            self.agent.usage_task = self._usage_task          # the agent (or harness) records its calls in this task
         ev0 = len(self.events)
         root = str(Path(self.workdir).resolve()) if self.workdir else ""
         with _ACTIVE_LOCK:
@@ -1045,10 +1269,40 @@ class Session:
             _ACTIVE[root].add(self)
         self._turn_n = None
 
+        def stopped_before_start():                  # Stop pressed before the agent started: never start it
+            if not self._stop_req:
+                return False
+            self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
+            self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
+                                                      "above; send it again to run it."})
+            return True
+
         def go():
-            idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
+            synthetic, cp_begun, nxt = False, False, None
             try:
+                try:
+                    C.load_into_env(override=True)      # newest settings (model, key) for this turn
+                except Exception:  # noqa: BLE001
+                    pass
+                bad = self._key_problem()
+                if bad:
+                    self.emit({"type": "user", "text": text, "images": []})
+                    self.emit({"type": "error", "text": bad})
+                    synthetic = True
+                    return
+                caps = self._capability_turn(text)
+                self._wait_mcp(token)
+                if stopped_before_start():
+                    synthetic = True
+                    return
+                if hasattr(self.agent, "plan"):
+                    changed = bool(self.agent.plan) != self.plan
+                    self.agent.plan = self.plan
+                    if changed and hasattr(self.agent, "apply_mode"):
+                        self.agent.apply_mode()      # an agent with its own modes (Codex): the mode the turn runs in
+                idx = len(self.agent.messages) if self.harness["type"] not in ("acp", "pi") else None
                 if self.cp:
+                    cp_begun = True
                     try:
                         t = self.cp.begin_turn(text.strip().splitlines()[0] if text.strip() else "Images", idx,
                                                event_index=ev0)
@@ -1088,7 +1342,7 @@ class Session:
                         self.agent.pace_deadline = time.time() + PACE.QUICK_S
                     elif self.harness["type"] == "pi" and hasattr(self.agent, "nudge"):
                         threading.Thread(target=self._pi_quick_wrap,
-                                         args=(self.agent, self.t_turn, agent_token(self.agent)), daemon=True).start()
+                                         args=(self.agent, self.t_turn, agent_token(self.agent), None, token), daemon=True).start()
                 elif hasattr(self.agent, "pace_deadline"):
                     self.agent.pace_deadline = 0
                 commits: list = []                   # what this turn used up: spent only once it really starts (M20-03)
@@ -1145,11 +1399,8 @@ class Session:
                 # The Stop generation of the agent that will run the turn (a handoff above may have replaced it):
                 # a Stop from here on either trips the check below or changes the generation send() checks.
                 gen0 = getattr(self.agent, "_gen", 0)
-                if self._stop_req:                  # Stop pressed while the checkpoint was taken: never start
-                    self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
-                    self.emit({"type": "interrupted", "text": "Stopped before it started. Your message is kept "
-                                                              "above; send it again to run it."})
-                    self.emit({"type": "turn_end"})
+                if stopped_before_start():          # Stop pressed while the checkpoint was taken
+                    synthetic = True
                     return
                 for spend in commits:
                     try:
@@ -1176,71 +1427,134 @@ class Session:
                 except Exception:  # noqa: BLE001
                     pass
                 self._after_turn(text, ev0, self.t_turn)
-            except Exception as e:  # noqa: BLE001 - a failure shows in the chat, with the message kept
+            except Exception as e:  # noqa: BLE001 - a bug here must end in a message, not a chat stuck on working
                 try:
                     with self.lock:
                         shown = any(x.get("type") == "user" for x in self.events[ev0:])
                     if not shown:
                         self.emit({"type": "user", "text": text.split("\u200b")[0].strip(), "images": []})
-                    self.emit({"type": "error", "text": f"This message could not be sent: {e}"})
-                    self.emit({"type": "turn_end"})
+                    self.emit({"type": "error", "text": f"This message could not run: {str(e)[:300]}"})
                 except Exception:  # noqa: BLE001
                     pass
             finally:
-                self._turn_finish()
-                with _ACTIVE_LOCK:
-                    _ACTIVE.get(root, set()).discard(self)
-                self._end_cp_turn()
-                while (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
-                       and self.agent.has_steers()):  # added with Enter just as the turn ended: answer it now
-                    try:
-                        self._resume_steers()
-                    except Exception as e:  # noqa: BLE001
-                        self.emit({"type": "error", "text": str(e)})
-                        break
-                write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan)
-                nxt = None
-                with self.lock:
-                    # Stop clears the queue, so whatever is queued now was sent after Stop, while the turn wound
-                    # down. The user was told it would run: run it (it was dropped, and its Queued chip stayed).
-                    if self.queue:
-                        items, self.queue = self.queue, []
-                        nxt = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                        if getattr(self.agent, "_stop", False) and self.harness.get("type") == "acp":
-                            nxt = (nxt[0] + "\n\n\u200b[Meshpool] I stopped your previous request. Do not continue "
-                                   "it; answer this message instead.", nxt[1])
-                if not nxt and self.goal and not getattr(self.agent, "_stop", False) and not self._stop_req:
-                    nxt = self._goal_next(ev0)
-                elif not nxt and not getattr(self.agent, "_stop", False) and not self._stop_req:
-                    nxt = self._resume_next(ev0)
-                if nxt:
-                    self.emit({"type": "queued", "text": "", "n": 0})
-                    # stays "working": the queued message goes straight in
-                    self._start_turn(*nxt, cont=nxt[0] in (GOAL_NEXT, RESUME_NEXT))
-                else:
-                    while True:                          # a message added in the last moment is answered, not left
-                        with self.lock:
-                            late = (not getattr(self.agent, "_stop", False) and hasattr(self.agent, "has_steers")
-                                    and self.agent.has_steers())
-                            if not late:
-                                self.state = "idle"
-                                break
-                        try:
-                            self._resume_steers()
-                        except Exception as e:  # noqa: BLE001
-                            self.emit({"type": "error", "text": str(e)})
-                            with self.lock:
-                                self.state = "idle"
-                            break
-                    if not getattr(self, "deleted", False):
-                        write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
-                    took = time.time() - self.t_turn
-                    if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
-                        last = next((e.get("text") for e in reversed(self.events)
-                                     if e.get("type") == "assistant" and e.get("text")), "") or "Finished."
-                        _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
-                                + (self.agent.title or "task")[:60], last.strip()[:200])
+                try:
+                    nxt = self._turn_epilogue(root, ev0, cp_begun)
+                except Exception:  # noqa: BLE001
+                    nxt = None
+                self._end_turn(token, synthetic, nxt)
         threading.Thread(target=go, daemon=True).start()
+
+    def _turn_epilogue(self, root: str, ev0: int, cp_begun: bool):
+        """What runs after a turn, however it ended. Each step is guarded alone: one failing (a full disk, a locked
+        file) never skips the rest. Returns the goal or auto-resume follow-up (message, images), or None."""
+        def guard(fn, *a):
+            try:
+                return fn(*a)
+            except Exception:  # noqa: BLE001
+                return None
+        guard(self._turn_finish)
+        with _ACTIVE_LOCK:
+            _ACTIVE.get(root, set()).discard(self)
+        if self.cp and cp_begun:
+            guard(self._end_cp_turn)
+        while (not getattr(self.agent, "_stop", False) and not self._stop_req and hasattr(self.agent, "has_steers")
+               and guard(self.agent.has_steers)):         # added with Enter just as the turn ended: answer it now
+            try:
+                self._resume_steers()
+            except Exception as e:  # noqa: BLE001
+                guard(self.emit, {"type": "error", "text": str(e)})
+                break
+        guard(lambda: write_meta(self.id, model=getattr(self.agent, "model", None), plan=self.plan))
+        stopped = getattr(self.agent, "_stop", False) or self._stop_req
+        with self.lock:                              # a message waiting to run: it goes first, the goal waits
+            waiting = bool(self._after_stop) or bool(self.queue)
+        if waiting or stopped:
+            return None
+        if self.goal:
+            return guard(self._goal_next, ev0)       # these take self.lock themselves: never called under it
+        return guard(self._resume_next, ev0)
+
+    def _end_turn(self, token: int, synthetic: bool = False, nxt=None, notice: bool = True):
+        """The only way a turn ends. A stale token is ignored. A turn that opened (a "user" event) but never
+        closed gets a synthetic turn_end, so the saved transcript never says it is still running. Then, under the
+        lock: the next message (sent after Stop, then the queue, then the goal / auto-resume follow-up `nxt` the
+        caller decided) takes over as a new turn, or the chat goes idle. Approvals this turn left open are closed."""
+        if token != self._turn_id:
+            return
+        self._retry_open = False                     # no retry_ok for a turn that ends in an error
+        try:
+            if synthetic or getattr(self, "_turn_open", False):
+                self.emit({"type": "turn_end", "synthetic": True})
+        except Exception:  # noqa: BLE001
+            pass
+        item, skip_late = None, False
+        while True:
+            with self.lock:
+                if token != self._turn_id:
+                    return
+                agent = self.agent
+                stopped = getattr(agent, "_stop", False)
+                late = (not skip_late and not stopped and not self._stop_req and hasattr(agent, "has_steers")
+                        and agent.has_steers())
+                if not late:
+                    if self._after_stop:             # sent after Stop: always runs, as its own turn
+                        items, self._after_stop = self._after_stop, []
+                        item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
+                    elif self.queue:                 # Stop clears the queue: what is in it now was sent after Stop
+                        items, self.queue = self.queue, []
+                        item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
+                        if stopped and self.harness.get("type") == "acp":
+                            item = (item[0] + self._STOPPED_NOTE, item[1])
+                    elif nxt and not stopped and not self._stop_req:
+                        item = nxt
+                    for p in self.pendings.values():  # a card of this turn nobody can answer any more
+                        if p.get("in_turn") and p.get("token") == token and not p.get("answered"):
+                            p["decision"], p["closed"] = "no", True
+                            p["ev"].set()
+                    if self._interrupting == token:
+                        self._interrupting = None
+                    if item:
+                        self._turn_id += 1
+                        new = self._turn_id
+                        self.state, self._stop_req, self._was_stopped = "working", False, False
+                        self.t_turn = time.time()
+                    else:
+                        took = time.time() - getattr(self, "t_turn", time.time())
+                        self.state = "idle"
+                    break
+            try:
+                self._resume_steers()
+            except Exception as e:  # noqa: BLE001
+                skip_late = True
+                try:
+                    self.emit({"type": "error", "text": str(e)})
+                except Exception:  # noqa: BLE001
+                    pass
+        if item:
+            try:
+                self.emit({"type": "queued", "text": "", "n": 0})
+                self._start_turn(item[0], item[1] or None, new,
+                                 cont=item[0] in (GOAL_NEXT, RESUME_NEXT))   # stays "working": straight into the next one
+            except Exception:  # noqa: BLE001
+                self._end_turn(new, True)
+        elif notice and not synthetic:
+            self._turn_done_notice(took)
+
+    def _turn_done_notice(self, took: float):
+        """After a turn that went idle: mark the chat unread and, for a long or scheduled one, tell the user."""
+        try:
+            if not getattr(self, "deleted", False):
+                write_meta(self.id, unread=True)     # cleared by the page when the chat is opened
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if (self.scheduled or took > 45) and not getattr(self.agent, "_stop", False):
+                last = next((e.get("text") for e in reversed(self.events)
+                             if e.get("type") == "assistant" and e.get("text")), "") or "Finished."
+                _notify(("Done: " if not self.scheduled else "Scheduled task done: ")
+                        + (self.agent.title or "task")[:60], last.strip()[:200])
+        except Exception:  # noqa: BLE001
+            pass
 
     def _end_cp_turn(self):
         """Close the open checkpoint turn, remember the turn counter, and tell the page which turn it was."""
@@ -1283,13 +1597,14 @@ class Session:
     def grade(self) -> dict:
         """"Check this": an independent review of the chat's last piece of work, on demand (works with the switch off).
         Runs beside nothing else: the chat must be idle. The result arrives as a review event."""
-        if self.state in ("working", "waiting"):
-            raise ValueError("Wait for the reply to finish, or stop it, then check it.")
+        busy = "Wait for the reply to finish, or stop it, then check it."
+        if self.state in _BUSY:
+            raise ValueError(busy)
         if not hasattr(self.agent, "grade_now"):
             raise ValueError("This agent cannot be checked by Meshpool's reviewer.")
-        with self.lock:
-            _claim_working(self)
-        self.t_turn = time.time()
+        token = self._claim_turn()
+        if token is None:
+            raise ValueError(busy)
 
         def go():
             try:
@@ -1297,8 +1612,7 @@ class Session:
             except Exception as e:  # noqa: BLE001
                 self.emit({"type": "error", "text": "The check could not run: " + str(e)[:160]})
             finally:
-                with self.lock:
-                    self.state = "idle"
+                self._end_turn(token, notice=False)
         threading.Thread(target=go, daemon=True, name="meshpool-grade").start()
         return {"started": True}
 
@@ -1441,7 +1755,7 @@ class Session:
                                              "a message or press Stop to take over."})
         return self._pause(wait, RESUME_NEXT)
 
-    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None):
+    def _pi_quick_wrap(self, agent, turn, tok0, wait: float | None = None, turn_tok: int | None = None):
         """Pi: when a quick request runs past its time, tell Pi to answer (a note only the model sees). It targets the
         turn send() starts after tok0 and nothing later; a real task added meanwhile (send) cancels it."""
         from meshpool_harness import pace as PACE
@@ -1454,7 +1768,7 @@ class Session:
             return False
         time.sleep(max(0.0, end - time.time()))
         if (self.state == "working" and self.t_turn == turn and not getattr(agent, "_stop", False)
-                and getattr(self, "_quick_off", None) != turn):
+                and getattr(self, "_quick_off", None) != turn and (turn_tok is None or self._turn_id == turn_tok)):
             try:
                 return bool(agent.nudge(PACE.WRAP, tok))   # only while that same turn runs; no chat message
             except Exception:  # noqa: BLE001
@@ -1562,17 +1876,18 @@ class Session:
         return CR.fork(self.id, CR.message_for_event(self, int(event_index)), session=self)
 
     def stop(self):
-        self._stop_req = True                        # checked before the agent starts: its own flag resets then
-        if self.state in ("working", "waiting"):
-            self._was_stopped = True             # a request really was cut short
         with self.lock:
+            self._stop_req = True                    # checked before the agent starts: its own flag resets then
+            if getattr(self, "state", "idle") in _BUSY:
+                self._was_stopped = True             # a request really was cut short
             had = bool(self.queue)
             self.queue = []
+            pend = list(self.pendings.values())
         if had:
             self.emit({"type": "queued", "text": "", "n": 0})
         if self.agent:
             self.agent.stop()
-        for p in list(self.pendings.values()):
+        for p in pend:
             p["ev"].set()
 
     def set_mode(self, mode: str):
@@ -1591,7 +1906,14 @@ class Session:
             evs = self.events[since:]
         a = self.agent
         meta = read_meta(self.id)
+        try:
+            oq = (a.pending_question() or {}).get("id") if hasattr(a, "pending_question") else None
+        except Exception:  # noqa: BLE001
+            oq = None
+        with self.lock:
+            open_ids = [k for k, p in self.pendings.items() if not p.get("closed")]
         return {"id": self.id, "workdir": self.workdir, "state": self.state, "mode": a.mode,
+                "open": {"approvals": open_ids, "question": oq},
                 "turn_started": getattr(self, "t_turn", None) if self.state in ("working", "waiting") else None,
                 "title": meta.get("title") or nice_title(a.title), "pinned": bool(meta.get("pinned")),
                 "project_id": _project_of(meta, self.workdir), "scratch": bool(meta.get("scratch")),
