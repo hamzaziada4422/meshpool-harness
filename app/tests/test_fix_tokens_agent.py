@@ -534,3 +534,34 @@ def test_lite_work_tools_switch_is_off_by_default_and_cuts_schemas_when_on(tmp_p
     lite = {t["function"]["name"] for t in _agent(tmp_path, "work").tool_schemas()}
     assert "delegate_task" in base and "bash_start" in base
     assert "delegate_task" not in lite and {"office_task", "read_file", "edit", "bash", "ask_user"} <= lite
+
+
+def test_work_prompt_drops_the_ask_user_section_when_the_tool_is_not_offered(tmp_path):
+    a = _agent(tmp_path, "work")
+    assert "Asking the user (ask_user)" in a.system_prompt()
+    a.headless = True
+    sp = a.system_prompt()
+    assert "Asking the user (ask_user)" not in sp and "\nRules\n" in sp and "Answer style" in sp
+
+
+def test_hidden_block_does_not_repeat_honesty_and_plain_text(tmp_path, monkeypatch):
+    from meshpool_harness.assistant import HONESTY, PLAIN
+    a = _agent(tmp_path, "work")
+    seen = []
+    monkeypatch.setattr(a, "_chat", lambda turn: seen.append([m for m in a.messages if m["role"] == "user"][-1]["content"])
+                        or ({"content": "ok"}, False))
+    a.emit = lambda ev: None
+    a.send("hello\n\n​" + PLAIN + "\n\n" + HONESTY + "\n\nfacts: x")
+    assert HONESTY not in seen[0] and PLAIN not in seen[0] and "facts: x" in seen[0]
+
+
+def test_grader_skipped_when_the_local_check_passed_and_todos_alone_are_not_large(tmp_path):
+    from meshpool_harness.agent import grader as GR
+    assert GR.large({"todos": [{}, {}, {}], "calls": 4}) == ""
+    assert GR.large({"todos": [{}, {}, {}], "calls": 9}).startswith("a plan")
+    a = _agent(tmp_path, "work")
+    a.trace = [{"tool": "mcp__meshpool_office__make_deck", "ok": True, "arg": ""},
+               {"tool": "mcp__meshpool_office__check_deck", "ok": True, "arg": "pass"}]
+    assert a._local_check_passed()
+    a.trace.append({"tool": "edit_office_file", "ok": True, "arg": ""})
+    assert not a._local_check_passed()                      # something was written after the check

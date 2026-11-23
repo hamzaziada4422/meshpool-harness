@@ -183,7 +183,7 @@ def large(info: dict) -> str:
     """Why this turn counts as a large task, or "" when it does not. info: todos, calls, research, final, files, request,
     after_plan, deep (see Agent._grade_info)."""
     todos = [t for t in info.get("todos") or [] if isinstance(t, dict)]
-    if len(todos) >= 3:
+    if len(todos) >= 3 and info.get("calls", 0) >= 8:       # a todo list alone is not a big job (it is asked for every multi-step request)
         return f"a plan with {len(todos)} steps"
     if info.get("after_plan"):
         return "an approved plan"

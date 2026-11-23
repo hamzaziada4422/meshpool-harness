@@ -965,6 +965,8 @@ class Agent:
             shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
+        if "ask_user" in self._dropped():             # headless or a lean route: no tool, so no 2k-char section about it
+            text = re.sub(r"\nAsking the user \(ask_user\)\n.*?(?=\nRules\n)", "\n", text, count=1, flags=re.S)
         if "todo_write" in self._dropped():          # no todo tool in this harness: no instruction to use it
             text = re.sub(r"\n2\. For (work|a multi-step job)( with several steps)?, keep a short plan with todo_write[^\n]*",
                           "\n2. Get several independent facts in one call (bash_many) rather than one call each.", text)
@@ -1206,6 +1208,9 @@ class Agent:
         self._stop = False
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
+        if not self._style() and "\u200b" in text:      # the app's hidden block repeats what the system prompt already says
+            from meshpool_harness.assistant import HONESTY, PLAIN
+            text = text.replace(PLAIN, "").replace(HONESTY, "")
         from meshpool_harness.agent import extras as EX
         cmd = EX.expand_command(text, self.root)          # /name from .meshpool/commands
         if cmd:
@@ -1598,6 +1603,18 @@ class Agent:
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
                 "root": str(self.root)}
 
+    def _local_check_passed(self) -> bool:
+        """The engine's own validator (check_deck, check_workbook, check_document) passed and nothing was written after
+        it: the deliverable already met the house rules, so a reviewer loop would only re-read it (MH_GRADER_LOCAL=0 off)."""
+        last_ok, last_write = None, -1
+        for i, t in enumerate(getattr(self, "trace", [])[-60:]):
+            name = str(t.get("tool", "")).replace("-", "_")
+            if re.search(r"(^|__)check_(deck|workbook|document)$", name):
+                last_ok = i if t.get("ok", True) and not re.search(r"\bfail", str(t.get("arg", "")), re.I) else None
+            elif name in ("write_file", "edit", "apply_patch", "shell", "bash") or re.search(r"__(make_|edit_|add_)", name):
+                last_write = i
+        return last_ok is not None and last_ok > last_write
+
     def _small_job(self, info: dict) -> bool:
         """Any lane: under 10 tool calls, one or two files that are not a deck, workbook or web page, a short final
         answer and no failing command after the last edit. A reviewer loop on a one-page document cost 30 to 60
@@ -1642,6 +1659,8 @@ class Agent:
             why = "you asked for it" if force else GR.large(info)
             if not why:
                 return False, final
+            if os.environ.get("MH_GRADER_LOCAL", "1") != "0" and self._local_check_passed():
+                return False, final        # check_deck / check_workbook / check_document passed on the last build
             if why.startswith("files made") and os.environ.get("MH_GRADER_SMALL", "0") != "1" and (
                     self._small_code_verified() or self._small_job(info)):
                 return False, final        # a small job, or a code change whose own checks passed: no second model loop
