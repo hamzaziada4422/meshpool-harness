@@ -658,6 +658,8 @@ class PiAgent:
                         pass
                     self.resume = True
                     self._start()
+                    if self._stop:                       # Stop pressed while it restarted
+                        break
                     self._done.clear()
                     self._request({"type": "prompt", "message": (
                         "[Meshpool] Your process stopped unexpectedly in the middle of this task. Carry on from "

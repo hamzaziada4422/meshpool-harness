@@ -363,11 +363,17 @@ def test_m14_02_connectors_reach_harnesses_through_the_refreshing_bridge(home, m
         url = f"http://127.0.0.1:{srv.server_address[1]}/mcp"
         monkeypatch.setattr(CN, "servers", lambda: {"github": {"url": url, "headers": {"Authorization": "Bearer old-token"},
                                                                 "connector": True, "timeout": 30}})
-        monkeypatch.setattr(CN, "refresh_headers", lambda cid: {"Authorization": "Bearer new-token"})
+        refused = []
+
+        def refresh(cid, failed_headers=None):                  # ws12's single-flight refresh
+            refused.append((failed_headers or {}).get("Authorization"))
+            return {"Authorization": "Bearer new-token"}
+        monkeypatch.setattr(CN, "refresh_headers", refresh)
         server = CB.connect("github")
         tools = CB.tools_for(server)
         accepted["token"] = "Bearer new-token"                  # an hour later: the old token is refused
         assert tools["whoami"].fn()[0]["text"] == "octocat"     # the bridge fetched a fresh one and went on
+        assert refused == ["Bearer old-token"]                  # telling the refresh which token was refused
         server.close()
     finally:
         srv.shutdown()
