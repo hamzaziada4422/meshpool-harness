@@ -1073,7 +1073,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif act == "grade":
                     s.grade()
                 elif act == "answer":
-                    s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
+                    s.answer(str(b.get("id", "")), b.get("decision", "no"), b.get("note", ""))
                 elif act == "compact":
                     if s.state in ("working", "waiting"):
                         raise ValueError("Wait for the task to finish or stop it, then compact.")
