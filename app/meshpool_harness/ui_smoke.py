@@ -129,7 +129,7 @@ def smoke(pw, url: str, launch=None, view=(1280, 800)) -> dict:
         inv = page.evaluate(CONTROLS_JS)
         for f in inv["forms"][:3]:
             sel = f'[data-smoke="{f["id"]}"]'
-            info = page.evaluate("""s => { const f = document.querySelector(s);
+            info = page.evaluate("""s => { const f = document.querySelector(s); if (!f) return {required: 0, inputs: 0, noval: false, types: []};
               const els = [...f.elements].filter(e => e.name || e.id);
               return {required: els.filter(e => e.required).length, inputs: els.filter(e => !["submit", "button", "hidden"].includes(e.type) && e.tagName !== "BUTTON" && e.tagName !== "FIELDSET").length,
                       noval: f.noValidate, types: els.map(e => e.type)}; }""", sel)
