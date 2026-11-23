@@ -1648,9 +1648,8 @@ def _grace() -> float:
 
 
 def _write_meta_raw(sid: str, m: dict) -> None:
-    tmp = _meta_path(sid).with_suffix(f".{threading.get_ident()}.tmp")
-    tmp.write_text(json.dumps(m), encoding="utf-8")
-    C.replace_file(tmp, _meta_path(sid))
+    from meshpool_harness import fsio
+    fsio.atomic_write_json(_meta_path(sid), m, indent=None)
     _METAS.pop(sid, None)
 
 
