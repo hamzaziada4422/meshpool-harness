@@ -54,7 +54,7 @@ MODES = ("code", "cowork")
 # OpenCode: the open-source coding agent, over ACP (`opencode acp`). It runs on the same providers as Meshpool's own
 # agents: its config in the Meshpool data folder points it at the key endpoint or at the local ChatGPT relay.
 OPENCODE_PKG = "opencode-ai@1.19.5"
-CODEX_CLI = "@openai/codex@0.46.0"          # only its `login` is used: pinned like the other npx agents
+CODEX_CLI = "@openai/codex@latest"          # only its `login` is used
 OPENCODE = {"id": "opencode", "name": "OpenCode", "mode": "code", "type": "acp", "models": "meshpool",
             "command": "npx", "args": ["-y", OPENCODE_PKG, "acp"], "share_mcp": True, "install": NODE_NOTE,
             "tagline": "The open-source coding agent, with its own tools and plans",

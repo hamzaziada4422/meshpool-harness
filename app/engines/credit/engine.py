@@ -27,6 +27,9 @@ AMOUNT = re.compile(r"(?P<cur>[$\u20ac\u00a3]|\b(?:usd|eur|gbp)\s?)?\s?"
 LOAN_WORDS = re.compile(r"(?i)\b(?:loan|facility|term loan|borrow\w*|financing|credit line|line of credit|revolver|"
                         r"request\w*|refinanc\w*|lend\w*|advance|mortgage|capex line)\b")
 FIN_WORDS = re.compile(r"(?i)\b(?:revenue|revenues|sales|ebitda|income|assets|profit|turnover|cash|equity|debt)\b")
+NOT_TICKERS = {"USD", "EUR", "GBP", "CAD", "AUD", "JPY", "CHF", "CNY", "SOFR", "LIBOR", "EURIBOR", "LLC", "LP", "LLP",
+               "LTD", "INC", "PLC", "CORP", "CO", "SA", "AG", "NV", "BV", "GMBH", "TTM", "LTM", "EBITDA", "DSCR",
+               "FCCR", "TNW", "LTV", "ABL", "RCF", "TL", "USA", "US", "UK", "EU", "CEO", "CFO", "FY", "YOY"}
 SCALE = {"k": 1e-3, "m": 1, "mm": 1, "mn": 1, "million": 1, "bn": 1e3, "b": 1e3, "billion": 1e3}
 
 
@@ -103,6 +106,11 @@ def parse_request(text: str) -> dict:
     if re.search(r"\bfixed[- ]rate\b|\bfixed[- ]interest\b", t):
         out["floating"] = False
     tk = re.search(r"(?:\b[Tt]icker|\bNYSE|\bNASDAQ|\bNasdaq)\s*[:=]?\s*\(?([A-Z]{1,5})\)?\b", text)
+    if not tk:                                      # "Acme Corp (ACME)": but not currencies, rates or entity suffixes
+        for pm in re.finditer(r"\(([A-Z]{1,5})\)", text):
+            if pm.group(1) not in NOT_TICKERS:
+                tk = pm
+                break
     if tk:
         out["ticker"] = tk.group(1)
     p = re.search(r"\bto (fund|finance|acquire|buy|build|refinance|expand)\b([^.,;(\n]{0,60})", t)   # one line:
