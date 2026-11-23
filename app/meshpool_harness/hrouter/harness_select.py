@@ -204,8 +204,10 @@ def log_outcome(decision_id: str, *, ok: bool | None, secs: float, usage: dict |
     scorecard can later be refitted from (opt-in)."""
     if decision_id:
         _append({"type": "outcome", "id": decision_id, "t": time.time(), "ok": ok, "secs": round(secs, 1),
-                 "usage": {k: (usage or {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens", "completion_tokens",
-                                                               "model_calls")},
+                 "usage": {**{k: (usage or {}).get(k, 0) for k in ("prompt_tokens", "cached_tokens",
+                                                                   "completion_tokens", "model_calls")},
+                           "cost_usd": (usage or {}).get("cost_usd"),
+                           "unpriced_calls": (usage or {}).get("unpriced_calls", 0)},
                  "error": (error or "")[:200] or None})
 
 

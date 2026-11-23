@@ -179,10 +179,23 @@ class TermFrontend:
                     return e["text"]
         return ""
 
+    @staticmethod
+    def _usage(a) -> dict:
+        """The old keys stay; cost_usd is None when no call had a price (core/usage.py has the rest)."""
+        u = dict(getattr(a, "usage", {}) or {})
+        try:
+            from meshpool_harness.api import usage_dict
+            ud = usage_dict(a)
+            u.update({k: ud[k] for k in ("cost_usd", "unpriced_calls", "unreported_calls", "cache_write_tokens",
+                                         "reasoning_tokens", "by_model") if k in ud})
+        except Exception:  # noqa: BLE001
+            pass
+        return u
+
     def result(self, failed: bool) -> dict:
         a = self.s.agent
         out = {"type": "result", "ok": not failed, "result": self.reply(), "session_id": self.s.id,
-               "chat_id": self.s.id, "usage": dict(getattr(a, "usage", {}) or {}),
+               "chat_id": self.s.id, "usage": self._usage(a),
                "steps": len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"]),
                "denied": list(self.denied)}
         rv = getattr(a, "last_review", None)

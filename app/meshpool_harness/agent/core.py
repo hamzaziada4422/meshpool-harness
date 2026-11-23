@@ -10,6 +10,7 @@ Front ends (terminal, web app) talk to it through two callbacks:
 """
 from __future__ import annotations
 
+import contextvars
 import copy
 import difflib
 import http.client
@@ -34,7 +35,9 @@ from meshpool_harness.core import gateway as GW
 from meshpool_harness.core import http as _mhttp
 from meshpool_harness.core import permrules as PR
 from meshpool_harness.core import tools as T
-from meshpool_harness.core.client import _withhold_latest_output, classify_error, rate_limit_wait, stated_wait
+from meshpool_harness.core import usage
+from meshpool_harness.core.client import (_reply_chars, _withhold_latest_output, classify_error, rate_limit_wait,
+                                          stated_wait)
 from meshpool_harness.core.loop import _compact, _sanitize_calls
 from meshpool_harness.core.tools import ToolError, Workspace, clean, validate
 from meshpool_harness.core import stream as ST
@@ -356,6 +359,9 @@ class _TrackHTTPS(_Track, urllib.request.HTTPSHandler):
     pass
 
 
+_ABORT: contextvars.ContextVar = contextvars.ContextVar("meshpool_abort", default=None)   # see _post_slotted
+
+
 class _EndpointDown(RuntimeError):
     """The endpoint stayed down for the whole recovery wait: report it, do not wait again."""
 
@@ -370,7 +376,7 @@ def _is_local_base(base: str) -> bool:
     return _MCL.is_local(base)
 
 
-def _probe_once(base: str, key: str, model: str, sink=None) -> str:
+def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | None = None) -> str:
     """One tiny request: "ok" when the endpoint answers (any reply below 502), "auth" on 401/403, else the error.
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
@@ -387,6 +393,8 @@ def _probe_once(base: str, key: str, model: str, sink=None) -> str:
     try:
         from meshpool_harness.core import modelcaps as _MCP
         t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
+        if timeout:
+            t = min(t, float(timeout))                  # a caller with a shorter first-byte wait (core/wire.py)
         with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
             ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
         return "ok"
@@ -929,6 +937,10 @@ def _bad_reply(resp) -> str:
 
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
+    usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
+    usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
+    budget_stopped = False  # the last turn ended on the spending limit
+    _task = None           # the usage task of the turn that is running
 
     def __init__(self, workdir: str, *, mcp=None, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None, max_steps: int = 0, profile: str = "code",
@@ -952,6 +964,7 @@ class Agent:
         self._inbox, self._inbox_lock = [], threading.Lock()
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._absorb_lock = threading.Lock()
         self.model: str | None = None          # None: the default model from settings
         self._plan, self._plan_next, self._in_turn = False, None, False   # see the `plan` property
         self._todos: list = []                 # the agent's plan (todo_write); see agent/planning.py
@@ -1180,14 +1193,17 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
-    def _wait(self, fn, *a, on_stop=None, **kw):
+    def _wait(self, fn, *a, on_stop=None, on_abandon=None, **kw):
         """Run a blocking call (a model request, an MCP tool, a web fetch) so Stop works within a fraction of a
-        second instead of when the call returns. A call that is abandoned finishes in the background, unseen."""
+        second instead of when the call returns. A call that is abandoned finishes in the background, unseen;
+        on_abandon() tells it so just before Stop is raised. It runs in a copy of this thread's context, so its
+        model calls are recorded in the turn's usage task."""
         box: dict = {}
+        cx = contextvars.copy_context()
 
         def run():
             try:
-                box["v"] = fn(*a, **kw)
+                box["v"] = cx.run(fn, *a, **kw)
             except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
                 box["e"] = e
         t = threading.Thread(target=run, daemon=True)
@@ -1195,6 +1211,8 @@ class Agent:
         while t.is_alive():
             t.join(0.15)
             if self._stop:
+                if on_abandon:
+                    on_abandon()
                 self._abort_live()                 # close the model stream now, not when it next sends a byte
                 if on_stop:
                     try:
@@ -1205,6 +1223,50 @@ class Agent:
         if "e" in box:
             raise box["e"]
         return box["v"]
+
+    # ---------- usage ledger (core/usage.py) -------------------------------------------------------------------
+    def _src(self) -> str:
+        return "grader" if getattr(self, "_is_grader", False) else self.usage_source
+
+    def _ensure_task(self):
+        """The usage task calls are recorded in: the turn's, or one made now (a call outside a turn)."""
+        if self._task is None:
+            self._task = self.usage_task or usage.start_task(chat=self.id, label="turn")
+        return self._task
+
+    def _begin_usage(self) -> None:
+        """Start the turn's usage task (the session's, else a new one; a grader nests under the turn that runs it)
+        and bind it for this thread until _end_usage()."""
+        cur = usage._CUR.get()
+        self._task = self.usage_task or usage.start_task(chat=self.id, parent=cur[0] if cur else None, label="turn")
+        self._utok = usage._CUR.set((self._task, self._src()))
+
+    def _end_usage(self) -> None:
+        tok, self._utok = getattr(self, "_utok", None), None
+        if tok is not None:
+            try:
+                usage._CUR.reset(tok)
+            except ValueError:                         # another context: nothing was bound here
+                pass
+
+    def _absorb_usage(self, turn: dict) -> None:
+        """Fold the ledger records the task has not shown yet (own calls, reviewers, graders, sub-agents, office
+        engines) into the turn and session totals, one usage event each. aux: anything but the chat's own call."""
+        t = self._task
+        if t is None:
+            return
+        with self._absorb_lock:
+            for r in t.poll():
+                c = r.get("cost")
+                d = {"in": int(r.get("in") or 0), "cached": int(r.get("cached") or 0), "out": int(r.get("out") or 0),
+                     "calls": 1}
+                more = {"cost": c or 0.0, "unpriced_calls": int(c is None), "unreported_calls": int(not r.get("reported")),
+                        "cache_write": int(r.get("cache_write") or 0), "reasoning": int(r.get("reasoning") or 0)}
+                for tot in (self.usage, turn) if isinstance(turn, dict) else (self.usage,):
+                    for k, v in {**d, **more}.items():
+                        tot[k] = tot.get(k, 0) + v
+                self.emit({"type": "usage", **d, "cost": c, "model": r.get("model", ""), "source": r.get("source", ""),
+                           "aux": r.get("source") != "chat"})
 
     def steer(self, text: str, images: list | None = None):
         """Add to the request while the agent works. It reads this before its next step."""
@@ -1445,6 +1507,8 @@ class Agent:
     def _turn(self) -> str:
         self._begin_turn_state()
         turn = self._turn_usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}   # sub-agents add theirs
+        self.budget_stopped = False
+        self._begin_usage()
         final, said = "", ""                         # said: reply text before an output-limit cut-off
         self._todo_touched = False
         self.ws.turn_files = set()
@@ -1709,6 +1773,10 @@ class Agent:
             self.emit({"type": "interrupted", "text": "Stopped. " + (
                 "What you added wasn't answered yet; it goes along with your next message." if added
                 else "Send a message to continue.")})
+        except usage.BudgetExceeded as e:           # the spending limit: end the turn here, nothing is lost
+            self._repair("Not run: the spending limit was reached before this call ran.")
+            self.budget_stopped = True
+            self.emit({"type": "error", "text": str(e) + " Raise the limit in Settings or send a message to continue."})
         except Exception as e:
             self._repair("Not run: the turn ended on an error before this call ran. Run it again if still needed.")
             self.unfinished = True                   # the next message picks the task up where it stopped
@@ -1745,6 +1813,11 @@ class Agent:
             self._in_turn = False
             if getattr(self, "_plan_next", None) is not None:          # a plan-mode change made during the turn applies now
                 self.plan = self._plan_next
+            try:
+                self._absorb_usage(turn)
+            except Exception:  # noqa: BLE001
+                pass
+            self._end_usage()
             try:
                 rec = self.receipt()
                 self.last_receipt = rec
@@ -1821,11 +1894,7 @@ class Agent:
             self.ws.commands[g.get("cmd0", 0):][-6:]
 
     def _grade_usage(self, res: dict, turn: dict) -> None:
-        u = res.get("usage") or {}
-        for k in ("in", "cached", "out", "calls"):
-            turn[k] += int(u.get(k, 0) or 0)
-            self.usage[k] += int(u.get(k, 0) or 0)
-        self.emit({"type": "usage", "aux": True, **{k: int(u.get(k, 0) or 0) for k in ("in", "cached", "out", "calls")}})
+        self._absorb_usage(turn)                       # the grader's own calls are in the task already (source grader)
 
     def _grade_gate(self, g: dict, turn: dict, final: str, force: bool = False) -> tuple[bool, str]:
         """At the final answer of a big task: an independent review. Returns (True, final) when the findings were sent
@@ -1863,7 +1932,7 @@ class Agent:
                     self.messages[-1].get("content"), str) and not force:
                 self.messages[-1]["content"] += "\n\n" + text
             return False, (final + "\n\n" + text) if not force else final
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception as e:  # noqa: BLE001 - the check must never break the turn
             try:
@@ -1893,7 +1962,9 @@ class Agent:
             self.emit(ev)
             return ev
         self.last_review = None
-        self._grade_gate(g, turn, final, force=True)
+        self._task = usage.start_task(chat=self.id, label="grade")
+        with usage.bind(self._task, "chat"):
+            self._grade_gate(g, turn, final, force=True)
         return getattr(self, "last_review", None) or {}
 
     def _plan_start(self, route, g: dict):
@@ -2463,12 +2534,17 @@ class Agent:
         self._first_scale = 1.0
         fixed: set = set()                                 # (action, field) refusals already fixed in this call
         cut_resent = False                                 # a silently cut prompt is resent once per call (H-02)
+        task = self._ensure_task()
         while True:
             attempt += 1
             if attempt >= 8:                               # every attempt waited or withheld: report the last error
                 raise last or RuntimeError("HTTP 0: the model call did not go through")
             self._check_stop()
+            res = None
             try:
+                # the spending limit: refuse before the call; the call that crosses it is still used
+                res = usage.reserve(body["model"], request_chars=_context_size(body["messages"]),
+                                    max_tokens=body.get("max_tokens") or 0, base=base, task=task)
                 if wire == "chatgpt":                  # the user's ChatGPT sign-in (core/chatgpt.py)
                     from meshpool_harness.core import chatgpt as CG
                     from meshpool_harness.core.wire import from_responses
@@ -2492,12 +2568,12 @@ class Agent:
                     if h.is_down() and not self._await_endpoint(h, base, key, body["model"]):
                         raise _EndpointDown("HTTP 0: the model endpoint did not come back")
                     slot = h.acquire(self._check_stop, self.emit)
-                    ok = False
-                    try:
-                        resp, streamed = self._wait(self._post, base, key, body, stream)
-                        ok = True
-                    finally:
-                        h.release(ok, slot)
+                    tok: dict = {}                         # the worker gives the slot back when the request ends
+                    resp, streamed = self._wait(self._post_slotted, h, slot, base, key, body, stream, tok,
+                                                on_abandon=lambda: tok.__setitem__("abort", True))
+                usage.record(body["model"], (resp or {}).get("usage"), base="" if wire == "chatgpt" else base,
+                             source=self._src(), task=task, reservation=res,
+                             request_chars=_context_size(body["messages"]), reply_chars=_reply_chars(resp))
                 self._key_ok = key                         # this key has been accepted: a later 401 may be spurious
                 bad = _bad_reply(resp)
                 if bad:                                # a 200 that carries no reply: retry or report, never "(no reply)"
@@ -2646,6 +2722,8 @@ class Agent:
                         continue
                     raise                                  # nothing to fix: a resend would fail the same way (W-04)
                 if kind == "rate_limit":
+                    if wire == "chat":                     # the provider says too many: fewer calls at once (P-12)
+                        GW.health(base, key, body["model"]).gate.throttled()
                     left = rl_budget - rl_waited
                     if left <= 0:                          # waited the whole budget: end the turn, resumable
                         raise RuntimeError(msg + f" [rate limited for {_dur(rl_waited)}]")
@@ -2776,15 +2854,13 @@ class Agent:
                 if streamed:
                     self.emit({"type": "stream_reset"})
                 self._sleep(min(20, 2 ** attempt))
+            finally:
+                if res is not None:
+                    res.close()                            # a failed attempt holds no part of the budget
         self.emit({"type": "model_end"})
         self._n429 = 0
         u = resp.get("usage") or {}
-        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
-        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
-             "calls": 1}
-        for k, v in d.items():
-            turn[k] += v
-            self.usage[k] += v
+        d_in = u.get("prompt_tokens", 0) or 0
         if not hasattr(self, "_meter"):
             from meshpool_harness.core.metrics import CacheMeter
             self._meter = CacheMeter()
@@ -2797,11 +2873,11 @@ class Agent:
         try:                                               # a server that silently cuts a too-long prompt (Ollama)
             from meshpool_harness.core import context as CTX
             sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
-            if d["in"] >= 512 and sent > 1500 and sent > d["in"] * 1.6:
-                CTX.learn(self.current_model(), int(d["in"] * 1.02) + CTX.max_output(self._ctx_window(), None))
+            if d_in >= 512 and sent > 1500 and sent > d_in * 1.6:
+                CTX.learn(self.current_model(), int(d_in * 1.02) + CTX.max_output(self._ctx_window(), None))
         except Exception:  # noqa: BLE001
             pass
-        self.emit({"type": "usage", **d})
+        self._absorb_usage(turn)                           # this call's record, and any helper's since the last one
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
         return choice.get("message") or {}, streamed
@@ -2819,23 +2895,28 @@ class Agent:
         _apply_refused(body)
         body = self._prepare(body)
         resp = None
+        task = self._ensure_task()
+        h = GW.health(base, key, model)
+        if h.is_down():                                    # a side call never waits out an outage
+            raise _EndpointDown("HTTP 0: the model endpoint is down; the review was skipped")
         for _ in range(3):
+            res = usage.reserve(model, request_chars=len(system) + len(user), max_tokens=max_tokens, base=base, task=task)
             try:
-                resp, _s = self._wait(self._post, base, key, body, False)
+                slot = h.acquire(self._check_stop, self.emit)
+                tok: dict = {}
+                resp, _s = self._wait(self._post_slotted, h, slot, base, key, body, False, tok,
+                                      on_abandon=lambda: tok.__setitem__("abort", True))
+                usage.record(model, resp.get("usage"), base=base, source="review", task=task, reservation=res,
+                             request_chars=len(system) + len(user), reply_chars=_reply_chars(resp))
                 break
             except RuntimeError as e:
                 if not _adapt_params(body, str(e)):
                     raise
+            finally:
+                res.close()
         if resp is None:
             raise RuntimeError("no reply")
-        u = resp.get("usage") or {}
-        cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
-        d = {"in": u.get("prompt_tokens", 0) or 0, "cached": cached or 0, "out": u.get("completion_tokens", 0) or 0,
-             "calls": 1}
-        for k, v in d.items():
-            turn[k] += v
-            self.usage[k] += v
-        self.emit({"type": "usage", "aux": True, **d})   # a side call (review): not the chat's context size
+        self._absorb_usage(turn)                           # a side call (review): shown as aux, not the chat's context
         return ((resp.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
     def _trace_note(self, tool: str, arg: str) -> None:
@@ -2879,7 +2960,7 @@ class Agent:
             n = len(re.findall(r"(?m)^\s*(?:[-*]|\d+[.)])\s", f)) or 1
             self._trace_note("review", f"{n} findings" if f else "LGTM")
             return RV.INJECT + f if f else ""
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception:  # noqa: BLE001 - a reviewer error must never break the turn
             return ""
@@ -2982,7 +3063,20 @@ class Agent:
             self._check_stop()
             time.sleep(0.25)
 
-    def _post(self, base: str, key: str, body: dict, stream: bool) -> tuple[dict, bool]:
+    def _post_slotted(self, h, slot, base: str, key: str, body: dict, stream: bool, tok: dict):
+        """_post, then give the gate slot back when the request really ends. It runs in _wait's worker, so a Stop
+        that abandons the call does not free the slot while the request is still on its way (MH_MAX_INFLIGHT)."""
+        ok = False
+        _ABORT.set(tok)                                    # _post reads it (it keeps its four-argument calls)
+        try:
+            out = self._post(base, key, body, stream)
+            ok = True
+            return out
+        finally:
+            h.release(ok, slot)
+
+    def _post(self, base: str, key: str, body: dict, stream: bool, tok: dict | None = None) -> tuple[dict, bool]:
+        tok = tok if tok is not None else _ABORT.get()    # Stop's token: set when the call was abandoned
         b = dict(body)
         from meshpool_harness import providers as _PV
         # an Anthropic-style key endpoint (Settings, Models and providers): the Messages API, translated both ways
@@ -3028,12 +3122,17 @@ class Agent:
             connect = c.connect
 
             def checked_connect():                       # Stop while connecting: close before sending anything
+                if tok and tok.get("abort"):
+                    c.close()
+                    raise ConnectionAbortedError("stopped before connecting")
                 connect()
-                if getattr(c, "_mh_abort", False):
+                if getattr(c, "_mh_abort", False) or (tok and tok.get("abort")):
                     c.close()
                     raise ConnectionAbortedError("stopped while connecting")
             c.connect = checked_connect
         try:
+            if tok and tok.get("abort"):                 # Stop came before the request went out: never send it
+                raise ConnectionAbortedError("stopped before the request was sent")
             with _urlopen(req, first, sink) as r:
                 if stream or _MC.is_local(base):
                     _MC.observe_first_byte(base, _bare, time.time() - t_sent)   # remembered: the next wait is 3x it
@@ -3050,7 +3149,7 @@ class Agent:
                         self.emit({"type": "status", "text": "Thinking…"})
 
                 def check():
-                    if self._stop or getattr(self, "_gen", 0) != gen:
+                    if self._stop or getattr(self, "_gen", 0) != gen or (tok and tok.get("abort")):
                         raise Interrupted()
 
                 def lines():
@@ -3467,7 +3566,7 @@ class Agent:
                     ok = out.startswith("[exit 0]")
         except ToolError as e:
             out, ok = f"ERROR: {e}", False
-        except (Interrupted, KeyboardInterrupt):
+        except (Interrupted, KeyboardInterrupt, usage.BudgetExceeded):
             raise
         except Exception as e:
             out, ok = f"ERROR: {type(e).__name__}: {e}", False
@@ -3584,18 +3683,35 @@ class Agent:
             return f"ERROR: office_task refused, nothing was built: {why}", False
         if engine == "slides":
             args = dict(args, request=self._deck_brief(args))
+        task = self._ensure_task()                # the engine's calls go to a child task: this chat's usage and limit
+        child = usage.start_task(chat=self.id, parent=task, label="office:" + engine)
         jid, reused = OJ.start(engine, args["request"], paths, self.root, scope=self.id,
-                                 model=self.model or None)   # the user's pick; else the engine resolves MH_MODEL / settings   # one request, one engine run
+                               model=self.model or None,   # the user's pick; else the engine resolves MH_MODEL / settings
+                               env_extra=usage.child_env(child, "engine:" + engine))   # one request, one engine run
         if reused == "refused":
             return OJ.refusal_text(jid, rel_to=self.root), True
         if reused != "done":
             self.emit({"type": "status", "text": f"The {engine} engine is working. Decks and models take a few minutes."})
+        seen = {"at": 0.0, "over": None}
+        turn = getattr(self, "_turn_usage", None)
+
+        def should_stop() -> bool:                # polled every 0.5 s: follow the engine's usage and the limit
+            if time.time() - seen["at"] >= 2:
+                seen["at"] = time.time()
+                if isinstance(turn, dict):
+                    self._absorb_usage(turn)
+                seen["over"] = next((t for t in task.chain() if t.budget > 0 and t.spent() >= t.budget), None)
+            return bool(self._stop or seen["over"])
         if reused == "running":              # the same request is already building (a parallel call): wait for it
             while not OJ.JOBS[jid]["event"].wait(0.5):
                 if self._stop:
                     raise Interrupted()
         elif not reused:
-            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=lambda: self._stop)
+            OJ.run(jid, timeout=float(os.environ.get("MH_OFFICE_TIMEOUT_S", "1500")), should_stop=should_stop)
+        if isinstance(turn, dict):
+            self._absorb_usage(turn)
+        if seen["over"] is not None and not self._stop:
+            raise usage.BudgetExceeded(seen["over"].id, seen["over"].budget, seen["over"].spent())
         if OJ.JOBS[jid].get("stopped"):
             raise Interrupted()
         text, failed = OJ.report(jid, rel_to=self.root, reused=reused)

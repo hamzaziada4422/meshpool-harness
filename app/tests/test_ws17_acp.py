@@ -246,6 +246,18 @@ def test_acp_prompt_usage_reaches_the_turn_and_the_chat(fake_acp):
     assert a.usage["in"] == 140 and a.usage["out"] == 20
 
 
+def test_ws04_one_ledger_row_per_acp_turn(fake_acp):
+    """The harness's usage is in the chat's own counts (ws17) and in the usage ledger (ws04): once each, not twice."""
+    from meshpool_harness.core import usage
+    make, _, _ = fake_acp
+    a = make(mode="auto", events=[])
+    a.usage_task = usage.start_task(chat="ws04-acp", label="turn")
+    assert a.send("USAGE please") == "counted"
+    t = a.usage_task.totals()
+    assert sum(b["calls"] for b in t["by_source"].values()) == 1
+    assert a.usage["in"] == 140 and a.usage["out"] == 20      # not doubled by the ledger row
+
+
 def test_m05_05_undo_gives_the_harness_a_session_without_the_undone_turns(fake_acp):
     from meshpool_harness.ui import agent_api as A
     make, calls, manifest = fake_acp

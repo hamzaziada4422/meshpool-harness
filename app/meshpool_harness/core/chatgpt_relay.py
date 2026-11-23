@@ -21,6 +21,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from meshpool_harness.core import chatgpt as CG
+from meshpool_harness.core import usage as USAGE
 
 MAX_BODY = 64 * 1024 * 1024
 _LOCK = threading.Lock()

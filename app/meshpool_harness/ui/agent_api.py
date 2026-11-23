@@ -16,6 +16,7 @@ from meshpool_harness.agent.history_repair import repair_tool_pairs
 from meshpool_harness.agent import mcp as M
 from meshpool_harness.agent.core import SESSIONS, Agent
 from meshpool_harness import harnesses as HR
+from meshpool_harness.core import usage
 from meshpool_harness.harnesses.acp import ACPAgent
 from meshpool_harness.harnesses.pi_rpc import PiAgent
 
@@ -999,7 +1000,9 @@ class Session:
         except Exception:  # noqa: BLE001
             pass
 
-    def _start_turn(self, text: str, images: list | None):
+    def _start_turn(self, text: str, images: list | None, cont: bool = False):
+        """Start a turn. `cont` is a continuation (goal next turn, resume after an outage): it keeps the usage task
+        of the message that began the work, so the spending limit covers the whole goal. A new message starts a task."""
         with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits);
             _claim_working(self)                    # refused while an update installs: the chat stays as it was
         self._stop_req = False
@@ -1021,6 +1024,10 @@ class Session:
         except BaseException:
             self.state = "idle"
             raise
+        if not (cont and getattr(self, "_usage_task", None)):
+            self._usage_task = usage.start_task(chat=self.id, label="scheduled" if self.scheduled else "task")
+        if hasattr(self.agent, "usage_task"):
+            self.agent.usage_task = self._usage_task      # the agent (or harness) records its calls in this task
         if hasattr(self.agent, "plan"):
             changed = bool(self.agent.plan) != self.plan
             self.agent.plan = self.plan
@@ -1208,7 +1215,8 @@ class Session:
                     nxt = self._resume_next(ev0)
                 if nxt:
                     self.emit({"type": "queued", "text": "", "n": 0})
-                    self._start_turn(*nxt)               # stays "working": the queued message goes straight in
+                    # stays "working": the queued message goes straight in
+                    self._start_turn(*nxt, cont=nxt[0] in (GOAL_NEXT, RESUME_NEXT))
                 else:
                     while True:                          # a message added in the last moment is answered, not left
                         with self.lock:
@@ -1350,6 +1358,10 @@ class Session:
             evs = self.events[ev0:]
         out = _turn_outcome(evs)
         reply = next((e.get("text") or "" for e in reversed(evs) if e.get("type") == "assistant"), "")
+        if getattr(getattr(self, "agent", None), "budget_stopped", False):
+            self.emit({"type": "status", "text": "Goal paused: the spending limit for this task was reached. Raise it "
+                                                 "in Settings or send a message to continue."})
+            return None                 # the goal stays set; a new message starts a new task with a fresh limit
         if getattr(self, "_goal_t", 0) > getattr(self, "t_turn", 0):
             return (GOAL_NEXT, [])      # set while this turn ran: that turn never saw the goal, so it cannot judge it
         found = _GOAL_RE.findall(reply)
@@ -1404,8 +1416,9 @@ class Session:
     def _resume_next(self, ev0: int):
         """After a turn with no goal: when it ended on a rate limit or an outage (not Stop), wait and pick the task
         up again by itself, so a long task is not left half done. None when there is nothing to pick up."""
-        if os.environ.get("MH_AUTO_RESUME", "1") == "0" or not self.auto_resume:
-            return None
+        if (os.environ.get("MH_AUTO_RESUME", "1") == "0" or not self.auto_resume
+                or getattr(getattr(self, "agent", None), "budget_stopped", False)):
+            return None                              # off, or the spending limit stopped it: never run on by itself
         with self.lock:
             evs = self.events[ev0:]
         out = _turn_outcome(evs)

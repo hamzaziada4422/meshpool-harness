@@ -1244,8 +1244,16 @@ function applyEv(ev) {
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
       { const nn = add(esc(ev.text), "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+    case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
+      if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
+      if (ev.state === "waiting") {
+        const t = `Waiting for a free model slot (${ev.inflight ?? "?"} of ${ev.limit ?? "?"} in use)...`;
+        if (cur.gateEl) cur.gateEl.innerHTML = esc(t); else cur.gateEl = add(esc(t), "note gate");
+      } else if (cur.gateEl) { cur.gateEl.remove(); cur.gateEl = null; }
+      break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
       $("[data-resend]", n)?.addEventListener("click", () => { const inp = $("#input"); inp.value = ev.resend; inp.dispatchEvent(new Event("input")); inp.focus(); });
@@ -1255,6 +1263,7 @@ function applyEv(ev) {
       if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("");
       closeGroup();
       const u = ev.turn || {};
@@ -2171,9 +2180,19 @@ async function renderSection(sec) {
     await draw(); return;
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">How much Meshpool's own agents used on this computer. What it cost is on your <a href="https://meshpool.ai" target="_blank" rel="noopener">Meshpool account</a>.</p>
-      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div></div>
-      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
+    // Cost: "$0.42" when every call was priced, "$0.42 + 3 unpriced calls" when some were not, "unpriced" when none were. Never $0.00 for unpriced.
+    const usd = x => x < 0.01 && x > 0 ? "$" + x.toFixed(4) : "$" + x.toFixed(2);
+    const money = r => !r.calls ? "-" : r.unpriced_calls >= r.calls ? "unpriced" : usd(r.cost || 0) + (r.unpriced_calls ? ` + ${r.unpriced_calls} unpriced call${r.unpriced_calls === 1 ? "" : "s"}` : "");
+    const SRC = [["Chat", /^chat$/], ["Engines", /^engine:/], ["Reviewers and grader", /^(review|grader)/], ["Helpers", /^helper:/], ["Sub-agents", /^subagent/], ["External agents", /^external:/], ["Background", /^background/]];
+    const bySrc = {}; for (const [k, r] of Object.entries(u.by_source || {})) { const name = (SRC.find(([, re]) => re.test(k)) || ["Other"])[0]; const b = bySrc[name] || (bySrc[name] = {in: 0, cached: 0, out: 0, calls: 0, cost: 0, unpriced_calls: 0}); for (const f in b) b[f] += r[f] || 0; }
+    const srcRows = [...SRC.map(x => x[0]), "Other"].filter(n => bySrc[n]);
+    const gw = (u.gateway || []).filter(g => g.inflight || g.waiting);
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call Meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
+      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div><div><b>${esc(money(t))}</b><span>Cost</span></div></div>
+      ${t.unreported_calls ? `<p class="pnote">${fmt(t.unreported_calls)} call${t.unreported_calls === 1 ? "" : "s"} did not report their tokens, so those are estimated.</p>` : ""}
+      ${gw.map(g => `<p class="pnote">Model calls running: ${g.inflight} of ${g.limit} on ${esc(g.endpoint)}${g.waiting ? `, ${g.waiting} waiting` : ""}</p>`).join("")}
+      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`).join("")}</table>
+      <h3 style="font-size:16px;margin:18px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
     b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>

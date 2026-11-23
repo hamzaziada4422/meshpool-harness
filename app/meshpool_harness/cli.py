@@ -593,6 +593,9 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
         if not isinstance(msg_, dict):
             raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
         txt = msg_.get("content") or ""
+        from meshpool_harness.core import usage
+        usage.record(model, r.get("usage"), base=led.base_url, source="check", request_chars=30,
+                     reply_chars=len(txt))
         return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
