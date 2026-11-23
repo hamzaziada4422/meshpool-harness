@@ -758,6 +758,17 @@ def _destructive(args: dict) -> bool:
                                     + " " + " ".join(map(str, args.get("commands") or []))))
 
 
+def _cache_hints_ok(base: str) -> bool:
+    """prompt_cache_key and user are optional routing hints that OpenAI, Azure OpenAI and the Meshpool gateway read;
+    other OpenAI-compatible servers (Ollama, LM Studio, Mistral, vLLM...) may reject fields they do not know."""
+    try:
+        from meshpool_harness import providers as PV
+        h = PV.host(base)
+        return h.endswith(("openai.com", "meshpool.ai", "openai.azure.com", "deepseek.com")) or PV.is_azure(base)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _bad_reply(resp) -> str:
     """Why a successful HTTP reply is not a model reply (an error body, no choices, a null message, a content filter
     with nothing in it), or "" when it is one."""
@@ -2174,6 +2185,9 @@ class Agent:
                 b["stream"] = True
                 b["stream_options"] = {"include_usage": True}
             b = _PV.adapt_body(base, b)
+            if not _cache_hints_ok(base):             # a server that validates fields strictly refuses unknown ones
+                b.pop("prompt_cache_key", None)
+                b.pop("user", None)
             url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key
         hdrs = {**hdrs, "Content-Type": "application/json"}
         req = urllib.request.Request(url, data=json.dumps(b).encode("utf-8"), method="POST",

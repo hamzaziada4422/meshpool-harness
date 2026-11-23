@@ -50,3 +50,74 @@ def test_full_prompt_is_still_available(monkeypatch):
 
 def test_non_codex_lanes_prefix_does_not_grow(tmp_path):
     assert _prefix_tokens(_agent(tmp_path, "work")) < 7500
+
+
+# ---- request shape per wire, against a local fake server and the Anthropic translator -------------------------------
+
+def _fake_server(captured):
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            captured.append((self.path, dict(self.headers), self.rfile.read(n).decode("utf-8")))
+            body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                               "usage": {"prompt_tokens": 10, "completion_tokens": 1}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def test_plain_openai_compatible_server_gets_no_cache_fields(tmp_path, monkeypatch):
+    got = []
+    srv = _fake_server(got)
+    base = f"http://127.0.0.1:{srv.server_port}/v1"
+    monkeypatch.setenv("MESHPOOL_BASE_URL", base)
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    try:
+        a = _agent(tmp_path)
+        body = a._body()
+        assert "prompt_cache_key" in body                      # the agent adds the hint ...
+        resp, _ = a._post(base, "k", body, False)
+        sent = json.loads(got[-1][2])
+        assert "prompt_cache_key" not in sent and "user" not in sent       # ... and drops it for an unknown server
+        assert "cache_control" not in got[-1][2]
+        assert resp["choices"][0]["message"]["content"] == "ok"
+    finally:
+        srv.shutdown()
+
+
+def test_anthropic_request_has_cache_breakpoints_and_tolerates_missing_usage():
+    from meshpool_harness.core import anthropic_wire as AW
+    body = {"model": "m", "max_tokens": 100, "messages": [
+        {"role": "system", "content": "be brief"}, {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function",
+                                                              "function": {"name": "shell", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "out"}],
+        "tools": [{"type": "function", "function": {"name": "shell", "parameters": {"type": "object"}}},
+                  {"type": "function", "function": {"name": "apply_patch", "parameters": {"type": "object"}}}]}
+    out = AW.to_request(dict(body))
+    assert out["system"][0]["cache_control"] == {"type": "ephemeral"}
+    assert out["tools"][-1]["cache_control"] == {"type": "ephemeral"} and "cache_control" not in out["tools"][0]
+    assert out["messages"][-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert json.dumps(out).count("cache_control") == 3
+    # the reply without any cache fields still gives a usable usage block
+    r = AW.from_response({"content": [{"type": "text", "text": "x"}], "usage": {"input_tokens": 5, "output_tokens": 2}})
+    assert r["usage"]["prompt_tokens"] == 5 and r["usage"]["prompt_tokens_details"]["cached_tokens"] == 0
+
+
+def test_anthropic_cache_markers_can_be_turned_off(monkeypatch):
+    from meshpool_harness.core import anthropic_wire as AW
+    monkeypatch.setenv("MH_ANTHROPIC_CACHE", "0")
+    out = AW.to_request({"model": "m", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+                         "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}]})
+    assert "cache_control" not in json.dumps(out)

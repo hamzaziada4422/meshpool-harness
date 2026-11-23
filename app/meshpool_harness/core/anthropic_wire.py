@@ -3,6 +3,7 @@ responses out, so the rest of Meshpool (agent loop, tools) never knows which wir
 from __future__ import annotations
 
 import json
+import os
 
 VERSION = "2023-06-01"
 
@@ -83,8 +84,12 @@ def to_request(body: dict) -> dict:
         else:
             push("user", _blocks(m.get("content")) or [{"type": "text", "text": "(empty)"}])
     out = {"model": body["model"], "max_tokens": int(body.get("max_tokens") or 8192), "messages": msgs}
+    cache = os.environ.get("MH_ANTHROPIC_CACHE", "1") != "0"
     if system:
-        out["system"] = "\n\n".join(s for s in system if s)
+        text = "\n\n".join(s for s in system if s)
+        # Explicit cache breakpoints (the Messages API caches only what is marked): the instructions, the tools and
+        # the end of the conversation so far. Everything before a marker is read from the cache on the next call.
+        out["system"] = [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}] if cache else text
     if body.get("temperature") is not None:
         out["temperature"] = body["temperature"]
     tools = []
@@ -94,11 +99,16 @@ def to_request(body: dict) -> dict:
             tools.append({"name": f["name"], "description": f.get("description", ""),
                           "input_schema": f.get("parameters") or {"type": "object", "properties": {}}})
     if tools:
+        if cache:
+            tools[-1]["cache_control"] = {"type": "ephemeral"}
         out["tools"] = tools
         tc = body.get("tool_choice")
         out["tool_choice"] = ({"type": "any"} if tc == "required" else
                               {"type": "tool", "name": tc["function"]["name"]} if isinstance(tc, dict) else
                               {"type": "auto"})
+    if cache and msgs and msgs[-1]["content"] and isinstance(msgs[-1]["content"][-1], dict) \
+            and msgs[-1]["content"][-1].get("type") in ("text", "tool_result", "tool_use"):
+        msgs[-1]["content"][-1] = dict(msgs[-1]["content"][-1], cache_control={"type": "ephemeral"})
     return out
 
 
