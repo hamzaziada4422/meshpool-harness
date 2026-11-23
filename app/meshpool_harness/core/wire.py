@@ -345,7 +345,7 @@ def sse_to_chat(lines) -> dict:
         if isinstance(whole, dict) and whole.get("error"):
             err = whole["error"]
             msg = (err.get("message") if isinstance(err, dict) else str(err)) or json.dumps(err)[:300]
-            raise RuntimeError(f"meshpool HTTP 502: {msg}")
+            raise RuntimeError(f"meshpool HTTP 200 but not a model reply: {str(msg)[:200]}")   # a 200: not transient
         raise RuntimeError("meshpool HTTP 200 but not a model reply: " + "\n".join(plain)[:200])
     if finish is None and not done:                      # closed cleanly mid-reply: do not pass a cut-off reply on
         raise RuntimeError("HTTP 0: the stream ended before the reply was complete")

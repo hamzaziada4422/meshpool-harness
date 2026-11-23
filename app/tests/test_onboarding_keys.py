@@ -106,10 +106,59 @@ def test_agent_post_surfaces_200_error_body(home, mock, tmp_path):              
     from meshpool_harness.agent.core import Agent
     s = mock(lambda p, b, h: (200, {"error": "model not loaded: qwen"}))
     a = Agent(str(tmp_path), mode="auto")
-    with pytest.raises(RuntimeError, match="answered 200 without a reply: model not loaded: qwen"):
+    with pytest.raises(RuntimeError, match="answered without a model reply: model not loaded: qwen"):
         a._post(s.url + "/v1", "k", {"model": "m", "messages": []}, False)
     with pytest.raises(RuntimeError, match="model not loaded: qwen"):                    # streamed: JSON, no data: events
         a._post(s.url + "/v1", "k", {"model": "m", "messages": []}, True)
+
+
+def test_non_reply_200_is_not_transient_and_reaches_the_chat(home, mock, tmp_path, monkeypatch):   # W-06
+    import time
+    from meshpool_harness.agent import core
+    from meshpool_harness.core.client import classify_error
+    from meshpool_harness.core.wire import SimpleLedger
+    s = mock(lambda p, b, h: (200, {"error": "model not loaded: qwen"}))
+    for stream in ("1", "0"):
+        monkeypatch.setenv("MH_STREAM", stream)
+        led = SimpleLedger("t")
+        led.base_url, led.api_key = s.url + "/v1", KEY
+        with pytest.raises(RuntimeError) as e:
+            led.chat(model="m", messages=[{"role": "user", "content": "x"}], retries=0)
+        assert classify_error(str(e.value)) not in ("transient", "rate_limit"), str(e.value)
+    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", KEY)
+    monkeypatch.setenv("MESHPOOL_BASE_URL", s.url + "/v1")
+    monkeypatch.setenv("MH_RECOVER_MIN", "0.05")        # a wrong "transient" verdict would show as a wait
+    events = []
+    a = core.Agent(str(tmp_path), mode="auto", emit=events.append)
+    with pytest.raises(RuntimeError) as e:
+        a._post(s.url + "/v1", KEY, {"model": "m", "messages": []}, False)
+    assert classify_error(str(e.value)) not in ("transient", "rate_limit")
+    t0 = time.time()
+    try:
+        out = a.send("hi")
+    except Exception as ex:                              # noqa: BLE001
+        out = str(ex)
+    shown = " ".join(str(ev.get("text")) for ev in events if ev.get("type") == "error") + out
+    assert time.time() - t0 < 60 and "model not loaded: qwen" in shown, shown   # short retries, not a 30-minute wait
+
+
+def test_onboard_resets_previous_endpoint_settings(home, mock):
+    from meshpool_harness import providers as PV
+    from meshpool_harness.core.wire import SimpleLedger
+    s = mock(_only_chat)
+    C.write({"MH_API_WIRE": "anthropic", "MH_AUTH_HEADER": "api-key", "MH_AUTH_SCHEME": "raw",
+             "MESHPOOL_AZURE_API_VERSION": "2024-10-21", "MESHPOOL_BASE_URL": "http://127.0.0.1:9/v1",
+             "MESHPOOL_API_KEY": "old", "MH_SUBAGENT_MODEL": "old-model"})
+    C.load_into_env(override=True)
+    r = S.onboard({"provider": "custom", "key": KEY, "base_url": s.url + "/v1", "model": "m"})
+    assert r["ok"], r
+    assert PV.key_wire() == "openai" and PV.auth_headers(KEY) == {"Authorization": "Bearer " + KEY}
+    assert C.read().get("MH_SUBAGENT_MODEL", "") == ""
+    s.posts.clear()
+    led = SimpleLedger("t")
+    led.chat(model="m", messages=[{"role": "user", "content": "x"}], retries=0)
+    assert s.posts and s.posts[-1][0] == "/v1/chat/completions"
 
 
 def test_ping_tests_the_key_not_chatgpt(home, mock, monkeypatch):                       # F-14

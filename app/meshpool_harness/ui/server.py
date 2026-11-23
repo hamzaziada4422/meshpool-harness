@@ -156,7 +156,7 @@ def assistant_action(b: dict) -> dict:
     return assistant_view()
 
 
-def test_connection(values: dict | None = None) -> dict:
+def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     """Check the saved key and endpoint, or (with values) a key and endpoint before they are saved. Typed values go
     straight to the check: saved settings win over the environment, so setting them there would test the saved
     endpoint and send the typed key to it."""
@@ -175,7 +175,7 @@ def test_connection(values: dict | None = None) -> dict:
         base = PS.normalise_base(base_in)
     except PS.SetupError as e:
         return {"ok": False, "detail": str(e), "endpoint": base_in}
-    same = PS._same_endpoint(base, PV.key_base())
+    same = PS._same_endpoint(base, PV.key_base()) and not fresh   # fresh: nothing saved applies (onboarding)
     key = v.get("MESHPOOL_API_KEY") or (PV.key() if same else "")
     if not key and not PV.keyless_ok(base):
         return {"ok": False, "detail": f"No API key {'saved yet' if same else 'entered for ' + PV.host(base)}.",
@@ -207,7 +207,7 @@ def test_connection(values: dict | None = None) -> dict:
             txt = ""
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
-            "endpoint": base}
+            "endpoint": base, "wire": wire, "api_version": ver}
 
 
 def onboard(body: dict) -> dict:
@@ -231,7 +231,7 @@ def onboard(body: dict) -> dict:
         vals = {"MESHPOOL_API_KEY": key, "MESHPOOL_BASE_URL": cand}
         if model:
             vals["MH_MODEL"] = model
-        r, used = test_connection(vals), cand
+        r, used = test_connection(vals, fresh=True), cand
         if r.get("ok") or r.get("status") != 404:
             break
     if not r.get("ok"):
@@ -240,6 +240,11 @@ def onboard(body: dict) -> dict:
             **HR.provider_values(which)}
     if which == "custom":
         vals["MH_MODEL"] = model
+    from meshpool_harness import providers as PV
+    vals.update(MH_API_WIRE=r.get("wire") or "openai", MH_AUTH_HEADER="", MH_AUTH_SCHEME="",
+                MESHPOOL_AZURE_API_VERSION=r.get("api_version") or "")      # nothing of the previous endpoint stays
+    if (C.read().get("MH_SUBAGENT_MODEL") or "").strip() and not PS._same_endpoint(used, PV.key_base()):
+        vals["MH_SUBAGENT_MODEL"] = ""                   # named a model of the old endpoint
     C.write(vals)
     HR.apply_env(vals)
     return {"ok": True, "base_url": used}

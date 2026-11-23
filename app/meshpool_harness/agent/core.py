@@ -2581,7 +2581,7 @@ class Agent:
                         if not _PS._is_reply("anthropic" if anthropic else "openai", data):
                             e = data.get("error") if isinstance(data, dict) else None
                             e = (e.get("message") if isinstance(e, dict) else e) or raw_body[:200].decode("utf-8", "replace")
-                            raise RuntimeError(f"HTTP 0: the endpoint answered 200 without a reply: {str(e)[:200]}")
+                            raise RuntimeError(f"HTTP 200: the endpoint answered without a model reply: {str(e)[:200]}")
                         return (AW.from_response(data) if anthropic and isinstance(data, dict) else data), False
                     except ValueError:                   # a gateway that streams anyway, or sends an error page
                         if raw_body.lstrip().startswith(b"data:"):
