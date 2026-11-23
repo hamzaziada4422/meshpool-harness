@@ -854,13 +854,19 @@ class WorkbookReview:
             pass
 
 
-def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> str:
+_COMPANY_WORDS = re.compile(r"valuation|\bDCF\b|\bLBO\b|\bcomps?\b|precedent|\bIPO\b|M&A|merger|acquisition|fairness|credit|"
+                            r"three[- ]statement|company|ticker", re.I)
+
+
+def dossier_brief(task: str, workdir: str, client, model: str, task_id: str, files=None) -> str:
     """Research the company before the first cell is written (engines/research/dossier.py): a model built from the
     statements alone misses what changed since them (an asset-light shift, a disposal, new guidance). Returns the text
     added to the task: the structural changes, the sourced findings and the open questions; '' when research is off
     (MH_DOSSIER=0, MH_RESEARCH=0, an offline client, no network) or found nothing."""
     if os.environ.get("MH_DOSSIER", "1") == "0":
         return ""
+    if any(str(f).lower().endswith((".xlsx", ".xlsm", ".csv")) for f in files or []) and not _COMPANY_WORDS.search(task):
+        return ""                              # a report or edit of the user's own data: no company to research
     try:
         from engines.forge import research as RS
         from engines.research.dossier import build_dossier, brief_block
@@ -868,7 +874,7 @@ def dossier_brief(task: str, workdir: str, client, model: str, task_id: str) -> 
         if not ok:
             return ""
         d = build_dossier(task, [], client=client, models=[os.environ.get("MH_STORY_REVIEW_MODEL") or model],
-                          out_dir=workdir, task_id=f"{task_id}-dossier")
+                          out_dir=workdir, task_id=f"{task_id}-dossier", require_company=True)
     except Exception:  # noqa: BLE001 - research never costs the model
         return ""
     if not d.get("facts"):
@@ -966,7 +972,7 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    task += dossier_brief(task, workdir, client, model, task_id)
+    task += dossier_brief(task, workdir, client, model, task_id, files)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
         if review_enabled(client, review) else None
     if rv:
