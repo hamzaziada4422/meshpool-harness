@@ -30,79 +30,106 @@ env:
 
 jobs:
   installer-test:
-    # The Windows installer on its own: the real installer.nsi with a stand-in payload (random files, the size of the real
-    # one), compiled and installed silently. Finds installer problems in minutes instead of after the whole app build.
+    # Finds out which part of the Windows installer misbehaves, in minutes: an empty installer, the real script with a
+    # small payload, and the real script as released (stub with an archive appended) with a small payload.
     if: github.event_name == 'workflow_dispatch' && inputs.platforms == 'installer-test'
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - name: Build the stand-in payload and compile the real installer script
+      - name: Build the test installers
         shell: bash
         run: |
           set -euo pipefail
           T=installer-test-work
-          mkdir -p $T/Meshpool/app/blob $T/Meshpool/app/small $T/Meshpool/runtime $T/Meshpool/bin
-          cp packaging/nsis/installer.nsi packaging/nsis/winsetup.nsh packaging/nsis/winsetup.ps1 $T/
-          cp packaging/icons/Meshpool.ico $T/Meshpool/Meshpool.ico
-          cp /c/Windows/System32/hostname.exe $T/Meshpool/Meshpool.exe
-          cp /c/Windows/System32/hostname.exe $T/Meshpool/runtime/python.exe
-          sed -i 's/@VERSION_NUM@/0.0.0/; s/@VERSION@/0.0.0/g; s/@BETA@/ test/' $T/installer.nsi
+          mkdir -p $T/payload/app $T/payload/runtime
+          cp packaging/icons/Meshpool.ico $T/payload/Meshpool.ico
+          cp /c/Windows/System32/hostname.exe $T/payload/Meshpool.exe
+          cp /c/Windows/System32/hostname.exe $T/payload/runtime/python.exe
           python - <<'PY'
           import os
-          root = "installer-test-work/Meshpool/app"
-          for i in range(70):                       # about 700 MB that does not compress, like the speech model and wheels
-              with open(f"{root}/blob/b{i:03d}.bin", "wb") as f:
-                  f.write(os.urandom(10 * 1024 * 1024))
-          for i in range(20000):                    # many small files, like site-packages
-              with open(f"{root}/small/f{i:05d}.txt", "w") as f:
-                  f.write(("meshpool %d\n" % i) * 20)
+          for i in range(300):
+              open(f"installer-test-work/payload/app/f{i:04d}.txt", "w").write("meshpool\n" * 50)
           PY
-          SEVEN="/c/Program Files/7-Zip"
-          (cd $T/Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -md=64m -mmt=on -bso0 -bsp0 ../payload.7z '*')
-          ls -la $T/payload.7z
-          curl -fsSL --retry 4 -o $T/7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
-          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  $T/7zr.exe" | sha256sum -c -
           choco install nsis -y --no-progress
-          (cd $T && "/c/Program Files (x86)/NSIS/makensis.exe" -V2 installer.nsi && ls -la "Meshpool Setup.exe")
-          (cd $T && cat "Meshpool Setup.exe" payload.7z > full.exe && "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 full.exe && mv -f full.exe "Meshpool Setup.exe" && ls -la "Meshpool Setup.exe")
-      - name: Install it silently and watch
-        timeout-minutes: 25
+          MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
+          SEVEN="/c/Program Files/7-Zip"
+          # v0: an installer that does nothing
+          printf 'Unicode true\nOutFile "v0.exe"\nRequestExecutionLevel user\nSection\nSectionEnd\n' > $T/v0.nsi
+          (cd $T && "$MAKENSIS" -V1 v0.nsi)
+          # v1: the real script, files inside it (no 7zr.exe next to it, so it takes the plain File /r path)
+          mkdir -p $T/v1 && cp -r $T/payload $T/v1/Meshpool
+          cp packaging/nsis/installer.nsi packaging/nsis/winsetup.nsh packaging/nsis/winsetup.ps1 $T/v1/
+          sed -i 's/@VERSION_NUM@/0.0.0/; s/@VERSION@/0.0.0/g; s/@BETA@/ test/' $T/v1/installer.nsi
+          (cd $T/v1 && "$MAKENSIS" -V1 installer.nsi && cp "Meshpool Setup.exe" ../v1.exe)
+          # v2: the real script as released: a stub with 7zr.exe, and the archive appended
+          mkdir -p $T/v2 && cp -r $T/payload $T/v2/Meshpool
+          cp packaging/nsis/installer.nsi packaging/nsis/winsetup.nsh packaging/nsis/winsetup.ps1 $T/v2/
+          sed -i 's/@VERSION_NUM@/0.0.0/; s/@VERSION@/0.0.0/g; s/@BETA@/ test/' $T/v2/installer.nsi
+          curl -fsSL --retry 4 -o $T/v2/7zr.exe https://github.com/ip7z/7zip/releases/download/25.01/7zr.exe
+          echo "27cbe3d5804ad09e90bbcaa916da0d5c3b0be9462d0e0fb6cb54be5ed9030875  $T/v2/7zr.exe" | sha256sum -c -
+          (cd $T/v2/Meshpool && "$SEVEN/7z.exe" a -t7z -mx=5 -bso0 -bsp0 ../payload.7z '*')
+          (cd $T/v2 && "$MAKENSIS" -V1 installer.nsi && cat "Meshpool Setup.exe" payload.7z > ../v2.exe && "$SEVEN/7z.exe" t -t7z -bso0 -bsp0 ../v2.exe)
+          ls -la $T/*.exe
+      - name: Run each one silently, with diagnostics when it hangs
+        timeout-minutes: 15
         shell: bash
         run: |
           set -uo pipefail
-          D="$PWD/install-test"
-          W=$(cygpath -w "$D")
-          SETUP="./installer-test-work/Meshpool Setup.exe"
-          watch() {   # watch PID for $1 seconds, print what it does every 10 s
-            local pid=$1 limit=$2 t=0
-            while [ $t -lt $limit ]; do
-              sleep 10; t=$((t + 10))
-              kill -0 $pid 2>/dev/null || return 0
-              powershell -NoProfile -Command 'Get-CimInstance Win32_Process | Where-Object { $_.Name -match "Meshpool Setup|7z|powershell|taskkill" -and $_.ProcessId -ne $PID } | ForEach-Object { $c = (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).CPU; "{0} pid={1} read={2}MB write={3}MB cpu={4}s ws={5}MB" -f $_.Name, $_.ProcessId, [int]($_.ReadTransferCount/1MB), [int]($_.WriteTransferCount/1MB), [int]$c, [int]($_.WorkingSetSize/1MB) }; foreach ($d in ($env:MP_W + ".new"), $env:MP_W) { if (Test-Path $d) { "{0}: {1} MB" -f $d, [math]::Round((Get-ChildItem $d -Recurse -File -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1MB) } }' 2>&1 | sed "s/^/-- ${t}s: /" || true
+          T="$PWD/installer-test-work"
+          cat > $T/diag.ps1 <<'PS'
+          $name = $env:MP_NAME
+          Add-Type -TypeDefinition @"
+          using System; using System.Text; using System.Runtime.InteropServices; using System.Collections.Generic;
+          public class W {
+            public delegate bool EnumProc(IntPtr h, IntPtr l);
+            [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc p, IntPtr l);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder s, int n);
+            [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+            public static List<string> For(uint pid) {
+              var r = new List<string>();
+              EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p);
+                if (p == pid) { var t = new StringBuilder(256); var c = new StringBuilder(256); GetWindowText(h, t, 256); GetClassName(h, c, 256);
+                  r.Add("window class=[" + c + "] title=[" + t + "] visible=" + IsWindowVisible(h)); }
+                return true; }, IntPtr.Zero);
+              return r;
+            }
+          }
+          "@
+          foreach ($x in @(Get-Process -Name $name -ErrorAction SilentlyContinue)) {
+            "pid {0}: cpu {1}s, responding {2}, threads {3}, handles {4}, ws {5} MB" -f $x.Id, $x.CPU, $x.Responding, $x.Threads.Count, $x.HandleCount, [int]($x.WorkingSet64/1MB)
+            $x.Threads | ForEach-Object { "  thread {0}: {1} {2}" -f $_.Id, $_.ThreadState, $_.WaitReason }
+            [W]::For([uint32]$x.Id) | ForEach-Object { "  $_" }
+            Get-CimInstance Win32_Process -Filter ("ParentProcessId=" + $x.Id) | ForEach-Object { "  child: {0} pid {1}" -f $_.Name, $_.ProcessId }
+          }
+          PS
+          run_one() {   # name, install folder; runs NAME.exe /S [/D=...] and reports
+            local n=$1 dir=$2 args=("/S")
+            [ -n "$dir" ] && args+=("/D=$(cygpath -w "$dir")")
+            echo "=================== $n"
+            local t0=$(date +%s)
+            "$T/$n.exe" "${args[@]}" &
+            local pid=$! i
+            for i in $(seq 1 18); do
+              sleep 5
+              kill -0 $pid 2>/dev/null || { wait $pid; echo "$n finished: exit code $?, $(( $(date +%s) - t0 )) s"; return 0; }
+              if [ $i -eq 6 ]; then echo "$n still running after 30 s:"; MP_NAME="$n" powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w $T/diag.ps1)" 2>&1 | head -60; fi
             done
+            echo "$n HUNG for 90 s"
+            MP_NAME="$n" powershell -NoProfile -ExecutionPolicy Bypass -File "$(cygpath -w $T/diag.ps1)" 2>&1 | head -60
+            taskkill //F //IM "$n.exe" >/dev/null 2>&1 || true
             return 1
           }
-          export MP_W="$W"
-          # 1. with the startup integrity check skipped
-          echo "== run 1: /S /NCRC"
-          "$SETUP" /S /NCRC "/D=$W" &
-          PID=$!
-          if watch $PID 240; then echo "run 1 finished"; wait $PID; echo "exit code: $?"
-          else
-            echo "run 1 still running after 4 minutes; stopping it"
-            taskkill //F //IM "Meshpool Setup.exe" >/dev/null 2>&1 || true
-            sleep 5
-            echo "== run 2: /S (integrity check on), watching I/O"
-            "$SETUP" /S "/D=$W" &
-            PID=$!
-            if ! watch $PID 240; then echo "run 2 also still running after 4 minutes"; exit 1; fi
-            wait $PID; echo "exit code: $?"
-          fi
-          for f in Meshpool.exe "Uninstall Meshpool.exe" runtime/python.exe app/blob/b069.bin app/small/f19999.txt; do
-            [ -e "$D/$f" ] || { echo "missing after install: $f"; exit 1; }
-          done
-          echo "the stand-in install is complete"
+          fail=0
+          run_one v0 "" || fail=1
+          run_one v1 "$PWD/inst-v1" || fail=1
+          ls "$PWD/inst-v1" 2>/dev/null | head -5
+          run_one v2 "$PWD/inst-v2" || fail=1
+          ls "$PWD/inst-v2" 2>/dev/null | head -5
+          [ -f "$PWD/inst-v2/Meshpool.exe" ] && echo "v2 installed Meshpool.exe" || echo "v2 did NOT install Meshpool.exe"
+          exit $fail
 
   mac-probe:
     # Which GitHub-hosted macOS runners this repository is actually given (a job no runner takes is cancelled after
