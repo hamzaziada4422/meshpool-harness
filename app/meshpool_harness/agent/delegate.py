@@ -599,7 +599,8 @@ class Delegation:
             if e is None:
                 continue
             base, root = str(wt["workdir"]), str(self.parent.root)
-            e["files_written"] = [root + f[len(base):] if f.startswith(base) else f for f in e["files_written"]]
+            e["files_written"] = [root + f[len(base):] if f.startswith(base + os.sep) else f
+                                  for f in e["files_written"]]
             e["changes_applied"] = bool(res.get("ok"))
             if not res.get("ok"):
                 bad = res.get("conflicts") or res.get("blocked") or []

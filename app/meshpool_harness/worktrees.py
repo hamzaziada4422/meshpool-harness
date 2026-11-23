@@ -705,6 +705,8 @@ def recover(alive=None) -> dict:
                         tip = _out(_git(top, "rev-parse", "-q", "--verify", rec["branch"]))
                         if tip and (tip == rec["base"] or _ancestor(top, tip, _head(top))):
                             _git(top, "branch", "-D", rec["branch"])
+                        elif tip:
+                            done["kept_branches"].append(rec["branch"])   # its commits are not in the folder yet
                     _drop(wid)
                 done["missing"].append(wid)
                 continue
