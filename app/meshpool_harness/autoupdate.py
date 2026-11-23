@@ -101,6 +101,11 @@ def udir() -> Path:
     return C.home() / "updates"
 
 
+def _write_json(p: Path, data: dict) -> None:
+    """Crash-safe JSON write (unique temporary file, fsync, rename): kept for callers of the old helper."""
+    fsio.atomic_write_json(p, data, indent=None)
+
+
 def _state_path() -> Path:
     return udir() / "state.json"
 
