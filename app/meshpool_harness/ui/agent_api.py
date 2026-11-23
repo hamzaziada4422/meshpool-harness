@@ -952,8 +952,8 @@ class Session:
             pass
 
     def _start_turn(self, text: str, images: list | None):
-        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits)
-            self.state = "working"
+        with self.lock:                             # busy and stoppable from the first moment (_capability_turn waits);
+            _claim_working(self)                    # refused while an update installs: the chat stays as it was
         self._stop_req = False
         C.load_into_env(override=True)              # newest settings (model, key) for this turn
         try:                                        # a masked or mangled key: one clear message for every agent
@@ -968,8 +968,6 @@ class Session:
                     return
         except Exception:  # noqa: BLE001
             pass
-        with self.lock:                             # busy from now on: _capability_turn can wait ~50 s for the office tools
-            _claim_working(self)
         try:
             caps = self._capability_turn(text)
         except BaseException:
