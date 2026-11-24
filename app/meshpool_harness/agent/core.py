@@ -2134,6 +2134,21 @@ class Agent:
             pass
         return self._repeat_guard(c, g, cut)
 
+    @staticmethod
+    def _write_target(name: str, args: str):
+        """(file, tiny) for a call that edits one file, else None. tiny: under 400 characters of change."""
+        try:
+            a = json.loads(args or "{}")
+        except ValueError:
+            return None
+        if name == "apply_patch":
+            body = str(a.get("input") or "")
+            files = re.findall(r"^\*\*\* (?:Update|Add) File: (.+)$", body, flags=re.M)
+            return (files[0].strip(), len(body) < 400) if len(files) == 1 else None
+        if name in ("edit", "write_file") and a.get("path"):
+            return (str(a["path"]), len(str(a.get("new") or a.get("content") or "")) < 400)
+        return None
+
     def _repeat_guard(self, c: dict, g: dict, cut: bool = False) -> str:
         """Run a tool call, unless the same call has just run three times in a row with the same result: a fourth time
         cannot tell the model anything new (one such loop, 60 calls and 1M tokens, cost more than a hundred tasks).
@@ -2148,6 +2163,18 @@ class Agent:
         runs = g.setdefault("same", [])
         edits = self.ws.edits
         nm = str(f.get("name", ""))
+        wf = self._write_target(nm, str(f.get("arguments", "")))
+        if wf and os.environ.get("MH_REPEAT_WRITES", "1") != "0":
+            st = g.setdefault("wl", {}).setdefault(wf[0], {"n": 0, "mark": g.get("wprog", 0)})
+            if st["mark"] != g.get("wprog", 0):
+                st["n"], st["mark"] = 0, g.get("wprog", 0)     # something else changed since the last edit: not a loop
+            if wf[1]:
+                st["n"] += 1
+                if st["n"] > 8:
+                    return (f"[Meshpool] Not done: you have edited {wf[0]} {st['n'] - 1} times with tiny changes and nothing "
+                            "else changed. Run the real check or answer; no more edits to this file this turn.")
+            else:
+                st["n"] = 0
         if os.environ.get("MH_REPEAT_READS", "1") != "0" and (
                 self._inspection(nm, str(f.get("arguments", ""))) or (nm.startswith("mcp__") and MA.read_like(nm))):
             bg = self.ws.__dict__.get("_bg") or {}
@@ -2181,6 +2208,21 @@ class Agent:
                 any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
             out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
                               "case, a shorter timeout), print what it is waiting on, or change the code first.")
+        wnote = ""
+        nwr = g.get("wl", {}).get(wf[0], {}).get("n", 0) if wf else 0
+        if wf and wf[1] and nwr > 4:
+            wnote = (f"\n[Meshpool] You have edited {wf[0]} {nwr} times with tiny changes and nothing else "
+                     "changed; stop editing it and run the real check, or answer.")
+        if wf:
+            for k, v in g.get("wl", {}).items():
+                if k != wf[0]:
+                    v["n"] = 0
+            g["wprog"] = g.get("wprog", 0) + (0 if wf[1] and nwr > 0 else 1)
+        else:                                      # a command whose key is new or whose pass/fail flipped is progress
+            last = [r for r in runs if r[0] == key]
+            if not last or last[-1][3] != failed:
+                g["wprog"] = g.get("wprog", 0) + 1
+        out = str(out) + wnote if wnote else out
         runs.append((key, h, edits, failed, str(out)[:240]))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
