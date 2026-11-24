@@ -1103,6 +1103,17 @@ class Agent:
             shell = "bash" if bash else "sh"
         text = (WORK_SYSTEM if self.profile == "work" else SYSTEM).format(
             root=self.root, os_name=f"{platform.system()} {platform.release()}", shell=shell)
+        # Stable prefix: what differs from one chat to the next (the folder, the project's instructions, the skills
+        # matched to this request, the route's method) goes after everything that is the same for every chat, so the
+        # provider's prompt cache serves the long shared part to every new chat. With the folder at character ~290
+        # (broad1, dabench), no two chats shared more than that: 57% cached input against Codex's 80%.
+        stable = os.environ.get("MH_STABLE_PREFIX", "1") != "0"
+        env_block = ""
+        if stable:
+            m = re.search(r"\nEnvironment\n(?:- [^\n]*\n)+", text)
+            if m:
+                env_block = "\n" + m.group(0).strip("\n")
+                text = text[:m.start()] + "\n" + text[m.end():]
         if "ask_user" in self._dropped():             # headless or a lean route: no tool, so no 2k-char section about it
             text = re.sub(r"\nAsking the user \(ask_user\)\n.*?(?=\nRules\n)", "\n", text, count=1, flags=re.S)
         if "todo_write" in self._dropped():          # no todo tool in this harness: no instruction to use it
@@ -1117,6 +1128,8 @@ class Agent:
             text += E2E_RULES
         if self.profile == "code":
             text += SCRATCH_RULE
+        if stable:
+            text += "\n" + env_block                    # after the shared rules, before the per-project parts
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
