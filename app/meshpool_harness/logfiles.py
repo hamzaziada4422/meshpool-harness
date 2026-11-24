@@ -25,6 +25,7 @@ class RotatingFile:
                                                        encoding="utf-8", errors="replace")
         self._h.terminator = ""
         self._lock = threading.Lock()
+        self._piece = max(1, int(max_bytes) // 4)      # chars per record: even 4-byte characters stay within one file
         self.closed = False
 
     def write(self, s) -> int:
@@ -32,10 +33,12 @@ class RotatingFile:
             return 0
         if isinstance(s, bytes):
             s = s.decode("utf-8", "replace")
-        rec = logging.LogRecord("meshpool", logging.INFO, "", 0, s, None, None)
         with self._lock:
             try:
-                self._h.emit(rec)
+                # One record is never split by the handler, so a big write (a pump that fell behind reads up to 64 KB at
+                # once) would make a file larger than max_bytes: cut it into pieces that each fit.
+                for i in range(0, len(s), self._piece):
+                    self._h.emit(logging.LogRecord("meshpool", logging.INFO, "", 0, s[i:i + self._piece], None, None))
             except Exception:  # noqa: BLE001 - a full disk must not crash the app
                 return 0
         return len(s)

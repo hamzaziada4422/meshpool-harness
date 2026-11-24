@@ -95,8 +95,8 @@ def test_h23_a_child_process_log_rotates_while_it_runs(tmp_path):
                          stderr=log)
     log.release()
     p.wait(30)
-    log.flush()
-    time.sleep(0.3)
+    log._t.join(60)                    # the pump copies until EOF: wait for it, not a fixed 0.3 s a loaded machine can miss
+    assert not log._t.is_alive()
     log.flush()
     files = sorted(q.name for q in tmp_path.iterdir())
     assert "srv.log.1" in files and "srv.log.3" not in files, files

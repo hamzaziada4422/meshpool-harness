@@ -1047,10 +1047,11 @@ class Server:
         retried = set()
         e = self._entry
         if e is not None:
-            self._acquire(timeout)
             with e.lock:
-                e.inflight += 1
-        try:
+                e.inflight += 1                   # before the start: the idle reaper must not stop a process that is still
+        try:                                      # starting for this very call (a slow start looked idle: its last use was old)
+            if e is not None:
+                self._acquire(timeout)
             return self._rpc_inner(method, params, timeout, retried, e)
         finally:
             if e is not None:

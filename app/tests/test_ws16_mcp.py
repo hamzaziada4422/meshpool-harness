@@ -127,7 +127,8 @@ def test_write_to_dead_server_restarts_and_retries_once(home):
     pid = int(s.call("pid", {})[0])
     os.kill(pid, signal.SIGKILL)
     _wait(lambda: not _alive(pid))
-    s._entry.t.alive = True                        # the reader has not noticed yet: the write is what fails
+    assert _wait(lambda: not s._entry.t.alive)      # the reader finishes noticing first: a late EOF would clear the flag again
+    s._entry.t.alive = True                        # now it looks unaware of the death: the write is what fails
     text, failed = s.call("echo", {})
     assert (text, failed) == ("ok", False)
     s.close()

@@ -695,6 +695,8 @@ class Handler(BaseHTTPRequestHandler):
                         gate_open = True
                         r = AU.begin_apply()
                         if not r.get("ok"):
+                            gate_open = False
+                            A.resume()                 # reopen before the reply goes out: a client that sees it can send at once
                             return self._send(200, r)
                         if r.get("mode") == "code":
                             self._send(200, {"ok": True, "mode": "code", "restarting": True, "boot": BOOT})
@@ -733,7 +735,9 @@ class Handler(BaseHTTPRequestHandler):
                         r2 = UP.apply_staged(r)
                         if not r2.get("ok"):
                             AU.install_finished(False, r2.get("error", ""))
-                            return self._send(200, r2)        # the finally below reopens the gate
+                            gate_open = False
+                            A.resume()                        # before the reply, not after it: the client sees an open gate
+                            return self._send(200, r2)
                         applied = True
                         self._send(200, {"ok": True, "action": "restarting", "boot": BOOT})
                         gate_open = False                  # the gate stays closed: the process is going away
