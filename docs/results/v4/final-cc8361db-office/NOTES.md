@@ -81,3 +81,15 @@ v4-fin-officebench
 | ob-1-19-3 | mp-work | fail | 2 | 0.0035 | 175 | 6 (gateway-hit) |
 | ob-2-23-0 | mp-on-codex | fail | 19 | 0.0239 | 84 | 5 (gateway-hit) |
 | ob-2-23-0 | mp-work | fail | 18 | 0.0231 | 82 | 3 (gateway-hit) |
+
+## Corrections (later the same day, no new model calls)
+
+- xlsx_budget on Meshpool Work and CLI was a grader false negative. Their formulas use named ranges defined on the
+  Assumptions sheet, and the live-update check passed. With the fixed grader (846ef557) both pass 7/7.
+- invoices_fx on Meshpool on Pi answered "Grand total in USD: $4,308.96" after 1 min 50 s. The kit never received
+  the reply because of the app bug fixed in c068fc43 (HTTP 500 on every poll of a Pi or Codex chat after its first
+  turn).
+- invoices_fx on Meshpool on Codex was a real failure: the sheets engine wrote the token "num2" as the Excel format
+  code, so every amount displayed as a date. Fixed in 5649fe0f.
+- pdf_report on Meshpool Work and CLI was a real failure: make_pdf could not draw a chart. Fixed in 57a73d43; the
+  re-run passed it on CLI (rerun-846ef557-office).
