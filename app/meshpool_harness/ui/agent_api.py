@@ -732,6 +732,10 @@ class Session:
     # fail a turn: the slow parts run on a thread, every call is guarded.
     def _turn_begin(self):
         self._ck_run, self._ck_n = f"{self.id}:{int(self.t_turn)}", 0
+        if not getattr(self, "_awake", False):         # no idle sleep while this turn runs (awake.py)
+            from meshpool_harness import awake as AW
+            AW.hold()
+            self._awake = True
         try:
             from meshpool_harness import checks as CK
             CK.begin(self._ck_run)
@@ -761,6 +765,10 @@ class Session:
             pass
 
     def _turn_finish(self):
+        if getattr(self, "_awake", False):
+            from meshpool_harness import awake as AW
+            AW.release()
+            self._awake = False
         run = getattr(self, "_ck_run", "")
         if getattr(self, "_ck_stop", None):
             self._ck_stop.set()
