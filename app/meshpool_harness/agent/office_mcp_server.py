@@ -6,7 +6,7 @@ Tools
   make_spreadsheet(request, files?)   -> .xlsx with live formulas, checked by the sheets engine
   analyze_data(request, files)        -> charts, tables and a written analysis from data files
   make_document(markdown, filename)   -> .docx from Markdown (headings, lists, tables, bold, code)
-  make_pdf(markdown, filename)        -> .pdf from Markdown
+  make_pdf(markdown, filename)        -> .pdf from Markdown (```chart blocks, images)
   convert_document(path, to)          -> docx/pptx/xlsx to PDF, and PDF to Word (docx, odt, rtf) or a picture, through LibreOffice
   read_document(path, sheet?, pages?) -> text of a PDF, Word, PowerPoint, Excel, CSV or Power BI file
   office_job_status(job_id)           -> result of a job that was still running
@@ -610,6 +610,75 @@ def _md_inline(s: str) -> str:
     return re.sub(r"\[([^\]]+)\]\((https?://[^)]+)\)", r"<link href='\2' color='#1A56DB'>\1</link>", s)
 
 
+def _pdf_chart(spec_text: str, font: str):
+    """A ```chart block as a native vector chart. JSON: {"type": "bar"|"line"|"pie", "title": str,
+    "labels": [...], "values": [...]} or "series": {"name": [...], ...} for several bar or line series."""
+    import json as _json
+    from reportlab.graphics.charts.barcharts import VerticalBarChart
+    from reportlab.graphics.charts.legends import Legend
+    from reportlab.graphics.charts.linecharts import HorizontalLineChart
+    from reportlab.graphics.charts.piecharts import Pie
+    from reportlab.graphics.shapes import Drawing, String
+    from reportlab.lib import colors
+    try:
+        spec = _json.loads(spec_text)
+    except ValueError as e:
+        raise ValueError(f"chart block is not JSON: {e}") from None
+    labels = [str(x) for x in spec.get("labels") or []]
+    series = spec.get("series") or ({"": spec["values"]} if "values" in spec else {})
+    if not labels or not series:
+        raise ValueError('chart block needs "labels" and "values" (or "series")')
+    data = [[float(v) for v in vals] for vals in series.values()]
+    if any(len(d) != len(labels) for d in data):
+        raise ValueError("every chart series needs one value per label")
+    kind = str(spec.get("type") or "bar").lower()
+    palette = [colors.HexColor(c) for c in ("#1A56DB", "#E3A008", "#0E9F6E", "#E02424", "#7E3AF2", "#6B7280")]
+    w, h = 440, 230
+    d = Drawing(w, h)
+    if spec.get("title"):
+        d.add(String(w / 2, h - 14, str(spec["title"]), fontName=font, fontSize=11, textAnchor="middle"))
+    if kind == "pie":
+        c = Pie()
+        c.x, c.y, c.width, c.height = 140, 15, 170, 170
+        c.data, c.labels = data[0], labels
+        for k in range(len(labels)):
+            c.slices[k].fillColor = palette[k % len(palette)]
+    else:
+        c = HorizontalLineChart() if kind == "line" else VerticalBarChart()
+        c.x, c.y, c.width, c.height = 50, 35, w - 80, h - 70
+        c.data = data
+        c.categoryAxis.categoryNames = labels
+        c.categoryAxis.labels.fontName = c.valueAxis.labels.fontName = font
+        c.valueAxis.valueMin = min(0, min(min(x) for x in data))
+        for k in range(len(data)):
+            if kind == "line":
+                c.lines[k].strokeColor = palette[k % len(palette)]
+                c.lines[k].strokeWidth = 2
+            else:
+                c.bars[k].fillColor = palette[k % len(palette)]
+        if len(data) > 1:
+            lg = Legend()
+            lg.x, lg.y, lg.fontName = w - 10, h - 30, font
+            lg.alignment = "right"
+            lg.colorNamePairs = [(palette[k % len(palette)], n) for k, n in enumerate(series)]
+            d.add(lg)
+    d.add(c)
+    return d
+
+
+def _pdf_image(src: str, max_w: float):
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import Image
+    path = _resolve(src)
+    if not path.exists():
+        raise ValueError(f"image not found: {src}")
+    if not _readable(path):
+        raise ValueError(f"{src} is outside the project folder")
+    iw, ih = ImageReader(str(path)).getSize()
+    scale = min(1.0, max_w / iw)
+    return Image(str(path), width=iw * scale, height=ih * scale)
+
+
 def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = None, _named: bool | None = None):
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -641,7 +710,14 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
             while i < len(lines) and not lines[i].strip().startswith("```"):
                 block.append(lines[i])
                 i += 1
-            flow.append(Preformatted("\n".join(block), st["Code"]))
+            lang = s[3:].strip().lower()
+            if lang == "chart":
+                try:
+                    flow += [_pdf_chart("\n".join(block), reg), Spacer(1, 8)]
+                except (ValueError, KeyError, TypeError) as e:
+                    return f"Could not draw the chart: {e}. Nothing was saved.", True
+            else:
+                flow.append(Preformatted("\n".join(block), st["Code"]))
         elif s.startswith("|") and i + 1 < len(lines) and re.match(r"^\s*\|?\s*:?-{3,}", lines[i + 1]):
             flush()
             rows = []
@@ -657,6 +733,13 @@ def make_pdf(markdown: str, filename: str = "document.pdf", title: str | None = 
                                    ("VALIGN", (0, 0), (-1, -1), "TOP")]))
             flow += [t, Spacer(1, 8)]
             continue
+        elif re.match(r"^!\[[^\]]*\]\([^)]+\)\s*$", s):
+            flush()
+            src = re.match(r"^!\[[^\]]*\]\(([^)]+)\)", s).group(1).strip()
+            try:
+                flow += [_pdf_image(src, A4[0] - 4 * cm), Spacer(1, 8)]
+            except ValueError as e:
+                return f"Could not add the image: {e}. Nothing was saved.", True
         elif re.match(r"^#{1,6}\s", s):
             flush()
             lvl = len(s) - len(s.lstrip("#"))
@@ -791,7 +874,10 @@ TOOLS = {
                          "{op, ...}; ops are listed if one is missing.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
-    "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder.",
+    "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
+                 "```chart block with JSON {\"type\": \"bar\"|\"line\"|\"pie\", \"title\", \"labels\": [...], "
+                 "\"values\": [...]} (or \"series\": {name: [...]}) is drawn as a real chart; ![caption](file.png) "
+                 "embeds an image. Never draw a chart with text characters.",
                  {"markdown": S, "filename": S, "title": S}, ["markdown"]),
     "convert_document": (convert_document, "Convert a document to another format (docx, pptx, xlsx, md to pdf; pdf to "
                          "docx). `to` is the target extension; `output` names the result.",
