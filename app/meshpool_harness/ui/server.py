@@ -1051,7 +1051,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif act == "compact":
                     if s.state in ("working", "waiting"):
                         raise ValueError("Wait for the task to finish or stop it, then compact.")
-                    r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
+                    r = s.agent.compact_now(str(b.get("focus") or "")) if hasattr(s.agent, "compact_now") else None
                     return self._send(200, dict(s.view(int(b.get("since", 10**9))), compacted=r))
                 else:
                     s.set_mode(b.get("mode", "ask"))

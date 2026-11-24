@@ -112,7 +112,7 @@ def rule_notes(middle: list) -> str:
     return "\n".join(parts)
 
 
-def summarize(middle: list, task: str, client=None, model: str | None = None) -> str:
+def summarize(middle: list, task: str, client=None, model: str | None = None, focus: str = "") -> str:
     """The note's model-written part. "" when no model can be reached (the rule-based part still goes in)."""
     if os.environ.get("MH_COMPACT_MODEL", "1") == "0":
         return ""
@@ -123,14 +123,16 @@ def summarize(middle: list, task: str, client=None, model: str | None = None) ->
         model = model or os.environ.get("MH_MODEL_FAST") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
         r = client.chat(model=model, messages=[
             {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": f"The task:\n{task[:3000]}\n\nThe log of earlier steps:\n{render(middle)}"}],
+            {"role": "user", "content": f"The task:\n{task[:3000]}\n\nThe log of earlier steps:\n{render(middle)}"
+             + (f"\n\nThe user asked this summary to keep, in full detail: {focus[:1000]}" if focus else "")}],
             max_tokens=2800, temperature=0.1, task_id="compact", role="worker")
         return (r["choices"][0]["message"].get("content") or "").strip()[:MAX_NOTE]
     except Exception:  # noqa: BLE001 - a failed summary must never stop the task
         return ""
 
 
-def compact_history(messages: list, client=None, model: str | None = None, keep_recent: int = KEEP_RECENT) -> dict | None:
+def compact_history(messages: list, client=None, model: str | None = None, keep_recent: int = KEEP_RECENT,
+                    focus: str = "") -> dict | None:
     """Replace the older steps in `messages` (in place) with the handoff note. Returns {"removed": n, "model": bool}
     or None when nothing was done."""
     parts = split(messages, keep_recent)
@@ -138,7 +140,7 @@ def compact_history(messages: list, client=None, model: str | None = None, keep_
         return None
     head, middle, tail = parts
     task = _text(head[-1].get("content")) if head[-1].get("role") == "user" else ""
-    written = summarize(middle, task, client, model)
+    written = summarize(middle, task, client, model, focus)
     rules = rule_notes(middle)
     note = ("[Earlier steps of this task were summarized to save space. The summary and the log facts below are "
             "accurate; the user's task above is unchanged.]\n"

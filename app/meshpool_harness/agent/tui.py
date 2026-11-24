@@ -35,7 +35,7 @@ COMMANDS = [
     ("model", "[id]", "pick the model"),
     ("login", "", "sign in: MeshPool key, another provider, or ChatGPT"),
     ("clear", "", "start a new conversation in this folder"),
-    ("compact", "", "shorten old tool output to free context"),
+    ("compact", "[what to keep]", "summarize earlier steps to free context; say what to keep in full"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
@@ -1390,7 +1390,7 @@ class Session:
             return t.p(st.dim("  /compact is not available for this agent."))
         from meshpool_harness.agent import core as A
         before = A._context_size(self.agent.messages)
-        done = self.agent.compact_now() if hasattr(self.agent, "compact_now") else None
+        done = self.agent.compact_now(arg or "") if hasattr(self.agent, "compact_now") else None   # /compact keep X
         A._shrink_context(self.agent.messages, max(1, int(before * 0.4)), hard=True)
         after = A._context_size(self.agent.messages)
         if before:

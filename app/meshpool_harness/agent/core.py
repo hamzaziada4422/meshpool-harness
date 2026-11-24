@@ -1953,15 +1953,16 @@ class Agent:
             if _context_size(self.messages) > limit:         # still too big: the older steps become a handoff note
                 self.compact_now()
 
-    def compact_now(self):
-        """Replace the older steps with a handoff note (agent/compaction.py). Returns what it did, or None."""
+    def compact_now(self, focus: str = ""):
+        """Replace the older steps with a handoff note (agent/compaction.py); focus says what the note must keep.
+        Returns what it did, or None."""
         from meshpool_harness.agent import compaction
         try:
             from meshpool_harness.agent import extras as EX
             EX.run_hooks(self.root, "PreCompact", {"messages": len(self.messages)})
         except Exception:  # noqa: BLE001
             pass
-        r = compaction.compact_history(self.messages)
+        r = compaction.compact_history(self.messages, focus=str(focus or "").strip())
         if r:
             try:
                 EX.run_hooks(self.root, "PostCompact", {"removed": r.get("removed"), "messages": len(self.messages)})

@@ -339,3 +339,20 @@ def test_no_worktrees_in_a_repo_whose_git_runs_programs(env):                   
     with pytest.raises(WT.WorktreeError, match="run programs"):
         WT.create(r, "x")
 
+
+
+def test_compaction_keeps_what_the_user_asked_for():                          # /compact keep X
+    from meshpool_harness.agent import compaction as CP
+    seen = []
+
+    class Fake:
+        def chat(self, **kw):
+            seen.append(kw["messages"][-1]["content"])
+            return {"choices": [{"message": {"content": "summary"}}]}
+    msgs = [{"role": "system", "content": "s"}, {"role": "user", "content": "build the API"}]
+    for i in range(40):
+        msgs += [{"role": "assistant", "content": "", "tool_calls": [{"id": f"c{i}", "type": "function", "function":
+                  {"name": "bash", "arguments": "{\"command\": \"ls\"}"}}]},
+                 {"role": "tool", "tool_call_id": f"c{i}", "content": "out " * 50}]
+    r = CP.compact_history(msgs, client=Fake(), model="m", focus="the API design decisions")
+    assert r and seen and seen[0].endswith("keep, in full detail: the API design decisions")

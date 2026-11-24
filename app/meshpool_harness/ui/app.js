@@ -586,9 +586,9 @@ const SLASH = [
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
-  ["/compact", "Summarize the earlier steps to free up room, so a long task can keep going", async () => {
+  ["/compact", "Summarize the earlier steps to free up room (/compact what to keep in full)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
-    try { const r = await post(`/api/agent/${S.cur.id}/compact`, {}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
+    try { const r = await post(`/api/agent/${S.cur.id}/compact`, {focus: arg || ""}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
   }],
   ["/diff", "Show what changed", () => togglePanel("diff", true)],
   ["/files", "Browse the project's files", () => togglePanel("files", true)],
