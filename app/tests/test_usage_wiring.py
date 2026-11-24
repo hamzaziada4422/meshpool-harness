@@ -302,10 +302,12 @@ def test_stop_before_connect_keeps_the_slot_and_sends_nothing(serve, monkeypatch
         except BaseException as e:  # noqa: BLE001
             box["e"] = e
         box["at"] = time.time()
-    t0 = time.time()
     th = threading.Thread(target=go)
     th.start()
-    time.sleep(0.2)
+    until = time.time() + 5                     # wait for the worker to hold its slot (a fixed sleep races under load)
+    while not gate.inflight and time.time() < until:
+        time.sleep(0.01)
+    t0 = time.time()
     a._stop = True
     th.join(5)
     assert isinstance(box.get("e"), Interrupted) and box["at"] - t0 < 0.8   # Stop answers quickly
