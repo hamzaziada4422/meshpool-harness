@@ -36,3 +36,5 @@ Model replies that hit the 4,096-token output cap (runaway generation):
 - Meshpool default: 0
 - default + large-repo Codex style: 0
 - Codex CLI 0.171.0: 0
+
+Note: sympy-23413 rep 0 hit the gateway budget 429 mid-run on all three arms (meter rows with status 429); the run stopped there, so rep 1 of that task is missing. report-excl-23413.md drops the task.
