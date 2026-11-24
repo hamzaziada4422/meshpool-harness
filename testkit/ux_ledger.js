@@ -1,0 +1,76 @@
+// Meshpool UI test for the feature-ledger additions: code blocks with colours and a Copy button, the Thinking block
+// for the built-in agent, the Effort menu, the @ file picker, Up arrow recall of sent messages, search inside files
+// and the folder trust note. Runs against an app on MAIN_PORT backed by the mock model (testkit/mock_llm.py).
+// Usage: node ux_ledger.js OUT_DIR MAIN_PORT PROJECT_DIR
+const {chromium} = require("playwright");
+const fs = require("fs"), path = require("path");
+const [out, port, proj] = process.argv.slice(2);
+const results = []; const check = (name, ok, detail = "") => { results.push([name, !!ok]); console.log((ok ? "PASS " : "FAIL ") + name + (ok ? "" : "  -> " + String(detail).slice(0, 300))); };
+
+(async () => {
+  fs.mkdirSync(path.join(proj, ".meshpool"), {recursive: true});
+  fs.writeFileSync(path.join(proj, ".meshpool", "hooks.json"), JSON.stringify({PreToolUse: [{matcher: "bash", command: "true"}]}));
+  fs.writeFileSync(path.join(proj, "notes.md"), "# Notes\nthe needle is here\n");
+  const b = await chromium.launch();
+  const ctx = await b.newContext({viewport: {width: 1360, height: 880}, permissions: ["clipboard-read", "clipboard-write"]});
+  const p = await ctx.newPage(); const errs = [];
+  p.on("pageerror", e => errs.push(e.message));
+  await p.addInitScript(() => { try { localStorage.setItem("mp_permsAsked", "1"); localStorage.removeItem("mp_sent"); } catch (e) {} });
+  await p.goto(`http://127.0.0.1:${port}/`); await p.waitForSelector(".hero", {timeout: 30000});
+  const ends = () => p.evaluate(() => (S.cur?.log || []).filter(e => e.type === "turn_end").length);
+  const send = async text => {                       // send, then wait for this message's own turn to end
+    const n = await ends(); await p.fill("#input", text); await p.keyboard.press("Enter");
+    await p.waitForFunction(k => S.cur?.view?.state === "idle" && (S.cur.log || []).filter(e => e.type === "turn_end").length > k, n, {timeout: 60000}).catch(() => {});
+  };
+  // a chat in the project: the trust note, then a code block
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(800);
+  await send("show python code");
+  check("trust note shows for a folder with its own hooks", await p.waitForSelector("#trustBar", {timeout: 10000}).then(() => true, () => false));
+  check("code block has a language label and a Copy button", !!(await p.$(".msg-ai .codewrap .codehd [data-copycode]")) &&
+        /python/.test(await p.textContent(".msg-ai .codewrap .codehd span")));
+  check("code block is coloured", (await p.$$(".msg-ai .codewrap pre .tk-k")).length > 0 && (await p.$$(".msg-ai .codewrap pre .tk-c")).length > 0);
+  await p.click(".msg-ai .codewrap [data-copycode]"); await p.waitForTimeout(300);
+  const clip = await p.evaluate(() => navigator.clipboard.readText()).catch(e => "ERR " + e.message);
+  check("Copy puts the code on the clipboard", /def add\(a, b\):/.test(clip) && !/```/.test(clip), clip);
+  await p.screenshot({path: out + "/code-block.png"});
+  // trust from the note
+  await p.click("#trustYes"); await p.waitForSelector(".dlg, .scrim", {timeout: 5000}).catch(() => {});
+  const okBtn = await p.$(".dlg button.primary, .dlg .btn.primary"); if (okBtn) await okBtn.click(); await p.waitForTimeout(800);
+  const t = await p.evaluate(dir => api("/api/trust?root=" + encodeURIComponent(dir)), proj);
+  check("Trust this folder trusts it", t.trusted === true && !(await p.$("#trustBar")), JSON.stringify(t));
+  // thinking
+  await send("think out loud"); await p.waitForTimeout(500);
+  check("the built-in agent's reasoning shows in a Thinking block", /briefly/.test(await p.evaluate(() => [...document.querySelectorAll(".think")].map(x => x.textContent).join(" "))));
+  // effort menu
+  await p.click("#mPill"); await p.waitForTimeout(300);
+  const eff = await p.$$eval("#ctx .mi", xs => xs.map(x => x.textContent));     // menus are #ctx
+  const effBtn = await p.$$("#ctx .mi"); let opened = false;
+  for (const x of effBtn) if (/Effort/.test(await x.textContent())) { await x.click(); opened = true; break; }
+  await p.waitForTimeout(300);
+  const high = await p.$$("#ctx .mi");
+  let picked = false;
+  for (const x of high) if (/^High/.test((await x.textContent()).trim())) { await x.click(); picked = true; break; }
+  await p.waitForTimeout(500);
+  check("Effort menu sets High for this chat", opened && picked && await p.evaluate(() => S.cur.view.effort === "high"), eff.join(" | "));
+  await p.keyboard.press("Escape");
+  // @ picker
+  await p.click("#input"); await p.fill("#input", ""); await p.type("#input", "look at @note"); await p.waitForTimeout(900);
+  const opts = await p.$$eval("#pop.inline .opt, #pop.inline button", xs => xs.map(x => x.textContent));
+  check("@ opens a file picker with matching files", opts.some(o => /@notes\.md/.test(o)), opts.join(" | "));
+  await p.keyboard.press("Enter"); await p.waitForTimeout(300);
+  check("picking a file puts @path in the message", /look at @notes\.md /.test(await p.inputValue("#input")), await p.inputValue("#input"));
+  // Up arrow recall
+  await p.fill("#input", ""); await p.keyboard.press("ArrowUp"); await p.waitForTimeout(200);
+  check("Up arrow in an empty box recalls the last sent message", (await p.inputValue("#input")) === "think out loud", await p.inputValue("#input"));
+  await p.keyboard.press("ArrowUp"); await p.waitForTimeout(200);
+  check("Up again goes further back", (await p.inputValue("#input")) === "show python code", await p.inputValue("#input"));
+  await p.keyboard.press("ArrowDown"); await p.keyboard.press("ArrowDown"); await p.waitForTimeout(200);
+  check("Down past the newest clears the box", (await p.inputValue("#input")) === "", await p.inputValue("#input"));
+  // search inside files
+  const r = await p.evaluate(dir => api(`/api/fs/search?root=${encodeURIComponent(dir)}&q=needle&content=1`), proj);
+  check("search inside files finds the line", (r.lines || []).some(x => x.path === "notes.md" && x.line === 2), JSON.stringify(r).slice(0, 200));
+  check("no page errors", !errs.length, errs.join(" | "));
+  await b.close();
+  const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);
+  process.exit(ok === results.length ? 0 : 1);
+})().catch(e => { console.error("CRASH", e.message); process.exit(2); });

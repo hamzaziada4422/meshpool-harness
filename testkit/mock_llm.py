@@ -118,6 +118,10 @@ def plan(messages, tools):
             if rd:
                 return ("tool", rd, {"path": "model.pbix"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
+    if "show python code" in u:                           # a fenced code block (copy button, colours in the app)
+        return ("text", "Here it is:\n\n```python\ndef add(a, b):\n    return a + b  # sum\n```\n\nThat is all.")
+    if "think out loud" in u:                             # streamed reasoning_content before the answer
+        return ("text", "THINK:I should answer briefly.|Done thinking.")
     if "hello" in u:
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": "hello.py", "content": "print('hello from meshpool')\n"})
@@ -166,12 +170,17 @@ class H(BaseHTTPRequestHandler):
             msg = {"role": "assistant", "content": p[1]}
         usage = {"prompt_tokens": 1000, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
         if not body.get("stream"):
+            if str(msg.get("content") or "").startswith("THINK:"):
+                msg["content"] = msg["content"].split("|", 1)[1]
             out = json.dumps({"id": "x", "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}], "usage": usage}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out); return
         self.send_response(200); self.send_header("Content-Type", "text/event-stream"); self.end_headers()
         def ev(d):
             self.wfile.write(b"data: " + json.dumps(d).encode() + b"\n\n"); self.wfile.flush()
+        if str(msg.get("content") or "").startswith("THINK:"):
+            thought, msg["content"] = msg["content"][6:].split("|", 1)
+            ev({"id": "x", "choices": [{"index": 0, "delta": {"reasoning_content": thought}}]})
         if msg.get("content"):
             words = msg["content"].split(" ")
             for i, w in enumerate(words):

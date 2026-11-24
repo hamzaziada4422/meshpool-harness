@@ -67,6 +67,14 @@ def test_search_finds_files_by_name(proj, http):
     assert [x["path"] for x in r["results"]] == ["src/a.py"]
 
 
+def test_search_inside_files_returns_matching_lines(proj, http):
+    (proj / "node_modules" / "x.js").write_text("print('hidden')")
+    (proj / "blob.bin").write_bytes(b"print\0\1")
+    st, r = http("GET", "/api/fs/search", root=str(proj), q="PRINT", content="1")
+    assert st == 200 and r["lines"] == [{"name": "a.py", "path": "src/a.py", "line": 1, "text": "print('hi')"}]
+    assert "lines" not in http("GET", "/api/fs/search", root=str(proj), q="print")[1]
+
+
 def test_read_text_and_kinds(proj, http):
     st, r = http("GET", "/api/fs/read", root=str(proj), path="src/a.py")
     assert st == 200 and r["kind"] == "text" and r["text"] == "print('hi')\n" and len(r["sha"]) == 64

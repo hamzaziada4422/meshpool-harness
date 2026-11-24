@@ -460,6 +460,8 @@ function setupComposer() {
   inp.addEventListener("keydown", e => {
     const pop = $("#pop.inline");
     if (pop && ["ArrowDown", "ArrowUp", "Enter", "Tab"].includes(e.key)) { e.preventDefault(); popKey(e.key); return; }
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey &&
+        !inp.value.slice(0, inp.selectionStart).includes("\n") && recallSent(inp, e.key === "ArrowUp" ? -1 : 1)) { e.preventDefault(); return; }
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendNow((isMac ? e.metaKey : e.ctrlKey) && cfg().busy); }
     if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim")) { e.preventDefault(); stopNow(); }
   });
@@ -529,6 +531,7 @@ async function sendNow(interrupt) {
   try { sessionStorage.removeItem("mp_draft_" + (S.cur?.id || "new")); } catch (e) {}
   const inp = $("#input"); let text = inp.value.trim(); const typed = text;
   if (!text && !S.attachments.length) return;
+  S.recall = null; rememberSent(typed);
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
@@ -656,6 +659,8 @@ function menuFromInput() {
   const before = v.slice(0, pos);
   const slash = /^\/(\w*)$/.exec(before);
   const skill = /(^|\s)\$([\w-]*)$/.exec(before);
+  const at = /(^|\s)@([\w./-]*)$/.exec(before);
+  if (at && !slash && !skill) return mentionPop(inp, v, pos, at[2]);
   if (slash) {
     const q = slash[1].toLowerCase();
     const items = byUse(SLASH.filter(s => s[0].slice(1).startsWith(q)).map(s => ({label: s[0], desc: s[1], fn: () => { used(s[0]); if (ARG_CMDS.has(s[0])) { inp.value = s[0] + " "; inp.focus(); inp.dispatchEvent(new Event("input")); return; } inp.value = ""; s[2](); }})));
@@ -672,6 +677,42 @@ function menuFromInput() {
   if ($("#pop.inline")) closePop();
 }
 
+/* @ in the composer: pick a file in this chat's folder; it is attached when the message is sent (@path). */
+let MENTION_T = null, MENTION_Q = null;
+function mentionPop(inp, v, pos, q) {
+  const root = S.cur?.view?.workdir || S.draft.project || "";
+  if (!root) { if ($("#pop.inline")) closePop(); return; }
+  clearTimeout(MENTION_T); MENTION_Q = q;
+  MENTION_T = setTimeout(async () => {
+    let r; try { r = await api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`); } catch (e) { return; }
+    if (MENTION_Q !== q || $("#input") !== inp) return;
+    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, 8);
+    if (!hits.length) { if ($("#pop.inline")) closePop(); return; }
+    inlinePop(hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => {
+      const cur = inp.value, p2 = inp.selectionStart, start = cur.lastIndexOf("@", p2 - 1);
+      inp.value = cur.slice(0, start) + "@" + h.path + " " + cur.slice(p2); inp.focus();
+      const c = start + h.path.length + 2; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
+    }})));
+  }, 120);
+}
+/* Up and Down in an empty composer walk back through the messages you sent (newest first), as in a terminal. */
+const SENT_KEY = "mp_sent";
+function sentList() { try { return JSON.parse(localStorage.getItem(SENT_KEY) || "[]"); } catch (e) { return []; } }
+function rememberSent(text) {
+  if (!text || S.cur?.view?.incognito || S.draft.incognito) return;          // incognito chats leave nothing behind
+  const l = sentList().filter(x => x !== text); l.push(text);
+  try { localStorage.setItem(SENT_KEY, JSON.stringify(l.slice(-100))); } catch (e) {}
+}
+function recallSent(inp, dir) {
+  const l = sentList(); if (!l.length) return false;
+  if (S.recall == null) { if (inp.value.trim()) return false; S.recall = l.length; }
+  else if (inp.value !== l[S.recall]) { S.recall = null; return false; }      // edited: stop walking history
+  const n = S.recall + dir;
+  if (n < 0) return true;
+  if (n >= l.length) { S.recall = null; inp.value = ""; inp.dispatchEvent(new Event("input")); return true; }
+  S.recall = n; inp.value = l[n]; inp.dispatchEvent(new Event("input")); inp.setSelectionRange(inp.value.length, inp.value.length);
+  return true;
+}
 /* ================================== popovers ================================== */
 function closePop() { $("#pop")?.remove(); document.removeEventListener("mousedown", popAway); }
 function popAway(e) { if (!e.target.closest("#pop") && !e.target.closest(".pill") && !e.target.closest(".chip")) closePop(); }
@@ -1060,13 +1101,35 @@ function inline(s) {
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+/* Code blocks in replies: coloured with the editor's tokenizer (editor.js), with a Copy button. */
+const CODE_EXT = {python: "py", py: "py", javascript: "js", js: "js", jsx: "js", typescript: "ts", ts: "ts", tsx: "ts", json: "json",
+  bash: "sh", sh: "sh", shell: "sh", zsh: "sh", console: "sh", powershell: "ps1", ps1: "ps1", sql: "sql", html: "html", xml: "xml",
+  svg: "svg", css: "css", scss: "css", yaml: "yaml", yml: "yaml", toml: "toml", ini: "ini", go: "go", golang: "go", rust: "rs", rs: "rs",
+  ruby: "rb", rb: "rb", php: "php", java: "java", kotlin: "kt", kt: "kt", swift: "swift", c: "c", h: "c", cpp: "cpp", "c++": "cpp",
+  cs: "cs", csharp: "cs", "c#": "cs", markdown: "md", md: "md", vue: "vue", dockerfile: "dockerfile", makefile: "makefile"};
+const CODE_LABEL = {py: "python", js: "javascript", ts: "typescript", sh: "shell", rs: "rust", rb: "ruby", md: "markdown"};
+function codeHTML(text, lang) {
+  const ext = CODE_EXT[lang];
+  if (!ext || typeof edTokens !== "function" || typeof edLangOf !== "function" || text.length > 60000) return esc(text);
+  try {
+    const L = edLangOf(ext === "dockerfile" || ext === "makefile" ? ext : "x." + ext);
+    return edTokens(text, L).map(([c, s]) => c ? `<span class="tk-${c}">${esc(s)}</span>` : esc(s)).join("");
+  } catch (e) { return esc(text); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest?.("[data-copycode]"); if (!b) return;
+  const code = b.closest(".codewrap")?.querySelector("pre code")?.textContent || "";
+  navigator.clipboard.writeText(code).then(() => { b.textContent = "Copied"; setTimeout(() => { b.textContent = "Copy"; }, 1500); }, () => toast("Could not copy."));
+});
 function md(src) {
   const parts = String(src || "").split(/```/);
   return parts.map((p, i) => {
     if (i % 2) {
-      const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), pre = `<pre><code>${esc(p.replace(/^[\w+.#-]*\n/, ""))}</code></pre>`;
+      const lang = (/^([\w+.#-]*)\n/.exec(p) || [, ""])[1].toLowerCase(), body = p.replace(/^[\w+.#-]*\n/, ""), pre = `<pre><code>${codeHTML(body, lang)}</code></pre>`;
       if (lang === "mermaid" && i < parts.length - 1) { const src = p.replace(/^[\w+.#-]*\n/, ""); return `<div class="mermaid-box" data-mermaid="${esc(src)}"><pre><code>${esc(src)}</code></pre></div>`; }
-      return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
+      const closed = i < parts.length - 1;          // a closed fence only: not while it streams
+      const prev = (lang === "html" || lang === "svg") && closed ? `<button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button>` : "";
+      return `<div class="codewrap"><div class="codehd"><span>${esc(CODE_LABEL[lang] || lang || "text")}</span><span class="codeacts">${prev}<button class="pvbtn" type="button" data-copycode="1" title="Copy this code" aria-label="Copy this code">Copy</button></span></div>${pre}</div>`;
     }
     const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
     p = p.replace(/\$\$([\s\S]+?)\$\$/g, (_, t) => `\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)

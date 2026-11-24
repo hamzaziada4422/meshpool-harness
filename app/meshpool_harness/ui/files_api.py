@@ -3,7 +3,8 @@ Meshpool. Nothing in this module starts another program.
 
 GET  /api/fs/home                         {home, skills}   the Meshpool home folder and the skills folder inside it
 GET  /api/fs/list?root=&path=             one folder, lazily: {entries: [{name, path, dir, size, link}]}
-GET  /api/fs/search?root=&q=              file names matching q anywhere under root (a flat list)
+GET  /api/fs/search?root=&q=[&content=1]  file names matching q anywhere under root (a flat list); content=1 adds
+                                          the lines inside text files that contain q
 GET  /api/fs/read?root=&path=             {kind: text|preview|binary|large, text, sha, mtime_ns, ...}
 GET  /api/fs/stat?root=&path=             {sha, mtime_ns, size}  to notice a change on disk
 POST /api/fs/save {root, path, text, base_sha, overwrite?}
@@ -132,11 +133,17 @@ def _dir_link(e) -> bool:
         return False
 
 
-def search(root_s: str, q: str) -> dict:
+def search(root_s: str, q: str, content: bool = False) -> dict:
+    """File names containing q; with content=True, also lines inside text files that contain q (case-insensitive),
+    as {name, path, line, text}. Hidden folders and secret-looking files are skipped either way."""
     root, _ = safe(root_s, "")
     q = (q or "").strip().lower()
     if not q:
         return {"results": [], "truncated": False}
+    if content:
+        names = search(root_s, q)
+        return {"results": names["results"], "lines": _search_lines(root, q),
+                "truncated": names["truncated"]}
     hits, deadline, truncated = [], time.time() + 2.5, False
     for cur, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
@@ -153,6 +160,37 @@ def search(root_s: str, q: str) -> dict:
             truncated = True
             break
     return {"results": hits, "truncated": truncated}
+
+
+MAX_LINE_HITS = 200
+
+
+def _search_lines(root: Path, q: str) -> list:
+    """Lines that contain q in the text files under root: at most 200, files up to 2 MB, about 3 seconds."""
+    hits, deadline = [], time.time() + 3.0
+    for cur, dirs, files in os.walk(root, followlinks=False):
+        dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
+        base = Path(cur)
+        for name in sorted(files):
+            if _hidden_name(root, name) or name in HIDE_DIRS:
+                continue
+            f = base / name
+            try:
+                if f.stat().st_size > 2_000_000:
+                    continue
+                raw = f.read_bytes()
+            except OSError:
+                continue
+            if b"\0" in raw[:4096]:
+                continue
+            for i, line in enumerate(raw.decode("utf-8", "replace").splitlines(), 1):
+                if q in line.lower():
+                    hits.append({"name": name, "path": _rel(root, f), "line": i, "text": line.strip()[:200]})
+                    if len(hits) >= MAX_LINE_HITS:
+                        return hits
+            if time.time() > deadline:
+                return hits
+    return hits
 
 
 # ---------------------------------------------------------------------------------------------------- read
@@ -299,7 +337,7 @@ def handle(method: str, u, body: bytes = b""):
         if p == "/api/fs/list":
             return 200, list_dir(q.get("root", ""), q.get("path", ""))
         if p == "/api/fs/search":
-            return 200, search(q.get("root", ""), q.get("q", ""))
+            return 200, search(q.get("root", ""), q.get("q", ""), q.get("content") == "1")
         if p == "/api/fs/read":
             return 200, read(q.get("root", ""), q.get("path", ""))
         if p == "/api/fs/stat":
