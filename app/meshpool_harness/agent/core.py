@@ -2541,10 +2541,11 @@ class Agent:
             # One judge for a silent cut (context.observe_silent_cut): local model servers only, never below a window
             # the table or provider states, total (fresh + cached) prompt tokens, two matching observations. A gateway
             # or metering proxy that reports usage differently must not shrink a 1M-token model to a few thousand.
-            if not CTX.observe_silent_cut(self.current_model(), sent, u, self._ctx_window(), base):
+            before = self._ctx_window()
+            if not CTX.observe_silent_cut(self.current_model(), sent, u, before, base):
                 return False
             win = CTX.window_info(self.current_model(), base, probe_endpoint=False)[0]
-            if win >= self._ctx_window():
+            if win >= before:
                 return False
             MC.learn(base, body.get("model", ""), window=win)
             for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
