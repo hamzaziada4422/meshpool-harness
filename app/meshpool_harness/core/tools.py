@@ -1747,6 +1747,8 @@ class Workspace:
     def _recheck(self, changed: list) -> str:
         if not getattr(self, "recheck", False) or os.environ.get("MH_RECHECK", "1") == "0":
             return ""
+        if (self.get_mode() if self.get_mode else None) != "auto":
+            return ""                             # only where commands already run unasked: a re-run is a new run
         if not any(str(x).endswith((".py", ".js", ".mjs", ".cjs", ".ts", ".go", ".rs", ".rb", ".java")) for x in changed):
             return ""
         c = self._last_check()
