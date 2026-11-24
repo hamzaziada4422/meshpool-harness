@@ -45,6 +45,15 @@ What changed since 0.0.12, and what it did:
   the budget (values, not formulas linked to the assumptions) and the PDF report (time limit). Pi failed the budget
   once in this run.
 
+**Re-run after the compaction fix (24 November 2026, same tasks and model, one run).** The summarize-every-step loop
+is gone. Meshpool CLI 6/7 at $0.036 and 108 s per task; Meshpool Work 6/7 at $0.093 and 194 s; Meshpool on Codex 4/7
+at $0.030 and 103 s; Meshpool on Pi 5/7 at $0.049 and 139 s (Codex 7/7 at $0.011 and 45 s, Pi 6/7 at $0.006 and
+35 s, from the run above). Still more expensive and slower than both. What still costs more: Meshpool's own loop
+wrongly concludes the model's context window is 9k-50k tokens and shrinks its context, after which it repeats work
+(chart deck 229 calls, PDF report 209); and it has no brake on near-identical repeated edits (one CLI run appended a
+line to a scratch file 122 times). Both are being fixed in the agent's context handling. The default Work agent stays
+Meshpool Work: it is the only app option at 6/7. Raw rows: `docs/results/v4/fix-8dc9f501-office/`.
+
 Default agent: on these numbers the cheapest agent that passes is vanilla Pi or Codex; Meshpool keeps its own loop as
 the Work default only until a re-measure shows it at or under Codex. The decision is recorded in
 `hrouter` `builtin_for()` when the re-measure is done.
