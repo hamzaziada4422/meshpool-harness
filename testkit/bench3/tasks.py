@@ -348,6 +348,29 @@ def _cells_near(ws, target, rel=0.01):
     return sum(1 for r in ws.iter_rows() for c in r if _num(c.value) is not None and _rel_close(c.value, target, rel, 0.5))
 
 
+def _names_on(wb, sheet):
+    """Workbook-level defined names whose destination is on `sheet` (=CoversPerDay links Assumptions!B4)."""
+    out = set()
+    for name, dn in wb.defined_names.items():
+        try:
+            if any(t.strip("'").lower() == sheet.lower() for t, _ in dn.destinations):
+                out.add(name.lower())
+        except Exception:  # noqa: BLE001 - a name with no cell destination (a constant or formula)
+            pass
+    return out
+
+
+def _refs_sheet(wb, value, sheet):
+    """A formula that reads `sheet`: a direct reference (Assumptions!B4, 'Assumptions'!B4) or a defined name that
+    points there."""
+    if not (isinstance(value, str) and value.startswith("=")):
+        return False
+    if re.search(r"(?<![\w.])'?" + re.escape(sheet) + r"'?!", value, re.I):
+        return True
+    names = _names_on(wb, sheet)
+    return any(t.lower() in names for t in re.findall(r"(?<![\w.!$'])([A-Za-z_][\w.]*)(?![\w(!])", value))
+
+
 @safe
 def grade_xlsx_budget(workdir, reply):
     import openpyxl
@@ -360,8 +383,7 @@ def grade_xlsx_budget(workdir, reply):
     ck.add("sheets Assumptions and Budget exist", a is not None and b is not None, str(wb.sheetnames))
     if a is None or b is None:
         return ck.result()
-    refs = sum(1 for r in b.iter_rows() for c in r
-               if isinstance(c.value, str) and c.value.startswith("=") and re.search(r"assumptions'?!", c.value, re.I))
+    refs = sum(1 for r in b.iter_rows() for c in r if _refs_sheet(wb, c.value, a.title))
     ck.add("Budget formulas reference the Assumptions sheet (>=5 cells)", refs >= 5, f"{refs} cells")
     e = mf.cafe_expected()
     bv = _find(_recalc_values(f), "Budget")
