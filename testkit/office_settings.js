@@ -19,7 +19,7 @@ const ok = (c, w) => { console.log((c ? "PASS " : "FAIL ") + w); if (!c) failure
   await p.waitForSelector("#ofRemove:visible", {timeout: 30000});
   ok(/Wrote the add-in manifest/.test(await p.innerText("#ofLines")), "install reports what it did");
   const r = await ctx.request.get(PANEL + "/office/taskpane.html");
-  ok(r.ok() && /MESHPOOL_TOKEN = "/.test(await r.text()), "the panel is served over HTTPS right away, no restart");
+  ok(r.ok() && /name="mp-token" content="[A-Za-z0-9_-]{20,}"/.test(await r.text()), "the panel is served over HTTPS right away, no restart");
   await p.screenshot({path: (process.env.SHOT_DIR || "/tmp") + "/office_settings.png"});
   await p.click("#ofRemove");
   await p.waitForSelector("text=Not added yet.", {timeout: 30000});

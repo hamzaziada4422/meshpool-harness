@@ -4,11 +4,17 @@ The meshpool add-in puts a meshpool panel on the Home tab of Excel, PowerPoint a
 
 Status: new. It is tested end to end with stand-in Office objects and the real meshpool app, but it has not yet been checked in real Excel, PowerPoint and Word on Windows and Mac. Please report what you see.
 
+## Which Office
+
+Microsoft 365, Office 2021 or later on Windows and Mac, and Office on the web. Office 2016 and 2019 run add-ins in an older browser engine that cannot run the panel; the panel says so instead of staying empty. Adding a slide needs PowerPoint with PowerPointApi 1.4.
+
 ## How it works
 
 The panel is a web page that meshpool serves on this computer at `https://localhost:44317/office/taskpane.html`. Office loads it from there, so the panel only talks to the meshpool app running on your computer. meshpool then sends your request to the model you set up, the same as any other chat.
 
-Office loads add-in panels only over HTTPS, from a certificate the computer trusts. meshpool makes its own certificate for localhost. The certificate authority that signs it is limited to `localhost` and `127.0.0.1`, and its private key is never saved, so it cannot vouch for any other site.
+That HTTPS address serves only the panel and the few calls it makes (start a chat, send, read, stop, answer an approval once), with a key of its own. The rest of the app is not reachable there, and the panel cannot pick a folder, an agent or a permission mode: its chats are plain Work chats with your usual settings.
+
+Office loads add-in panels only over HTTPS, from a certificate the computer trusts. meshpool makes its own certificate for localhost. The certificate authority that signs it is limited to `localhost` and `127.0.0.1`, and its private key is thrown away as soon as the certificate is signed, so it cannot vouch for any other site.
 
 ## Set it up
 
@@ -21,6 +27,8 @@ meshpool office install
 ```
 
 Then keep meshpool running, restart Excel, PowerPoint or Word, and click meshpool on the Home tab.
+
+If you skipped trusting the certificate, run the install again (or click Trust the certificate in Settings): it asks again. The certificate lasts about two years; the install renews it when fewer than 30 days are left.
 
 - Windows: meshpool registers the add-in under `HKEY_CURRENT_USER\Software\Microsoft\Office\16.0\WEF\Developer`, the same place Microsoft's developer tools use.
 - Mac: meshpool copies the manifest into each app's `wef` folder under `~/Library/Containers`.
@@ -52,7 +60,7 @@ Nothing changes in your file until you click an Insert button.
 
 ## What you can do with the answer
 
-- Excel: Insert at selection (tables and formulas land at the active cell), Insert in a new sheet, Undo insert (puts back exactly what was there, because add-in changes cannot always be undone with Ctrl+Z).
+- Excel: Insert at selection (tables and formulas land at the active cell), Insert in a new sheet, Undo insert (puts back the values and formulas that were there; formatting is not restored). Formulas that reach outside the workbook, such as WEBSERVICE or HYPERLINK, go in as text, and if Excel refuses a formula the answer goes in as text.
 - Word: Replace selection or Insert after, with headings, lists, bold and tables kept.
 - PowerPoint: Insert on slide, or New slide (the first line becomes the title; needs PowerPoint with PowerPointApi 1.4).
 - Copy, in every app.

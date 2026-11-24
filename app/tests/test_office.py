@@ -131,15 +131,19 @@ def test_install_asks_before_trusting_and_writes_the_manifest(home, monkeypatch,
     monkeypatch.setattr(sys, "platform", "darwin")
     ran = []
     monkeypatch.setattr(OF.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(returncode=0, stdout="", stderr=""))
-    monkeypatch.setattr("builtins.input", lambda *a: "n")
+    answers = iter(["n", "y"])
+    monkeypatch.setattr("builtins.input", lambda *a: next(answers))
     assert OF.cli(["install", "--apps", "excel"]) == 0
     out = capsys.readouterr().out
     assert ran == [] and "Skipped" in out and "limited to localhost" in out
     assert (OF.folder() / "manifest.xml").is_file() and (OF.folder() / "localhost.crt").is_file()
-    assert OF.cli(["install", "--apps", "excel"]) == 0                 # a second run reuses the certificate
-    assert "Using the certificate" in capsys.readouterr().out
+    assert OF.status()["needs_trust"] is True
+    assert OF.cli(["install", "--apps", "excel"]) == 0                 # a second run reuses it and asks again
+    out = capsys.readouterr().out
+    assert "Using the certificate" in out and "Trusted the meshpool certificate" in out
+    assert ran[0][:2] == ["security", "add-trusted-cert"] and OF.trusted() and not OF.status()["needs_trust"]
     assert OF.cli(["uninstall"]) == 0
-    assert ran and ran[0][:2] == ["security", "delete-certificate"]
+    assert ran[-1][:2] == ["security", "delete-certificate"]
     assert not (OF.folder() / "localhost.key").exists()
     assert OF.cli(["install", "--apps", "outlook"]) == 2
 
@@ -157,7 +161,7 @@ def test_https_listener_serves_the_panel_with_the_token(home, monkeypatch):
         base = f"https://localhost:{OF.port()}"
         with urllib.request.urlopen(base + "/office/taskpane.html", context=ctx, timeout=10) as r:
             html = r.read().decode()
-            assert S.TOKEN in html and "__MESHPOOL_TOKEN__" not in html
+            assert S.OFFICE_TOKEN in html and "__MESHPOOL_TOKEN__" not in html
             csp = r.headers["Content-Security-Policy"]
             assert csp.startswith("frame-ancestors 'self' https://*.officeapps.live.com") and "*" not in csp.split()[1:2]
         with urllib.request.urlopen(base + "/office/icon-80.png", context=ctx, timeout=10) as r:
@@ -167,7 +171,7 @@ def test_https_listener_serves_the_panel_with_the_token(home, monkeypatch):
         with pytest.raises(urllib.error.HTTPError) as e:
             urllib.request.urlopen(base + "/api/settings", context=ctx, timeout=10)
         assert e.value.code == 403                             # the token is still required on this listener
-        req = urllib.request.Request(base + "/api/settings", headers={"X-Meshpool-Token": S.TOKEN})
+        req = urllib.request.Request(base + "/api/settings", headers={"X-Meshpool-Token": S.OFFICE_TOKEN})
         with urllib.request.urlopen(req, context=ctx, timeout=10) as r:
             assert "fields" in json.loads(r.read())
         req = urllib.request.Request(base + "/office/taskpane.html", headers={"Host": "evil.example"})
@@ -203,6 +207,7 @@ const out = {
   addr: m.splitAddress("'Bob''s sheet'!A1:B2"),
   cells: m.cellsText([[1, 2], ["x", 3]], [[1, "=A1*2"], ["x", 3]]),
   msg: m.buildMessage("Excel", {label: "Selected range Sheet1!A1", text: "1", cut: true}, "Sum it", true),
+  safe: m.safeFormulas([["=SUM(A1:A2)", "=WEBSERVICE(\\"http://x\\")", "=cmd|' /c calc'!A0", "+HYPERLINK(\\"x\\")", "plain"]]),
 };
 console.log(JSON.stringify(out));
 """ % json.dumps(str(PANEL_JS))
@@ -218,4 +223,87 @@ console.log(JSON.stringify(out));
     assert out["plain"] == "Title\n• Bold point\n• code"
     assert out["addr"] == ["Bob's sheet", "A1:B2"]
     assert out["cells"] == "1\t=A1*2 [2]\nx\t3"
+    assert out["safe"] == [[["=SUM(A1:A2)", "'=WEBSERVICE(\"http://x\")", "'=cmd|' /c calc'!A0",
+                             "'+HYPERLINK(\"x\")", "plain"]], 3]
     assert out["msg"].startswith("[I am in Excel") and "(cut to fit)" in out["msg"] and out["msg"].endswith("Sum it")
+
+
+def test_an_expiring_certificate_is_renewed_and_trusted_again(home, monkeypatch):
+    pytest.importorskip("cryptography")
+    monkeypatch.setattr(sys, "platform", "darwin")
+    ran = []
+    monkeypatch.setattr(OF.subprocess, "run", lambda cmd, **k: ran.append(cmd) or types.SimpleNamespace(returncode=0, stdout="", stderr=""))
+    OF.install(["word"], confirm=lambda cmd: True)
+    old = (OF.folder() / "localhost.crt").read_bytes()
+    assert 800 < OF.days_left(OF.folder() / "localhost.crt") <= 825
+    monkeypatch.setattr(OF, "days_left", lambda c: 10)
+    lines = OF.install(["word"], confirm=lambda cmd: True)
+    assert any("about to expire" in x for x in lines) and (OF.folder() / "localhost.crt").read_bytes() != old
+    assert [c[:2] for c in ran] == [["security", "add-trusted-cert"], ["security", "delete-certificate"],
+                                    ["security", "add-trusted-cert"]]
+
+
+def test_a_trust_dialog_that_never_returns_does_not_hang(home, monkeypatch):
+    def slow(cmd, **k):
+        assert k.get("timeout")
+        raise OF.subprocess.TimeoutExpired(cmd, k["timeout"])
+    monkeypatch.setattr(OF.subprocess, "run", slow)
+    assert "two minutes" in OF._run(["certutil"]).stderr
+
+
+def test_a_refused_mac_sideload_says_what_to_do(home, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    def denied(*a, **k):
+        raise PermissionError("Operation not permitted")
+    monkeypatch.setattr(OF.shutil, "copy", denied)
+    with pytest.raises(OF.OfficeError, match="My Add-ins"):
+        OF.sideload(OF.write_manifest(), ["excel"])
+
+
+def test_the_panel_listener_only_serves_the_panel_and_its_calls(home):
+    import io
+    import threading
+    pytest.importorskip("cryptography")
+    made = OF.make_certs()
+    OF.write_manifest()
+    from meshpool_harness.ui import server as S
+    S._start_office()
+    main = S._Server(("127.0.0.1", 0), S.Handler)
+    threading.Thread(target=main.serve_forever, daemon=True).start()
+    try:
+        ctx = ssl.create_default_context(cafile=made["ca"])
+        base = f"https://localhost:{OF.port()}"
+
+        def get(url, tok=None, **kw):
+            req = urllib.request.Request(url, headers={"X-Meshpool-Token": tok} if tok else {})
+            try:
+                with urllib.request.urlopen(req, timeout=10, **kw) as r:
+                    return r.status, r.read()
+            except urllib.error.HTTPError as e:
+                return e.code, b""
+        code, html = get(base + "/office/taskpane.html", context=ctx)
+        assert code == 200 and S.OFFICE_TOKEN.encode() in html and S.TOKEN.encode() not in html
+        assert get(base + "/api/settings", S.OFFICE_TOKEN, context=ctx)[0] == 200
+        assert get(base + "/api/settings", S.TOKEN, context=ctx)[0] == 403          # the app's token is not for here
+        assert get(base + "/api/memory", S.OFFICE_TOKEN, context=ctx)[0] == 404      # nothing else of the app
+        assert get(base + "/", S.OFFICE_TOKEN, context=ctx)[0] == 404
+        mp = f"http://127.0.0.1:{main.server_address[1]}"
+        assert get(mp + "/office/taskpane.html")[0] != 200                            # never on the app's own port
+        assert get(mp + "/api/settings", S.OFFICE_TOKEN)[0] == 403
+
+        def body_of(path, payload):
+            h = S.OfficeHandler.__new__(S.OfficeHandler)
+            raw = json.dumps(payload).encode()
+            h.path, h.headers, h.rfile = path, {"Content-Length": str(len(raw))}, io.BytesIO(raw)
+            return h._json()
+        assert body_of("/api/agent", {"kind": "code", "workdir": "/", "mode": "auto", "task": "t"}) == \
+            {"kind": "cowork", "task": "t"}
+        assert body_of("/api/agent/x/answer", {"id": 3, "decision": "save"})["decision"] == "no"
+        assert body_of("/api/agent/x/send", {"text": "hi", "images": ["x"]}) == {"text": "hi", "since": 10 ** 9}
+    finally:
+        main.shutdown()
+        main.server_close()
+        for srv in S.OFFICE_HTTPD:
+            srv.shutdown()
+            srv.server_close()
+        S.OFFICE_HTTPD.clear()

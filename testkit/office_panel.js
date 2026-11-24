@@ -7,7 +7,10 @@ const BASE = process.argv[2] || "https://localhost:44399";
 const STUB = String.raw`
 (function () {
   const host = new URLSearchParams(location.search).get("host");
-  if (!host) return;                                  // "not in Office": no Office object at all
+  if (!host) {                                        // a plain browser tab: office.js loads, but there is no host
+    window.Office = {onReady(cb) { setTimeout(() => cb({host: null}), 0); return Promise.resolve({host: null}); }};
+    return;
+  }
   const rec = window.__rec = {inserted: [], setText: [], boxes: [], slidesAdded: 0};
   const A1 = (r, c) => { let s = "", n = c + 1; while (n) { s = String.fromCharCode(65 + (n - 1) % 26) + s; n = Math.floor((n - 1) / 26); } return s + (r + 1); };
   const book = window.__book = {sheets: {Sheet1: {"0,0": "Name", "0,1": "Qty", "1,0": "apple", "1,1": "3"}}, order: ["Sheet1"]};
@@ -89,8 +92,14 @@ const lastRequest = () => sent[sent.length - 1] || "";
   await page.press("#inp", "Enter");
   await page.waitForFunction(() => document.querySelectorAll(".msg.bot").length >= 2, null, {timeout: 30000});
   ok(true, "Excel: answering meshpool's question in the panel continues the task");
+  await page.fill("#inp", "office question demo");
+  await page.press("#inp", "Enter");
+  await page.waitForSelector("text=Which quarter?", {timeout: 30000});
+  const stops = [];
+  page.on("request", r => { if (/\/stop$/.test(r.url())) stops.push(r.url()); });
   await page.click("#newChat");
-  ok(await page.locator(".msg").count() === 0, "New chat clears the panel");
+  await page.waitForTimeout(500);
+  ok(await page.locator(".msg").count() === 0 && stops.length === 1, "New chat during a turn stops it and clears the panel");
 
   // ---------------- Word
   await page.goto(BASE + "/office/taskpane.html?host=Word");
@@ -125,6 +134,11 @@ const lastRequest = () => sent[sent.length - 1] || "";
   // ---------------- outside Office
   await page.goto(BASE + "/office/taskpane.html");
   ok(await page.locator("text=Open this from Office").count() === 1, "Outside Office the page says how to open it");
+  await ctx.route("**/office/taskpane.js", r => r.fulfill({contentType: "text/javascript", body: "const a = {}?.b ?? ; // too new for old Office"}));
+  await page.goto(BASE + "/office/taskpane.html?host=Excel");
+  await page.waitForTimeout(2000);
+  ok(await page.locator("text=too old for meshpool").count() === 1, "An Office too old to run the panel says so");
+  errors.length = 0;                                  // that page's syntax error was the point
   ok(errors.length === 0, "no page errors" + (errors.length ? ": " + errors.join(" | ") : ""));
   await page.screenshot({path: (process.env.SHOT_DIR || "/tmp") + "/office_panel.png"});
   await browser.close();

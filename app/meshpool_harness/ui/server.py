@@ -34,9 +34,12 @@ EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/ap
 TOKEN = secrets.token_urlsafe(24)
 OF_DIR = HERE.parent / "office"
 _ICONS: dict = {}
-# Only Office may show the add-in panel in a frame (Office on the web frames it; the desktop apps do not frame it).
+# The Office panel's own token: good only on the HTTPS listener and only for the few calls the panel makes.
+OFFICE_TOKEN = secrets.token_urlsafe(24)
+# Only Office on the web may show the panel in a frame (its add-in frames live on these hosts; the desktop apps do not
+# frame it). No SharePoint or live.com: any tenant can put pages there.
 OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
-                 "https://*.microsoft365.com https://*.sharepoint.com https://*.cloud.microsoft https://*.live.com")
+                 "https://*.microsoft365.com https://*.cloud.microsoft")
 OFFICE_HTTPD: list = []
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
@@ -303,7 +306,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, png, "image/png", {"Cache-Control": "max-age=86400"})
         data = (OF_DIR / name).read_bytes()
         if name == "taskpane.html":
-            data = data.replace(b"__MESHPOOL_TOKEN__", TOKEN.encode())
+            data = data.replace(b"__MESHPOOL_TOKEN__", OFFICE_TOKEN.encode())
         ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
                  "css": "text/css; charset=utf-8"}[name.rsplit(".", 1)[1]]
         return self._send(200, data, ctype, {"Content-Security-Policy": OFFICE_FRAMES} if name.endswith(".html") else None)
@@ -346,9 +349,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8")
         if u.path == "/healthz":
             return self._send(200, {"ok": True, "app": "meshpool"})
-        m = re.fullmatch(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|commands\.html|help\.html|icon-(16|32|64|80)\.png)", u.path)
-        if m:                                         # the Excel, PowerPoint and Word panel (meshpool_harness/office)
-            return self._office(m.group(1), m.group(2))
         if u.path == "/favicon.svg":
             return self._send(200, (HERE / "favicon.svg").read_bytes(), "image/svg+xml")
         m = re.fullmatch(r"/brand/((?:fonts/)?[\w.-]+\.(png|woff2))", u.path)
@@ -1186,9 +1186,70 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     return 0
 
 
+class OfficeHandler(Handler):
+    """The HTTPS listener Excel, PowerPoint and Word load the panel from. It serves the panel's files and the few
+    calls the panel makes (start a chat, send, read, stop, answer an approval, read settings), with the panel's own
+    token. Nothing else of the app is reachable here, and what the panel can ask for is narrowed (_json)."""
+    timeout = 60                                      # an idle or half-open connection never holds a thread for good
+    _FILES = re.compile(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|compat\.js|commands\.html|help\.html|"
+                        r"icon-(16|32|64|80)\.png)")
+    _GET = re.compile(r"/api/agent/[\w-]+|/api/settings")
+    _POST = re.compile(r"/api/agent(/[\w-]+/(send|stop|answer))?")
+
+    def _gate(self) -> bool:
+        if not self._host_ok():
+            self._send(403, {"error": "forbidden"})
+            return False
+        path = urlparse(self.path).path
+        if self.command == "GET" and (self._FILES.fullmatch(path) or path == "/healthz"):
+            return True
+        rule = self._GET if self.command == "GET" else self._POST
+        if not rule.fullmatch(path):
+            self._send(404, {"error": "not found"})
+            return False
+        if self.headers.get("X-Meshpool-Token") != OFFICE_TOKEN:
+            self._send(403, {"error": "forbidden"})
+            return False
+        self.headers.replace_header("X-Meshpool-Token", TOKEN)     # the app's own checks, unchanged, from here on
+        return True
+
+    def _json(self) -> dict:
+        b = super()._json()
+        path = urlparse(self.path).path
+        if path == "/api/agent":                      # a plain Work chat: no folder, harness or mode from the panel
+            return {"kind": "cowork", "task": str(b.get("task") or "")[:500]}
+        if path.endswith("/send"):
+            return {"text": str(b.get("text") or ""), "since": b.get("since", 10 ** 9)}
+        if path.endswith("/answer"):                  # once only: "always" answers belong in the app
+            return {"id": b.get("id", 0), "decision": "yes" if b.get("decision") == "yes" else "no",
+                    "since": b.get("since", 10 ** 9)}
+        return {"since": b.get("since", 10 ** 9)}
+
+    def do_GET(self):
+        if not self._gate():
+            return None
+        m = self._FILES.fullmatch(urlparse(self.path).path)
+        if m:
+            return self._office(m.group(1), m.group(2))
+        return super().do_GET()
+
+    def do_POST(self):
+        if not self._gate():
+            return None
+        return super().do_POST()
+
+
+class _OfficeServer(_Server):
+    def handle_error(self, request, client_address):
+        import ssl
+        if isinstance(sys.exc_info()[1], (ssl.SSLError, ConnectionError, TimeoutError)):
+            return                                    # a client that refused the certificate or went away
+        super().handle_error(request, client_address)
+
+
 def _start_office() -> str:
     """The HTTPS listener Excel, PowerPoint and Word load the meshpool panel from, once `meshpool office install`
-    made a certificate. Same handler and token as the app; localhost only (IPv4 and, where there is one, IPv6)."""
+    made a certificate. Localhost only (IPv4 and, where there is one, IPv6); see OfficeHandler for what it serves."""
     if os.environ.get("MH_OFFICE") == "0":
         return ""
     import socket
@@ -1205,12 +1266,12 @@ def _start_office() -> str:
         print(f"  The Office panel is off: its certificate did not load ({e}). Run: meshpool office install")
         return ""
 
-    class _V6(_Server):
+    class _V6(_OfficeServer):
         address_family = socket.AF_INET6
 
-    for cls, host in ((_Server, "127.0.0.1"), (_V6, "::1")):
+    for cls, host in ((_OfficeServer, "127.0.0.1"), (_V6, "::1")):
         try:
-            srv = cls((host, OF.port()), Handler)
+            srv = cls((host, OF.port()), OfficeHandler)
         except OSError as e:
             if host == "127.0.0.1":
                 print(f"  The Office panel is off: port {OF.port()} is in use ({e}). Set MH_OFFICE_PORT to another one "
@@ -1219,7 +1280,6 @@ def _start_office() -> str:
             continue                                      # no IPv6 loopback here
         # the TLS handshake happens in the request's own thread, so a slow client never holds up the others
         srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
-        srv.handle_error = lambda *a: None                # a client that refused the certificate: nothing to log
         OFFICE_HTTPD.append(srv)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
     return OF.base_url() + "/office/taskpane.html"

@@ -76,8 +76,9 @@ def _write_private(path: Path, data: bytes) -> None:
 
 def make_certs(days: int = 825) -> dict:
     """A certificate authority limited by name constraints to localhost and 127.0.0.1, and one certificate for
-    localhost signed by it. The authority's private key is never written to disk. Needs the cryptography package
-    (pip install cryptography) or the openssl command."""
+    localhost signed by it. The authority's private key is thrown away once the certificate is signed: with the
+    cryptography package it never touches the disk; with the openssl command it lives only in a temporary folder
+    that is deleted right after. Needs the cryptography package (pip install cryptography) or the openssl command."""
     d = folder()
     d.mkdir(parents=True, exist_ok=True)
     try:
@@ -150,10 +151,41 @@ def _make_with_openssl(d: Path, days: int) -> dict:
         run("req", "-new", "-key", "leaf.key", "-subj", "/CN=localhost", "-out", "leaf.csr")
         run("x509", "-req", "-in", "leaf.csr", "-CA", "ca.crt", "-CAkey", "ca.key", "-CAcreateserial",
             "-days", str(days), "-extfile", "leaf.ext", "-out", "leaf.crt")
-        shutil.copy(t / "ca.crt", d / "ca.crt")
+        shutil.copy(t / "ca.crt", d / "ca.crt")         # the temporary folder, with ca.key, goes when this block ends
         shutil.copy(t / "leaf.crt", d / "localhost.crt")
         _write_private(d / "localhost.key", (t / "leaf.key").read_bytes())
     return {"ca": str(d / "ca.crt"), "cert": str(d / "localhost.crt"), "key": str(d / "localhost.key")}
+
+
+def days_left(cert: Path) -> int | None:
+    """Days until the certificate expires, or None when it cannot be read."""
+    try:
+        from cryptography import x509
+        c = x509.load_pem_x509_certificate(Path(cert).read_bytes())
+        end = getattr(c, "not_valid_after_utc", None) or c.not_valid_after.replace(tzinfo=_dt.timezone.utc)
+        return (end - _dt.datetime.now(_dt.timezone.utc)).days
+    except ImportError:
+        pass
+    except (OSError, ValueError):
+        return None
+    if not shutil.which("openssl"):
+        return None
+    for d in (0, 30):                                     # openssl can only say "expires within N seconds"
+        r = subprocess.run(["openssl", "x509", "-checkend", str(d * 86400), "-noout", "-in", str(cert)],
+                           capture_output=True, text=True, timeout=30)
+        if r.returncode:
+            return d - 1 if d else -1
+    return 30
+
+
+def _own() -> bool:
+    return (folder() / "localhost.crt").is_file() and (folder() / "localhost.key").is_file()
+
+
+def trusted() -> bool:
+    """meshpool's own certificate was added to the user's trusted ones (Microsoft's dev certificate is trusted by
+    its own tool)."""
+    return (folder() / "trusted").exists() or (not _own() and cert_paths() is not None)
 
 
 def trust_command() -> list[str] | None:
@@ -308,6 +340,15 @@ def _mac_wef(app: str) -> Path:
 def sideload(manifest: Path, apps: list[str]) -> list[str]:
     """Registers the manifest with desktop Office, the way Microsoft's own developer tools do: a value under
     HKCU\\...\\WEF\\Developer on Windows, a copy in each app's wef folder on macOS. Returns what was done."""
+    try:
+        return _sideload(manifest, apps)
+    except OSError as e:                                  # e.g. macOS refused access to another app's folder
+        raise OfficeError(f"Could not add the add-in to Office ({e}). On a Mac, allow meshpool to reach other apps' "
+                          "data when asked, or add it by hand: Insert, Add-ins, My Add-ins, then choose "
+                          f"{manifest}.") from None
+
+
+def _sideload(manifest: Path, apps: list[str]) -> list[str]:
     done = []
     if sys.platform == "win32":
         import winreg
@@ -353,11 +394,21 @@ def status() -> dict:
             import winreg
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WEF_KEY) as k:
                 winreg.QueryValueEx(k, addin_id())
-                loaded = list(APPS)
+                loaded = _apps_installed()
         except OSError:
             loaded = []
+    left = days_left(cp[0]) if cp else None
     return {"url": base_url() + "/office/taskpane.html", "port": port(), "certificate": str(cp[0]) if cp else "",
-            "manifest": str(man) if man.exists() else "", "sideloaded": loaded}
+            "manifest": str(man) if man.exists() else "", "sideloaded": loaded, "trusted": trusted(),
+            "days_left": left, "needs_trust": bool(cp) and not trusted() and trust_command() is not None}
+
+
+def _apps_installed() -> list[str]:
+    try:
+        got = [a for a in (folder() / "apps.txt").read_text().split() if a in APPS]
+        return got or list(APPS)
+    except OSError:
+        return list(APPS)
 
 
 def icon_png(size: int) -> bytes:
@@ -376,7 +427,7 @@ def icon_png(size: int) -> bytes:
 
 TRUST_NOTE = ("Office only loads the panel over HTTPS from a certificate this computer trusts, so meshpool adds its own "
               "certificate authority to your user's trusted certificates. It is limited to localhost and 127.0.0.1, "
-              "and its private key was never saved, so it cannot vouch for any other site.")
+              "and its private key was thrown away once the certificate was signed, so it cannot vouch for any other site.")
 
 
 def install(apps: list[str] | None = None, confirm=lambda cmd: False) -> list[str]:
@@ -384,23 +435,37 @@ def install(apps: list[str] | None = None, confirm=lambda cmd: False) -> list[st
     line by line. confirm is the user's say: a terminal question, or the click on Settings' button."""
     apps = [a for a in (apps or list(APPS)) if a in APPS]
     out = []
+    left = days_left(folder() / "localhost.crt") if _own() else None
+    if _own() and left is not None and left < 30:       # renew before it runs out (its authority's key is gone)
+        old = untrust_command()
+        if old and trusted():
+            _run(old)
+        (folder() / "trusted").unlink(missing_ok=True)
+        for n in ("ca.crt", "localhost.crt", "localhost.key"):
+            (folder() / n).unlink(missing_ok=True)
+        out.append("The certificate was about to expire, so meshpool makes a new one.")
     if cert_paths() is None:
         made = make_certs()
         out.append(f"Made a certificate for localhost: {made['cert']}")
-        cmd = trust_command()
-        if cmd:
-            if confirm(cmd):
-                r = subprocess.run(cmd, capture_output=True, text=True)
-                out.append("Trusted the meshpool certificate." if r.returncode == 0 else
-                           f"Trusting the certificate did not work: {(r.stderr or r.stdout).strip()[:300]}")
-            else:
-                out.append("Skipped trusting the certificate. Office will not load the panel until it is trusted.")
-        else:
-            out.append("There is no desktop Office on this system. For Office on the web, trust " + made["ca"] +
-                       " in your browser.")
     else:
         out.append(f"Using the certificate at {cert_paths()[0]}")
+    cmd = trust_command()
+    if _own() and not trusted():                         # new, or skipped or failed last time: ask (again)
+        if not cmd:
+            out.append("There is no desktop Office on this system. For Office on the web, trust " +
+                       str(folder() / "ca.crt") + " in your browser.")
+        elif confirm(cmd):
+            r = _run(cmd)
+            if r.returncode == 0:
+                (folder() / "trusted").write_text(_dt.datetime.now().isoformat())
+                out.append("Trusted the meshpool certificate.")
+            else:
+                out.append(f"Trusting the certificate did not work: {(r.stderr or r.stdout).strip()[:300]}")
+        else:
+            out.append("Skipped trusting the certificate. Office will not load the panel until it is trusted; "
+                       "run this again to trust it.")
     man = write_manifest(apps)
+    (folder() / "apps.txt").write_text(" ".join(apps))
     out.append(f"Wrote the add-in manifest: {man}")
     out += sideload(man, apps)
     out.append("Next: keep meshpool running (it serves the panel at " + base_url() + "/office/taskpane.html), "
@@ -409,14 +474,25 @@ def install(apps: list[str] | None = None, confirm=lambda cmd: False) -> list[st
     return out
 
 
+def _run(cmd: list[str]):
+    """A trust command. The system may show a dialog; two minutes is plenty, and a dialog hidden behind a window
+    must not hang the app."""
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(cmd, 1, "", "no answer within two minutes (is a system dialog waiting?)")
+    except OSError as e:
+        return subprocess.CompletedProcess(cmd, 1, "", str(e))
+
+
 def uninstall() -> list[str]:
     out = unsideload()
     cmd = untrust_command()
-    if cmd and (folder() / "ca.crt").exists():
-        r = subprocess.run(cmd, capture_output=True, text=True)
+    if cmd and (folder() / "ca.crt").exists() and trusted():
+        r = _run(cmd)
         out.append("Removed the meshpool certificate from your trusted ones." if r.returncode == 0 else
                    f"Could not remove the certificate: {(r.stderr or r.stdout).strip()[:200]}")
-    for n in ("ca.crt", "localhost.crt", "localhost.key", "manifest.xml"):
+    for n in ("ca.crt", "localhost.crt", "localhost.key", "manifest.xml", "trusted", "apps.txt"):
         (folder() / n).unlink(missing_ok=True)
     out.append("The meshpool add-in is uninstalled.")
     return out
@@ -443,7 +519,9 @@ def cli(args: list) -> int:
         if a.action == "status":
             s = status()
             print(f"Panel address: {s['url']}")
-            print(f"Certificate:   {s['certificate'] or 'none yet (run: meshpool office install)'}")
+            print(f"Certificate:   {s['certificate'] or 'none yet (run: meshpool office install)'}" +
+                  (f" (expires in {s['days_left']} days)" if s.get("days_left") is not None else "") +
+                  (" (not trusted yet: run meshpool office install)" if s.get("needs_trust") else ""))
             print(f"Manifest:      {s['manifest'] or 'none yet'}")
             print(f"Sideloaded in: {', '.join(s['sideloaded']) or 'none'}")
             return 0

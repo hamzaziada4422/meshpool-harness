@@ -2234,11 +2234,13 @@ async function renderSection(sec) {
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" id="ofInstall" hidden>Add meshpool to Office</button><button class="btn" id="ofRemove" hidden>Remove from Office</button></div>
       <pre class="pnote" id="ofLines" hidden style="white-space:pre-wrap"></pre>`;
     const show = r => {
-      const on = !!(r.manifest && r.certificate);
+      const on = !!(r.manifest && r.certificate) && !r.needs_trust && !(r.days_left !== null && r.days_left < 30);
       $("#ofRes").className = "res" + (on && r.running ? " ok" : "");
-      $("#ofRes").textContent = !on ? "Not added yet." : r.running ? `Added${r.sideloaded.length ? " to " + r.sideloaded.map(x => ({excel: "Excel", powerpoint: "PowerPoint", word: "Word"})[x]).join(", ") : ""}. Restart those apps, then click meshpool on the Home tab.` : "Added, but the panel is not being served. Quit and reopen meshpool.";
-      $("#ofNote").hidden = on; $("#ofNote").textContent = r.trust_note + (r.desktop_office ? " Your system asks you to confirm." : " There is no desktop Office here: use Office on the web and upload the manifest (Home, Add-ins, Upload My Add-in).");
-      $("#ofInstall").hidden = on; $("#ofRemove").hidden = !on;
+      $("#ofInstall").textContent = r.manifest && r.needs_trust ? "Trust the certificate" : r.manifest ? "Renew the certificate" : "Add meshpool to Office";
+      $("#ofRes").textContent = r.manifest && r.needs_trust ? "Added, but the certificate is not trusted yet, so Office cannot load the panel." :
+        r.manifest && r.days_left !== null && r.days_left < 30 ? `The certificate expires in ${Math.max(0, r.days_left)} days.` : !on ? "Not added yet." : r.running ? `Added${r.sideloaded.length ? " to " + r.sideloaded.map(x => ({excel: "Excel", powerpoint: "PowerPoint", word: "Word"})[x]).join(", ") : ""}. Restart those apps, then click meshpool on the Home tab.` : "Added, but the panel is not being served. Quit and reopen meshpool.";
+      $("#ofNote").hidden = on || (!!r.manifest && !r.needs_trust); $("#ofNote").textContent = r.trust_note + (r.desktop_office ? " Your system asks you to confirm." : " There is no desktop Office here: use Office on the web and upload the manifest (Home, Add-ins, Upload My Add-in).");
+      $("#ofInstall").hidden = on; $("#ofRemove").hidden = !r.manifest;
     };
     const act = async (action, btn) => { btn.disabled = true; try { const r = await post("/api/office", {action}); show(r); $("#ofLines").hidden = false; $("#ofLines").textContent = (r.lines || []).join("\n"); } catch (e) { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; } btn.disabled = false; };
     $("#ofInstall").onclick = e => act("install", e.currentTarget);

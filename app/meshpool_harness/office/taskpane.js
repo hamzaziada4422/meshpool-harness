@@ -155,15 +155,31 @@ function splitAddress(addr) {           // "'My sheet'!A1:B2" -> ["My sheet", "A
   return [String(addr).slice(0, i).replace(/^'(.*)'$/, "$1").replace(/''/g, "'"), String(addr).slice(i + 1)];
 }
 
+/** Formulas that reach outside the workbook (web requests, links, other programs) go in as text, so an answer cannot
+    make the sheet call out when it is inserted. Returns [cells, how many were kept as text]. */
+const OUTSIDE = /\b(WEBSERVICE|FILTERXML|HYPERLINK|RTD|CALL|REGISTER\.ID|IMAGE|STOCKHISTORY|ENCODEURL|DDE|DDEAUTO)\s*\(|^=\s*[\w.-]+\|/i;
+function safeFormulas(m) {
+  let n = 0;
+  const out = m.map(r => r.map(v => {
+    const s = String(v == null ? "" : v);
+    if (/^[=+@-]/.test(s.trim()) && OUTSIDE.test(s.trim())) { n++; return "'" + s; }
+    return s;
+  }));
+  return [out, n];
+}
+
 if (typeof module !== "undefined") {
-  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress};
+  module.exports = {esc, parseTable, firstCode, plain, toMatrix, mdToHtml, buildMessage, cellsText, splitAddress, safeFormulas};
 }
 
 // ------------------------------------------------------------------------------------------- the panel
 if (typeof document !== "undefined") (function () {
+  window.__mpParsed = true;                          // compat.js: this file ran, so the Office version is new enough
   const $ = id => document.getElementById(id);
-  const S = {id: null, since: 0, host: "", busy: false, bot: null, live: "", final: "", ctx: null, undo: null, polls: 0};
-  const TOKEN = window.MESHPOOL_TOKEN;
+  const S = {id: null, since: 0, host: "", busy: false, bot: null, live: "", final: "", asking: false, gen: 0,
+             polling: false, ctxSeq: 0};
+  const meta = document.querySelector('meta[name="mp-token"]');
+  const TOKEN = meta ? meta.getAttribute("content") : "";
   const sleep = ms => new Promise(r => setTimeout(r, ms));
 
   async function api(method, path, body) {
@@ -179,7 +195,8 @@ if (typeof document !== "undefined") (function () {
     return j;
   }
 
-  // ---- reading the document
+  // ---- reading the document. light: for the "Include the selection" line only, so moving the cursor never reads
+  //      the whole document or deck; the full read happens when a message is sent.
   async function readExcel() {
     return Excel.run(async c => {
       const r = c.workbook.getSelectedRange();
@@ -199,22 +216,23 @@ if (typeof document !== "undefined") (function () {
     });
   }
 
-  async function readWord() {
+  async function readWord(light) {
     return Word.run(async c => {
       const s = c.document.getSelection();
       s.load("text");
       await c.sync();
-      let text = s.text || "", label = "Selected text";
-      if (!text.trim()) {
-        const b = c.document.body;
-        b.load("text");
-        await c.sync();
-        text = b.text || "";
-        label = "Nothing is selected; this is the whole document";
+      const sel = s.text || "";
+      if (sel.trim()) {
+        return {label: "Selected text", text: sel.slice(0, MAX_TEXT), cut: sel.length > MAX_TEXT,
+                short: `${sel.trim().split(/\s+/).length} words selected`};
       }
-      const cut = text.length > MAX_TEXT;
-      return {label, text: text.slice(0, MAX_TEXT), cut,
-              short: label === "Selected text" ? `${text.trim().split(/\s+/).length} words selected` : "the whole document"};
+      if (light) return {label: "", text: "", short: "nothing selected, so the whole document"};
+      const b = c.document.body;
+      b.load("text");
+      await c.sync();
+      const text = b.text || "";
+      return {label: "Nothing is selected; this is the whole document", text: text.slice(0, MAX_TEXT),
+              cut: text.length > MAX_TEXT, short: "the whole document"};
     });
   }
 
@@ -227,24 +245,32 @@ if (typeof document !== "undefined") (function () {
     });
   }
 
-  async function readPowerPoint() {
+  const pptApi = v => !!(window.PowerPoint && Office.context.requirements.isSetSupported("PowerPointApi", v));
+
+  async function readPowerPoint(light) {
     const sel = await selectedText();
     if (sel.trim()) return {label: "Selected text on the slide", text: sel.slice(0, MAX_TEXT), cut: sel.length > MAX_TEXT, short: "selected text"};
-    if (!(window.PowerPoint && Office.context.requirements.isSetSupported("PowerPointApi", "1.4"))) {
-      return {label: "Nothing is selected", text: "", short: "nothing selected"};
-    }
+    if (!pptApi("1.4")) return {label: "Nothing is selected", text: "", short: "nothing selected"};
+    if (light) return {label: "", text: "", short: "nothing selected, so the whole deck"};
     return PowerPoint.run(async c => {
       const slides = c.presentation.slides;
       slides.load("items");
       await c.sync();
       const out = [];
       for (const [i, s] of slides.items.slice(0, 60).entries()) {
-        s.shapes.load("items");
+        s.shapes.load("items/type");
         await c.sync();
-        const texts = [];
-        for (const sh of s.shapes.items) {
-          try { sh.textFrame.textRange.load("text"); await c.sync(); if (sh.textFrame.textRange.text.trim()) texts.push(sh.textFrame.textRange.text.trim()); }
-          catch (e) { /* a picture or chart: no text */ }
+        const texty = s.shapes.items.filter(sh => !/^(Image|Table|Group|Line|Unsupported)$/i.test(String(sh.type || "")));
+        const ranges = texty.map(sh => { const t = sh.textFrame.textRange; t.load("text"); return t; });
+        let texts = [];
+        try {                                        // one round trip per slide
+          await c.sync();
+          texts = ranges.map(t => String(t.text || "").trim()).filter(Boolean);
+        } catch (e) {                                // a shape without text on this slide: one by one instead
+          for (const sh of texty) {
+            try { const t = sh.textFrame.textRange; t.load("text"); await c.sync(); if (String(t.text || "").trim()) texts.push(t.text.trim()); }
+            catch (x) { /* a picture or chart: no text */ }
+          }
         }
         out.push(`Slide ${i + 1}:\n${texts.join("\n")}`);
       }
@@ -254,11 +280,11 @@ if (typeof document !== "undefined") (function () {
     });
   }
 
-  async function readContext() {
+  async function readContext(light) {
     try {
       if (S.host === "Excel") return await readExcel();
-      if (S.host === "Word") return await readWord();
-      if (S.host === "PowerPoint") return await readPowerPoint();
+      if (S.host === "Word") return await readWord(light);
+      if (S.host === "PowerPoint") return await readPowerPoint(light);
     } catch (e) {
       return {label: "", text: "", short: "could not read the selection: " + (e.message || e)};
     }
@@ -266,15 +292,18 @@ if (typeof document !== "undefined") (function () {
   }
 
   async function showContext() {
+    const seq = ++S.ctxSeq;                          // only the newest read updates the line
     if (!$("useSel").checked) { $("ctxText").textContent = "Include the selection"; return; }
-    S.ctx = await readContext();
-    $("ctxText").textContent = S.ctx ? "Include the selection: " + S.ctx.short : "Include the selection";
+    const ctx = await readContext(true);
+    if (seq !== S.ctxSeq) return;
+    $("ctxText").textContent = ctx ? "Include the selection: " + ctx.short : "Include the selection";
   }
 
   // ---- writing to the document
-  async function excelInsert(md, newSheet) {
-    const m = toMatrix(md), rows = m.length, cols = m[0].length;
-    return Excel.run(async c => {
+  async function excelInsert(md, newSheet, undo) {
+    const [m, asText] = safeFormulas(toMatrix(md));
+    const rows = m.length, cols = m[0].length;
+    const write = async plainOnly => Excel.run(async c => {
       let target, sheetName;
       if (newSheet) {
         const all = c.workbook.worksheets;
@@ -291,16 +320,24 @@ if (typeof document !== "undefined") (function () {
       }
       target.load("address,formulas");
       await c.sync();
-      S.undo = newSheet ? {sheet: sheetName} : {address: target.address, formulas: target.formulas};
-      target.formulas = m;
+      const before = newSheet ? {sheet: sheetName} : {address: target.address, formulas: target.formulas};
+      target.formulas = plainOnly ? m.map(r => r.map(v => /^=/.test(v) ? "'" + v : v)) : m;
       target.format.autofitColumns();
       await c.sync();
-      return newSheet ? `Added the sheet ${sheetName}.` : `Inserted ${rows} × ${cols} at ${target.address}.`;
+      undo.state = before;                           // this answer's own Undo
+      return (newSheet ? `Added the sheet ${sheetName}.` : `Inserted ${rows} × ${cols} at ${target.address}.`) +
+        (asText ? ` ${asText} formula${asText === 1 ? "" : "s"} that reach outside the workbook went in as text.` : "");
     });
+    try {
+      return await write(false);
+    } catch (e) {                                    // Excel refused a formula: the whole answer goes in as text
+      if (newSheet) throw e;
+      return (await write(true)) + " Excel did not take the formulas, so they went in as text.";
+    }
   }
 
-  async function excelUndo() {
-    const u = S.undo;
+  async function excelUndo(undo) {
+    const u = undo.state;
     if (!u) return "";
     await Excel.run(async c => {
       if (u.sheet) {
@@ -311,8 +348,8 @@ if (typeof document !== "undefined") (function () {
       }
       await c.sync();
     });
-    S.undo = null;
-    return u.sheet ? `Removed the sheet ${u.sheet}.` : `Put back what was in ${u.address}.`;
+    undo.state = null;
+    return u.sheet ? `Removed the sheet ${u.sheet}.` : `Put back what was in ${u.address} (values and formulas; not formatting).`;
   }
 
   async function wordInsert(md, where) {
@@ -330,13 +367,19 @@ if (typeof document !== "undefined") (function () {
   }
 
   async function pptNewSlide(md) {
-    if (!(window.PowerPoint && Office.context.requirements.isSetSupported("PowerPointApi", "1.4"))) {
-      throw new Error("Adding a slide needs a newer PowerPoint. Use Insert on the slide instead.");
-    }
+    if (!pptApi("1.4")) throw new Error("Adding a slide needs a newer PowerPoint. Use Insert on slide instead.");
     const lines = plain(md).split("\n").filter(l => l.trim());
     const title = (lines.shift() || "").replace(/^•\s*/, "");
     return PowerPoint.run(async c => {
-      c.presentation.slides.add();
+      let layoutId = "";
+      try {                                          // a blank layout: no empty placeholders under the text
+        const layouts = c.presentation.slideMasters.getItemAt(0).layouts;
+        layouts.load("items/name,items/id");
+        await c.sync();
+        const blank = layouts.items.find(l => /^blank$/i.test(String(l.name || "").trim()));
+        layoutId = blank ? blank.id : "";
+      } catch (e) { layoutId = ""; }
+      c.presentation.slides.add(layoutId ? {layoutId} : undefined);
       await c.sync();
       const slides = c.presentation.slides;
       slides.load("items");
@@ -363,15 +406,18 @@ if (typeof document !== "undefined") (function () {
 
   function setBusy(on) {
     S.busy = on;
-    $("send").disabled = on;
+    $("send").disabled = on && !S.asking;
     $("stop").hidden = !on;
     $("status").hidden = !on;
     if (on) $("status").textContent = "Working…";
+    if (!on) S.asking = false;
   }
 
   function actions(div, md) {
     const acts = document.createElement("div");
     acts.className = "acts";
+    const undo = {state: null};                      // each answer has its own Undo
+    let undoBtn = null;
     const btn = (label, fn, title) => {
       const b = document.createElement("button");
       b.className = "ghost";
@@ -386,11 +432,11 @@ if (typeof document !== "undefined") (function () {
       return b;
     };
     if (S.host === "Excel") {
-      btn("Insert at selection", async () => { const t = await excelInsert(md, false); undo.hidden = false; return t; },
+      btn("Insert at selection", async () => { const t = await excelInsert(md, false, undo); undoBtn.hidden = false; return t; },
           "Write the table or formula into the sheet, starting at the active cell");
-      btn("Insert in a new sheet", async () => { const t = await excelInsert(md, true); undo.hidden = false; return t; });
-      var undo = btn("Undo insert", async () => { const t = await excelUndo(); undo.hidden = true; return t; });
-      undo.hidden = true;
+      btn("Insert in a new sheet", async () => { const t = await excelInsert(md, true, undo); undoBtn.hidden = false; return t; });
+      undoBtn = btn("Undo insert", async () => { const t = await excelUndo(undo); undoBtn.hidden = true; return t; });
+      undoBtn.hidden = true;
     } else if (S.host === "Word") {
       btn("Replace selection", () => wordInsert(md, "Replace"));
       btn("Insert after", () => wordInsert(md, "After"));
@@ -425,13 +471,19 @@ if (typeof document !== "undefined") (function () {
         break;
       case "tool_start": $("status").textContent = "Working: " + String(ev.name || "").replace(/^mcp__\w+__/, "").replace(/_/g, " ") + "…"; break;
       case "approval": askCard(ev); break;
+      case "approval_done": {
+        const card = document.querySelector(`[data-ask="${Number(ev.id)}"]`);
+        if (card) card.querySelectorAll("button").forEach(x => { x.disabled = true; });
+        break;
+      }
       case "question": {
         const qs = (ev.questions || []).map(q => q.question || q.text || "").filter(Boolean);
         add("ask", `<div class="t">meshpool asks</div>${qs.map(q => `<p>${esc(q)}</p>`).join("")}<p class="note">Type your answer below and press Send.</p>`);
-        $("send").disabled = false;
         S.asking = true;
+        $("send").disabled = false;
         break;
       }
+      case "question_done": S.asking = false; $("send").disabled = S.busy; break;
       case "error": note(ev.text || "Something went wrong.", true); break;
       case "turn_end": endTurn(); break;
     }
@@ -439,15 +491,17 @@ if (typeof document !== "undefined") (function () {
 
   function askCard(ev) {
     const d = add("ask", `<div class="t">${esc(ev.title || "Allow this?")}</div>${ev.detail ? `<pre>${esc(String(ev.detail).slice(0, 1500))}</pre>` : ""}`);
+    d.setAttribute("data-ask", String(Number(ev.id)));
     const row = document.createElement("div");
     row.className = "acts";
+    const id = S.id;
     for (const [label, decision] of [["Allow once", "yes"], ["Deny", "no"]]) {
       const b = document.createElement("button");
       b.textContent = label;
       if (decision === "no") b.className = "ghost";
       b.onclick = async () => {
         row.querySelectorAll("button").forEach(x => { x.disabled = true; });
-        try { await api("POST", `/api/agent/${S.id}/answer`, {id: ev.id, decision, since: 1e9}); d.querySelector(".t").textContent += decision === "yes" ? " (allowed)" : " (denied)"; }
+        try { await api("POST", `/api/agent/${id}/answer`, {id: ev.id, decision, since: 1e9}); d.querySelector(".t").textContent += decision === "yes" ? " (allowed)" : " (denied)"; }
         catch (e) { note(e.message, true); }
       };
       row.appendChild(b);
@@ -462,22 +516,36 @@ if (typeof document !== "undefined") (function () {
     $("inp").focus();
   }
 
-  function apply(v) {
+  /** Events for the chat this panel shows now, never a chat it left (New chat) */
+  function apply(v, gen) {
+    if (gen !== S.gen) return;
     if (typeof v.total === "number") S.since = v.total;
-    for (const ev of v.events || []) onEvent(ev);
+    for (const ev of v.events || []) { if (gen !== S.gen) return; onEvent(ev); }
   }
 
   async function poll() {
-    let quiet = 0;
-    while (S.id && S.busy) {
-      await sleep(350);
-      let v;
-      try { v = await api("GET", `/api/agent/${S.id}?since=${S.since}`); }
-      catch (e) { note(e.message, true); setBusy(false); return; }
-      apply(v);
-      if (!S.busy) return;
-      quiet = ["working", "waiting", "starting"].includes(v.state) ? 0 : quiet + 1;
-      if (quiet > 8) { if (S.bot || S.final) endTurn(); else setBusy(false); return; }   // ended without a turn_end
+    if (S.polling) return;                           // one reader of events at a time
+    S.polling = true;
+    const gen = S.gen, id = S.id;
+    let quiet = 0, fails = 0;
+    try {
+      while (S.busy && gen === S.gen) {
+        await sleep(350);
+        if (gen !== S.gen) return;
+        let v;
+        try { v = await api("GET", `/api/agent/${id}?since=${S.since}`); fails = 0; }
+        catch (e) {
+          if (++fails < 4) continue;                   // a blip: try again before giving up
+          if (gen === S.gen) { note(e.message, true); setBusy(false); }
+          return;
+        }
+        apply(v, gen);
+        if (!S.busy || gen !== S.gen) return;
+        quiet = ["working", "waiting", "starting"].includes(v.state) ? 0 : quiet + 1;
+        if (quiet > 8) { if (S.bot || S.final) endTurn(); else setBusy(false); return; }   // ended without a turn_end
+      }
+    } finally {
+      if (gen === S.gen) S.polling = false;
     }
   }
 
@@ -486,29 +554,46 @@ if (typeof document !== "undefined") (function () {
     if (!text) return;
     const answering = S.busy && S.asking;           // the answer to meshpool's question, while the turn waits
     if (S.busy && !answering) return;
-    const ctx = !answering && $("useSel").checked ? await readContext() : null;
-    add("user", esc(text) + (ctx && ctx.short ? `<div class="note">with ${esc(ctx.short)}</div>` : ""));
+    add("user", esc(text));
     $("inp").value = "";
     if (answering) {
       S.asking = false;
       $("send").disabled = true;
-      try { apply(await api("POST", `/api/agent/${S.id}/send`, {text, since: S.since})); } catch (e) { note(e.message, true); }
+      try { await api("POST", `/api/agent/${S.id}/send`, {text, since: 1e9}); }   // the running poll reads what follows
+      catch (e) { note(e.message, true); }
       return;
     }
-    const first = !S.id;
+    const gen = S.gen;
     setBusy(true);
+    const ctx = $("useSel").checked ? await readContext(false) : null;
+    if (gen !== S.gen) return;
+    if (ctx && ctx.short) $("log").lastElementChild.insertAdjacentHTML("beforeend", `<div class="note">with ${esc(ctx.short)}</div>`);
+    const first = !S.id;
     try {
       if (!S.id) {
         const v = await api("POST", "/api/agent", {kind: "cowork", task: text});
+        if (gen !== S.gen) return;
         S.id = v.id;
         S.since = v.total || 0;
       }
-      apply(await api("POST", `/api/agent/${S.id}/send`, {text: buildMessage(S.host, ctx, text, first), since: S.since}));
+      apply(await api("POST", `/api/agent/${S.id}/send`, {text: buildMessage(S.host, ctx, text, first), since: S.since}), gen);
       poll();
     } catch (e) {
-      note(e.message, true);
-      setBusy(false);
+      if (gen === S.gen) { note(e.message, true); setBusy(false); }
     }
+  }
+
+  async function stop() {
+    if (!S.id) { setBusy(false); return; }
+    try { await api("POST", `/api/agent/${S.id}/stop`, {since: 1e9}); } catch (e) { note(e.message, true); }
+  }
+
+  function newChat() {
+    if (S.busy && S.id) api("POST", `/api/agent/${S.id}/stop`, {since: 1e9}).catch(() => {});   // nothing left waiting on the panel
+    S.gen++;
+    S.id = null; S.since = 0; S.bot = null; S.live = ""; S.final = ""; S.polling = false;
+    setBusy(false);
+    $("log").innerHTML = '<div id="empty" class="empty">New chat. Ask about what you selected, or ask for something new.</div>';
   }
 
   const QUICK = {
@@ -526,11 +611,17 @@ if (typeof document !== "undefined") (function () {
                  ["Outline a deck", "Outline a short deck about: "]],
   };
 
+  function outside() {
+    document.body.innerHTML = '<div class="off"><h2>Open this from Office</h2><p>This panel runs inside Excel, ' +
+      "PowerPoint or Word. Install it with <code>meshpool office install</code>, then click meshpool on the Home tab.</p></div>";
+  }
+
   function boot(host) {
+    if (!QUICK[host]) return outside();             // a plain browser tab, or another Office app
     S.host = host;
-    $("host").textContent = host ? "in " + host : "";
+    $("host").textContent = "in " + host;
     const q = $("quick");
-    for (const [label, prompt] of QUICK[host] || []) {
+    for (const [label, prompt] of QUICK[host]) {
       const b = document.createElement("button");
       b.textContent = label;
       b.onclick = () => { if (prompt.endsWith(": ")) { $("inp").value = prompt; $("inp").focus(); } else send(prompt); };
@@ -538,11 +629,8 @@ if (typeof document !== "undefined") (function () {
     }
     $("composer").onsubmit = e => { e.preventDefault(); send($("inp").value); };
     $("inp").onkeydown = e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send($("inp").value); } };
-    $("stop").onclick = async () => { try { await api("POST", `/api/agent/${S.id}/stop`, {since: 1e9}); } catch (e) { note(e.message, true); } };
-    $("newChat").onclick = () => {
-      S.id = null; S.since = 0; S.undo = null; S.bot = null; S.live = ""; S.final = ""; setBusy(false);
-      $("log").innerHTML = '<div id="empty" class="empty">New chat. Ask about what you selected, or ask for something new.</div>';
-    };
+    $("stop").onclick = stop;
+    $("newChat").onclick = newChat;
     $("useSel").onchange = showContext;
     $("refreshSel").onclick = showContext;
     try {
@@ -557,7 +645,6 @@ if (typeof document !== "undefined") (function () {
   if (window.Office && Office.onReady) {
     Office.onReady(info => boot(info && info.host ? String(info.host) : ""));
   } else {
-    document.body.innerHTML = '<div class="off"><h2>Open this from Office</h2><p>This panel runs inside Excel, ' +
-      "PowerPoint or Word. Install it with <code>meshpool office install</code>, then click meshpool on the Home tab.</p></div>";
+    outside();
   }
 })();
