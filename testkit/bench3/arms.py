@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -72,7 +73,18 @@ def private_tmp(cmd: list, *paths) -> list:
                 return cmd
         except (OSError, ValueError):
             return cmd
-    return ["unshare", "--mount", "--map-root-user", "sh", "-c", 'mount -t tmpfs tmpfs /tmp && exec "$@"', "sh", *cmd]
+    # also hide the benchmark's own sources (task definitions with their hidden tests): an agent that runs `find /`
+    # found and read them (eval final14, csv-import: 8 calls in testkit/loop, then it ran the hidden test)
+    kit = str(Path(__file__).resolve().parents[1])
+    for p in paths:
+        try:
+            if p and Path(p).resolve().is_relative_to(kit):
+                kit = ""                                    # a run folder inside the kit: leave it visible
+        except (OSError, ValueError):
+            pass
+    hide = f" && mount -t tmpfs tmpfs {shlex.quote(kit)}" if kit else ""
+    return ["unshare", "--mount", "--map-root-user", "sh", "-c", f'mount -t tmpfs tmpfs /tmp{hide} && exec "$@"', "sh",
+            *cmd]
 
 
 def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
