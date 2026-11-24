@@ -145,6 +145,16 @@ def search(root_s: str, q: str, content: bool = False) -> dict:
         return {"results": names["results"], "lines": _search_lines(root, q),
                 "truncated": names["truncated"]}
     hits, deadline, truncated = [], time.time() + 2.5, False
+    tracked = _git_files(root)
+    if tracked is not None:                         # a git repository: what git sees, so ignored files stay out
+        for rel in tracked:
+            parts = rel.split("/")
+            if any(x in HIDE_DIRS or _hidden_name(root, x) for x in parts) or q not in rel.lower():
+                continue
+            hits.append({"name": parts[-1], "path": rel, "dir": False})
+            if len(hits) >= MAX_SEARCH:
+                return {"results": hits, "truncated": True}
+        return {"results": hits, "truncated": False}
     for cur, dirs, files in os.walk(root, followlinks=False):
         dirs[:] = sorted(x for x in dirs if x not in HIDE_DIRS and not _hidden_name(root, x))
         base = Path(cur)
@@ -160,6 +170,26 @@ def search(root_s: str, q: str, content: bool = False) -> dict:
             truncated = True
             break
     return {"results": hits, "truncated": truncated}
+
+
+def _git_files(root: Path) -> list | None:
+    """The files of root that git tracks or would track (not ignored), relative to root; None when root is not in a
+    git repository, git is missing, or MH_PICKER_IGNORED=1 asks for ignored files too."""
+    if os.environ.get("MH_PICKER_IGNORED") == "1":
+        return None
+    import shutil
+    import subprocess
+    g = shutil.which("git")
+    if not g:
+        return None
+    try:
+        r = subprocess.run([g, "-c", "core.fsmonitor=false", "-c", "core.quotePath=false", "ls-files", "-z", "-co",
+                            "--exclude-standard", "--", "."], cwd=str(root), capture_output=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode:
+        return None
+    return sorted(x for x in r.stdout.decode("utf-8", "replace").split("\0") if x)[:200000]
 
 
 MAX_LINE_HITS = 200
