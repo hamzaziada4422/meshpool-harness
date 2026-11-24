@@ -87,7 +87,11 @@ def provider_cap(base: str) -> int:
 def default_slots_dir() -> str:
     """The folder every Meshpool process shares for its slot lock files unless MH_SLOTS_DIR names another."""
     import tempfile
-    return os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots")
+    try:                                # per user: another user's folder in a shared /tmp cannot be written
+        tag = str(os.getuid())
+    except AttributeError:              # Windows: the temp folder is already per user
+        tag = ""
+    return os.path.join(tempfile.gettempdir(), "meshpool-gateway-slots" + (f"-{tag}" if tag else ""))
 
 
 class _Slots:

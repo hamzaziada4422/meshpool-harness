@@ -584,7 +584,8 @@ def _outputs_dir(sub: str) -> Path:
     import tempfile
     import time
     project = str(Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).resolve())
-    base = Path(os.environ.get("MH_SHOTS_DIR") or Path(tempfile.gettempdir()) / "meshpool-shots")
+    base = Path(os.environ.get("MH_SHOTS_DIR") or Path(tempfile.gettempdir()) / (
+        "meshpool-shots" + (f"-{os.getuid()}" if hasattr(os, "getuid") else "")))      # per user, as gateway slots
     if not _pruned:
         _pruned = True
         try:
