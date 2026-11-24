@@ -15,6 +15,41 @@ from pathlib import Path
 
 
 OUTPUT_HEAD, OUTPUT_TAIL, OUTPUT_KILL_CHARS = 200_000, 200_000, 64_000_000
+SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "target"})   # H-11
+MAX_GREP_FILE = 5_000_000                       # H-11: bytes read per file by grep
+_WIN_RESERVED = frozenset({"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+                           "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"})
+
+
+def reserved_name(path: str) -> str | None:
+    """H-22: a Windows device name (nul, con, aux ...) as a file name: creating it makes a file Explorer cannot delete."""
+    for part in re.split(r"[\\/]", str(path)):
+        if part.split(".")[0].strip().lower() in _WIN_RESERVED and part:
+            return part
+    return None
+
+
+def fix_win_path(p):
+    """OSS-28: a drive-letter path a model or a URI gave as /C:\\Users\\x, /C:/x or file:///C:/x becomes C:\\Users\\x."""
+    if not isinstance(p, str):
+        return p
+    q = re.sub(r"^file:///(?=[A-Za-z]:)", "", p)
+    return re.sub(r"^[/\\]+(?=[A-Za-z]:([\\/]|$))", "", q)
+
+
+_NUL_REDIRECT = re.compile(r"(?<![\w/])((?:\d|&)?>>?)\s*nul\b(?!\.)", re.I)
+
+
+def fix_nul_redirect(command: str) -> str:
+    """H-22: `2>nul` in Git Bash makes a real file called nul (undeletable in Explorer); /dev/null is what was meant."""
+    return _NUL_REDIRECT.sub(lambda m: m.group(1) + " /dev/null", command)
+
+
+def _quiet_close(f) -> None:
+    try:
+        f.close()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 class _Capped:
@@ -393,6 +428,9 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
         args["content"] = json.dumps(args["content"], indent=2, ensure_ascii=False) + "\n"   # models often send JSON as an object
     if name == "shell" and isinstance(args.get("command"), str):        # a plain string: run it with bash
         args["command"] = ["bash", "-lc", args["command"]]
+    for k in ("path", "file_path", "cwd", "dir", "directory"):
+        if isinstance(args.get(k), str):
+            args[k] = fix_win_path(args[k])
     sch = SCHEMAS[name]["function"]["parameters"]
     for k in sch["required"]:
         if k not in args:
@@ -439,7 +477,12 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
         with p.open("ab") as f:
             f.write(data)
     else:
-        p.write_bytes((_BOM if bom else b"") + data)
+        from meshpool_harness import fsio
+        try:
+            mode = p.stat().st_mode & 0o7777
+        except OSError:
+            mode = None
+        fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode)   # OSS-15: never a half-written file
 
 
 def shown(text: str) -> str:
@@ -507,6 +550,7 @@ class Workspace:
         self.edits = 0
         self.written: set[str] = set()
         self.created: set[str] = set()        # files the agent created (new tests are allowed)
+        self.turn_new: set[str] = set()       # files created in the current turn (the receipt's "new")
         self.turn_files: set[str] = set()     # files changed in the current turn (the review receipt)
         self._n = 0
 
@@ -514,6 +558,9 @@ class Workspace:
     def _path(self, p: str, write=False) -> Path:
         if self.container and self.mounted and self.cdir and os.path.isabs(p) and (p == self.cdir or p.startswith(self.cdir.rstrip("/") + "/")):
             p = str(self.root / os.path.relpath(p, self.cdir))     # container path -> host copy
+        p = fix_win_path(p)
+        if write and (bad := reserved_name(p)):
+            raise ToolError(f"'{bad}' is a reserved device name on Windows and cannot be used as a file name")
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
@@ -641,17 +688,19 @@ class Workspace:
         base = self._path(path)
         if not base.exists():
             raise ToolError(f"path not found: {path}")
-        files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
+        files = [base] if base.is_file() else self._walk(base)
         out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
-            if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
-                continue
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
             if glob and not glob_match(str(rel), glob):
                 continue
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
+                if f.stat().st_size > MAX_GREP_FILE:
+                    continue                                       # H-11: a huge file is not source
                 text = f.read_text(errors="ignore")
             except (OSError, UnicodeDecodeError):
                 continue
@@ -711,12 +760,27 @@ class Workspace:
         if os.path.isabs(pattern) or re.match(r"^[A-Za-z]:", pattern) or ".." in Path(pattern).parts:
             raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
         try:
-            res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                         if ".git" not in p.parts and "node_modules" not in p.parts
-                         and (not inside_only or self._inside(p)))
+            res = []
+            for p in self.root.glob(pattern):
+                if self.should_stop and self.should_stop():
+                    raise ToolError("stopped by the user")
+                if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
+                    res.append(str(p.relative_to(self.root)))
+            res.sort()
         except (NotImplementedError, ValueError) as e:
             raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
+
+    def _walk(self, base: Path):
+        """H-11: files under base, never entering SKIP_DIRS, and checking the Stop flag as it walks."""
+        for dp, dns, fns in os.walk(base):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            dns[:] = [d for d in dns if d not in SKIP_DIRS]
+            for fn in fns:
+                f = Path(dp, fn)
+                if f.is_file():
+                    yield f
 
     @staticmethod
     def _syntax_error(path: Path, text: str) -> str | None:
@@ -734,7 +798,7 @@ class Workspace:
                 compile(text, str(path), "exec", dont_inherit=True)
                 return None
             except SyntaxError as e:     # Python's own message: "'(' was never closed", "invalid syntax. Perhaps you forgot a comma?"
-                # MeshPool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
+                # Meshpool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
                 # The code is judged by the newest Python that would run it: the project's venv, else the newest
                 # python3.x on this computer. Without a newer one the code cannot run here either, so the error stands.
                 if _parses_with_newer_python(path, text):
@@ -983,6 +1047,8 @@ class Workspace:
                     self._cwrite(pth, after)
                 else:
                     write_src(p, after, *fmt)
+                    if self._hash(read_src(p)[0]) != self._hash(after):      # OSS-14: success only if the file changed
+                        raise OSError(f"{pth} does not hold the new text after writing (another program changed it?)")
         except Exception as e:  # noqa: BLE001
             for pth, p, before, fmt in done:
                 try:
@@ -1059,10 +1125,13 @@ class Workspace:
         if p.is_dir():
             raise ToolError(f"{path or '.'} is a directory; give a file path")
         fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
+        same = False
         if not p.exists():
             self.created.add(str(p))
+            self.turn_new.add(str(p))
         elif p.is_file():
             text, eol, bom = read_src(p)                # an existing file keeps its line endings and BOM
+            same = not append and text == content.replace("\r\n", "\n")      # rewritten with the text it already had
             fmt = (eol, bom)
             if str(p) not in self.original:
                 self.original[str(p)] = self._hash(text)
@@ -1075,12 +1144,14 @@ class Workspace:
         self.seen[str(p)] = self._hash(after)
         self.edits += 1
         self.written.add(str(p))
-        self.turn_files.add(str(p))
+        if not same:                                  # F-21: an unchanged rewrite is not a change
+            self.turn_files.add(str(p))
         bad = self._syntax_error(p, after) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
+    get_mode = None             # set by the agent: a callable that gives the chat's access mode (Full access skips the sandbox)
 
     def _proc(self, args, env, timeout_s, shell=False, encoding=None, cwd=None):
         """Run a command the user can stop at any moment: the whole process tree is killed on Stop or timeout."""
@@ -1093,11 +1164,18 @@ class Workspace:
         over = threading.Event()
 
         def drain(stream, buf):
+            import codecs
+            dec = codecs.getincrementaldecoder(getattr(stream, "encoding", None) or "utf-8")(errors="replace")
             try:
                 while True:
-                    chunk = stream.read(65536)
-                    if not chunk:
+                    # read1: what is there now. stream.read(65536) waits for 65536 characters or the end of the pipe,
+                    # which a background child keeps open (H-01).
+                    raw = stream.buffer.read1(65536)
+                    chunk = dec.decode(raw, final=not raw).replace("\r\n", "\n")
+                    if not raw and not chunk:
                         break
+                    if not chunk:
+                        continue
                     buf.add(chunk)
                     if bufs["out"].total + bufs["err"].total > OUTPUT_KILL_CHARS:
                         over.set()                       # an endless producer: end it, keep head and tail
@@ -1113,11 +1191,16 @@ class Workspace:
             while any(t.is_alive() for t in ts) and not over.is_set():
                 for t in ts:
                     t.join(0.1)
+                if p.poll() is not None:                 # H-01: the command is done; a background child may still
+                    for t in ts:                         # hold the pipes, so give the last output a moment, then stop
+                        t.join(0.3)
+                    if any(t.is_alive() for t in ts):
+                        box["left_running"] = True
+                        for st in (p.stdout, p.stderr):  # close our ends (in a thread: a blocked read holds the lock)
+                            threading.Thread(target=_quiet_close, args=(st,), daemon=True).start()
+                    break
             if over.is_set():
-                try:
-                    os.killpg(p.pid, 9) if os.name != "nt" else p.kill()
-                except Exception:  # noqa: BLE001
-                    p.kill()
+                _kill_tree(p)                            # the whole tree: taskkill /T /F on Windows, killpg elsewhere
             try:
                 p.wait(10)
             except subprocess.TimeoutExpired:
@@ -1152,6 +1235,9 @@ class Workspace:
             err = (err + f"\n[output stopped after {OUTPUT_KILL_CHARS // 1_000_000} million characters]").lstrip()
         if why == "stopped":
             err = (err + "\n[stopped by the user]").lstrip()
+        if box.get("left_running"):
+            err = (err + "\n[the command finished but left a background process running; its output is not captured. "
+                         "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
     def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
@@ -1173,19 +1259,22 @@ class Workspace:
             else:
                 env.setdefault("PYTHONUTF8", "1")
                 bash = _bash()
+                from meshpool_harness.core import sandbox as _SB
+                mode = self.get_mode() if self.get_mode else None
                 if bash and os.name == "nt":                     # Git Bash: keep the working folder
                     env["CHERE_INVOKING"] = "1"
-                    r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
+                    if _SB.requested(mode):
+                        _SB.wrap(["x"], self.root, platform="win32")     # says once that it is not available here
+                    r = self._proc([bash, "-c", fix_nul_redirect(command)], env, timeout_s, encoding="utf-8", cwd=cwd)
                 elif bash:
-                    from meshpool_harness.core import sandbox as _SB
-                    r = self._proc(_SB.wrap([bash, "-c", command], self.root, cwd=cwd), env, timeout_s, cwd=cwd)
+                    r = self._proc(_SB.wrap([bash, "-c", command], self.root, cwd=cwd, mode=mode), env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
                                    env, timeout_s, encoding="utf-8", cwd=cwd)
                 else:
                     r = self._proc(command, env, timeout_s, shell=True, cwd=cwd)
-            code, out = r.returncode, (r.stdout + ("\n" + r.stderr if r.stderr else ""))
+            code, out = r.returncode, _C.redact_secrets(r.stdout + ("\n" + r.stderr if r.stderr else ""))   # OSS-29
         except subprocess.TimeoutExpired as e:
             code = 124
             out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + f"\n[timed out after {timeout_s}s]"
@@ -1196,7 +1285,7 @@ class Workspace:
         try:                                     # full outputs: evidence for number tracing; the task may have
             self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
             with (self.run_dir / "commands.log").open("a", encoding="utf-8", errors="replace") as f:
-                f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+                f.write(f"\n$ {_C.redact_secrets(command.strip())}\n[exit {code}]\n{out[:200000]}\n")
         except OSError:
             pass
         if raw:                                  # probe/trace post-process the full text themselves
@@ -1237,7 +1326,9 @@ class Workspace:
             args, shell = [bash, "-c", command], False
             if os.name != "nt":
                 from meshpool_harness.core import sandbox as _SB
-                args = _SB.wrap(args, self.root)
+                args = _SB.wrap(args, self.root, mode=self.get_mode() if self.get_mode else None)
+            else:
+                args = [bash, "-c", fix_nul_redirect(command)]
         elif os.name == "nt":
             args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
         else:

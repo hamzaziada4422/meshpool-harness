@@ -158,22 +158,28 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
-    base, key, _src = __import__("meshpool_harness.providers", fromlist=["x"]).endpoint_pair()
+    from meshpool_harness import providers as _PV
+    from meshpool_harness.core import endpoint as _EP
+    base, key, _src = _PV.endpoint_pair()           # the saved endpoint, or the environment pair when none is saved
+    kind = _PV.key_kind()
     cache_key = base + "|" + key[-6:]
     vals = C.read()
     fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key and not __import__("meshpool_harness.providers", fromlist=["x"]).keyless_ok(base):
+    elif not key and not (_EP.caps(kind)["keyless"] or _PV.keyless_ok(base)):
         rows, err = [], "Add your API key to see your models."
+    elif not _EP.caps(kind)["lists"]:               # Azure and Perplexity have no list to read: the chosen model shows
+        rows, err = [], ""
     else:
         rows, err = [], ""
         try:
-            from meshpool_harness import providers as _PV
-            url, auth = _PV.chat_target(base, key, "", "models")     # Azure: /openai/models?api-version=, api-key
-            req = urllib.request.Request(url, headers={**auth, "User-Agent": "Meshpool"})
-            with _mhttp.open(req, 20) as r:
+            auth = {k: v for k, v in _EP.auth_headers("anthropic" if _PV.key_wire() == "anthropic" else kind,
+                                                      key).items() if k != "Content-Type"}
+            auth = _PV.custom_auth(auth, base, key)
+            req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
+            with _EP.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
             for it in items or []:
@@ -196,8 +202,7 @@ def models(refresh: bool = False) -> dict:
                 rows = []
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
-            err = f"The endpoint answered HTTP {e.code} when listing models." + (
-                " Check your API key." if e.code in (401, 403) else (" " + str(e.msg)) if 300 <= e.code < 400 else "")
+            err = "Could not list models. " + _EP.explain(e.code, e.read(200_000), kind=kind, host=_PV.host(base), key=key)
         except Exception as e:  # noqa: BLE001
             err = f"Could not list models: {_mhttp.explain(e, base)}"
     from meshpool_harness import providers as PV
@@ -213,11 +218,18 @@ def models(refresh: bool = False) -> dict:
             "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
+def set_default_model(mid: str) -> dict:
+    C.write({"MH_MODEL": str(mid or "").strip()})   # may carry a provider prefix
+    C.load_into_env(override=True)
+    return models()
+
+
 def set_favorite(mid: str, on: bool) -> dict:
-    vals = C.read()
-    fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
-    fav = [m for m in fav if m != mid] + ([mid] if on else [])
-    C.write({"MH_FAVORITE_MODELS": ",".join(fav)})
+    def change(vals):
+        fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
+        fav = [m for m in fav if m != mid] + ([mid] if on else [])
+        return {"MH_FAVORITE_MODELS": ",".join(fav)}
+    C.update(change)                       # read and write under one lock
     return models()
 
 
@@ -252,6 +264,12 @@ def _perm_hint(p: Path) -> str:
     return f"Meshpool cannot read {p}: permission denied."
 
 
+# B4: decided by name first, so an empty or odd-looking .jpg is never opened as text with a Save button.
+BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".heic", ".avif",
+              ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".mp4", ".mov", ".m4v", ".webm", ".ogv", ".avi", ".mkv",
+              ".zip", ".gz", ".7z", ".exe", ".dll", ".so", ".dylib", ".pyc", ".sqlite", ".db"}
+
+
 def read_file(root: str, rel: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
@@ -262,8 +280,17 @@ def read_file(root: str, rel: str) -> dict:
     if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
         if size > 60_000_000:
             return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 60 MB."}
-        return {"path": rel, "binary": False, "readonly": True, "size": size,
-                "text": docread.extract(p, max_chars=400_000), "note": "Preview of the document's text"}
+        try:
+            text = docread.extract(p, max_chars=400_000)
+            if text.startswith("Could not read "):         # docread reports a parser failure as text: "Could not read x: PackageNotFoundError ..."
+                raise ValueError(text)
+        except Exception as e:  # noqa: BLE001 - B6: a damaged document is a plain sentence, not a parser traceback
+            from meshpool_harness.ui.previews import friendly_error
+            raise ValueError(friendly_error(p, e)) from None
+        return {"path": rel, "binary": False, "readonly": True, "size": size, "text": text,
+                "note": "Preview of the document's text"}
+    if p.suffix.lower() in BINARY_EXT:
+        return {"path": rel, "binary": True, "readonly": True, "size": size, "text": "", "note": "This is not a text file."}
     if size > 2_000_000:
         return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 2 MB."}
     try:
@@ -293,13 +320,22 @@ def write_file(root: str, rel: str, text: str) -> dict:
     except OSError:
         pass
     p.write_bytes(text.encode("utf-8"))
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(root, str(p), "workbench")
+    except Exception:
+        pass
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
 # ======================================== git =====================================================================
 def attach(root: str, name: str, data: bytes) -> dict:
     """Save a file the user attached in the message box into the project, without overwriting anything."""
-    r = check_root(root)
+    return attach_to(check_root(root), name, data)
+
+
+def attach_to(r: Path, name: str, data: bytes) -> dict:
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
     name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
     if name.strip(".") == "":
         name = "file"
@@ -313,14 +349,24 @@ def attach(root: str, name: str, data: bytes) -> dict:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
     sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
-    base.mkdir(exist_ok=True)
-    p = base / name
-    stem, suf, i = p.stem, p.suffix, 2
-    while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
-        p = base / f"{stem} ({i}){suf}"
-        i += 1
-    with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
-        f.write(data)
+    try:
+        base.mkdir(exist_ok=True)
+        p = base / name
+        stem, suf, i = p.stem, p.suffix, 2
+        while p.exists() or p.is_symlink():      # exists() follows a dangling link: it wrote outside the project
+            p = base / f"{stem} ({i}){suf}"
+            i += 1
+        with open(p, "xb") as f:                 # x: never through a link or over a file made meanwhile
+            f.write(data)
+    except PermissionError:
+        raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
+    except OSError as e:
+        raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(r), str(p), "attach")
+    except Exception:
+        pass
     return {"path": (sub + "/" if sub else "") + p.name}
 
 
@@ -669,33 +715,83 @@ def term_stop(tid: str) -> dict:
 
 def term_stop_all() -> None:
     """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
-    for t in list(TERMS.values()):
-        if t.get("rc") is None:
-            _term_kill(t, 1.0)
+    ths = [threading.Thread(target=_term_kill, args=(t, 1.0), daemon=True) for t in list(TERMS.values())
+           if t.get("rc") is None]
+    for th in ths:                               # all at once: ten dev servers must not take ten seconds to stop
+        th.start()
+    for th in ths:
+        th.join(5)
 
 
 # ======================================== usage ===================================================================
-def usage() -> dict:
+_LEGACY_MODEL = "unknown (before usage tracking)"
+_BUCKET_KEYS = ("in", "cached", "out", "calls", "cost", "unpriced_calls", "unreported_calls", "cache_write", "reasoning")
+
+
+def usage(since: float = 0) -> dict:
+    """Usage from the call ledger: every model call, nested engine, reviewer and helper calls included, with the real
+    model of each call. Chats from before the ledger existed are added from their session file, marked "legacy"."""
+    from meshpool_harness import session_store as SS
     from meshpool_harness.agent.core import SESSIONS
-    rows, total = [], {"in": 0, "cached": 0, "out": 0, "calls": 0}
-    by_model: dict[str, dict] = {}
+    from meshpool_harness.core import gateway, usage as U
+    U.flush()
+    recs = [r for r in U.read_records(since=since) if isinstance(r, dict)]
+    s = U.summarize(recs)
+    total = {k: s[k] for k in _BUCKET_KEYS}
+    by_model = {m: {**b, "threads": 0} for m, b in s["by_model"].items()}
+    chats_of: dict[str, set] = {}
+    last: dict[str, float] = {}
+    chat_models: dict[str, dict[str, int]] = {}
+    for r in recs:
+        c = str(r.get("chat") or "")
+        if not c:
+            continue
+        m = str(r.get("model") or "?")
+        chats_of.setdefault(m, set()).add(c)
+        last[c] = max(last.get(c, 0.0), float(r.get("ts") or 0))
+        if (r.get("source") or "chat") == "chat":
+            cm = chat_models.setdefault(c, {})
+            cm[m] = cm.get(m, 0) + 1
+    for m, cs in chats_of.items():
+        by_model[m]["threads"] = len(cs)
+    sessions: dict[str, dict] = {}
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = SS.read_head(p.parent)           # P-07/H-14: the small head record; a chat saved before heads held usage is read once
+            if not isinstance(d, dict) or "usage" not in d:
+                d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if isinstance(d, dict):
+            sessions[str(d.get("id") or p.parent.name)] = d
+    rows = []
+    for c, b in s["by_chat"].items():
+        if not c:
+            continue
+        d = sessions.get(c) or {}
+        cm = chat_models.get(c)
+        model = max(cm, key=cm.get) if cm else (d.get("model") or "unknown")
+        rows.append({"id": c, "title": d.get("title") or c, "model": model, "updated": last.get(c, 0),
+                     "in": b["in"], "cached": b["cached"], "out": b["out"], "calls": b["calls"], "cost": b["cost"],
+                     "unpriced_calls": b["unpriced_calls"], "legacy": False})
+    for c, d in sessions.items():
         u = d.get("usage") or {}
-        m = d.get("model") or d.get("harness") or "unknown"
-        for k in total:
-            total[k] += int(u.get(k) or 0)
-        bm = by_model.setdefault(m, {"in": 0, "cached": 0, "out": 0, "calls": 0, "threads": 0})
-        for k in ("in", "cached", "out", "calls"):
-            bm[k] += int(u.get(k) or 0)
+        calls = int(u.get("calls") or 0)
+        if c in s["by_chat"] or not calls or float(d.get("updated") or 0) < since:
+            continue
+        r = {"id": c, "title": d.get("title") or c, "model": d.get("model") or "unknown", "updated": d.get("updated", 0),
+             "in": int(u.get("in") or 0), "cached": int(u.get("cached") or 0), "out": int(u.get("out") or 0),
+             "calls": calls, "cost": 0.0, "unpriced_calls": calls, "legacy": True}
+        rows.append(r)
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            total[k] += r[k]
+        bm = by_model.setdefault(_LEGACY_MODEL, {**U._empty_bucket(), "threads": 0})   # noqa: SLF001
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            bm[k] += r[k]
         bm["threads"] += 1
-        rows.append({"id": d.get("id"), "title": d.get("title") or "New chat", "model": m,
-                     "updated": d.get("updated", 0), **{k: int(u.get(k) or 0) for k in total}})
-    rows.sort(key=lambda r: -r["updated"])
-    return {"total": total, "by_model": by_model, "threads": rows[:200]}
+    rows.sort(key=lambda r: -(r["updated"] or 0))
+    return {"total": total, "by_model": by_model, "by_source": s["by_source"], "threads": rows[:200],
+            "gateway": gateway.snapshot()}
 
 
 def open_editor(root: str) -> dict:

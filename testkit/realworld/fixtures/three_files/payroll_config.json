@@ -1,0 +1,14 @@
+{
+  "currency": "EUR",
+  "payout_reference_date": "2026-01-01",
+  "day_rates": {
+    "G1": 210.0,
+    "G2": 265.0,
+    "G3": 340.0
+  },
+  "legacy_day_rates_2024": {
+    "G1": 190.0,
+    "G2": 240.0,
+    "G3": 310.0
+  }
+}

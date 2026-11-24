@@ -66,7 +66,7 @@ def _fsync_dir(d: Path) -> None:
         os.close(fd)
 
 
-def atomic_write_bytes(path, data: bytes, *, fsync: bool = True) -> None:
+def atomic_write_bytes(path, data: bytes, *, fsync: bool = True, mode: int | None = None) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
@@ -76,6 +76,9 @@ def atomic_write_bytes(path, data: bytes, *, fsync: bool = True) -> None:
             f.flush()
             if fsync:
                 os.fsync(f.fileno())
+        if mode is not None:
+            with contextlib.suppress(OSError):
+                os.chmod(tmp, mode)                 # OSS-15: keep the permission bits (an executable stays executable)
         _replace(tmp, str(p))
         if fsync:
             _fsync_dir(p.parent)

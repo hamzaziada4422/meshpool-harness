@@ -45,10 +45,25 @@ def _review_of(agent) -> dict | None:
             "error": r.get("error") or ""}
 
 
+def _nested_calls(a) -> int | None:
+    """Calls of the agent's current task that were not the chat's own (engines, reviewers, helpers, sub-agents)."""
+    try:
+        t = getattr(a, "_task", None)
+        if t is None:
+            return None
+        return sum(int(b.get("calls") or 0) for k, b in t.totals()["by_source"].items() if k != "chat")
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def log_turn(session, route, usage_before: dict, ev0: int | None = None, turn: int | None = None) -> None:
     a = session.agent
     u = dict(getattr(a, "usage", {}) or {})
     d = {k: (u.get(k, 0) or 0) - (usage_before.get(k, 0) or 0) for k in ("in", "cached", "out", "calls")}
+    unpriced = int((u.get("unpriced_calls", 0) or 0) - (usage_before.get("unpriced_calls", 0) or 0))
+    cost = None                                   # None: no call of this turn has a known price
+    if "cost" in u and d["calls"] > unpriced:
+        cost = round(float(u.get("cost") or 0) - float(usage_before.get("cost") or 0), 6)
     evs = getattr(session, "events", None) or []
     ev = list(evs[ev0:]) if ev0 is not None else list(evs[-30:])    # this turn's events only (old window: no ev0)
     model = a.current_model() if hasattr(a, "current_model") else getattr(a, "model", None)
@@ -57,6 +72,7 @@ def log_turn(session, route, usage_before: dict, ev0: int | None = None, turn: i
              "chat_spec": getattr(getattr(a, "route", None), "spec", None), "harness": session.harness.get("id"),
              "model": model, "secs": round(time.time() - session.t_turn, 1), "tokens_in": d["in"],
              "tokens_cached": d["cached"], "tokens_out": d["out"], "calls": d["calls"],
+             "cost_usd": cost, "unpriced_calls": max(unpriced, 0), "nested_calls": _nested_calls(a),
              "reason": (getattr(session, "auto_reason", "") or getattr(route, "harness_reason", "")
                         or getattr(route, "reason", "") or "")[:300],
              "error": any(e.get("type") == "error" for e in ev),
@@ -89,7 +105,7 @@ def rows(chat: str) -> list[dict]:
 
 
 def refit() -> dict:
-    """Per spec and harness: turns, failure share, median seconds and output tokens.
+    """Per spec and harness: turns, failure share, median seconds and output tokens, average cost where measured.
 
     A mark applies to ONE row: the latest row of that chat (and turn, when the mark names one) logged at or before it.
     """
@@ -118,7 +134,7 @@ def refit() -> dict:
     out: dict = {}
     for r in rws:
         k = f"{r.get('spec')}|{r.get('harness')}"
-        b = out.setdefault(k, {"turns": 0, "failed": 0, "secs": [], "out": []})
+        b = out.setdefault(k, {"turns": 0, "failed": 0, "secs": [], "out": [], "cost": []})
         b["turns"] += 1
         ms = hit.get(id(r), [])
         thumbs = [o for o in ms if o in ("up", "down")]
@@ -127,6 +143,10 @@ def refit() -> dict:
         b["failed"] += bool(bad)
         b["secs"].append(r.get("secs") or 0)
         b["out"].append(r.get("tokens_out") or 0)
+        if isinstance(r.get("cost_usd"), (int, float)):
+            b["cost"].append(float(r["cost_usd"]))
     med = lambda xs: sorted(xs)[len(xs) // 2] if xs else 0   # noqa: E731
     return {k: {"turns": v["turns"], "fail_rate": round(v["failed"] / v["turns"], 3), "median_secs": med(v["secs"]),
-                "median_out_tokens": med(v["out"])} for k, v in out.items()}
+                "median_out_tokens": med(v["out"]),
+                **({"avg_cost_usd": round(sum(v["cost"]) / len(v["cost"]), 6)} if v["cost"] else {})}
+            for k, v in out.items()}

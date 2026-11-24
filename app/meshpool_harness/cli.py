@@ -46,6 +46,13 @@ def _engine(name):
 
 def run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
+    from meshpool_harness import telemetry
+    with telemetry.span("meshpool.run", {"meshpool.engine": engine or ""}):
+        return _run_request(request, files, out, engine, workdir, client, output_format, model)
+
+
+def _run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
+                 client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
     from meshpool_harness.router.router import route
     if not request or not request.strip():
@@ -123,7 +130,8 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "worktree", "permissions", "chats", "projects", "memory", "skills", "plugins",
+            "schedule", "agents", "models", "usage", "settings", "help"}
 
 
 def _agent_parser():
@@ -141,6 +149,7 @@ def _agent_parser():
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
                "  work             fetch a task from GitHub, Jira, a URL or a file, run it, report back\n"
                "  run / route      run or preview Meshpool's task engines (decks, spreadsheets, data, code)\n"
+               "  worktree         isolated copies: list, diff, merge or discard (see --worktree)\n"
                "  ui / app         open the Meshpool web app or desktop app\n"
                "  install-browser  install the optional browser engine")
     ap.add_argument("request", nargs="?", help="first request for an interactive session")
@@ -149,17 +158,60 @@ def _agent_parser():
     ap.add_argument("--auto", action="store_true", help="allow edits and commands without asking")
     ap.add_argument("--json", dest="json_out", action="store_true", help="with -p: print one JSON object (result, usage, session id) for scripts and CI")
     ap.add_argument("--output-format", choices=["text", "json", "stream-json"], help="with -p: text (default), json, or stream-json (one event per line as it happens)")
-    ap.add_argument("--permission-mode", choices=["ask", "edits", "auto", "plan"], help="ask (default), edits (accept file changes), auto (everything), plan (read only, then a plan)")
+    ap.add_argument("--permission-mode", type=lambda v: v if v == "plan" else (_config.normalize_mode(v, None) or v), choices=["ask", "edits", "auto", "plan"], help="ask (default), accept-edits (accept file changes), full-access (everything), plan (read only, then a plan). Old names (edits, auto, manual, supervised) still work")
+    ap.add_argument("--sandbox", action="store_true", help="run the agent's commands in the sandbox (on by default except in Full access): they can write only in the project and temporary folders")
+    ap.add_argument("--no-network", dest="no_network", action="store_true", help="also cut the network for sandboxed commands")
     ap.add_argument("--append-system-prompt", help="extra instructions added to the agent's system prompt for this run")
-    ap.add_argument("--max-turns", type=int, help="stop after this many tool steps in one request")
+    ap.add_argument("--max-turns", "--max-steps", dest="max_turns", type=int, metavar="N",
+                    help="stop after this many tool steps in one reply (default 200; 0 = no limit)")
     ap.add_argument("--allowed-tools", help="comma-separated tools or bash:pattern rules that never ask, e.g. edit,bash:npm test*")
     ap.add_argument("--disallowed-tools", help="comma-separated tools or bash:pattern rules that are always refused")
     ap.add_argument("-c", "--continue", dest="resume", action="store_true", help="resume the last session here")
     ap.add_argument("--resume", dest="session", help="resume a session by id")
     ap.add_argument("--model", help="model id for this session")
+    ap.add_argument("--effort", choices=["off", "low", "medium", "high", "xhigh"],
+                    help="how hard the model thinks (setting MH_REASONING_EFFORT; /effort in a session)")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
-    ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--mode", choices=["code", "work", "auto"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps; auto: pick the agent for the request")
+    ap.add_argument("--profile", choices=["code", "work"], help=argparse.SUPPRESS)      # the old name of --mode
+    ap.add_argument("--agent", dest="agent_id", help="the agent to run (an id from `meshpool agents`, e.g. meshpool-code, meshpool-work, codex)")
+    ap.add_argument("--project", help="a project id: its instructions, memory and folder apply")
+    ap.add_argument("--incognito", action="store_true", help="no memory is read or written and nothing is learned from this chat")
+    ap.add_argument("--attach", action="append", default=[], metavar="PATH", help="a file or picture to send with the request (repeatable)")
+    ap.add_argument("--output-last-message", metavar="FILE", help="with -p: also write the final reply to FILE")
+    ap.add_argument("--worktree", action="store_true", help="work in an isolated copy of the folder (a git worktree on its own branch; a plain copy without git), so other sessions and chats are not disturbed; merge it back with `meshpool worktree merge <id>`")
     return ap
+
+
+def _worktree_session(a, prompt) -> dict | None:
+    """--worktree: an isolated copy for this session; a.dir then points into it."""
+    if not getattr(a, "worktree", False):
+        return None
+    from meshpool_harness import worktrees as WT
+    if a.resume or a.session:
+        raise SystemExit("error: --worktree starts a new session; it cannot be combined with -c or --resume")
+    try:
+        rec = WT.create(a.dir or os.getcwd(), owner_kind="cli", owner_id=str(os.getpid()),
+                        title=(prompt or a.request or "terminal session").strip()[:80])
+    except WT.WorktreeError as e:
+        raise SystemExit(f"error: {e}")
+    print(f"Working in an isolated copy ({rec['id']}): {rec['workdir']}", file=sys.stderr)
+    a.dir = rec["workdir"]
+    return rec
+
+
+def _worktree_done(rec: dict | None) -> None:
+    if not rec:
+        return
+    from meshpool_harness import worktrees as WT
+    try:
+        n = len(WT.diff(rec["id"], max_patch=0)["files"])
+    except (WT.WorktreeError, KeyError, OSError):
+        n = -1
+    what = "No changes" if n == 0 else f"{n} file(s) changed" if n > 0 else "Changes"
+    print(f"{what} in isolated copy {rec['id']}. Review: meshpool worktree diff {rec['id']}  |  bring them in: "
+          f"meshpool worktree merge {rec['id']}  |  throw away: meshpool worktree discard {rec['id']}",
+          file=sys.stderr)
 
 
 def _stdin_has_data(explicit: bool) -> bool:
@@ -189,20 +241,77 @@ def _no_console() -> bool:
         return False
 
 
-_HELP = {
-    "login": "Usage: meshpool login\nAsk for your API key and save it.",
-    "setup": "Usage: meshpool setup\nFirst-run setup: key, folder and preferences.",
-    "run-due": "Usage: meshpool run-due\nRun every scheduled task that is due, then exit.",
-    "scheduler": "Usage: meshpool scheduler install | uninstall | status\nRun scheduled tasks while the app is closed.",
-    "import": "Usage: meshpool import <export.zip | claude-code | codex>\n       meshpool import agents [--dry-run] [--yes] [--from claude,codex]",
-    "mcp": "Usage: meshpool mcp\nStart the configured MCP servers and show their status.",
-    "app": "Usage: meshpool app\nOpen the desktop app.",
-    "connect": "Usage: meshpool connect [name]\nConnect an app or service.",
-    "disconnect": "Usage: meshpool disconnect <name>\nRemove a connection.",
-}
+from meshpool_harness.cli_app import HELP as _HELP, NEW as _APP_COMMANDS  # noqa: E402  (one table for help)
+
+
+def _permissions_cmd(argv) -> int:
+    ap = argparse.ArgumentParser(prog="meshpool permissions", description="List or edit the saved allow/deny rules. "
+                                 "A rule is a tool name (edit, mcp__github__*) or bash: and a command pattern (bash:npm test*).")
+    ap.add_argument("action", nargs="?", choices=["list", "allow", "deny", "remove"], default="list")
+    ap.add_argument("rule", nargs="?", help="the rule to add or remove")
+    ap.add_argument("--project", action="store_true", help="use <dir>/.meshpool/permissions.json instead of the user file")
+    ap.add_argument("--dir", default=".", help="the project folder (with --project, and for listing)")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit as e:
+        return int(e.code or 0)
+    from meshpool_harness.core import permrules as PR
+    path = PR.project_path(a.dir) if a.project else PR.user_path()
+    if a.action == "list":
+        for label, p in (("user", PR.user_path()), ("project", PR.project_path(a.dir))):
+            r = PR.list_rules(p)
+            print(f"{label} rules ({p}):")
+            for k in ("allow", "deny"):
+                for x in r[k]:
+                    print(f"  {k:5} {x}")
+            if not (r["allow"] or r["deny"]):
+                print("  (none)")
+        return 0
+    if not a.rule:
+        print(f"Usage: meshpool permissions {a.action} RULE [--project] [--dir DIR]", file=sys.stderr)
+        return 2
+    try:
+        if a.action == "remove":
+            PR.remove_rule(path, "allow", a.rule)
+            PR.remove_rule(path, "deny", a.rule)
+        else:
+            PR.add_rule(path, a.action, a.rule)
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    print(f"{a.action}: {a.rule} ({path})")
+    return 0
 
 
 def main(argv=None):
+    """The command line. Anything that goes wrong comes out as one `error: ...` line and exit code 1, never a
+    traceback (F-10); MH_DEBUG=1 keeps the traceback. Ctrl+C and sys.exit pass through."""
+    try:
+        return _main(argv)
+    except (KeyboardInterrupt, SystemExit):
+        raise
+    except Exception as e:  # noqa: BLE001
+        if os.environ.get("MH_DEBUG") == "1":
+            raise
+        from meshpool_harness.errors import plain
+        expected = isinstance(e, (ValueError, KeyError, OSError, zipfile.BadZipFile, RuntimeError))
+        line = f"error: {plain(e)}"
+        if not expected:
+            try:
+                import traceback
+                log = _config.runs_dir() / "logs" / "cli-error.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                with log.open("a", encoding="utf-8") as f:
+                    f.write(f"--- {time.strftime('%Y-%m-%d %H:%M:%S')} {' '.join(sys.argv[1:])}\n"
+                            + traceback.format_exc() + "\n")
+                line += f" (details: {log})"
+            except OSError:
+                pass
+        print(line, file=sys.stderr)
+        return 1
+
+
+def _main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] in _HELP and any(x in ("-h", "--help") for x in argv[1:]):
         print(_HELP[argv[0]])                              # help never runs the command
@@ -230,8 +339,9 @@ def main(argv=None):
     if argv[:1] == ["app"]:              # the desktop app (Meshpool.app / Meshpool.exe)
         from meshpool_harness.ui.desktop import run as run_app
         return run_app()
-    if os.environ.get("MESHPOOL_HOME"):
-        _config.ensure_home()
+    from meshpool_harness.agent import tui_render as _R
+    _R.prepare_streams()             # OSS-30: a cp1252 console or a redirected stdout must not crash on glyphs
+    _config.ensure_home()
     _config.load_into_env()          # before any engine import: engines read MH_* at import time
     try:
         from meshpool_harness.ui.desktop import _bundled_tools
@@ -248,17 +358,30 @@ def main(argv=None):
         a = _agent_parser().parse_args(argv)
         if a.model:
             os.environ["MH_MODEL"] = a.model
+        if os.environ.get("MH_EFFORT") and not os.environ.get("MH_REASONING_EFFORT"):
+            os.environ["MH_REASONING_EFFORT"] = os.environ["MH_EFFORT"]      # the old name, kept as an alias
+        if getattr(a, "effort", None):
+            os.environ["MH_REASONING_EFFORT"] = a.effort
         from meshpool_harness.agent.tui import main as agent_main
         prompt = a.prompt
         if prompt is not None and _stdin_has_data(prompt == "-"):   # cat notes.txt | meshpool -p "summarise this"
             piped = sys.stdin.read()
             prompt = (prompt + "\n\n" + piped) if prompt not in ("", "-") else piped
-        if a.profile:
-            os.environ["MH_AGENT_PROFILE"] = a.profile
-        if a.max_turns:
+        if prompt is not None and not prompt.strip():
+            print("error: -p needs a request (an empty one was given)", file=sys.stderr)
+            return 2
+        mode = a.mode or a.profile
+        if mode in ("code", "work"):
+            os.environ["MH_AGENT_PROFILE"] = mode
+        if a.max_turns is not None:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
+        if getattr(a, "sandbox", False):
+            os.environ["MH_SANDBOX"] = "1"
+        if getattr(a, "no_network", False):
+            os.environ["MH_SANDBOX"] = "1"
+            os.environ["MH_SANDBOX_NETWORK"] = "0"
         if a.permission_mode:
             os.environ["MH_PERMISSION_MODE"] = a.permission_mode
             if a.permission_mode == "auto":
@@ -268,9 +391,25 @@ def main(argv=None):
         if a.disallowed_tools:
             os.environ["MH_DENY"] = a.disallowed_tools
         fmt = a.output_format or ("json" if a.json_out else "")
-        return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request, json_out=fmt if fmt in ("json", "stream-json") else False)
+        wt = _worktree_session(a, prompt)
+        try:
+            return agent_main(a.dir, prompt, a.auto, a.resume, a.session, a.no_mcp, a.request,
+                              json_out=fmt if fmt in ("json", "stream-json") else False, mode=mode,
+                              agent=a.agent_id, project=a.project, incognito=a.incognito, attach=a.attach or None,
+                              output_last_message=a.output_last_message, effort=getattr(a, "effort", None),
+                              **({"worktree_id": wt["id"]} if wt else {}))
+        finally:
+            _worktree_done(wt)
+    if argv[0] in _APP_COMMANDS and not (argv[0] == "mcp" and len(argv) == 1):   # the app's features as commands
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
+    if argv[0] == "worktree":                    # meshpool worktree list|diff|merge|discard
+        from meshpool_harness import worktrees as WT
+        return WT.cli(argv[1:])
     if argv[0] == "agent":
         return main(argv[1:] or [])
+    if argv[0] == "permissions":
+        return _permissions_cmd(argv[1:])
     if argv[0] == "acp":
         ap = argparse.ArgumentParser(prog="meshpool acp", description="Serve the Meshpool agent over ACP on stdio.")
         ap.add_argument("--profile", choices=["code", "work"], default="code")
@@ -326,15 +465,15 @@ def main(argv=None):
             what = argv[1]
             if what in ("claude-code", "codex"):
                 r = CI.import_local([what])
-                print(f"Imported {r['imported']} {what} sessions as chats ({r['skipped']} were already here).")
+                print(f"{what}: {r['summary']}")
                 return 0
             try:
                 r = CI.import_export(os.path.expanduser(what))
             except (OSError, ValueError, zipfile.BadZipFile) as e:
                 print(f"Could not import {what}: {e}")
                 return 1
-            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['imported']} chats "
-                  f"({r['skipped']} were already here), {len(r['skills'])} project skills, {r['memory']} facts into "
+            print(f"{'Claude' if r['kind'] == 'claude' else 'ChatGPT'} export: {r['summary']} "
+                  f"{len(r['skills'])} project skills, {r['memory']} facts into "
                   f"memory, {r['instructions']} instructions.")
             return 0
         return 0 if onboard.context_step(Style(_enable_ansi())) else 1
@@ -344,6 +483,9 @@ def main(argv=None):
             return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
+    if argv[0] == "mcp" and len(argv) > 1:
+        from meshpool_harness import cli_app
+        return cli_app.main(argv)
     if argv[0] == "mcp":
         from meshpool_harness.agent.mcp import Manager, config_file
         from meshpool_harness.agent.tui import Terminal, _mcp_status
@@ -438,7 +580,7 @@ def main(argv=None):
     return 0 if res["ok"] else 1
 
 
-def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
+def ping(model: str | None = None, base: str = "", key: str = "", kind: str = "", api_version: str = "") -> dict:
     """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
     to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
@@ -462,19 +604,24 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
                 return {"ok": False, "detail": "Choose a model this endpoint serves first.", "model": "",
                         "seconds": 0.0, "endpoint": led.base_url}
         model = m
+        led.kind, led.api_version = kind, api_version    # an Azure kind or api-version typed but not saved yet
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
                      max_tokens=16, retries=1, timeout=60, key_only=True)   # Responses endpoints need at least 16
         msg_ = ((r.get("choices") or [{}])[0].get("message"))
         if not isinstance(msg_, dict):
             raise RuntimeError("meshpool HTTP 200 but not a model reply: no message")
         txt = msg_.get("content") or ""
+        from meshpool_harness.core import usage
+        usage.record(model, r.get("usage"), base=led.base_url, source="check", request_chars=30,
+                     reply_chars=len(txt))
         return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
-        msg = str(e)
-        if "401" in msg or "403" in msg:
-            msg = "the endpoint rejected the API key (" + msg[:160] + ")"
-        return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
+        import re
+        m_st = re.match(r"^meshpool HTTP (\d+): ", str(e))
+        msg = re.sub(r"^meshpool HTTP \d+: ", "", str(e))     # wire.py already explains the status in plain words
+        return {"ok": False, "detail": msg[:400], "status": int(m_st.group(1)) if m_st else 0,
+                "model": model or "", "seconds": round(time.time() - t0, 1),
                 "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 

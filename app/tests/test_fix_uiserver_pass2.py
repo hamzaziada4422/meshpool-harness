@@ -60,6 +60,21 @@ def test_send_failure_shows_error_and_keeps_message(chat):
     assert s.state == "idle"
 
 
+def test_a_built_in_turn_that_ends_normally_leaves_the_chat_idle(chat):
+    s = A.Session(workdir=str(chat), harness="meshpool-code", kind="code")
+
+    def say(text, images=None):
+        s.emit({"type": "user", "text": text, "images": []})
+        s.emit({"type": "assistant", "text": "done"})
+        s.emit({"type": "turn_end"})
+    s.agent.send = say
+    s._start_turn("hello there", None)
+    end = time.time() + 10
+    while (s.state != "idle" or not any(e["type"] == "turn_end" for e in s.events)) and time.time() < end:
+        time.sleep(0.05)
+    assert s.state == "idle" and s.view(0)["state"] == "idle"
+
+
 def test_actions_on_missing_chat_are_404(chat):
     with pytest.raises(KeyError):
         A.thread_action("ghost-1", {"action": "pin"})

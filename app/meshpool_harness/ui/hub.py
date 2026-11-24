@@ -105,7 +105,10 @@ def _task_row(t: dict, threads: dict) -> dict:
             if p.get("path") == t["folder"]:
                 pj = p.get("name", "")
     return {"id": t["id"], "name": t.get("name") or "Scheduled task", "prompt": t.get("prompt", ""),
-            "enabled": bool(t.get("enabled")), "status": "Active" if t.get("enabled") else "Paused",
+            "enabled": bool(t.get("enabled")), "status": AS.status(t),
+            "error": (t.get("last_error") or {}).get("text", ""), "invalid": t.get("invalid", ""),
+            "skipped": (t.get("skipped") or {}).get("why", ""), "skip_if_missed_h": t.get("skip_if_missed_h"),
+            "running": bool(t.get("lease") and float((t["lease"] or {}).get("until") or 0) > __import__("time").time()),
             "schedule": AS.describe(t), "when": t.get("when"), "time": t.get("time"), "day": t.get("day"),
             "minutes": t.get("minutes"), "at": t.get("at"), "only_on_change": bool(t.get("only_on_change")), "next_run": t.get("next_run"),
             "last_run": t.get("last_run"), "last_thread": t.get("last_thread"), "kind": t.get("kind", "cowork"),
@@ -123,11 +126,11 @@ TEMPLATES = [
 def scheduled() -> dict:
     threads = {r["id"]: r for r in A.listing()}
     rows = [_task_row(t, threads) for t in AS.tasks()]
-    return {"tasks": rows, "templates": TEMPLATES}
+    return {"tasks": rows, "templates": TEMPLATES, "problem": AS.tasks_problem()}
 
 
 def account() -> dict:
-    """What the account menu and the sidebar footer show. MeshPool keeps no remote profile: the name is the one in
+    """What the account menu and the sidebar footer show. Meshpool keeps no remote profile: the name is the one in
     Settings, the plan is the state of the key, and 'this computer' is the one device."""
     p = SV.profile()
     name = (p["address"] or p["name"]).strip()
@@ -136,8 +139,8 @@ def account() -> dict:
     rows = A.listing()
     code = [r for r in rows if is_code_session(r) and not r.get("archived")]
     return {"name": name, "first_name": first, "initial": (first or "M")[:1].upper(), "full_name": p["name"],
-            "plan": "MeshPool key" if key else "No key yet", "key_set": key,
-            "email": "Signed in with a MeshPool key" if key else "Not signed in",
+            "plan": "Meshpool key" if key else "No key yet", "key_set": key,
+            "email": "Signed in with a Meshpool key" if key else "Not signed in",
             "device": {"name": platform.node() or "This computer", "connected": True, "os": platform.system()},
             "billing_url": SV.BILLING_URL, "keys_url": SV.BILLING_URL,
             "code_waiting": len([r for r in code if r.get("state") == "waiting"]),

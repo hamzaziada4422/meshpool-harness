@@ -1,5 +1,6 @@
 """Keep test runs from writing into the package folder (the failure catalog defaults to it)."""
 import os
+import sys
 
 os.environ.setdefault("MH_FAILURES_LOG", "off")
 os.environ.setdefault("MH_RECOVER_MIN", "0")        # an outage in a test fails at once instead of waiting 30 min
@@ -45,6 +46,31 @@ def _no_slot_files_in_real_temp():
                       "MH_SLOTS_DIR. (Slot files other processes create there are not this run's concern.)")
 
 
+def _forget_chats():
+    """Chats opened live by one test (agent_api.LIVE, the deleted set, the sidebar and search caches) must not show up in the
+    next test's listing or count: a worker runs hundreds of tests in one process."""
+    api = sys.modules.get("meshpool_harness.ui.agent_api")
+    if api is None:
+        return
+    with api.LOCK:
+        api.LIVE.clear()
+    api.DELETED.clear()
+    api.QUIESCING[0] = False
+    api._METAS.clear()
+    api._ROWS.clear()
+    api._RAW.clear()
+    api._RAW_BYTES[0] = 0
+    api.list_dirty()
+
+
+def _forget_learned():
+    """Windows and refused fields learned in one test (process-wide, keyed by model) must not trim the next test."""
+    from meshpool_harness.agent import core as _AC
+    from meshpool_harness.core import context as _CX
+    _CX.forget()
+    _AC._REFUSED.clear()
+
+
 @pytest.fixture(autouse=True)
 def _offline_gateway(monkeypatch, tmp_path):
     """No test probes the real endpoint, and no endpoint state leaks between tests."""
@@ -54,6 +80,16 @@ def _offline_gateway(monkeypatch, tmp_path):
     from meshpool_harness import config as _C
     monkeypatch.setattr(_C, "SHELL", {}, raising=False)             # the shell's own endpoint values and the injected names are
     monkeypatch.setattr(_C, "_INJECTED", set())         # per-process state: no test inherits another's
+    env_before = dict(os.environ)       # app code may load a test's config into os.environ (C.load_into_env): undone below
+    from meshpool_harness.core import modelcaps as MCAPS
+    monkeypatch.setenv("MH_CAPS_LEARNED", str(tmp_path / "caps_learned.json"))   # learned facts never reach the real folder
+    MCAPS.reset()
+    _forget_learned()
+    _forget_chats()
+    # Loopback mocks count as local servers, which wait 15 min for a first byte and 5 min between bytes (H-06): tests that
+    # check the timeouts use short ones, so the local floors are off here (the H-06 test turns them on).
+    monkeypatch.setenv("MH_LOCAL_FIRST_BYTE_S", "1")
+    monkeypatch.setenv("MH_LOCAL_IDLE_S", "1")
     # A test that misses its mock must fail, never reach a real model: a module reload once let a patched Agent fall
     # through to the live endpoint (12 paid calls). Tests that run a mock server set their own URL after this.
     monkeypatch.setenv("MESHPOOL_BASE_URL", "http://127.0.0.1:9/v1")
@@ -73,4 +109,9 @@ def _offline_gateway(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_REVIEW_CALIBRATION", "0")    # reviewer tests grade raw; the calibration has its own test
     monkeypatch.setattr(Agent, "_probe", lambda self, base, key, model: "HTTP 0: offline in tests")
     yield
+    os.environ.clear()                  # e.g. MH_API_WIRE=anthropic from one test sent later agents down the wrong wire
+    os.environ.update(env_before)
     GW.reset()
+    MCAPS.reset()
+    _forget_learned()
+    _forget_chats()

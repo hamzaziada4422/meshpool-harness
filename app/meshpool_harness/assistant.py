@@ -19,6 +19,14 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you o
 
 # Every agent, whichever harness runs it: slides and workbooks come from the Meshpool engines, which carry the
 # consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
+# What Pi (tools="deferred") gets instead of HONESTY and PLAIN: the same rules in about a fifth of the words. Every word
+# here is in Pi's first request.
+LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never say something was done or tested "
+              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji.")
+# The office rules for Pi, only in a chat that asked for an office file.
+ENGINES_LEAN = ("Slides and workbooks: make_deck, add_slides, make_spreadsheet or office_task, never python-pptx, "
+                "openpyxl or xlsxwriter by hand. To change a file the user has (.docx, .xlsx, .pptx), use "
+                "edit_office_file: it keeps their formatting and formulas.")
 ENGINES = ("Slides and workbooks come from the Meshpool office tools: make_deck for a deck, add_slides to add to a deck "
            "the user has, make_spreadsheet (or office_task) for a workbook or model. Never write a .pptx or .xlsx by "
            "hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs; pass the user's facts and files in the request. "
@@ -38,6 +46,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 # House writing rule for every agent and every file Meshpool writes: it reads as written by a careful professional,
 # never as machine output (the user's standing request: no AI look anywhere in the harness).
@@ -135,10 +144,6 @@ def _memory_lock():
     return _locked(_dir() / ".memory.lock")
 
 
-def _tasks_lock():
-    return _locked(C.home() / "schedules.lock")
-
-
 QUIET_DEFAULT = {"on": False, "start": "22:00", "end": "07:00"}
 
 
@@ -159,6 +164,13 @@ def settings() -> dict:
 
 
 def save_settings(**kw) -> dict:
+    """Change only the settings given, under the cross-process lock: a page that sends one switch never rewrites the
+    others from an old copy (M19-01)."""
+    with _memory_lock():
+        return _save_settings(kw)
+
+
+def _save_settings(kw: dict) -> dict:
     d = _settings_raw()
     for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on"):
         if k in kw:
@@ -179,8 +191,20 @@ def instructions() -> str:
     return _read(_dir() / "instructions.md").strip()
 
 
-def set_instructions(text: str):
-    _write(_dir() / "instructions.md", (text or "").strip()[:8000] + "\n")
+def set_instructions(text: str, base: str | None = None):
+    """Save the instructions. `base` is what the page loaded: when the text is unchanged nothing is written, and when
+    someone else changed the instructions meanwhile the save is refused rather than overwriting them (M19-01)."""
+    new = (text or "").strip()[:8000]
+    with _memory_lock():
+        if base is not None:
+            old = (base or "").strip()[:8000]
+            cur = instructions()
+            if new == old:
+                return
+            if cur != old and cur != new:
+                raise ValueError("Your instructions were changed somewhere else since you opened this page. "
+                                 "Reload the page and make your change again.")
+        _write(_dir() / "instructions.md", new + "\n")
 
 
 def _MS():
@@ -193,9 +217,13 @@ def memory() -> str:
     return _MS().text("everywhere")
 
 
-def set_memory(text: str):
-    """Replace the memory with this text: lines added become facts, lines removed are archived (never lost)."""
-    _MS().replace_scope_text("everywhere", (text or "").strip())
+def set_memory(text: str, base: str | None = None):
+    """Replace the memory with this text: lines added become facts, lines removed are archived (never lost). With
+    `base` (the text the page loaded) only the lines the person added or removed change; facts added meanwhile stay."""
+    if base is None:
+        _MS().replace_scope_text("everywhere", (text or "").strip())
+    else:
+        _MS().patch_scope_text("everywhere", base, (text or "").strip())
 
 
 def remember(fact: str, kind: str = "stated", source: dict | None = None, scope: str = "everywhere") -> str:
@@ -362,22 +390,26 @@ def project_block(project_id: str, task: str = "", exclude=()) -> str:
 
 
 def context_block(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = True, rules: bool = True, tools: str = "all", office: bool = True) -> str:
+                  exclude=(), record: bool = True, lookup: bool = True, rules: bool = True, tools: str = "all",
+                  office: bool = True) -> str:
     """Text the app adds, out of sight, to the first message of a new thread. task and root pick what memory is
     relevant: the user's core facts, the facts that match the task, and the project's notes. project_id adds the
     project's instructions, memory and knowledge files (see project_store). `incognito` reads no memory at all.
     With a chat_id, the facts given are recorded (so a reply can show its sources)."""
-    return build_context(task, root, project_id, chat_id, incognito, exclude, record, rules, tools, office)["text"]
+    return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
 
 
 def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
     """The "Notes from Meshpool" paragraph: only the tools the agent has are named."""
     if tools == "none":
         return "Notes from Meshpool: cite sources with links." + ((" " + ENGINES) if office else "")
-    deferred = tools == "deferred"
-    t = ("Notes from Meshpool: " + ("the web, memory, schedule, browser and office tools load through tool_search. "
-                                   if deferred else "")
-         + "look things up with the web search, research and fetch tools, not the browser, and cite sources with "
+    if tools == "deferred":
+        # Pi: what each Meshpool server is for is in its one-line entry (pi_rpc.SERVER_NOTE), so only what depends on
+        # this chat goes here: the office rules in a chat that asked for an office file, and incognito.
+        return " ".join(x for x in (ENGINES_LEAN if office else "",
+                                    "This chat is incognito: do not call memory_save or project_note." if incognito
+                                    else "") if x)
+    t = ("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser, and cite sources with "
          "links. Check anything visual (a web page, app screen or slide) with view_output or ui_audit, and fix what "
          "they show before you say it is done; for a page or screen use the build-ui skill. ")
     if mem_on:
@@ -392,7 +424,8 @@ def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
 
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
-                  exclude=(), record: bool = False, rules: bool = True, tools: str = "all", office: bool = True) -> dict:
+                  exclude=(), record: bool = False, lookup: bool = True, rules: bool = True, tools: str = "all",
+                  office: bool = True) -> dict:
     """context_block with its parts: {text, facts: [ids given], sections: [{title, text, ids}]} for the X-ray.
     `rules`: add HONESTY and PLAIN (Meshpool's own agents carry them in their system prompt, so their first message
     leaves them out; Pi and Codex get them here, once). `tools`: which Meshpool tools the agent has, "all", "deferred"
@@ -401,7 +434,7 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
     st = settings()
     mem_on = st["memory_on"] and not incognito
     MS = _MS()
-    if not project_id and root:
+    if not project_id and root and lookup:       # lookup off: the chat was moved out of its project
         try:
             from meshpool_harness import project_store as PS
             project_id = PS.for_root(root)
@@ -409,8 +442,11 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
             project_id = ""
     now = datetime.now().astimezone()
     sections = []
-    parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", *([HONESTY, PLAIN] if rules else [])]
+    lean = tools == "deferred"         # Pi: the date only (no clock, which also keeps the text stable) and the short rules
+    parts = [f"Today is {now.strftime('%A %d %B %Y')}." if lean else
+             f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).",
+             *(([LEAN_RULES] if lean else [HONESTY, PLAIN]) if rules else [])]
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -450,7 +486,9 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         pf = MS.project_facts(project_id, exclude) if (project_id and mem_on) else []
         sections.append({"title": "This project (instructions, notes, files)", "text": pb, "ids": [f["id"] for f in pf]})
         ids += [f["id"] for f in pf]
-    parts.append(_notes(tools, office, mem_on, incognito))
+    note = _notes(tools, office, mem_on, incognito)
+    if note:
+        parts.append(note)
     text = "\n\n".join(parts)
     if record and chat_id and ids and not incognito:
         MS.record_given(chat_id, 0, ids, text)
@@ -459,43 +497,90 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
 
 # ---------- scheduled tasks ------------------------------------------------------------------------------------------
 
+LEASE_S = 900          # a run holds its task this long without a sign of life (the chat renews it while it works)
+LATE_S = 6 * 3600      # a run this long after its time ran late: the computer was off or Meshpool closed
+
+
+class TasksDamaged(RuntimeError):
+    """schedules.json cannot be read. Nothing is written until the person resolves it (M18-05)."""
+
+
 def _sfile() -> Path:
     return C.home() / "schedules.json"
 
 
-def tasks() -> list[dict]:
-    try:
-        d = json.loads(_read(_sfile()) or "[]")
-        return d if isinstance(d, list) else []
-    except ValueError:
-        return []
+def _tasks_lock():
+    return fsio.file_lock(_sfile())                                     # across threads and processes
 
 
-def _tasks_rw() -> list[dict]:
-    """The task list for a read-modify-write. A missing file is an empty list; an unreadable file raises (so a
-    transient lock never wipes the list); a corrupt file is kept as schedules.json.bak before starting fresh."""
+def _rows() -> list:
+    """The stored rows for a read-modify-write. A missing file is an empty list; a damaged one raises TasksDamaged
+    (and a copy is kept next to it), so nothing is ever written over it."""
     p = _sfile()
     try:
-        raw = p.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return []
-    except OSError as e:
-        raise RuntimeError(f"could not read {p.name}: {e}") from e
-    try:
-        d = json.loads(raw or "[]")
+        d = fsio.read_json(p, default=[])
         if isinstance(d, list):
             return d
-    except ValueError:
-        pass
-    try:
-        os.replace(p, p.with_name(p.name + ".bak"))
+        cause = ValueError("not a list")
+    except fsio.CorruptFile as e:
+        cause = e.cause
+    try:                                                                # keep what is there, once per content
+        import hashlib
+        raw = p.read_bytes()
+        keep = p.with_name(f"{p.name}.corrupt-{hashlib.sha1(raw).hexdigest()[:8]}")
+        if not keep.exists():
+            fsio.atomic_write_bytes(keep, raw)
     except OSError:
         pass
-    return []
+    raise TasksDamaged(f"Your scheduled tasks file ({p}) is damaged ({cause}). Nothing was changed. "
+                       "A copy was saved next to it. Fix the file, or choose Start fresh to set it aside and begin "
+                       "with an empty list.")
 
 
-def _save_tasks(rows: list[dict]):
-    _write(_sfile(), json.dumps(rows, indent=1))
+def _save_tasks(rows: list) -> None:
+    """Replace the stored list (a test or repair helper: normal changes go through _mutate)."""
+    with _tasks_lock():
+        fsio.atomic_write_json(_sfile(), rows)
+
+
+def _mutate(fn):
+    """Locked read-modify-write of the task list: fn(rows) changes them in place and returns the result."""
+    with _tasks_lock():
+        rows = _rows()
+        res = fn(rows)
+        fsio.atomic_write_json(_sfile(), rows)
+        return res
+
+
+def tasks() -> list[dict]:
+    """The tasks, for showing. A damaged file shows as no tasks plus tasks_problem(); a row that is not a task is left
+    out (and left in the file)."""
+    try:
+        return [t for t in _rows() if isinstance(t, dict) and t.get("id")]
+    except (TasksDamaged, OSError):
+        return []
+
+
+def tasks_problem() -> str:
+    """Why the task list cannot be used, in plain words, or ""."""
+    try:
+        _rows()
+    except TasksDamaged as e:
+        return str(e)
+    except OSError as e:
+        return f"The scheduled tasks file could not be read: {e}"
+    return ""
+
+
+def reset_tasks() -> str:
+    """Set a damaged task file aside (never delete it) so a new list can start. Returns where it went."""
+    with _tasks_lock():
+        try:
+            fsio.read_json(_sfile(), default=[])
+            return ""                                                   # it reads fine: nothing to resolve
+        except fsio.CorruptFile:
+            dst = fsio.quarantine(_sfile())
+            return str(dst or "")
 
 
 def _hm(s: str) -> tuple[int, int]:
@@ -512,20 +597,32 @@ def _hm(s: str) -> tuple[int, int]:
     return h, mi
 
 
+def _at(t: dict) -> datetime:
+    return datetime.fromisoformat(str(t.get("at") or "").replace("Z", "+00:00"))
+
+
+def _is_done(t: dict) -> bool:
+    return t.get("when") == "once" and bool(t.get("last_run")) and not t.get("enabled")
+
+
 def next_run(t: dict, after: datetime | None = None) -> float | None:
-    now = (after or datetime.now()).replace(second=0, microsecond=0)
+    """The next time the task runs, as a timestamp. Hourly and every-N-minutes work in absolute time (a clock change
+    neither skips an hour nor runs twice); times of day are the computer's local time (M18-10)."""
+    ref = after or datetime.now()
+    now = ref.replace(second=0, microsecond=0)
+    ts = now.timestamp()
     w = t.get("when")
     if w == "once":
         try:
-            at = datetime.fromisoformat(str(t["at"]).replace("Z", "+00:00"))
+            at = _at(t)
         except (KeyError, ValueError):
             return None
         return at.timestamp() if not t.get("last_run") else None
     if w == "hourly":
-        return (now.replace(minute=0) + timedelta(hours=1)).timestamp()
+        off = now.astimezone().utcoffset().total_seconds() if now.tzinfo is None else 0
+        return ((ts + off) // 3600 + 1) * 3600 - off
     if w == "every":
-        mins = max(15, int(t.get("minutes") or 60))
-        return (now + timedelta(minutes=mins)).timestamp()
+        return ts + max(15, int(t.get("minutes") or 60)) * 60
     h, mi = _hm(t.get("time", "09:00"))
     cand = now.replace(hour=h, minute=mi)
     for i in range(0, 8):
@@ -540,29 +637,40 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
     return None
 
 
-def _check_task(t: dict) -> dict:
-    """Validate and normalise a task's schedule fields in place (shared by add_task and update_task)."""
+def _check_task(t: dict, past_ok: bool = False) -> dict:
+    """Validate and normalise a task's schedule fields in place (shared by add_task and update_task). The messages
+    are for the person who typed the task, not for an API."""
     when = t.get("when")
     if when not in WHEN:
-        raise ValueError("when must be one of: " + ", ".join(WHEN))
+        raise ValueError("Pick how often it should run: " + ", ".join(WHEN) + ".")
     if not str(t.get("prompt") or "").strip():
         raise ValueError("Write what the task should do.")
     t["prompt"] = str(t["prompt"]).strip()
     if when == "once":
         try:
-            datetime.fromisoformat(str(t.get("at") or "").replace("Z", "+00:00"))
+            at = _at(t)
         except ValueError:
-            raise ValueError("For a one-time task give `at` as a local date and time, like 2026-11-20T09:00.")
+            raise ValueError("Give the date and time it should run, like 2026-11-20 09:00.")
+        if not past_ok and at.timestamp() <= time.time():
+            raise ValueError("That time has already passed. Pick a time in the future.")
     if when in ("daily", "weekdays", "weekly"):
         h, mi = _hm(t.get("time") or "09:00")
         t["time"] = f"{h:02d}:{mi:02d}"
     t["day"] = (t.get("day") or "mon")[:3].lower()
     if when == "weekly" and t["day"] not in DAYS:
-        raise ValueError("day must be mon, tue, wed, thu, fri, sat or sun.")
+        raise ValueError("Pick a day of the week: mon, tue, wed, thu, fri, sat or sun.")
     try:
         t["minutes"] = max(15, int(t.get("minutes") or 60))
     except (TypeError, ValueError):
-        raise ValueError("minutes must be a whole number.")
+        raise ValueError("Give the number of minutes as a whole number.")
+    sk = t.get("skip_if_missed_h")
+    if sk in (None, "", 0, "0"):
+        t["skip_if_missed_h"] = None
+    else:
+        try:
+            t["skip_if_missed_h"] = max(0.1, float(sk))
+        except (TypeError, ValueError):
+            raise ValueError("Give the number of hours as a number, or leave it empty.")
     if t.get("kind") not in ("cowork", "code"):
         t["kind"] = "cowork"
     t["name"] = str(t.get("name") or t["prompt"].splitlines()[0])[:80]
@@ -572,97 +680,235 @@ def _check_task(t: dict) -> dict:
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
              minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
-             only_on_change: bool = False) -> dict:
+             only_on_change: bool = False, skip_if_missed_h=None) -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "only_on_change": bool(only_on_change), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "skip_if_missed_h": skip_if_missed_h, "enabled": True,
+                     "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
-    with _tasks_lock():
-        rows = _tasks_rw()
-        rows.append(t)
-        _save_tasks(rows)
+    _mutate(lambda rows: rows.append(t))
     return t
 
 
 def update_task(tid: str, **kw) -> dict:
-    with _tasks_lock():
-        rows = _tasks_rw()
+    def change(rows):
         for n, t in enumerate(rows):
-            if t["id"] == tid:
+            if isinstance(t, dict) and t.get("id") == tid:
                 new = dict(t)
                 for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
-                          "only_on_change"):
+                          "only_on_change", "skip_if_missed_h"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
-                _check_task(new)                                     # same rules as add_task; nothing saved on error
-                if new.get("when") != t.get("when") or new.get("at") != t.get("at"):
+                done = _is_done(t)
+                moved = new.get("when") != t.get("when") or new.get("at") != t.get("at")
+                if done and new.get("enabled") and not moved:
+                    raise ValueError("This one-time task already ran. Pick a new date and time to run it again.")
+                new.pop("invalid", None)                             # edited: look at it afresh
+                _check_task(new, past_ok=not moved and not (new.get("enabled") and not t.get("enabled")))
+                if moved:
                     new["last_run"] = None                           # a new time: a fired one-time task runs again
                 if new.get("enabled") and not t.get("enabled") and new.get("when") == "once":
                     new["last_run"] = None                           # switched back on: run it once more at its time
                 new["next_run"] = next_run(new) if new.get("enabled") else None
                 rows[n] = new
-                _save_tasks(rows)
                 return new
-    raise KeyError(tid)
+        raise KeyError(tid)
+    return _mutate(change)
 
 
 def delete_task(tid: str) -> bool:
-    with _tasks_lock():
-        rows = _tasks_rw()
-        keep = [t for t in rows if t["id"] != tid and t.get("name", "").lower() != tid.lower()]
-        _save_tasks(keep)
-    return len(keep) != len(rows)
+    """Delete by id. A name works only when exactly one task has it; otherwise the person is asked which (M18-11)."""
+    def remove(rows):
+        tasks_ = [t for t in rows if isinstance(t, dict)]
+        hit = [t for t in tasks_ if t.get("id") == tid]
+        if not hit:
+            hit = [t for t in tasks_ if str(t.get("name", "")).lower() == str(tid).lower() and tid]
+            if len(hit) > 1:
+                raise ValueError(f"{len(hit)} tasks are called \"{tid}\". Say which one by its id: "
+                                 + ", ".join(f"{t['id']} ({describe(t)})" for t in hit) + ".")
+        if not hit:
+            return False
+        rows[:] = [t for t in rows if not any(t is h for h in hit)]
+        return True
+    return _mutate(remove)
+
+
+# ---- one run at a time per task: a lease in the store, taken under the cross-process lock (M18-02, M18-07) ----------
+
+def _leased(t: dict, now: float) -> bool:
+    ls = t.get("lease")
+    return bool(isinstance(ls, dict) and float(ls.get("until") or 0) > now)
+
+
+def claim(tid: str, ttl: float = LEASE_S) -> str | None:
+    """Take the task for one run (Run now). Returns the claim token, or None while its previous run still holds it."""
+    token = uuid.uuid4().hex
+
+    def take(rows):
+        now = time.time()
+        for t in rows:
+            if isinstance(t, dict) and t.get("id") == tid:
+                if _leased(t, now):
+                    return None
+                t["lease"] = {"token": token, "until": now + ttl, "pid": os.getpid()}
+                return token
+        raise KeyError(tid)
+    return _mutate(take)
+
+
+def renew(tid: str, token: str, ttl: float = LEASE_S) -> bool:
+    def go(rows):
+        for t in rows:
+            if isinstance(t, dict) and t.get("id") == tid and (t.get("lease") or {}).get("token") == token:
+                t["lease"]["until"] = time.time() + ttl
+                return True
+        return False
+    try:
+        return _mutate(go)
+    except (RuntimeError, OSError, TimeoutError):
+        return False
+
+
+def release(tid: str, token: str) -> None:
+    def go(rows):
+        for t in rows:
+            if isinstance(t, dict) and t.get("id") == tid and (t.get("lease") or {}).get("token") == token:
+                t.pop("lease", None)
+    try:
+        _mutate(go)
+    except (RuntimeError, OSError, TimeoutError):
+        pass
+
+
+def run_failed(tid: str, token: str, error: str) -> None:
+    """A run that could not start: say why on the task and keep it (M18-03). A recurring task keeps its next time and
+    forgets it ran; a one-time task is tried again in 15 minutes, three times, then stays off with the reason."""
+    def go(rows):
+        for t in rows:
+            if isinstance(t, dict) and t.get("id") == tid:
+                now = time.time()
+                if token and (t.get("lease") or {}).get("token") == token:
+                    t.pop("lease", None)
+                if "prior_run" in t:
+                    t["last_run"] = t.pop("prior_run")           # it did not run: forget that it did
+                n = int((t.get("last_error") or {}).get("attempts", 0)) + 1 if t.get("when") == "once" else 1
+                t["last_error"] = {"at": now, "text": str(error)[:300], "attempts": n, "seen": False}
+                if t.get("when") == "once":
+                    if n < 3:
+                        t["enabled"], t["next_run"] = True, now + 900
+                    else:
+                        t["enabled"], t["next_run"] = False, None
+                return
+    try:
+        _mutate(go)
+    except (RuntimeError, OSError, TimeoutError):
+        pass
+
+
+def clear_error(tid: str) -> None:
+    def go(rows):
+        for t in rows:
+            if isinstance(t, dict) and t.get("id") == tid:
+                t.pop("last_error", None)
+    try:
+        _mutate(go)
+    except (RuntimeError, OSError, TimeoutError):
+        pass
 
 
 def due() -> list[dict]:
-    """Tasks whose time has come; marks them as run and works out their next time. The claim (re-read, check, mark,
-    save) happens under the cross-process lock, so two app instances never both run the same task."""
+    """Tasks whose time has come; marks them as run, works out their next time and takes each one's lease. All of it
+    happens under the cross-process lock, so two app instances (or `meshpool run-due`) never both run a task, and a
+    task whose previous run still works is skipped for this time instead of started again. One damaged row never stops
+    the others (M18-04)."""
     now = time.time()
-    out = []
-    with _tasks_lock():
-        try:
-            rows = _tasks_rw()
-        except RuntimeError:
-            return []                                           # unreadable right now: run nothing, lose nothing
-        changed = False
-        for t in rows:
-            if t.get("enabled") and t.get("next_run") and t["next_run"] <= now:
-                late = now - t["next_run"] > 6 * 3600         # the computer was off: run once, not for every miss
-                t["last_run"] = now
-                t["next_run"] = next_run(t)
-                if t["when"] == "once":
-                    t["enabled"] = False
-                changed = True
-                out.append(dict(t, late=late))
-        if changed:
-            _save_tasks(rows)
+    out: list[dict] = []
+    try:
+        with _tasks_lock():
+            rows = _rows()
+            changed = False
+            for t in rows:
+                if not isinstance(t, dict):
+                    continue
+                try:
+                    if not (t.get("enabled") and t.get("next_run") and float(t["next_run"]) <= now):
+                        continue
+                    late_s = now - float(t["next_run"])
+                    if _leased(t, now):                                  # still running: skip this occurrence
+                        t["skipped"] = {"at": now, "why": "its previous run was still going"}
+                        t["next_run"] = next_run(t)
+                        if t["when"] == "once":
+                            t["next_run"] = now + 60                     # a one-time task waits for the run to end
+                        changed = True
+                        continue
+                    sk = t.get("skip_if_missed_h")
+                    if sk and late_s > float(sk) * 3600:                 # missed by more than the person allows
+                        t["skipped"] = {"at": now, "why": f"it was missed by more than {sk:g} hours"}
+                        t["next_run"] = next_run(t)
+                        if t["when"] == "once":
+                            t["enabled"], t["last_run"] = False, now
+                        changed = True
+                        continue
+                    token = uuid.uuid4().hex
+                    t["prior_run"] = t.get("last_run")
+                    t["last_run"] = now
+                    t["next_run"] = next_run(t)
+                    t["lease"] = {"token": token, "until": now + LEASE_S, "pid": os.getpid()}
+                    t.pop("invalid", None)
+                    t.pop("skipped", None)
+                    if t["when"] == "once":
+                        t["enabled"] = False
+                    changed = True
+                    out.append(dict(t, late=late_s > LATE_S, late_s=late_s, claim=token))
+                except (ValueError, TypeError, KeyError, OverflowError) as e:
+                    t["invalid"] = f"This task cannot be scheduled: {e}"
+                    t["next_run"] = None
+                    changed = True
+            if changed:
+                fsio.atomic_write_json(_sfile(), rows)
+    except (TasksDamaged, OSError, TimeoutError):
+        return []                                                       # unreadable right now: run nothing, lose nothing
     return out
 
 
 def describe(t: dict) -> str:
     w = t.get("when")
     if w == "once":
-        s = f"once at {t.get('at', '').replace('T', ' ')}"
+        s = f"once at {str(t.get('at', '')).replace('T', ' ')}"
     elif w == "hourly":
         s = "every hour"
     elif w == "every":
         s = f"every {t.get('minutes')} minutes"
     elif w == "weekly":
-        s = f"every {t.get('day', 'mon').title()} at {t.get('time')}"
+        s = f"every {str(t.get('day', 'mon')).title()} at {t.get('time')}"
     else:
         s = f"{'every weekday' if w == 'weekdays' else 'every day'} at {t.get('time')}"
     nr = t.get("next_run")
+    if t.get("invalid"):
+        return s + ", needs fixing"
+    if _is_done(t):
+        return s + ", done"
     return s + (f", next {datetime.fromtimestamp(nr).strftime('%a %d %b %H:%M')}" if nr and t.get("enabled") else
                 ", paused" if not t.get("enabled") else "")
 
 
+def status(t: dict) -> str:
+    """Active, Paused, Done (a one-time task that ran) or Needs fixing."""
+    if t.get("invalid"):
+        return "Needs fixing"
+    if _is_done(t):
+        return "Done"
+    return "Active" if t.get("enabled") else "Paused"
+
+
 def set_thread(tid: str, sid: str):
-    with _tasks_lock():
-        rows = _tasks_rw()
+    def go(rows):
         for t in rows:
-            if t["id"] == tid:
+            if isinstance(t, dict) and t.get("id") == tid:
                 t["last_thread"] = sid
-        _save_tasks(rows)
+                t.pop("prior_run", None)                                 # it started
+                t.pop("last_error", None)
+    _mutate(go)
 
 
 # ---------- past chats ----------------------------------------------------------------------------------------------
@@ -776,6 +1022,8 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         if isinstance(it, str):
             it = {"title": it[:60], "prompt": it}
         if isinstance(it, dict) and str(it.get("prompt", "")).strip():
+            if any(r["prompt"] == str(it["prompt"]) for r in rows):    # an identical request in one batch runs once
+                continue
             rows.append({"title": str(it.get("title") or it["prompt"])[:80], "prompt": str(it["prompt"])})
     if not rows:
         raise ValueError("Give at least one task with a prompt.")
@@ -793,6 +1041,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
     deadline = time.time() + cfg["minutes"] * 60
     live: list = []
     halted = {"why": ""}
+    # two or more editing sub-agents each work in their own copy of the project (as agent/delegate.py does); their
+    # changes are brought back in task order below, conflicts reported and not applied
+    isolate = edit and len(rows) > 1
+    copies: dict = {}
+    run_id = "sub-" + uuid.uuid4().hex[:8]
 
     class Sub(K.Agent):
         _delegate_depth = 99                                 # these never start sub-agents of their own
@@ -833,7 +1086,11 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         if halted["why"]:
             return f"## {r['title']}\n\nNot started: the sub-agents were stopped ({halted['why']})."
         try:
-            a = Sub(root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=steps, profile="work")
+            wt = None
+            if isolate:
+                from meshpool_harness import worktrees as WT
+                wt = copies[id(r)] = WT.subagent_copy(root, run_id, r["title"])
+            a = Sub(wt["workdir"] if wt else root, mode="auto", session_id="sub-" + uuid.uuid4().hex[:10], max_steps=steps, profile="work")
             if model:
                 a.model = model
             a.messages[0]["content"] += (
@@ -860,11 +1117,85 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
         return f"## {r['title']}\n({round(time.time() - t0)} s)\n\n{out.strip()}"
 
     threading.Thread(target=watch, daemon=True).start()
+    res: list = []
     try:
         with ThreadPoolExecutor(workers) as ex:
             res = list(ex.map(one, rows))
     finally:
         halted["done"] = True
+        if copies:                                           # in task order; an error leaves unapplied work on branches
+            from meshpool_harness import worktrees as WT
+            for i, r in enumerate(rows):
+                wt = copies.get(id(r))
+                if not wt:
+                    continue
+                ap = WT.apply_subagent_copy(wt)
+                if i >= len(res):
+                    continue
+                if ap["ok"]:
+                    res[i] += "\n\n(Its changes were applied to the project.)"
+                else:
+                    res[i] += ("\n\nIts changes were NOT applied to the project: " + ap["reason"]
+                               + (f" Files: {', '.join(ap['bad'][:10])}." if ap["bad"] else "")
+                               + (f" They are kept on git branch {ap['kept_branch']}." if ap["kept_branch"] else ""))
     head = f"{len(rows)} parts finished." if not halted["why"] else \
         f"{len(rows)} parts; the sub-agents were stopped by {halted['why']}, so some parts are incomplete."
     return head + "\n\n" + "\n\n".join(res)
+
+
+def run_folder(t: dict) -> dict:
+    """The folder a scheduled run works in: {"workdir", "worktree_id"}. A task on a git repository gets its own
+    isolated copy (a worktree off the folder's HEAD) unless it says ``worktree: false``, so a run never edits the
+    folder under an open chat or a previous run; the run's chat shows the changes with Merge and Discard."""
+    folder = t.get("folder") or ""
+    plain = {"workdir": folder, "worktree_id": ""}
+    if not folder or t.get("worktree") is False or not Path(folder).expanduser().is_dir():
+        return plain
+    from meshpool_harness import worktrees as WT
+    if not WT.is_git(folder):
+        return plain
+    try:
+        rec = WT.create(folder, owner_kind="schedule", owner_id=str(t.get("id") or ""), title=t.get("name") or "")
+    except (WT.WorktreeError, OSError, TimeoutError):
+        return plain
+    return {"workdir": rec["workdir"], "worktree_id": rec["id"]}
+
+
+# ---------- the app's and the terminal's one entry point (moved from ui/server.py) -----------------------------------
+
+def api_view() -> dict:
+    rows = [dict(t, describe=describe(t), status=status(t)) for t in tasks()]
+    return {"instructions": instructions(), "memory": memory(), "settings": settings(), "tasks": rows,
+            "tasks_problem": tasks_problem()}
+
+
+def api_action(b: dict) -> dict:
+    act = b.get("action")
+    if act == "instructions":
+        set_instructions(b.get("text", ""), base=b.get("base"))
+    elif act == "memory":
+        set_memory(b.get("text", ""), base=b.get("base"))
+    elif act == "settings":
+        save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
+    elif act == "task_add":
+        add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
+                 b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
+                 b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
+                 b.get("skip_if_missed_h"))
+    elif act == "task_update":
+        update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at", "minutes",
+                                                              "folder", "harness", "kind", "enabled",
+                                                              "only_on_change", "skip_if_missed_h")})
+    elif act == "tasks_reset":
+        reset_tasks()
+    elif act == "task_delete":
+        delete_task(b.get("id", ""))
+    elif act == "task_run":
+        from meshpool_harness.ui import agent_api as A
+        t = next((x for x in tasks() if x["id"] == b.get("id")), None)
+        if not t:
+            raise ValueError("That task is gone.")
+        return dict(api_view(), thread=A.run_scheduled(t))
+    else:
+        raise ValueError("Unknown action.")
+    return api_view()

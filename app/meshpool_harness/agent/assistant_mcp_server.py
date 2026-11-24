@@ -61,7 +61,10 @@ def list_scheduled_tasks() -> str:
 
 
 def delete_scheduled_task(id: str) -> str:
-    return "Deleted." if A.delete_task(id) else "No task with that id or name."
+    try:
+        return "Deleted." if A.delete_task(id) else "No task with that id or name."
+    except ValueError as e:                          # several tasks share the name: say which
+        return str(e)
 
 
 def search_chats(query: str) -> str:

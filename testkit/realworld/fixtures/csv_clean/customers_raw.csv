@@ -1,0 +1,66 @@
+id,name,email,phone,signup_date
+6,George  Berg,george.berg6@example.com,+1 825 954 7378,28 Aug 2023
+43,Dmitri  Costa,Dmitri.costa43@example.com,+1 641 761 3376,2024/11/04
+48,Ivan Patel, ivan.patel48@example.com ,9582293102,2024-06-04
+54,Oscar  Nguyen,Oscar.nguyen54@example.com,15466525147,06/17/2024
+44,ERIN NGUYEN,n/a,984-855-3635,13 Mar 2024
+7,  Hana Jones , hana.jones7@example.com ,(340) 350-9641,2024-10-31
+4,erin nguyen,ERIN.NGUYEN4@EXAMPLE.COM,699.442.8602,26 Sep 2024
+32,marco novak,marco.novak32@example.com,224.864.5835,2024-05-09
+8,Ivan  Patel, ivan.patel8@example.com ,2462681059,2024-08-15
+19,Tomas Silva,Tomas.silva19@example.com,12114855357,2023-10-05
+13,Nadia  Costa,NADIA.COSTA13@EXAMPLE.COM,12174389467,2024/08/29
+39,tomas silva,tomas.silva39@example.com,(632) 692-6492,01/10/2024
+60,  Alice Smith , alice.smith60@example.com ,15279058690,09/10/2024
+36,Quinn Berg,quinn.berg36@example.com,+1 708 791 5338,10/12/2023
+1,Bob Garcia,bob.garcia1@example.com,4108797511,26 Oct 2024
+102,  Quinn Berg ,QUINN.BERG16@EXAMPLE.COM,(201) 550-4286,11 Dec 2024
+23,DMITRI COSTA, dmitri.costa23@example.com ,766.297.1996,2023-04-27
+37,  Rahul Jones ,rahul.jones37@example.com,478.409.5716,03/29/2023
+10,  Kemal Smith ,Kemal.smith10@example.com,921.473.4140,04/26/2023
+57,rahul jones,Rahul.jones57@example.com,856-714-5048,2023/05/14
+53,nadia costa,NADIA.COSTA53@EXAMPLE.COM,9858888495,2024/01/02
+22,Carol  Novak,n/a,(211) 396-3534,2024/11/27
+42,Carol Novak,CAROL.NOVAK42@EXAMPLE.COM,811.961.7692,28 May 2023
+52,marco novak,MARCO.NOVAK52@EXAMPLE.COM,691.460.4974,01/17/2023
+27,HANA JONES,HANA.JONES27@EXAMPLE.COM,898.426.3133,2023/06/05
+101,Ivan  Patel, IVAN.PATEL8@EXAMPLE.COM ,246.268.1059,2024-07-16
+33,  Nadia Costa ,  ,+1 783 954 3372,2023/10/28
+5,Farah  Kim,Farah.kim5@example.com,16349442051,2024-11-18
+20,alice smith,ALICE.SMITH20@EXAMPLE.COM,(864) 456-9280,03/11/2024
+25,Farah  Kim,farah.kim25@example.com,7674326253,09 May 2024
+14,Oscar Nguyen,OSCAR.NGUYEN14@EXAMPLE.COM,+1 878 407 3393,09/23/2024
+15,  Petra Kim ,petra.kim15@example.com,19343323192,2023-01-11
+104,FARAH KIM,FARAH.KIM45@EXAMPLE.COM,789.675.6825,04 Nov 2023
+55,  Petra Kim ,  ,+1 472 533 2496,12 Feb 2023
+28,Ivan  Patel,Ivan.patel28@example.com,482.266.8684,08/18/2024
+29,julia silva,Julia.silva29@example.com,554.312.8242,2024-03-23
+100,dmitri costa,DMITRI.COSTA3@EXAMPLE.COM,496.584.7670,10 Jul 2024
+58,sofia patel, sofia.patel58@example.com ,(647) 854-3639,11 Sep 2023
+3,dmitri costa, dmitri.costa3@example.com ,496.584.7670,2024-06-10
+47,HANA JONES,HANA.JONES47@EXAMPLE.COM,803-731-1432,2024/05/11
+18,sofia patel, sofia.patel18@example.com ,4737875790,02/09/2024
+35,petra kim,petra.kim35@example.com,(800) 992-2878,2024-04-21
+56,  Quinn Berg ,quinn.berg56@example.com,(598) 772-6519,2023-09-15
+21,bob garcia,BOB.GARCIA21@EXAMPLE.COM,224-700-8985,2023-12-04
+30,kemal smith,kemal.smith30@example.com,+1 444 619 8326,2023/05/22
+11,  Lena Garcia ,  ,8934233237,2023/02/14
+45,Farah Kim, farah.kim45@example.com ,789-675-6825,2023-10-05
+41,Bob Garcia,bob.garcia41@example.com,496-826-1099,2023/04/08
+59,Tomas Silva,tomas.silva59@example.com,802.599.4631,29 Jun 2024
+34,  Oscar Nguyen ,OSCAR.NGUYEN34@EXAMPLE.COM,17856181965,2024/01/17
+24,Erin Nguyen,ERIN.NGUYEN24@EXAMPLE.COM,+1 735 616 7310,2023/12/02
+9,Julia Silva, julia.silva9@example.com ,(818) 575-3156,2023/02/21
+46,GEORGE BERG,George.berg46@example.com,222-449-7905,2024-01-17
+26,george berg, george.berg26@example.com ,(409) 517-1539,12 Apr 2024
+51,  Lena Garcia , lena.garcia51@example.com ,3183875613,2024-10-19
+38,sofia patel,Sofia.patel38@example.com,469.415.5462,10/12/2023
+16,QUINN BERG,quinn.berg16@example.com,2015504286,11/11/2024
+50,Kemal  Smith,KEMAL.SMITH50@EXAMPLE.COM,6562329820,2024-06-09
+12,  Marco Novak ,MARCO.NOVAK12@EXAMPLE.COM,498-690-5317,29 Jan 2024
+17,Rahul Jones,rahul.jones17@example.com,4586167441,01/19/2023
+31,Lena  Garcia,LENA.GARCIA31@EXAMPLE.COM,3003282205,11 Oct 2024
+103,Lena  Garcia,LENA.GARCIA31@EXAMPLE.COM,13003282205,2024/09/11
+40,Alice  Smith,alice.smith40@example.com,5457062213,2023/08/03
+49,JULIA SILVA, julia.silva49@example.com ,+1 651 350 4487,2024/06/28
+2,Carol Novak,Carol.novak2@example.com,(418) 442-1157,2024-10-01

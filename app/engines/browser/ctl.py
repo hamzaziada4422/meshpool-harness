@@ -200,9 +200,33 @@ def _serve(outdir: str | None = None):
         if not exe:
             raise
         browser = pw.chromium.launch(executable_path=exe, **kw)   # preinstalled Chromium when versions differ
-    page = browser.new_page()
     lock = threading.Lock()
-    state = {"outdir": outdir}
+    sessions: dict = {}                           # task id -> {"ctx", "page", "state"}: a task's own cookies, page, folder
+
+    def new_session(task: str, folder: str) -> dict:
+        """A fresh browser context for a task: nothing of an earlier task (cookies, logins, open page) carries over,
+        and two tasks never share a page."""
+        old = sessions.pop(task, None)
+        if old:
+            try:
+                old["ctx"].close()
+            except Exception:
+                pass
+        ctx = browser.new_context()
+        sess = {"ctx": ctx, "page": ctx.new_page(), "state": {"outdir": os.path.realpath(folder)}}
+
+        def follow(p):                            # target=_blank, window.open: carry on in the tab that opened
+            try:
+                if p.opener() is sess["page"] or sess["page"].is_closed():
+                    sess["page"] = p
+            except Exception:
+                sess["page"] = p
+        ctx.on("page", follow)
+        sessions[task] = sess
+        return sess
+
+    first = new_session("", outdir)
+    page, state = first["page"], first["state"]
 
     def ref(n):
         return page.locator(f"[{MARK}='{int(n)}']").first
@@ -270,7 +294,17 @@ def _serve(outdir: str | None = None):
                 return done, False
         return done, True
 
+    cur_task = [""]
+
     def act(cmd, args):
+        nonlocal page, state
+        sess = sessions.get(cur_task[0])
+        if sess is None and cmd != "_outdir":
+            sess = new_session(cur_task[0], state["outdir"])
+        if sess is not None:
+            if sess["page"].is_closed():           # the page died (a crash, the user closed it): a new one, same cookies
+                sess["page"] = sess["ctx"].new_page()
+            page, state = sess["page"], sess["state"]
         if cmd == "batch":
             try:
                 steps = json.loads(" ".join(args))
@@ -312,7 +346,11 @@ def _serve(outdir: str | None = None):
         elif cmd == "back":
             page.go_back()
         elif cmd == "_outdir":                    # `start <dir>` on a running daemon: a new task's working folder
-            state["outdir"] = os.path.realpath(args[0])
+            if not browser.is_connected():
+                return {"error": "the browser died"}      # the caller starts a new daemon instead of reusing this one
+            if os.path.realpath(args[0]) != state["outdir"] or page.is_closed():
+                sess = new_session(cur_task[0], args[0])   # another task: clean cookies, its own page and folder
+                page, state = sess["page"], sess["state"]
             return {"outdir": state["outdir"]}
         elif cmd == "_lock":                      # grader: lock _eval behind a token only the grader holds
             state["token"] = args[0]
@@ -390,6 +428,7 @@ def _serve(outdir: str | None = None):
                 return
             with lock:
                 try:
+                    cur_task[0] = str(req.get("task") or "")
                     res = act(req.get("cmd"), req.get("args", []))
                 except Exception as e:
                     res = {"error": f"{type(e).__name__}: {str(e).splitlines()[0][:200]}"}
@@ -421,7 +460,8 @@ def call(cmd, *args, port=None):
     """Send one command to the running daemon (port: the MH_BROWSER_PORT it was started with; default: the env)."""
     st = _read_state(port)
     req = urllib.request.Request(f"http://127.0.0.1:{st['port']}",
-                                 data=json.dumps({"cmd": cmd, "args": list(args)}).encode(), method="POST",
+                                 data=json.dumps({"cmd": cmd, "args": list(args),
+                                                  "task": os.environ.get("MH_TASK_ID", "")}).encode(), method="POST",
                                  headers={"Content-Type": "application/json", TOKEN_HEADER: st["token"]})
     with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=60) as r:
         return json.loads(r.read())
@@ -454,9 +494,14 @@ def main(argv=None):
     if a[0] == "start":
         outdir = os.path.abspath(a[1] if len(a) > 1 else os.getcwd())
         try:
-            call("_outdir", outdir)
-            print("browser already running")
-            return 0
+            res = call("_outdir", outdir)
+            if "error" not in res:                # alive, with a fresh page and cookies when this is another task
+                print("browser already running")
+                return 0
+        except Exception:
+            pass
+        try:
+            call("stop")                          # a daemon whose Chromium died: end it, then start a new one
         except Exception:
             pass
         try:

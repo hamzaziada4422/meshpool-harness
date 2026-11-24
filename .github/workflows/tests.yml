@@ -15,11 +15,11 @@ permissions:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]   # requires-python is >=3.10: keep the oldest supported version tested
+        python-version: ["3.10", "3.11", "3.12"]   # requires-python is >=3.10: test_py310_compat.py needs the 3.10 and 3.11 interpreters
     env:
       # one place for Chromium: the install step and the app under test (which only sets a default) both use it
       PLAYWRIGHT_BROWSERS_PATH: /home/runner/pw-browsers

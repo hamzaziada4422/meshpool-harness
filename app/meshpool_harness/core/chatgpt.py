@@ -32,6 +32,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from meshpool_harness.core import http as _HTTP
 from meshpool_harness import fsio
 
 BASE_URL = "https://chatgpt.com/backend-api/codex"
@@ -301,7 +302,7 @@ def _refresh(d: dict) -> dict:
         "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json",
         "User-Agent": f"Meshpool/{_version()}"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
+        with _HTTP.open(req, 30) as r:
             new = json.loads(r.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "replace")[:300]
@@ -406,6 +407,8 @@ def to_request(body: dict, model: str) -> dict:
         out["tool_choice"] = body.get("tool_choice", "auto")
     if body.get("prompt_cache_key"):
         out["prompt_cache_key"] = body["prompt_cache_key"]
+    if body.get("reasoning_effort"):
+        out["reasoning"] = {"effort": body["reasoning_effort"]}
     if (body.get("response_format") or {}).get("type") == "json_object":
         out["text"] = {"format": {"type": "json_object"}}
     return out
@@ -476,7 +479,7 @@ def models() -> list[str]:
         req = urllib.request.Request(f"{base_url()}/models?client_version={CODEX_COMPAT_VERSION}", headers={
             "Authorization": f"Bearer {tok}", "originator": "meshpool", "User-Agent": f"Meshpool/{_version()}",
             **account_headers(tok, tokens)})
-        with urllib.request.urlopen(req, timeout=20) as r:
+        with _HTTP.open(req, 20) as r:
             data = json.loads(r.read().decode("utf-8"))
         rows = data.get("models") or data.get("data") or []
         ids = [m.get("slug") or m.get("id") for m in rows if isinstance(m, dict)
@@ -522,7 +525,7 @@ def chat(body: dict, task_id: str = "", timeout: int = 600, idle: int = 120, on_
             "originator": "meshpool", "User-Agent": f"Meshpool/{_version()}", "session_id": session,
             **account_headers(tok, tokens)})
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with _HTTP.open(req, timeout) as r:
                 from meshpool_harness.core.wire import _first_then_idle
                 out = read_stream(_first_then_idle(r, idle), on_text, data_idle=idle)
             _LIMIT.pop(account, None)                 # a call went through: the plan's limit is over

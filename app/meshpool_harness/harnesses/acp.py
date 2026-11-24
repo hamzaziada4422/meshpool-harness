@@ -14,6 +14,7 @@ Meshpool UI events:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import os
@@ -27,6 +28,8 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
+from meshpool_harness.core import usage as USAGE
 
 PROTOCOL_VERSION = 1
 
@@ -324,6 +327,10 @@ def earlier_context(events: list, limit: int = 40000) -> str:
 
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
+    usage_task = None          # the session's usage task (core/usage.py): the harness's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
+    _usage_recorded = False        # set once the current prompt response is in the ledger (any code path)
+    _cost_now = _cost_seen = 0.0   # session cost the harness reported (usage_update), and the part already recorded
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -335,7 +342,7 @@ class ACPAgent:
         self.dir = C.runs_dir() / "sessions" / self.id
         self.emit_cb = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.title = ""
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -362,6 +369,7 @@ class ACPAgent:
         self._text = []
         self._replaying = False
         self._tools: dict[str, dict] = {}
+        self._open_tools: dict[str, str] = {}          # started this turn, no tool_end yet: id -> label
         self._lock = threading.Lock()
         self._in_turn = False                  # Stop ends only requests made for a running turn
 
@@ -414,11 +422,14 @@ class ACPAgent:
                 self._err.close()              # the log of a process that exited
             except OSError:
                 pass
-        self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import RotatingFile      # H-23: rotates by size while the harness runs
+        self._err = RotatingFile(log_dir / f"{m.get('id', 'acp')}.log")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=self._err, cwd=str(self.root), env=env, **kw)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(self.root), env=env, **kw)
         self._alive = True
+        self._last_msg = time.time()
+        threading.Thread(target=self._pump_stderr, args=(self._p, self._err), daemon=True).start()
         threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
         try:
             return self._handshake(m)
@@ -444,14 +455,42 @@ class ACPAgent:
             self._request("authenticate", auth, timeout=120)
         return True
 
+    def _pump_stderr(self, proc, log):
+        """The harness's stderr into its log with secret-looking values removed (OSS-29); a Codex sandbox failure
+        (OSS-02) is told to the user once, plainly."""
+        told = False
+        for raw in proc.stderr:
+            line = C.redact_secrets(raw.decode("utf-8", "replace"))
+            try:
+                log.write(line)
+                log.flush()
+            except (OSError, ValueError):
+                pass
+            if not told and self.manifest.get("id") == "codex":
+                from meshpool_harness.harnesses import codex_sandbox_failure
+                note = codex_sandbox_failure(line)
+                if note:
+                    told = True
+                    self.sandbox_note = note
+                    self._emit({"type": "text_delta", "text": "\n" + note + "\n"})
+
+    def _serve_counted(self, msg):
+        self._serving = getattr(self, "_serving", 0) + 1          # a request waiting on the user is not idleness
+        try:
+            self._serve_request(msg)
+        finally:
+            self._serving -= 1
+            self._last_msg = time.time()
+
     def _reader(self, proc):
         for raw in proc.stdout:
+            self._last_msg = time.time()
             try:
                 msg = json.loads(raw.decode("utf-8", "replace"))
             except ValueError:
                 continue
             if "method" in msg and "id" in msg:
-                threading.Thread(target=self._serve_request, args=(msg,), daemon=True).start()
+                threading.Thread(target=self._serve_counted, args=(msg,), daemon=True).start()
             elif "method" in msg:
                 try:
                     self._notification(msg)
@@ -487,6 +526,9 @@ class ACPAgent:
                                    f"See runs/harness-logs/{self.manifest.get('id', 'acp')}.log")
                 if end and time.time() > end:
                     raise ACPError(f"No reply to {method} within {int(timeout)} s.")
+                if method == "session/prompt" and not getattr(self, "_serving", 0) and self._idle_s() and \
+                        time.time() - getattr(self, "_last_msg", time.time()) > self._idle_s():
+                    break                                   # OSS-09: nothing for MH_ACP_IDLE_S: the harness is hung
                 if self._stop and self._in_turn and (method != "session/prompt" or time.time() - getattr(self, "_stop_t", 1e18) > 3):
                     # session/prompt: the harness ignored the cancel. Anything else (initialize, authenticate,
                     # session/new ...) is start-up, which no cancel reaches: give up now, not at its timeout.
@@ -499,7 +541,17 @@ class ACPAgent:
                     raise ACPError(f"{e.get('message', 'error')}" + (f": {e.get('data')}" if e.get("data") else ""))
                 return msg.get("result") or {}
         self._hard_restart()
+        if self._idle_s() and not self._stop and method == "session/prompt":
+            raise ACPError(f"{self.manifest.get('name', 'The harness')} sent nothing for {int(self._idle_s())} seconds, so "
+                           "this turn was ended. It restarts with your next message (MH_ACP_IDLE_S sets the limit).")
         raise ACPStopped("stopped")
+
+    @staticmethod
+    def _idle_s() -> float:
+        try:
+            return float(os.environ.get("MH_ACP_IDLE_S") or C.read().get("MH_ACP_IDLE_S") or 300)
+        except (TypeError, ValueError, OSError):
+            return 300.0
 
     def _hard_restart(self):
         """End the harness process (and what it started); the next message restarts it and reloads the session."""
@@ -633,6 +685,7 @@ class ACPAgent:
             tid = u.get("toolCallId") or uuid.uuid4().hex
             self._tools[tid] = u
             name, summary = _label(u)
+            self._open_tools[tid] = name
             self._emit({"type": "tool_start", "id": tid, "name": name, "summary": summary,
                         "mcp": False, "diff": _diff_of(u.get("content"))})
             if u.get("status") in ("completed", "failed"):
@@ -654,11 +707,23 @@ class ACPAgent:
                                                     for e in u.get("entries") or []]})
         elif kind == "usage_update":
             self.context = {"used": u.get("used", 0), "size": u.get("size", 0)}
+            c = u.get("cost")
+            if isinstance(c, dict) and str(c.get("currency") or "USD").upper() == "USD":
+                with contextlib.suppress(TypeError, ValueError):
+                    self._cost_now = max(self._cost_now, float(c.get("amount") or 0))
             self._emit({"type": "context", **self.context})
         elif kind == "session_info_update" and u.get("title"):
             self.title = self.title or str(u["title"])[:80]
 
+    def _close_open_tools(self):
+        """The turn is over: a tool card that never got a final status must not stay 'running'."""
+        for tid, name in list(self._open_tools.items()):
+            self._open_tools.pop(tid, None)
+            self._emit({"type": "tool_end", "id": tid, "name": name, "ok": False, "denied": False,
+                        "output": "Not finished: the turn ended."})
+
     def _tool_end(self, tid, u):
+        self._open_tools.pop(tid, None)
         out = _text_of(u.get("content"))
         if not out.strip() or re.fullmatch(r"\s*\[terminal [^\]]*\]\s*", out):
             out = u.get("_term_out") or _raw_text(u.get("rawOutput")) or ""
@@ -781,7 +846,7 @@ class ACPAgent:
 
     def _ask_mode(self, modes: dict):
         """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
-        applies the user's permission setting (Supervised, Auto-accept edits, Full access) the same way for every
+        applies the user's permission setting (Ask, Accept edits, Full access) the same way for every
         harness. Without this Codex, for one, edits files on its own."""
         ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
         self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
@@ -798,7 +863,7 @@ class ACPAgent:
                 pass
 
     def apply_mode(self):
-        """The user changed Supervised / Auto-accept edits / Full access: tell a harness that has its own modes."""
+        """The user changed Ask / Accept edits / Full access: tell a harness that has its own modes."""
         if self.acp_session and self._p and self._p.poll() is None and getattr(self, "modes_seen", None):
             self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 
@@ -808,17 +873,31 @@ class ACPAgent:
         if not (bare and bare != "default" and self.acp_session):
             return                             # "default": the harness's own account picks the model
         now = getattr(self, "model_now", None) or ""
-        if bare == now or now.startswith((bare + "[", bare + "/")):
-            return                             # already on it; switching anyway makes Hermes rebuild its agent
-        # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
         ids = [m["id"] for m in self.available_models or [] if m.get("id")]
-        want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
-                                                        bare)
+        eff = (getattr(self, "effort", "") or "").lower()
+        pick = f"{bare}[{eff}]" if eff and eff not in ("off", "none", "default") else ""
+        if pick and pick in ids:                   # the chat's effort level: Codex's own id for this model at that level
+            if pick == now:
+                return
+            want = pick
+        else:
+            if bare == now or now.startswith((bare + "[", bare + "/")):
+                return                         # already on it; switching anyway makes Hermes rebuild its agent
+            # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
+            want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
+                                                            bare)
         try:
             self._request("session/set_model", {"sessionId": self.acp_session, "modelId": want}, timeout=60)
             self.model_now = want
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
+
+    effort = ""
+
+    def set_effort(self, level: str):
+        self.effort = level or ""
+        if self.model and self.acp_session and self._p and self._p.poll() is None:
+            self._apply_model()
 
     def set_model(self, model: str):
         self.model = model or None
@@ -853,7 +932,45 @@ class ACPAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _prompt_call(self, prompt: list) -> dict:
+        """One session/prompt request; its usage goes to the ledger once (_record_usage)."""
+        self._usage_recorded = False
+        r = self._prompt(prompt)                         # the turn's and chat's own counts (ws17); the ledger row is below
+        self._record_usage(r, "".join(str(p.get("text") or "") for p in prompt if isinstance(p, dict)),
+                           "".join(self._text))
+        return r
+
+    def _record_usage(self, r: dict, prompt_text: str, final_text: str) -> None:
+        """The harness's own usage from a prompt response, else one call counted from the text sizes (flagged as an
+        estimate, never free). At most once per response: other code that records it sets _usage_recorded."""
+        if self._usage_recorded:
+            return
+        self._usage_recorded = True
+        try:
+            hid = str(self.manifest.get("id") or "acp")
+            extra = None
+            if self._cost_now > self._cost_seen:
+                extra = {"reported_cost": round(self._cost_now - self._cost_seen, 6)}
+                self._cost_seen = self._cost_now
+            USAGE.record(str(getattr(self, "model_now", None) or self.model or hid),
+                         (r.get("usage") if isinstance(r, dict) else None) or None, source=f"external:{hid}",
+                         task=self.usage_task or None, extra=extra, request_chars=len(prompt_text),
+                         reply_chars=len(final_text))
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     def send(self, text: str, images: list | None = None) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         kt = getattr(self, "_kill_timer", None)
         if kt:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
@@ -899,7 +1016,7 @@ class ACPAgent:
                 else:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name')} does not take images; "
                                                           "they were left out."})
-            r = self._prompt(prompt)
+            r = self._prompt_call(prompt)
             if (r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text
                     and not self._stop):                 # a refusal to a stopped prompt is just the stop
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
@@ -907,14 +1024,15 @@ class ACPAgent:
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
                     prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
-                r = self._prompt(prompt)
+                r = self._prompt_call(prompt)
             self._reloaded = False
             final = "".join(self._text)
             if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
                     and getattr(self, "_turn_tools", 0) == 0):
                 # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
                 self._text = []
-                r = self._prompt([{"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
+                r = self._prompt_call([
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
                 final = "".join(self._text)
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
@@ -942,6 +1060,7 @@ class ACPAgent:
                 self._emit({"type": "error", "text": str(e)})
         finally:
             self._in_turn = False
+            self._close_open_tools()
             self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),
                         "context": self.context})
             self.save()
@@ -966,8 +1085,10 @@ class ACPAgent:
             add = {"in": n("inputTokens", "input_tokens") + cached + n("cachedWriteTokens", "cached_write_tokens"),
                    "cached": cached, "out": n("outputTokens", "output_tokens") + n("thoughtTokens", "thought_tokens"),
                    "calls": 1}
+            turn = getattr(self, "_turn", None)          # none outside a send() (a bare prompt call)
             for k, v in add.items():
-                self._turn[k] += v
+                if turn is not None:
+                    turn[k] += v
                 if k != "calls":                         # calls: counted once per message in send()
                     self.usage[k] += v
         return r
@@ -1023,11 +1144,11 @@ class ACPAgent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            SS.write_snapshot(self.dir, {
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "harness": self.manifest.get("id"), "kind": self.manifest.get("mode", "cowork"),
                 "acp_session": self.acp_session or self.loaded_from, "usage": self.usage,
-                "events": self.events[-2000:]}, ensure_ascii=False), encoding="utf-8")
+                "events": self.events[-2000:]})
         except OSError:
             pass
 

@@ -60,13 +60,20 @@ def estimate(obj) -> int:
 
 
 def _is_local(base: str) -> bool:
+    """This computer or its LAN (loopback, private ranges, .local names, a bare host name like `gpu-box`). A public
+    host never counts, whatever its port: nothing Ollama-style is ever asked of a remote gateway."""
     try:
         u = urlparse(base or "")
     except ValueError:
         return False
     h = (u.hostname or "").lower()
-    return (h in ("localhost", "::1") or h.startswith(("127.", "10.", "192.168.", "169.254.")) or h.endswith(".local")
-            or re.match(r"172\.(1[6-9]|2\d|3[01])\.", h) is not None or u.port in (11434, 1234, 8080, 8000, 5000, 5001))
+    if not h:
+        return False
+    if ":" in h:                                           # an IPv6 literal: loopback, link-local or unique-local
+        return h == "::1" or h.startswith(("fe80:", "fc", "fd"))
+    return (h == "localhost" or h.startswith(("127.", "10.", "192.168.", "169.254."))
+            or re.match(r"172\.(1[6-9]|2\d|3[01])\.", h) is not None
+            or h.endswith((".local", ".lan", ".internal", ".home.arpa")) or "." not in h)
 
 
 def _name_hint(model: str) -> int | None:
@@ -100,42 +107,109 @@ def _http_json(url: str, body: dict | None = None, key: str = "", timeout: float
         return json.loads(r.read().decode("utf-8", "replace"))
 
 
+_SEEN_SERVER: set = set()          # local endpoints that answered an Ollama / LM Studio route with real data
+_NO_SHOW: set = set()             # endpoints that answered a plain 404 to Ollama/LM Studio style routes
+
+
+def _mc():
+    from meshpool_harness.core import modelcaps as MC
+    return MC
+
+
+def _route_absent(base: str, kind: str) -> bool:
+    if (base, kind) in _NO_SHOW:
+        return True
+    try:
+        if _mc()._mem_get(base, "*", kind):
+            _NO_SHOW.add((base, kind))
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return False
+
+
+def _mark_absent(base: str, kind: str) -> None:
+    _NO_SHOW.add((base, kind))
+    try:
+        _mc()._mem_mark(base, "*", kind)           # remembered on disk: the next run does not ask again
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _plain_404(e) -> bool:
+    """A 404/405 that is the route missing (an HTML or empty page), not a JSON "model not found" from a real Ollama."""
+    import urllib.error
+    if not isinstance(e, urllib.error.HTTPError) or e.code not in (404, 405):
+        return False
+    try:
+        d = json.loads(e.read().decode("utf-8", "replace"))
+        return not (isinstance(d, dict) and d.get("error"))
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _meta_window(it: dict) -> int:
+    """vLLM reports max_model_len and llama.cpp meta.n_ctx in /v1/models: the window the server really serves."""
+    v = it.get("max_model_len")
+    if isinstance(v, int) and v > 0:
+        return v
+    v = (it.get("meta") or {}).get("n_ctx") if isinstance(it.get("meta"), dict) else None
+    return v if isinstance(v, int) and v > 0 else 0
+
+
 def probe(base: str, model: str, key: str = "") -> int | None:
-    """The window the endpoint reports for this model: Ollama /api/show (the num_ctx it will really use), LM Studio
-    /api/v0/models, or context_length in an OpenAI-style /models list (OpenRouter and others). None if unknown."""
+    """The window a LOCAL endpoint reports for this model: Ollama /api/show (the num_ctx it will really use) or LM Studio
+    /api/v0/models. Never asks a remote host; asks an endpoint that has no such route once, then remembers that (on disk
+    too). None if unknown."""
     if not base:
         return None
-    root = re.sub(r"/v\d+/?$", "", base.rstrip("/"))
-    local = _is_local(base)              # /api/show (Ollama) and /api/v0 (LM Studio) exist only on a local server
-    try:
-        if not local:
-            raise ValueError("hosted endpoint")
-        d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
-        params = str(d.get("parameters") or "")
-        m = re.search(r"\bnum_ctx\s+(\d+)", params)
-        if m:
-            return int(m.group(1))
-        mi = d.get("model_info") or {}
-        full = next((int(v) for k, v in mi.items() if k.endswith(".context_length") and isinstance(v, int)), None)
-        if full:
-            return min(full, 4096)         # no num_ctx set: Ollama serves its small default, not the model's maximum
-    except Exception:  # noqa: BLE001 - not Ollama
-        pass
-    for url in ((root + "/api/v0/models/" + model,) if local else ()) + (base.rstrip("/") + "/models",):
+    if not _is_local(base):                # a remote gateway: only its OpenAI-style /models list, never /api/*
         try:
-            d = _http_json(url, None, key)
+            d = _http_json(base.rstrip("/") + "/models", None, key)
         except Exception:  # noqa: BLE001
-            continue
-        items = [d] if isinstance(d, dict) and ("id" in d or "loaded_context_length" in d) else \
-            (d.get("data") if isinstance(d, dict) else d) or []
-        for it in items:
-            if not isinstance(it, dict) or str(it.get("id") or it.get("name") or "") not in (model, model.split("/")[-1], ""):
-                if not (isinstance(it, dict) and model in str(it.get("id") or "")):
-                    continue
-            for k in ("loaded_context_length", "context_length", "context_window", "max_context_length",
-                      "max_input_tokens", "inputTokenLimit"):
-                if isinstance(it.get(k), int) and it[k] > 0:
-                    return it[k]
+            return None
+        for it in (d.get("data") if isinstance(d, dict) else d) or []:
+            if isinstance(it, dict) and str(it.get("id") or "") in (model, model.split("/")[-1]):
+                for k in ("max_input_tokens", "context_length", "context_window", "max_context_length", "max_model_len"):
+                    if isinstance(it.get(k), int) and it[k] > 0:
+                        return it[k]
+                if _meta_window(it):
+                    return _meta_window(it)
+        return None
+    root = re.sub(r"/v\d+/?$", "", base.rstrip("/"))
+    if not _route_absent(base, "no_show"):
+        try:
+            d = _http_json(root + "/api/show", {"model": model, "name": model}, key)
+            if isinstance(d, dict) and (d.get("parameters") or d.get("model_info") or d.get("details")):
+                _SEEN_SERVER.add(base)
+            params = str(d.get("parameters") or "")
+            m = re.search(r"\bnum_ctx\s+(\d+)", params)
+            if m:
+                return int(m.group(1))
+            mi = d.get("model_info") or {}
+            full = next((int(v) for k, v in mi.items() if k.endswith(".context_length") and isinstance(v, int)), None)
+            if full:
+                return min(full, 4096)     # no num_ctx set: Ollama serves its small default, not the model's maximum
+        except Exception as e:  # noqa: BLE001 - not Ollama
+            if _plain_404(e):
+                _mark_absent(base, "no_show")
+    if not _route_absent(base, "no_v0"):
+        try:
+            d = _http_json(root + "/api/v0/models/" + model, None, key)
+            if isinstance(d, dict) and (d.get("loaded_context_length") or d.get("max_context_length") or d.get("arch")):
+                _SEEN_SERVER.add(base)
+            for k in ("loaded_context_length", "context_length", "max_context_length"):
+                if isinstance(d.get(k), int) and d[k] > 0:
+                    return d[k]
+        except Exception as e:  # noqa: BLE001
+            if _plain_404(e):
+                _mark_absent(base, "no_v0")
+    try:                                   # last: vLLM / llama.cpp list the served window in /v1/models
+        listed = (_listed(base, key) or {}).get(model) or (_listed(base, key) or {}).get(model.split("/")[-1])
+        if isinstance(listed, int) and listed > 0:
+            return listed
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
@@ -156,6 +230,27 @@ def _failed(k) -> None:
         _FAILED[k] = time.time()
 
 
+def _note_tools(base: str, it: dict) -> None:
+    """An entry whose supported_parameters (OpenRouter style) lack "tools": no tools for it, before the first request."""
+    try:
+        sp = it.get("supported_parameters")
+        mid = str(it.get("id") or it.get("name") or "")
+        if mid and isinstance(sp, list) and sp and "tools" not in sp:
+            from meshpool_harness.core import modelcaps as MC
+            MC.learn(base, mid, no_tools=True)
+    except Exception:  # noqa: BLE001 - metadata only
+        pass
+
+
+def note_models(base: str, key: str = "") -> None:
+    """Read the endpoint's /models list once before the first request (what _listed learns is applied from then on)."""
+    try:
+        if base and os.environ.get("MH_PROBE_CONTEXT", "1") != "0":
+            _listed(base, key)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _listed(base: str, key: str) -> dict:
     """{model id: context tokens} from the endpoint's /models list. Kept once it has been read; a failed read is not
     remembered (it is retried after a minute), so a slow start never pins the wrong windows for the whole run."""
@@ -171,12 +266,16 @@ def _listed(base: str, key: str) -> dict:
         for it in items or []:
             if not isinstance(it, dict):
                 continue
+            _note_tools(base, it)
             for k in ("max_input_tokens", "loaded_context_length", "context_length", "context_window", "max_context",
-                      "max_context_length", "inputTokenLimit"):
+                      "max_context_length", "inputTokenLimit", "max_model_len"):
                 v = it.get(k) or (it.get("top_provider") or {}).get(k)
                 if isinstance(v, int) and v > 0:
                     out[str(it.get("id") or it.get("name") or "")] = v
                     break
+            else:
+                if _meta_window(it):
+                    out[str(it.get("id") or it.get("name") or "")] = _meta_window(it)
         if not isinstance(items, list):
             raise ValueError("no model list")
     except Exception:  # noqa: BLE001 - unreachable, slow or no list: try again later
@@ -189,16 +288,19 @@ def _listed(base: str, key: str) -> dict:
 
 def window_info(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> tuple[int, str]:
     """(tokens, source) for this model. Source: override, learned, provider, profile, table, default."""
+    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
+    with _LOCK:
+        learned = _LEARNED.get(bare)
     for var in ("MESHPOOL_CONTEXT_WINDOW", "MH_CONTEXT_WINDOW"):
         try:
             if os.environ.get(var):
-                return max(1024, int(float(os.environ[var]))), "override"
+                ov = max(1024, int(float(os.environ[var])))
+                # the server proved the setting too big (it cut the prompt or named a smaller limit): believe the server
+                return (learned, "learned") if learned and learned < ov else (ov, "override")
         except ValueError:
             pass
-    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
-    with _LOCK:
-        if bare in _LEARNED:
-            return _LEARNED[bare], "learned"
+    if learned:
+        return learned, "learned"
     if base is None:
         try:
             from meshpool_harness import providers as PV
@@ -232,7 +334,14 @@ def window_info(model: str, base: str | None = None, key: str = "", probe_endpoi
     hint = _name_hint(bare)
     if hint:
         return hint, "table"
-    return (DEFAULT_LOCAL if local else DEFAULT_HOSTED), "default"
+    # A small default is for a model server on this computer (Ollama, LM Studio: seen answering their routes, or on
+    # their usual ports). A local proxy or mock in front of a hosted model says nothing about the window: assume large.
+    try:
+        port = urlparse(base or "").port
+    except ValueError:
+        port = None
+    server = local and (base in _SEEN_SERVER or port in (11434, 1234))
+    return (DEFAULT_LOCAL if server else DEFAULT_HOSTED), "default"
 
 
 def window(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> int:
@@ -265,11 +374,15 @@ def target(win: int) -> int:
     return int(min(win * TRIGGER, TARGET_CAP))
 
 
-def learn(model: str, tokens: int) -> int:
-    """Remember a window the server showed us (an error naming it, or a prompt it silently cut). Only ever shrinks."""
+LEARN_FLOOR = 16_384             # a window below this is only ever believed when the server NAMED it in an error
+
+
+def learn(model: str, tokens: int, explicit: bool = False) -> int:
+    """Remember a window the server showed us. explicit: an error message named it (parse_limit); anything else (a
+    guess from usage numbers) is ignored below LEARN_FLOOR. Only ever shrinks, and only in this process."""
     bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
     tokens = int(tokens)
-    if tokens < 512:
+    if tokens < (512 if explicit else LEARN_FLOOR):
         return window(model, probe_endpoint=False)
     with _LOCK:
         cur = _LEARNED.get(bare)
@@ -278,12 +391,98 @@ def learn(model: str, tokens: int) -> int:
         return _LEARNED[bare]
 
 
+def learned(model: str) -> int:
+    """The window learned for this model in this process (0 when none), whatever a user setting says."""
+    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
+    with _LOCK:
+        return int(_LEARNED.get(bare) or 0)
+
+
+_SILENT: dict[str, list] = {}
+
+
+def observe_silent_cut(model: str, sent_tokens: int, usage: dict, win: int, base: str | None = None) -> bool:
+    """A local server that silently cuts a too-long prompt (Ollama) reports far fewer prompt tokens than were sent.
+    Believed only when: the endpoint is local, the window is a guess (unknown model), never one the table or provider states, the TOTAL prompt tokens
+    (fresh plus cached) stay far under what was sent twice in a row, and the implied window is a sane size. A gateway
+    that reports only fresh tokens, or a metering proxy in front, therefore never shrinks the window."""
+    try:
+        u = usage or {}
+        used = int(u.get("prompt_tokens") or 0)
+        used += int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        used += int(u.get("cache_read_input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+        used = max(used, int(u.get("total_tokens") or 0) - int(u.get("completion_tokens") or 0))
+        if base is None:
+            from meshpool_harness import providers as PV
+            base = PV.key_base()
+        src = window_info(model, base, probe_endpoint=False)[1]
+        if not _is_local(base or "") or src not in ("default", "learned", "override"):   # never below a size the table or provider states
+            return False
+        implied = used + max_output(win, None)
+        if used < 512 or sent_tokens < 1500 or sent_tokens <= used * 1.6:
+            _SILENT.pop(model, None)
+            return False
+        ollama = _looks_like_model_server(base or "") or src == "override"   # the user set the window for this server
+        if not ollama:
+            # an unknown local endpoint may be a proxy in front of a big hosted model: believe it only twice in a row,
+            # above the floor
+            if implied < LEARN_FLOOR:
+                return False
+            seen = _SILENT.setdefault(model, [])
+            seen.append(implied)
+            del seen[:-2]
+            if len(seen) < 2 or abs(seen[0] - seen[1]) > 0.15 * max(seen):
+                return False
+        # a real model server's cut is as good as a stated window (Ollama's num_ctx can be 2048)
+        learn(model, int(implied) if ollama else int(min(seen)), explicit=ollama)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _looks_like_model_server(base: str) -> bool:
+    """Ollama / LM Studio: answered one of their routes with real data, or sits on their usual ports. Those cut a too-long
+    prompt silently with a small num_ctx (2048 by default), so one clear observation is enough there."""
+    try:
+        from urllib.parse import urlparse
+        port = urlparse(base).port
+    except Exception:  # noqa: BLE001
+        port = None
+    return base in _SEEN_SERVER or port in (11434, 1234)
+
+
+class CompactGuard:
+    """Compaction must not become a loop: it may run again only after the conversation has grown 30% since the last
+    one, and after two compactions that shrank nothing much and changed no file it stops (the task carries on or finishes)."""
+
+    def __init__(self):
+        self.last_size = 0
+        self.last_edits = None
+        self.idle = 0
+
+    def allow(self, size: int, edits: int = 0) -> bool:
+        if self.last_size and size < self.last_size * 1.3:
+            return False
+        if self.idle >= 2 and edits == self.last_edits:
+            return False
+        return True
+
+    def record(self, size_after: int, edits: int = 0, size_before: int | None = None) -> None:
+        """A compaction that cut the conversation by less than 30% and changed no file counts as idle."""
+        useless = size_before is None or size_after > 0.7 * size_before
+        self.idle = self.idle + 1 if (edits == self.last_edits and useless) else 0
+        self.last_size, self.last_edits = size_after, edits
+
+
 def forget() -> None:
     with _LOCK:
         _LEARNED.clear()
         _PROBED.clear()
         _LISTS.clear()
         _FAILED.clear()
+        _NO_SHOW.clear()
+        _SEEN_SERVER.clear()
+        _SILENT.clear()
         _TOLD.clear()
 
 
@@ -329,7 +528,8 @@ def compact_chars(win: int, fixed_tokens: int, limit: int) -> int:
     """The conversation size (chars) at which compaction starts: 70% of the window less the schemas, system prompt
     and reply; never above `limit` (the profile's own number)."""
     room = target(win) - fixed_tokens - max_output(win, None) * 0.5
-    return int(max(1500, min(limit, room * CHARS_PER_TOKEN)))
+    floor = 1500 if win <= 16_384 else 12_000          # a window that holds a real conversation never compacts at 1.5k
+    return int(max(floor, min(limit, room * CHARS_PER_TOKEN)))
 
 
 def is_small(win: int) -> bool:
@@ -481,14 +681,17 @@ def fit(messages: list, tools: list | None, win: int, max_tokens: int | None = N
         first = 1 if msgs and msgs[0].get("role") == "system" else 0
         head_n = first + (1 if len(msgs) > first and msgs[first].get("role") == "user" else 0)
         groups = _groups(msgs, head_n)
-        dropped = 0
-        while over() and len(groups) > 1:
-            a, b = groups.pop(0)
-            dropped += b - a
+        sizes = [len(json.dumps(m, ensure_ascii=False)) for m in msgs]      # once: no re-serialising per dropped group
+        total = sum(sizes) + 2 * len(sizes)
+        drop, dropped = set(), 0
+        for a, b in groups[:-1]:                                            # oldest first; the newest group always stays
+            if total <= limit_chars:
+                break
             for k in range(a, b):
-                msgs[k] = None
-            msgs = [m for m in msgs if m is not None]
-            groups = _groups(msgs, head_n)
+                drop.add(k)
+                total -= sizes[k] + 2
+            dropped += b - a
+        msgs = [m for i, m in enumerate(msgs) if i not in drop]
         if dropped:
             msgs.insert(head_n, {"role": "user", "content": f"[{dropped} earlier messages were dropped to fit the "
                                                             "model's context window; continue from the messages below.]"})

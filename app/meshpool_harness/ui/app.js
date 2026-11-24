@@ -57,7 +57,13 @@ const PROV_PREFIX = ["chatgpt"];
 function provOf(id) { const [h, ...r] = String(id || "").split(":"); return r.length && PROV_PREFIX.includes(h) ? h : "key"; }
 function bareModel(id) { const p = provOf(id); return p === "key" ? String(id || "") : String(id).slice(p.length + 1); }
 function modelLabel(id, list) {                 // the name, plus the id when another model in the list shares it
-  const n = modelName(id); return (list || []).filter(m => modelName(m.id || m) === n).length > 1 ? `${n} · ${bareModel(id)}` : n;
+  // F-20: the same model name from two providers or endpoints also shows where it comes from
+  const n = modelName(id), same = (list || []).filter(m => modelName(m.id || m) === n);
+  if (same.length < 2) return n;
+  const label = `${n} · ${bareModel(id)}`;
+  const twin = same.some(m => (m.id || m) !== id && `${modelName(m.id || m)} · ${bareModel(m.id || m)}` === label);
+  const src = provOf(id) === "key" ? ((list || []).find(m => (m.id || m) === id) || {}).provider || "your endpoint" : provOf(id);
+  return twin ? `${label} (${src})` : label;
 }
 function modelName(id) {
   const known = {deepseek: "DeepSeek", gpt: "GPT", qwen: "Qwen", glm: "GLM", kimi: "Kimi", llama: "Llama", mistral: "Mistral", grok: "Grok", openai: "OpenAI", minimax: "MiniMax"};
@@ -188,14 +194,14 @@ function fitInput(inp) {
   if (fitRaf) return;
   fitRaf = requestAnimationFrame(() => { fitRaf = 0; inp.style.height = "auto"; inp.style.height = Math.min(260, inp.scrollHeight) + "px"; });
 }
-function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false}) {
+function ask({title, text = "", value, ok = "OK", cancel = "Cancel", danger = false, allowEmpty = false, check = ""}) {
   return new Promise(res => {
     const sc = document.createElement("div"); sc.className = "scrim dlg-scrim";
     const input = value !== undefined;
-    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
+    sc.innerHTML = `<div class="dlg" role="dialog" aria-modal="true" aria-label="${esc(title)}"><h3>${esc(title)}</h3>${text ? `<p>${esc(text)}</p>` : ""}${input ? `<input id="dlgIn" value="${esc(value)}" spellcheck="false">` : ""}${check ? `<label class="dlgck"><input type="checkbox" id="dlgCk" checked> ${esc(check)}</label>` : ""}<div class="row"><button class="btn" data-a="0">${esc(cancel)}</button><button class="btn ${danger ? "danger" : "primary"}" data-a="1">${esc(ok)}</button></div></div>`;
     document.body.appendChild(sc);
     const done = v => { sc.remove(); document.removeEventListener("keydown", key, true); res(v); };
-    const val = () => input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
+    const val = () => check ? {checked: $("#dlgCk", sc).checked} : input ? ($("#dlgIn", sc).value.trim() || (allowEmpty ? "" : null)) : true;
     const key = e => { if (e.key === "Escape") { e.stopPropagation(); done(input ? null : false); } if (e.key === "Enter") { e.preventDefault(); done(document.activeElement?.dataset?.a === "0" ? (input ? null : false) : val()); } };
     document.addEventListener("keydown", key, true);
     sc.addEventListener("mousedown", e => { if (e.target === sc) done(input ? null : false); });
@@ -225,12 +231,17 @@ const S = {
   page: "",                          // the open gallery page when view is "page" (projects, artifacts, scheduled, plugins)
   // draft: what the next new chat will use. project is a folder the user picked for this chat (usually none: a chat
   // gets its own private folder), pid a Meshpool project, harness "meshpool-auto" (Meshpool picks the agent).
-  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: store("mode") || "ask", plan: false, style: ""},
+  draft: {project: "", pid: "", harness: "meshpool-auto", model: store("model") || "", mode: "", plan: false, style: ""},
   panel: store("panel") || null, steps: store("steps") ?? false, attachments: [], showArchived: false,
   collapsed: new Set(store("collapsed") || []),
 };
 // What a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODES = {ask: ["Manual", "Asks before it edits files or runs commands"], edits: ["Auto", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+const MODES = {ask: ["Ask", "Asks before it edits files or runs commands"], edits: ["Accept edits", "Edits files on its own; still asks before running commands"], auto: ["Full access", "Edits files and runs commands without asking"]};
+// Earlier spellings of the three levels still read as these three.
+const MODE_ALIAS = {manual: "ask", supervised: "ask", ask: "ask", edits: "edits", "accept edits": "edits", "accept-edits": "edits", "auto-accept edits": "edits", full: "auto", "full access": "auto", "full-access": "auto", auto: "auto"};
+function normMode(v) { return MODE_ALIAS[String(v || "").trim().toLowerCase()] || "ask"; }
+// New chats start from the saved setting (Settings, Capabilities). Changing the access for one chat never changes it.
+function defaultMode() { return normMode(get0("MH_AGENT_PERMISSIONS")); }
 
 function isDark() { const t = store("theme") || "system"; return t === "dark" || (t === "system" && matchMedia("(prefers-color-scheme: dark)").matches); }
 function logoSrc() { return isDark() ? "/brand/logo-dark.png" : "/brand/logo-light.png"; }
@@ -370,17 +381,17 @@ function projMenu(e, pid) {
     {label: "Delete project", icon: ICON.trash, danger: true, fn: () => deleteProject(pid)},
   ]);
 }
-// A delete still waiting out its undo window is sent when the page goes away, so a reload never brings the chat back.
-addEventListener("pagehide", () => { for (const id of S.delFlush?.keys() || []) { try { fetch(`/api/threads/${id}`, {method: "POST", keepalive: true, headers: {"X-Meshpool-Token": MP.token, "Content-Type": "application/json"}, body: JSON.stringify({action: "delete"})}); } catch (e) { /* page is closing */ } } });
 async function threadAct(id, action) {
-  if (action === "delete") {                         // hidden at once, deleted after a few seconds unless undone
+  if (action === "delete") {                         // the server does the delete (and its grace period) itself
     S.pendingDelete = new Set([...(S.pendingDelete || []), id]);
-    if (["working", "waiting"].includes(S.threads.find(t => t.id === id)?.state)) post(`/api/agent/${id}/stop`, {}).catch(() => {});
+    try { await post(`/api/threads/${id}`, {action: "delete"}); }
+    catch (e) { S.pendingDelete.delete(id); renderSide(); return toast(e.message); }
     if (S.cur?.id === id) newThread();
     renderSide();
-    const t = setTimeout(async () => { S.pendingDelete.delete(id); S.delFlush?.delete(id); try { await post(`/api/threads/${id}`, {action}); } catch (e) { toast(e.message); } await loadThreads(); }, 6000);
-    (S.delFlush = S.delFlush || new Map()).set(id, t);
-    toast("Chat deleted", 6000, {label: "Undo", fn: () => { clearTimeout(t); S.pendingDelete.delete(id); S.delFlush?.delete(id); renderSide(); toast("Chat restored"); }});
+    toast("Chat deleted", 6000, {label: "Undo", fn: async () => {
+      try { await post(`/api/threads/${id}`, {action: "undelete"}); S.pendingDelete.delete(id); await loadThreads(); toast("Chat restored"); }
+      catch (e) { toast(e.message); }
+    }});
     return;
   }
   try { await post(`/api/threads/${id}`, {action}); } catch (e) { return toast(e.message); }
@@ -489,7 +500,7 @@ function setupComposer() {
 function cfg() { // the settings that apply to the next message: the open thread's, or the draft's
   const v = S.cur?.view;
   if (v) return {harness: v.harness?.id, model: v.model, mode: v.mode, plan: v.plan, style: v.style, busy: ["working", "waiting"].includes(v.state), starting: v.state === "starting"};
-  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode, plan: S.draft.plan, style: S.draft.style, busy: false};
+  return {harness: S.draft.harness, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: S.draft.style, busy: false};
 }
 async function chooseDraftFolder() {
   const path = await browseFolder(S.draft.project || "");
@@ -503,7 +514,7 @@ async function setPlan(on) {
 }
 async function setMode(m) {
   if (S.cur) { try { await post(`/api/agent/${S.cur.id}/mode`, {mode: m, since: 1e9}); S.cur.view.mode = m; } catch (e) { return toast(e.message); } }
-  else { S.draft.mode = m; store("mode", m); }
+  else S.draft.mode = m;                       // this draft only: the default for later chats is the saved setting
   renderBar();
 }
 async function setModel(id) {
@@ -547,35 +558,39 @@ async function sendNow(interrupt) {
   // Doherty threshold: answer the press at once, before the server does
   const sb = $("#sendBtn"); if (sb) { sb.classList.remove("go"); void sb.offsetWidth; sb.classList.add("go"); }
   S.sendHold = Date.now() + 2500; setWorking("Sending"); scrollConv(true);
-  let created = null;
+  let created = null; const draft0 = {project: S.draft.project, pid: S.draft.pid};
   try {
     if (!S.cur) {
-      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode, plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || []});
-      S.draft.style = ""; S.draft.incognito = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
+      const v = created = await post("/api/agent", {workdir: S.draft.project || "", project_id: S.draft.pid || "", harness: S.draft.harness || "meshpool-auto", ...(S.mode === "code" ? {kind: "code"} : {}), model: S.draft.model, mode: S.draft.mode || defaultMode(), plan: S.draft.plan, style: styleId(), task: text, incognito: !!S.draft.incognito, memory_exclude: S.draft.exclude || [], ...(S.mode === "code" && S.draft.worktree ? {worktree: true} : {})});
+      S.draft.style = ""; S.draft.incognito = false; S.draft.worktree = false; S.draft.exclude = []; S.draft.plan = !!capOn("plan_first"); S.draft.pid = "";
       openThread(v.id, true);
     }
-    const cur = S.cur, root = curRoot() || created?.workdir || "";          // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image);
-    if (files.length) {
-      const saved = [];
-      for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
-      text += `\n\nAttached files (in ${S.cur?.view?.scratch ? "this chat's folder" : "the project folder"}): ${saved.join(", ")}`;
-    }
+    const cur = S.cur;                              // before any wait: the user may open another chat meanwhile
+    const files = atts.filter(a => !a.image).map(a => ({name: a.name, data: a.data}));   // saved by the server, in the chat's own folder
     const images = atts.filter(a => a.image).map(a => ({name: a.name, mime: a.mime, data: a.data}));
+    const wasStopping = S.stopping;               // Stop is still finishing: stopNow's wait loop owns the flag
     if (interrupt) { S.stopping = true; renderBar(); }
     if (S.pendingGoal) { const g = S.pendingGoal; S.pendingGoal = null; await setGoal(g, cur); }
-    const r = await post(`/api/agent/${cur.id}/send`, {text, images, since: 1e9, interrupt: !!interrupt});
-    S.stopping = false;
+    const r = await post(`/api/agent/${cur.id}/send`, {text, images, files, since: 1e9, interrupt: !!interrupt});
+    if (interrupt && !wasStopping) S.stopping = false;
     if (S.cur !== cur) { setTimeout(loadThreads, 500); return; }        // the user moved on: the sent chat keeps running
-    if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
+    if (!interrupt && (r.sent?.after_stop || wasStopping)) toast("Sent. It runs as soon as the current request stops.");
+    else if (busy && !interrupt && r.sent?.queued) toast(`${harness(cfg().harness).name} gets this when the current step finishes.`);
     if (cur.view) cur.view.state = "working";
     renderBar();
     clearTimeout(cur.pollT); poll(); setTimeout(loadThreads, 500);
   } catch (e) {
     S.pendingGoal = null;
-    S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
+    if (interrupt) S.stopping = false; S.sendHold = 0; setWorking(null); renderBar();
     if (!inp.value.trim()) { inp.value = typed; inp.dispatchEvent(new Event("input")); }
     if (!S.attachments.length) { S.attachments = atts; renderAttach(); }
+    if (created) {                                  // a brand-new chat whose first message failed: no empty chat is left behind
+      try { await post(`/api/threads/${created.id}`, {action: "discard"}); } catch (e2) { /* it may already be gone */ }
+      if (S.cur?.id === created.id) newThread();
+      S.draft.project = draft0.project; S.draft.pid = draft0.pid;
+      const i2 = $("#input"); if (i2) { i2.value = typed; i2.dispatchEvent(new Event("input")); }
+      S.attachments = atts; renderAttach(); loadThreads();
+    }
     toast(e.message, 4000);
   }
 }
@@ -821,7 +836,7 @@ function newThread(opt) {
   S.draft.pid = ""; S.draft.incognito = false; S.draft.exclude = [];
   { const i = $("#input"); if (i && !(opt && typeof opt === "object")) { i.value = ""; i.style.height = "auto"; } }
   S.cur = null; S.attachments = []; renderAttach(); setWorking(null); $("#col").classList.remove("loading");
-  S.draft.harness = modeHarness();
+  S.draft.harness = modeHarness(); S.draft.mode = "";
   renderTop(); renderBar(); renderHero(); renderSide(); renderPanel();
   restoreDraft(); $("#input").focus();
 }
@@ -875,7 +890,7 @@ function openThread(id, fresh) {
   const known = S.threads.find(t => t.id === id);
   if (known) { const m = isCodeThread(known) ? "code" : "chat"; if (S.mode !== m) { S.mode = m; store("appmode", m); syncMode(); } }
   const hit = !fresh && CACHE.get(id);
-  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode, events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
+  S.cur = {id, total: 0, view: fresh ? {id, state: "starting", harness: {id: S.draft.harness}, model: S.draft.model || S.models?.default, mode: S.draft.mode || defaultMode(), events: []} : null, epoch: -1, groups: null, live: null, tools: {}, pollT: null, turn: 0, log: [], q: []};
   if (!fresh && known) S.cur.view = {id, title: known.title, state: known.state, kind: known.kind, workdir: known.workdir, scratch: known.scratch, project_id: known.project_id || "", pinned: known.pinned, harness: harness(known.harness), events: [], prefill: true};
   const cur = S.cur;
   S.pinned = true; setWorking(null);
@@ -915,7 +930,7 @@ async function poll() {
   if (busy) startStream(cur);
   // A chat that is not running changes only when someone else touches it: look rarely, and less often the longer it stays quiet.
   cur.quiet = busy || cur.total !== before ? 0 : (cur.quiet || 0) + 1;
-  const delay = busy ? (document.hidden ? 2000 : cur.es && cur.es.readyState === 1 ? 4000 : 400)
+  const delay = busy ? (document.hidden ? 2000 : (cur.es && cur.es.readyState === 1) || cur.relay ? 4000 : 400)
     : document.hidden ? 60000 : Math.min(30000, 5000 * (1 + cur.quiet));
   cur.pollT = setTimeout(poll, delay);
 }
@@ -938,6 +953,7 @@ function ingest(cur, v) {
   if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
+  if (!cur.q.length) reconcileOpen(cur, v);
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
@@ -949,13 +965,55 @@ function ingest(cur, v) {
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
   return false;
 }
+// What the server says it still waits on is the truth: a card, step or spinner it no longer waits on is closed here (a reopened chat, an old transcript).
+function reconcileOpen(cur, v) {
+  try {
+    const total = v.total || 0, fresh = total >= (cur.next || 0);      // an older poll must not close what a newer event showed
+    const seen = d => { const n = d.dataset.i === undefined ? NaN : Number(d.dataset.i); return !isNaN(n) && n >= total; };
+    const op = v.open;
+    if (op) {
+      const ids = new Set((op.approvals || []).map(i => "appr-" + i));
+      for (const d of $$(".appr:not(.done)", colEl())) if (!ids.has(d.id) && !seen(d)) applyEv({type: "approval_done", id: d.id.slice(5), decision: "stopped", closed: true});
+      const qid = op.question == null ? null : qId({id: op.question});
+      for (const d of $$(".qcard:not(.done)", colEl())) if (d.id !== qid && !seen(d)) questionDone({id: d.id.slice(2), source: "stopped", answers: [], text: ""});
+    }
+    if (fresh && !["starting", "working", "waiting"].includes(v.state)) {
+      settleSteps("");
+      for (const g of $$(".work:not([data-done])", colEl())) bumpGroup(g, true);
+      cur.group = null;
+    }
+  } catch (e) { console.error(e); }
+}
 // ---- Server-Sent Events: the open chat's events pushed as they happen
+// P-11: browsers allow six connections per site, and every tab used to hold its own stream: twenty tabs on a running chat
+// starved each other. One tab per chat (the one that holds a Web Lock) keeps the EventSource and relays what arrives to the
+// other tabs over a BroadcastChannel; when it closes, the next tab takes over. An idle tab holds no stream at all.
 function startStream(cur) {
-  if (cur.es || cur.sseOff || !window.EventSource || S.cur !== cur) return;
-  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; return; }
+  if (cur.es || cur.relay || cur.sseOff || !window.EventSource || S.cur !== cur) return;
+  if (!(window.BroadcastChannel && navigator.locks)) return openStream(cur);
+  const name = "mp-sse-" + cur.id;
+  let ch, ac;
+  try { ch = new BroadcastChannel(name); ac = new AbortController(); } catch (e) { return openStream(cur); }
+  const r = cur.relay = {ch, ac, leader: false, release: null};
+  ch.onmessage = e => {                              // a follower: what the leader's stream delivered
+    if (r.leader || cur.relay !== r || S.cur !== cur) return;
+    const d = e.data || {};
+    if (d.end) { poll(); return; }
+    let v; try { v = JSON.parse(d.data); } catch (err) { return; }
+    const first = (v.events || []).find(x => typeof x.i === "number");
+    if (first && first.i > (cur.next || 0)) { poll(); return; }     // a gap (this tab joined late): fetch what it missed
+    if (ingest(cur, v)) poll();
+  };
+  navigator.locks.request(name, {signal: ac.signal}, () => new Promise(done => {
+    if (cur.relay !== r || S.cur !== cur) return done();
+    r.leader = true; r.release = done; openStream(cur);
+  })).catch(() => {});
+}
+function openStream(cur) {
+  let es; try { es = new EventSource(`/api/agent/${cur.id}/events?since=${cur.total}&t=${encodeURIComponent(MP.token)}`); } catch (e) { cur.sseOff = true; stopStream(cur); return; }
   cur.es = es;
-  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
-  es.addEventListener("end", () => { stopStream(cur); if (S.cur === cur) poll(); });
+  es.onmessage = m => { let v; try { v = JSON.parse(m.data); } catch (e) { return; } cur.esFails = 0; try { cur.relay?.ch.postMessage({data: m.data}); } catch (e) { /* closed */ } if (S.cur === cur && ingest(cur, v)) { stopStream(cur); poll(); } };
+  es.addEventListener("end", () => { try { cur.relay?.ch.postMessage({end: true}); } catch (e) { /* closed */ } stopStream(cur); if (S.cur === cur) poll(); });
   es.onerror = () => {                           // fall back to polling; try the stream again a few times
     stopStream(cur); cur.esFails = (cur.esFails || 0) + 1;
     if (cur.esFails >= 4) { cur.sseOff = true; return; }
@@ -963,7 +1021,10 @@ function startStream(cur) {
     if (S.cur === cur) { clearTimeout(cur.pollT); cur.pollT = setTimeout(poll, 100); }
   };
 }
-function stopStream(cur) { if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; } }
+function stopStream(cur) {
+  if (cur?.es) { try { cur.es.close(); } catch (e) {} cur.es = null; }
+  const r = cur?.relay; if (r) { cur.relay = null; try { r.release?.(); r.ac.abort(); r.ch.close(); } catch (e) { /* already gone */ } }
+}
 // ---- the paced drain: events leave the queue in order; text goes a few characters per frame
 function drainQ(cur, all) {
   const q = cur.q; if (!q || !q.length) return;
@@ -1020,7 +1081,7 @@ function setWorking(text, secs) {
 function workTick(cur) {
   if (!cur) return;
   const g = cur.group; if (g && g.isConnected && !g.dataset.done && g._t0) { const el = $(".gel", g), s = Math.round((Date.now() - g._t0) / 1000) + "s"; if (el && el.textContent !== s) el.textContent = s; }
-  const waiting = cur.working && ($(".appr:not(.done)") || $(".qcard:not(.done)"));
+  const waiting = cur.view?.state === "waiting";   // the server says what it waits on; a stale card in the column must not hide Working
   const pd = cur.working ? planData() : null;
   if (cur.working && !waiting) setWorking(pd ? planLine(pd) : cur.live ? "Writing" : String(cur.activity || "Working").split(" ").slice(0, 3).join(" ").replace(/[:,]$/, ""), Math.round((Date.now() - (cur.since || Date.now())) / 1000));
   else if (cur.view?.state !== "starting" && Date.now() > (S.sendHold || 0)) setWorking(null);
@@ -1131,33 +1192,46 @@ function closeGroup() { const g = S.cur.group; if (g && g.isConnected) bumpGroup
 const GOAL_NEXT = "Continue working toward the goal.";
 const RESUME_NEXT = "Continue where you left off.";
 const stripGoal = t => String(t || "").replace(/\n*^\W*GOAL:\s*(DONE|CONTINUE)\b.*$/gim, "").trimEnd();
+const RETRY_RX = /Trying again \(\d+ of \d+\)|^Rate limited by the endpoint|^Trying again without streaming/;   // old transcripts have no retry flag
+const clearRetry = () => $$(".note.retry", colEl()).forEach(n => n.remove());   // the call went through: the "trying again" notes are history
+// OSS-12: one event that cannot be drawn must not break the page or the rest of a saved chat.
+function safe(fn) { try { return fn(); } catch (e) { try { console.warn("meshpool: could not draw part of this chat", e); } catch (_) {} } }
 function applyEv(ev) {
+  try { return applyEvRaw(ev); }
+  catch (e) {
+    try { console.warn("meshpool: could not show an item", ev && ev.type, e); const d = document.createElement("div"); d.className = "note"; d.textContent = "Could not show this item."; colEl().appendChild(d); } catch (_) {}
+  }
+}
+function applyEvRaw(ev) {
   const cur = S.cur, col = colEl();
   const add = (html, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; if (cls === "msg-ai" || cls === "msg-user") d.dir = "auto"; d.innerHTML = html; col.appendChild(d); return d; };
   if (questionEv(ev, add)) return;
   switch (ev.type) {
     case "queued": {
       const box = $("#attachRow"); $("#queuedChip")?.remove();
-      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>Queued: ${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
+      if (ev.n) box.insertAdjacentHTML("afterbegin", `<span class="att-chip" id="queuedChip">${ICON.list}<span>${ev.after_stop ? "Runs after the stop: " : "Queued: "}${esc(ev.text.slice(0, 60))}${ev.n > 1 ? ` and ${ev.n - 1} more` : ""}</span></span>`);
       break; }
     case "user": {
+      if (!ev.steer) { cur.turnPlan = !!ev.plan; for (const x of col.querySelectorAll(".buildplan")) x.remove(); }   // the card belongs to a turn sent in plan mode
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; mu.dataset.ei = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
       cur.liveText += ev.text; cur.liveDirty = true; cur.activity = "Writing"; break;
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
+    case "retry_ok": clearRetry(); break;
     case "assistant":
-      { const txt = stripGoal(ev.text);
+      { const txt = stripGoal(ev.text); if (txt) clearRetry();
       if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
       else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
       cur.lastText = stripGoal(ev.text || "") || cur.lastText;
       break;
     case "tool_start": {
+      clearRetry();
       const g = workGroup();
       const raw = ev.name || "";
       const name = ev.mcp ? raw.split("__").slice(2).join("__") : raw;
@@ -1171,7 +1245,7 @@ function applyEv(ev) {
       if (ev.output) for (const m of String(ev.output).matchAll(OUT_RX)) (cur.tpaths ||= []).push(relPath(m[1]));   // this turn's files, for the cards under the reply
       const d = cur.tools[ev.id] || document.getElementById("tool-" + ev.id); if (!d) break;
       // A step the user stopped, or one Plan mode blocked, did not fail: label it for what happened.
-      const out = String(ev.output || ""), stopped = /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
+      const out = String(ev.output || ""), stopped = ev.stopped || /not run: stopped by the user|^\[exit 130\]|stopped by the user|sub-agents were stopped by stop/i.test(out);
       const planned = !ev.ok && (/plan mode/i.test(out) || (cur.view?.plan && ["write", "edit", "write_file", "bash", "bash_many", "delete", "move"].includes(d.dataset.name)));
       const st = $(".st", d); st.className = "st " + (ev.ok || stopped || planned || ev.denied ? "" : "bad");
       st.textContent = ev.denied ? "not run" : ev.ok ? "" : stopped ? "stopped" : planned ? "not allowed in Plan mode" : "failed";
@@ -1186,12 +1260,12 @@ function applyEv(ev) {
       closeGroup();
       const OPT = {allow_once: "Allow", allow_always: "Allow for this chat", reject_once: "Deny", reject_always: "Always deny"};
       const opts = ev.options && ev.options.length ? ev.options.map(o => `<button class="btn ${o.kind === "allow_once" ? "primary" : String(o.kind).startsWith("reject") ? "danger" : ""}" data-d="${esc(o.id)}">${esc(OPT[o.kind] || o.label)}</button>`).join("")
-        : `<button class="btn primary" data-d="yes">Allow</button><button class="btn" data-d="always">Allow ${ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button><button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
+        : `<button class="btn primary" data-d="yes">Allow</button>${ev.scope === "once" ? "" : `<button class="btn" data-d="always">Allow ${ev.scope ? esc(ev.scope) : ev.kind === "edit" ? "all edits" : ev.kind === "bash" ? "all commands" : "this tool"} in this chat</button>`}<button class="btn danger" data-d="no">Deny</button><input placeholder="Note for the agent (optional)" aria-label="Note for the agent">`;
       const title = String(ev.title || "").replace(/^(run a command|execute terminal|terminal)\s*:.*$/is, "Run this command?").replace(/^Approve edit:\s*(.+)$/i, "Change $1?");
       const g0 = gKeep;
       const d = add(`<b>${esc(title)}</b>${ev.detail ? (ev.kind === "doc" ? `<div class="docprev">${md(ev.detail)}</div>` : `<pre>${ev.kind === "edit" ? diffLines(ev.detail) : esc(ev.detail)}</pre>`) : ""}<div class="acts">${opts}</div>`, "appr");
       if (g0) { $(".rows", g0).appendChild(d); cur.group = g0; bumpGroup(g0); g0.open = true; }   // the Allow buttons must stay visible
-      d.id = "appr-" + ev.id;
+      d.id = "appr-" + ev.id; if (typeof ev.i === "number") d.dataset.i = ev.i;
       $$("button", d).forEach(b => b.onclick = async () => {
         d.dataset.note = $("input", d)?.value || "";
         $$("button", d).forEach(x => x.disabled = true);
@@ -1200,7 +1274,7 @@ function applyEv(ev) {
       });
       scrollConv(true); break; }
     case "approval_done": { for (const t of Object.values(cur.tools || {})) { const st = $(".st.run", t); if (st && /approval|waiting/i.test(st.textContent)) { st.textContent = ""; const nm = t.dataset.name || ""; $(".tn", t).textContent = TOOL_RUN[nm] || TOOL_LABEL[nm] || nm; } }
-      const d = document.getElementById("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.decision === "stopped" ? "Stopped before running." : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
+      const d = cardEl("appr-" + ev.id); if (d) { d.classList.add("done"); const a = $(".acts", d); $("pre", d)?.remove(); $(".docprev", d)?.remove(); { const bt = $("b", d); if (bt) bt.textContent = bt.textContent.replace(/\?$/, ""); } if (a) a.outerHTML = `<div class="note">— ${ev.closed ? "Closed when Meshpool restarted." : ev.decision === "stopped" ? "Stopped before running." : ev.decision === "timeout" ? "No answer in time." : ev.reason ? esc(ev.reason) : ev.decision === "no" || /deny|reject/.test(ev.decision) ? (d.dataset.note ? `Denied. Your note: ${esc(d.dataset.note)}` : "Denied.") : ev.decision === "always" || /always|session/.test(ev.decision) ? "Allowed for this chat." : "Allowed."}</div>`;
         const g = d.previousElementSibling; if (g?.classList.contains("work") && d === col.lastElementChild) { $(".rows", g).appendChild(d); cur.group = g; } } break; }
     case "thought": {
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
@@ -1235,27 +1309,35 @@ function applyEv(ev) {
       if (ev.route) { cur.route = {label: String(ev.text || "").replace(/^(Harness|Working as): /, "").replace(/ \(.*$/, "").replace(/\.$/, ""), why: ""}; sessionSoon(); break; }
       if (/^Starting MCP|^MCP:|^MCP did not start|^No MCP servers/.test(ev.text || "")) { cur.mcpNote = ev.text; sessionSoon(); break; }
       if (/ is ready\. ?/.test(ev.text || "") && !cur.turn) break;
-      { const nn = add(esc(ev.text), "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+      { const nn = add(esc(ev.text), ev.retry || RETRY_RX.test(ev.text || "") ? "note retry" : "note"); if (ev.undo && ev.undo.ids && ev.undo.ids.length) nn.dataset.undo = JSON.stringify(ev.undo.ids); } break; }
+    case "gate": {                                      // all model slots busy: say so while it waits, drop the line once it runs
+      if (cur.gateEl && !cur.gateEl.isConnected) cur.gateEl = null;
+      if (ev.state === "waiting") {
+        const t = `Waiting for a free model slot (${ev.inflight ?? "?"} of ${ev.limit ?? "?"} in use)...`;
+        if (cur.gateEl) cur.gateEl.innerHTML = esc(t); else cur.gateEl = add(esc(t), "note gate");
+      } else if (cur.gateEl) { cur.gateEl.remove(); cur.gateEl = null; }
+      break; }
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("stopped"); closeGroup();
       const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
       $("[data-resend]", n)?.addEventListener("click", () => { const inp = $("#input"); inp.value = ev.resend; inp.dispatchEvent(new Event("input")); inp.focus(); });
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; safe(() => pvTurnCards(cur, cur.lastFoot, t.n)); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
+      cur.gateEl?.remove(); cur.gateEl = null;
       settleSteps("");
       closeGroup();
+      if (ev.synthetic) break;                  // a turn that never ran (or one cut short by a restart): no footer, no Build this plan
       const u = ev.turn || {};
       const foot = add("", "turnfoot"); if (u.calls) foot.title = `${u.calls} model call${u.calls === 1 ? "" : "s"} · ${fmt(u.in)} tokens in · ${fmt(u.out)} out`;
       cur.lastFoot = foot;
-      const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
-      pvTurnCards(cur, foot, cur.turn);
-      if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(foot); }
-      if (cur.view?.plan && cur.lastText) {
+      safe(() => pvTurnCards(cur, foot, 0));                     // the files it changed arrive with its checkpoint event
+      if (cur.turnPlan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
         $$("button", b)[1].onclick = () => { b.remove(); $("#input").focus(); };
@@ -1287,7 +1369,7 @@ function questionCard(ev, add) {
       </div></fieldset>`;
   }).join("");
   const d = add(`<div class="qin">${html}<div class="qfoot"><span class="qnote">${ev.timeout_s ? "Or type a reply in the message box." : ""}</span><button type="button" class="btn primary qsend">${many ? "Send answers" : "Continue"}</button></div></div>`, "qcard");
-  d.id = cid; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
+  d.id = cid; if (typeof ev.i === "number") d.dataset.i = ev.i; d.setAttribute("role", "group"); d.setAttribute("aria-label", "A question from the agent"); d.dataset.n = qs.length;
   const sync = () => {
     $$(".qq", d).forEach(fs => { const inp = $("input", fs), oth = $(".qother", fs); oth.setAttribute("aria-checked", inp.value.trim() ? "true" : "false"); });
     const ok = $$(".qq", d).every(fs => $$(".qopt[aria-checked=true]", fs).length);
@@ -1342,8 +1424,11 @@ document.addEventListener("keydown", e => {            // from an empty message 
   if (e.key === "Enter") { if ($(".qsend", d).disabled) return; e.preventDefault(); e.stopPropagation(); d._submit(); return; }
   qKeys(e, d);
 }, true);
+// A card by id in the chat column, also while a reopened chat's history is replayed into the off-screen column
+// (document.getElementById cannot see it there, so a closing event left the card live).
+function cardEl(id) { const c = colEl(); return (c && c.querySelector("#" + CSS.escape(String(id)))) || document.getElementById(id); }
 function questionDone(ev) {
-  const d = document.getElementById(qId(ev)); if (!d || d.classList.contains("done")) return;
+  const d = cardEl(qId(ev)); if (!d || d.classList.contains("done")) return;
   const src = ev.source, ans = ev.answers || [], typed = src === "user" && /^You replied/.test(ev.text || "");
   const qs = $$(".qq", d).map(fs => $(".qtext", fs)?.textContent || "");
   const how = src === "stopped" ? "Stopped" : src === "timeout" ? "No answer in time, went with" : src === "user" || src === "replay" ? "" : "Went with";
@@ -1369,13 +1454,36 @@ function bindFoot(foot) {
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+  const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
+  const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
+    threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
+  const asked = ue?.text || "";
   try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
+// "Rewind to here" / "Fork from here" under one of your messages (the server finds the message from the event number).
+async function rewindFork(kind, el) {
+  const cur = S.cur, ei = el && el.dataset.ei !== undefined ? +el.dataset.ei : -1;
+  if (!cur || ei < 0) return;
+  if (["working", "waiting"].includes(cur.view?.state)) { toast(kind === "rewind" ? "Stop the agent before rewinding." : "Wait for the reply, or stop it, then fork."); return; }
+  try {
+    if (kind === "fork") {
+      const r = await post(`/api/agent/${cur.id}/fork`, {event_index: ei});
+      await loadThreads(); openThread(r.id); toast("Forked into a new chat. Nothing changed in your files.", 4000); return;
+    }
+    const a = await ask({title: "Rewind to here?", text: "The conversation goes back to just before this message, and the reply and everything after it are removed. The message goes back into the box so you can change it.",
+      ok: "Rewind", danger: true, check: "Also undo the file changes Meshpool made from here on"});
+    if (!a) return;
+    const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
+    if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
+    const inp = $("#input"); if (r.text && !inp.value.trim()) { inp.value = r.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
+    renderBranch(); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
+  } catch (e) { toast(e.message); }
+}
+
 /* ================================== right panel ================================== */
-const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser"};
+const PTABS_ALL = {session: "Session", progress: "Progress", outputs: "Artifacts", diff: "Changes", files: "Files", term: "Terminal", git: "Git and CI", preview: "Preview", browser: "Browser", worktree: "Isolated copy"};
 function togglePanel(name, force) {
   if (!panelSet().includes(name)) name = panelSet()[0];
   if (S.panel === name && !force && curMode() === "cowork") store("cw_panel_closed", true);
@@ -1401,13 +1509,13 @@ function renderPanel() {
   fitPanel(); if (S.panel !== "browser") brwStop();
   if (!S.panel) { p.hidden = true; return; }
   p.hidden = false;
-  $("#ptabs").innerHTML = panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `<span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
+  $("#ptabs").innerHTML = `<div class="pstrip" role="tablist" aria-label="Side panel tabs">` + panelSet().map(k => [k, PTABS_ALL[k]]).map(([k, lb]) => `<button role="tab" aria-selected="${S.panel === k}" data-t="${k}">${lb}</button>`).join("") + `</div><span class="sp"></span><button class="iconbtn" id="pclose" aria-label="Close panel">${ICON.x}</button>`;
   $$("#ptabs [data-t]").forEach(b => b.onclick = () => togglePanel(b.dataset.t, true));
   $("#pclose").onclick = () => togglePanel(S.panel);
   const body = $("#pbody"); body.innerHTML = "";
   if (!S.cur && S.panel !== "session" && S.panel !== "browser") { body.innerHTML = `<div class="pnote">Start a chat and what it makes, changes or runs shows up here.</div>`; return; }
   ({session: panelSession, progress: panelProgress, outputs: panelOutputs, diff: panelDiff, files: panelFiles, term: panelTerm, git: panelGit,
-    preview: panelPreview, browser: panelBrowser})[S.panel](body);
+    preview: panelPreview, browser: panelBrowser, worktree: panelWorktree})[S.panel](body);
 }
 
 /* ---------- Cowork: progress, files made, context ---------- */
@@ -1581,10 +1689,10 @@ async function panelGit(body) {
       <div class="row" style="margin-top:6px"><input id="gnew" placeholder="New branch name"><button class="btn" id="gcreate">Create</button></div>
       <div class="stat" style="margin-top:6px">${g.upstream ? `${g.ahead} to push, ${g.behind} to pull` : "Not pushed yet"}${g.remote ? ` · ${esc(g.github || g.remote)}` : " · no remote"}</div></div>
     <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
-    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
+    <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : `disabled title="Nothing to commit: no files have changed."`}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : `disabled title="This folder has no remote to push to."`}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : `disabled title="This branch is not linked to a remote branch yet."`}>Pull</button></div></div>
     <div id="chgBox"></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
-    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
+    <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : `disabled title="Needs a GitHub remote."`}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
   $("#gbr").onchange = () => gitAct({action: "checkout", branch: $("#gbr").value});
   $("#gcreate").onclick = () => gitAct({action: "checkout", branch: $("#gnew").value, create: true});
@@ -1785,7 +1893,7 @@ function openGithubPicker(opts = {}) {
     <input id="ghQ" placeholder="Search your repositories, or type owner/name" spellcheck="false" autocomplete="off" aria-label="Search repositories">
     <ul class="fblist" id="ghList" role="listbox"><li class="pnote">Loading...</li></ul>
     <div id="ghBr" class="ghbr" hidden><label>Branch<select id="ghSel"></select></label><label class="chk"><input type="checkbox" id="ghNewOn"> New branch from it</label><input id="ghNewName" placeholder="New branch name" hidden></div>
-    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled>${esc(opts.cta || "Start chat")}</button></div></div>`;
+    <div class="row"><span class="fbsel" id="ghMsg"></span><button class="btn" data-a="0">Cancel</button><button class="btn primary" id="ghGo" disabled title="Choose a repository first">${esc(opts.cta || "Start chat")}</button></div></div>`;
   document.body.appendChild(sc);
   let repo = null, qT = null;
   const done = () => { sc.remove(); document.removeEventListener("keydown", key, true); };
@@ -1864,8 +1972,11 @@ async function renderSection(sec) {
     $("#paMemPage").onclick = () => { closeSettings?.(); goPage("memory"); };
     $("#paSave").onclick = async () => {
       try {
-        await post("/api/assistant", {action: "instructions", text: $("#paIns").value});
-        await post("/api/assistant", {action: "settings", memory_on: $("#paMemOn").checked, instructions_on: $("#paInsOn").checked, learn_from_edits: $("#paEdits").checked});
+        // Send only what this person changed on the page, never the whole snapshot it loaded (M19-01).
+        if ($("#paIns").value !== a.instructions) await post("/api/assistant", {action: "instructions", text: $("#paIns").value, base: a.instructions});
+        const sw = {}; for (const [k, id] of [["memory_on", "paMemOn"], ["instructions_on", "paInsOn"], ["learn_from_edits", "paEdits"]]) if ($("#" + id).checked !== !!a.settings[k]) sw[k] = $("#" + id).checked;
+        if (Object.keys(sw).length) await post("/api/assistant", {action: "settings", ...sw});
+        a.instructions = $("#paIns").value; Object.assign(a.settings, sw);
         RES("paRes").className = "res ok"; RES("paRes").textContent = "Saved. New chats use it.";
       } catch (e) { RES("paRes").className = "res bad"; RES("paRes").textContent = e.message; }
     };
@@ -1966,7 +2077,7 @@ async function renderSection(sec) {
       $$("[data-cncat]", b).forEach(x => x.onclick = () => { S.cnCat = x.dataset.cncat; filter(); });
       filter();
       $("#cxAdd").onclick = async () => {
-        const url = $("#cxUrl").value.trim(); if (!url) { $("#cxUrl").focus(); return; }
+        const url = $("#cxUrl").value.trim(); if (!url) { say("Paste the address of the app's MCP server first.", "bad"); $("#cxUrl").setAttribute("aria-invalid", "true"); $("#cxUrl").focus(); return; }
         $("#cxAdd").disabled = true; say("Checking the server...");
         const r = await act({action: "custom", name: $("#cxName").value.trim(), url, token: $("#cxTok").value.trim(), client_id: $("#cxCid").value.trim(), client_secret: $("#cxSec").value.trim()}); $("#cxAdd").disabled = false;
         if (!r) return;
@@ -2077,7 +2188,7 @@ async function renderSection(sec) {
     const ex = S.hInfo.examples || [];
     b.innerHTML = `${close}<h3>Agents</h3><p class="lead">The agent is who does the work in a chat. What it runs on is your provider (Settings, Account): ${esc((S.settings.providers || {})[S.settings.provider || "meshpool"] || "")}. Meshpool Auto picks a good agent for each task. Each agent runs on the provider of the model you pick in the message box: your API key or your ChatGPT sign-in. Other agents can be added too.</p>
       <div class="dflt">${[["cowork", "Work"], ["code", "Code"]].map(([m, lb]) => `<label class="field"><span>Default for ${lb}</span><select data-dm="${m}">${S.harnesses.filter(h => h.available !== false && !h.error && h.ready !== false).map(h => `<option value="${esc(h.id)}" ${h.id === S.defaults[m] ? "selected" : ""}>${esc(h.name)}${h.mode !== m && h.type !== "auto" ? " · made for " + (h.mode === "code" ? "Code" : "Work") : ""}</option>`).join("")}</select><small>${m === "code" ? "Meshpool Code and Pi both solve most coding tasks; Pi is a little faster and cheaper, Meshpool Code has the full toolset (browser, connectors, skills)." : "Meshpool Work makes Word, Excel and PowerPoint files and does research. Hermes adds long-term memory for ongoing work."}</small></label>`).join("")}</div>
-      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? "disabled" : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
+      <ul class="rows2">${S.harnesses.filter(h => !h.hidden).map(h => `<li><span class="tg"><b>${esc(h.name)}</b> <span class="badge modified">${h.type === "auto" ? "Any task" : h.mode === "cowork" ? "Work" : "Code"}</span>${h.available === false ? ` <span class="badge deleted">${h.unsupported ? "Not available" : "Not installed"}</span>` : h.ready === false ? ` <span class="badge deleted">Needs setup</span>` : ""}<small>${esc(h.description || "")}</small>${h.runs_on && h.ready !== false ? `<small>Runs on ${esc(h.runs_on)}.</small>` : ""}${h.ready === false && h.setup ? `<small>${esc(h.setup)}</small>` : ""}${h.install && h.available === false ? `<small>${esc(h.install)}</small>` : ""}</span>${h.login ? (h.signed_in ? `<span class="badge added">Signed in</span><button class="btn" data-login="${esc(h.id)}">Sign in again</button>` : `<button class="btn primary" data-login="${esc(h.id)}" ${h.available === false ? `disabled title="Not available on this computer."` : ""}>Sign in</button>`) : h.builtin || h.id === "hermes" ? "" : `<button class="iconbtn" data-rm="${esc(h.id)}" aria-label="Remove ${esc(h.name)}">${ICON.x}</button>`}</li>`).join("")}</ul>
       ${ex.length ? `<h3 style="font-size:16px;margin:18px 0 8px">Add one</h3><div style="display:flex;gap:6px;flex-wrap:wrap">${ex.map(e => `<button class="btn" data-ex="${esc(e.id)}">${esc(e.name)}</button>`).join("")}</div>` : ""}
       <div class="dropzone" id="hDrop" style="margin-top:14px" tabindex="0" role="button">Or drop an agent's .json file here<input type="file" id="hFile" accept=".json" hidden></div><div class="res" id="hRes"></div>`;
     const act = async body => { try { await post("/api/harnesses", body); await loadHarnesses(); renderSection("harnesses"); renderBar(); } catch (e) { RES("hRes").className = "res bad"; RES("hRes").textContent = e.message; } };
@@ -2106,7 +2217,7 @@ async function renderSection(sec) {
     $("#mEdit").onclick = () => $("#mEd").hidden = !$("#mEd").hidden;
     $("#mImp").onclick = () => importPanel($("#mImpBox"), r => { if (r) setTimeout(() => renderSection("mcp"), 1500); });
     $("#mSave").onclick = async () => { try { await post("/api/mcp", {text: $("#mText").value}); renderSection("mcp"); } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
-    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res " + (rows.some(s => s.status === "error") ? "bad" : "ok"); RES("mRes").innerHTML = rows.map(s => `${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error)}`).join("<br>") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
+    $("#mTest").onclick = async () => { RES("mRes").className = "res"; RES("mRes").textContent = "Starting each server..."; try { const r = await post("/api/mcp/test", {workdir: curRoot()}); const rows = r.status.filter(s => s.status !== "disabled"); RES("mRes").className = "res"; /* each server has its own colour: one broken server does not paint the working ones red */ RES("mRes").innerHTML = rows.map(s => `<div class="srv ${s.status === "connected" ? "ok" : s.status === "starting" ? "wait" : "bad"}">${esc(s.name)}: ${s.status === "connected" ? `connected, ${s.tools.length} tools` : esc(s.error || s.status)}</div>`).join("") || "No servers are on."; } catch (e) { RES("mRes").className = "res bad"; RES("mRes").textContent = e.message; } };
     drawMcpLibrary(b);
   } else if (sec === "permissions") {
     const draw = async body => {
@@ -2116,7 +2227,20 @@ async function renderSection(sec) {
         <ul class="rows2">${r.rows.map(x => `<li><span class="dot ${x.ok === true ? "" : "wait"}" style="margin-top:7px;${x.ok === true ? "background:var(--add)" : ""}"></span><span class="tg"><b>${esc(x.name)}</b><small>${x.ok === true ? "Allowed. " : x.ok === false ? "Not allowed yet. " : ""}${esc(x.why)}</small></span>${x.ok === true || r.platform !== "darwin" ? "" : `<button class="btn" data-perm="${esc(x.id)}">${x.ok === false ? "Allow" : "Open settings"}</button>`}</li>`).join("")}</ul>
         <h3 style="font-size:16px;margin:18px 0 8px">Folders Meshpool works in</h3>
         <ul class="rows2">${S.projects.map(p => `<li><span class="tg"><b>${esc(p.name)}</b><small>${esc(p.managed ? "GitHub" : p.path)}</small></span><button class="iconbtn" data-rmp="${esc(p.path)}" aria-label="Remove">${ICON.x}</button></li>`).join("") || `<li class="pnote">No folders yet.</li>`}</ul>
-        <button class="btn" id="addP">${ICON.folder} Add a folder</button>`;
+        <button class="btn" id="addP">${ICON.folder} Add a folder</button>
+        <h3 style="font-size:16px;margin:18px 0 8px">Rules</h3>
+        <p class="lead">Rules decide without asking. Deny wins over allow. A rule is a tool name or <code>bash:</code> and a command pattern. Examples: <code>bash:npm test*</code>, <code>bash:git status*</code>, <code>edit</code>, <code>mcp__github__*</code>. An allow rule covers a command only when every part of it matches.</p>
+        <div id="rulesBox"></div>
+        <div class="row" style="margin-top:8px;gap:6px"><input id="ruleIn" placeholder="bash:npm test*" aria-label="New rule" style="flex:1"><button class="btn" id="ruleAllow">Allow</button><button class="btn danger" id="ruleDeny">Deny</button></div>
+        <div class="res" id="ruleRes"></div>`;
+      const drawRules = r => {
+        const li = (k, x) => `<li><span class="tg"><b>${esc(x)}</b><small>${k}</small></span><button class="iconbtn" data-rk="${k}" data-rr="${esc(x)}" aria-label="Remove rule">${ICON.x}</button></li>`;
+        $("#rulesBox", b).innerHTML = `<ul class="rows2">${r.allow.map(x => li("allow", x)).join("")}${r.deny.map(x => li("deny", x)).join("")}${r.allow.length + r.deny.length ? "" : `<li class="pnote">No saved rules.</li>`}</ul>`;
+        $$("[data-rk]", b).forEach(x => x.onclick = async () => drawRules(await post("/api/rules", {action: "remove", kind: x.dataset.rk, rule: x.dataset.rr})));
+      };
+      const addRule = async kind => { try { const r = await post("/api/rules", {action: "add", kind, rule: $("#ruleIn", b).value}); $("#ruleIn", b).value = ""; $("#ruleRes", b).textContent = ""; drawRules(r); } catch (e) { $("#ruleRes", b).className = "res bad"; $("#ruleRes", b).textContent = e.message; } };
+      drawRules(await api("/api/rules"));
+      $("#ruleAllow").onclick = () => addRule("allow"); $("#ruleDeny").onclick = () => addRule("deny");
       done();
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
@@ -2126,9 +2250,19 @@ async function renderSection(sec) {
     await draw(); return;
   } else if (sec === "usage") {
     const u = await api("/api/usage"); const t = u.total;
-    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">How much Meshpool's own agents used on this computer. What it cost is on your <a href="https://meshpool.ai" target="_blank" rel="noopener">Meshpool account</a>.</p>
-      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div></div>
-      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td></tr>`).join("")}</table>`;
+    // Cost: "$0.42" when every call was priced, "$0.42 + 3 unpriced calls" when some were not, "unpriced" when none were. Never $0.00 for unpriced.
+    const usd = x => x < 0.01 && x > 0 ? "$" + x.toFixed(4) : "$" + x.toFixed(2);
+    const money = r => !r.calls ? "-" : r.unpriced_calls >= r.calls ? "unpriced" : usd(r.cost || 0) + (r.unpriced_calls ? ` + ${r.unpriced_calls} unpriced call${r.unpriced_calls === 1 ? "" : "s"}` : "");
+    const SRC = [["Chat", /^chat$/], ["Engines", /^engine:/], ["Reviewers and grader", /^(review|grader)/], ["Helpers", /^helper:/], ["Sub-agents", /^subagent/], ["External agents", /^external:/], ["Background", /^background/]];
+    const bySrc = {}; for (const [k, r] of Object.entries(u.by_source || {})) { const name = (SRC.find(([, re]) => re.test(k)) || ["Other"])[0]; const b = bySrc[name] || (bySrc[name] = {in: 0, cached: 0, out: 0, calls: 0, cost: 0, unpriced_calls: 0}); for (const f in b) b[f] += r[f] || 0; }
+    const srcRows = [...SRC.map(x => x[0]), "Other"].filter(n => bySrc[n]);
+    const gw = (u.gateway || []).filter(g => g.inflight || g.waiting);
+    b.innerHTML = `${close}<h3>Usage</h3><p class="lead">Every model call Meshpool's own agents made on this computer, including the ones its tools, checks and sub-agents made. A cost shows only where the model's price is known.</p>
+      <div class="statgrid"><div><b>${fmt(t.in)}</b><span>Input tokens</span></div><div><b>${t.in ? Math.round(100 * t.cached / t.in) : 0}%</b><span>Served from cache</span></div><div><b>${fmt(t.out)}</b><span>Output tokens</span></div><div><b>${fmt(t.calls)}</b><span>Model calls</span></div><div><b>${esc(money(t))}</b><span>Cost</span></div></div>
+      ${t.unreported_calls ? `<p class="pnote">${fmt(t.unreported_calls)} call${t.unreported_calls === 1 ? "" : "s"} did not report their tokens, so those are estimated.</p>` : ""}
+      ${gw.map(g => `<p class="pnote">Model calls running: ${g.inflight} of ${g.limit} on ${esc(g.endpoint)}${g.waiting ? `, ${g.waiting} waiting` : ""}</p>`).join("")}
+      <h3 style="font-size:16px;margin:0 0 8px">By model</h3><table class="t"><tr><th>Model</th><th>Chats</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${Object.entries(u.by_model).map(([m, r]) => `<tr><td title="${esc(m)}">${esc(modelName(m))}</td><td class="n">${r.threads}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`).join("")}</table>
+      <h3 style="font-size:16px;margin:18px 0 8px">By source</h3><table class="t"><tr><th>Source</th><th>Calls</th><th>In</th><th>Cached</th><th>Out</th><th>Cost</th></tr>${srcRows.map(n => { const r = bySrc[n]; return `<tr><td>${esc(n)}</td><td class="n">${fmt(r.calls)}</td><td class="n">${fmt(r.in)}</td><td class="n">${fmt(r.cached)}</td><td class="n">${fmt(r.out)}</td><td class="n">${esc(money(r))}</td></tr>`; }).join("")}</table>`;
   } else if (sec === "terminal") {
     const c = S.settings.cli || {};
     b.innerHTML = `${close}<h3>Terminal command</h3><p class="lead">The same agent works in any terminal. Go to a project folder and type <code>meshpool</code>. Use <code>meshpool -p "..."</code> for one answer, and <code>meshpool acp</code> to plug Meshpool into Zed, JetBrains or other ACP apps.</p>
@@ -2136,7 +2270,7 @@ async function renderSection(sec) {
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
   } else if (sec === "advanced") {
-    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
+    const CH = {MH_AGENT_PERMISSIONS: [["ask", "Ask"], ["edits", "Accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).
     const keys = F.filter(x => !["MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "MH_PROVIDER", "GITHUB_TOKEN", "MH_ONBOARDED", "BRAVE_SEARCH_API_KEY", "TAVILY_API_KEY", "SERPER_API_KEY", "SEARXNG_URL", "INSTANTLY_API_KEY"].includes(x.key));
     b.innerHTML = `${close}<h3>Advanced</h3><p class="lead">Most people never need to change these.</p>
@@ -2273,7 +2407,9 @@ async function contextPanel(box) {
     try {
       const r = await api("/api/import-file?chats=1&context=1", {method: "POST", body: f, headers: {"Content-Type": "application/zip"}});
       await refresh();
-      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.` + (r.context_pending ? " Facts about you will appear in Memory to review." : ""), false, true);
+      res(`${r.kind === "claude" ? "Assistant" : "ChatGPT"} export: ${r.summary || ""}` + (r.context_pending ? " Reading it for facts about you…" : ""), false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} chat${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
+      if (r.context_pending) { const t0 = Date.now(); const poll = async () => { try { const st = await api("/api/import-status"); if (st.state === "failed") return res(`${r.summary} Could not read facts about you from it: ${st.error}`, true); if (st.state === "done") return res(`${r.summary} ${n(st.memory)} fact${st.memory === 1 ? "" : "s"} to review in Memory.`, false, true); } catch (e) { return; } if (Date.now() - t0 < 180000) setTimeout(poll, 3000); }; setTimeout(poll, 3000); }
     } catch (e) { res(e.message, true); }
   };
   const dz = $("#ctxDrop", box);
@@ -2285,7 +2421,8 @@ async function contextPanel(box) {
     x.disabled = true; res(`Importing ${local[x.dataset.local].name} sessions…`);
     try {
       const r = await post("/api/import-chats", {sources: [x.dataset.local]}); await refresh();
-      res(`Imported ${n(r.imported)} ${local[x.dataset.local].name} session${r.imported === 1 ? "" : "s"} as chats${r.skipped ? ` (${n(r.skipped)} already here)` : ""}.`, false, true);
+      res(`${local[x.dataset.local].name}: ${r.summary}`, false, true);
+      if (r.imported && r.ids?.[0]) toast(`${n(r.imported)} session${r.imported === 1 ? "" : "s"} imported.`, 9000, {label: "Open", fn: () => { try { closeSettings(); } catch (e) { /* onboarding */ } openThread(r.ids[0]); }});
       x.textContent = "Imported";
     } catch (e) { x.disabled = false; res(e.message, true); }
   });
@@ -2371,7 +2508,7 @@ async function importPanel(box, onDone) {
   const agents = f.agents.filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
   const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : (it.kind === "instructions" || it.default === false) ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
   const sum = a => ["skill", "mcp", "memory", "instructions"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}
@@ -2450,13 +2587,18 @@ function setupStep(o, prev) {
     ${onbSteps(3)}<h1>Bring your setup</h1><p>Optional. You can skip this.</p>
     <div id="oImport"></div>
     <div id="oContext"></div>
+    <label class="switchrow" id="oLocalRow" hidden><input type="checkbox" id="oLocal" checked> <span id="oLocalTxt"></span></label>
     <div class="onb-go"><button class="bigbtn" id="oFinish">Start using Meshpool</button></div>`;
   importPanel($("#oImport", card)).then(() => { const b = $("#impGo", card); if (b) b.hidden = true; });
   contextPanel($("#oContext", card));
+  let found = {};
+  api("/api/import-chats").then(l => { found = l; const n = Object.values(l).filter(v => v.default).reduce((a, v) => a + v.found - v.imported, 0); if (n) { $("#oLocalTxt", card).textContent = `Bring in my ${Object.values(l).filter(v => v.default).map(v => v.name).join(" and ")} chats (${n.toLocaleString()})`; $("#oLocalRow", card).hidden = false; } }).catch(() => {});
   store("onbStep", 3);
   $("#oFinish", card).onclick = async () => {
     store("onbDone", 1); post("/api/settings", {values: {MH_ONBOARDED: "1"}}).catch(() => {});        // ticked items are imported on the way out; no extra click
     const box = $("#oImport", card);
+    const srcs = Object.entries(found).filter(([, v]) => v.default).map(([k]) => k);
+    if (srcs.length && $("#oLocal", card)?.checked && !$("#oLocalRow", card).hidden) { try { const r = await post("/api/import-chats", {sources: srcs}); if (r.imported) toast(`${r.imported.toLocaleString()} chats imported.`, 9000, {label: "Open", fn: () => openThread(r.ids[0])}); await loadThreads(); } catch (e) { /* the page can import later */ } }
     if (box?._import && !box.dataset.done && $$("[data-key]", box).some(x => x.checked)) { $("#oFinish", card).disabled = true; $("#oFinish", card).textContent = "Importing…"; await box._import(); }
     o.remove(); renderBar(); renderHero();
   };
@@ -2559,7 +2701,7 @@ function updatePanel(u) {
   res.className = "res"; res.textContent = `Meshpool ${u.latest} is available. You have ${u.current}.`;
   const how = ["mac-app", "win-app"].includes(kind) ? "Downloads in the background; installs when you restart." : "Installs in place in under a minute, then restarts.";
   const busy = !!S.updBusy;
-  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? "disabled" : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
+  more.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-top:10px"><button class="btn primary" id="updGo" ${busy ? `disabled title="Wait until the current work finishes."` : ""}>${busy ? "Installing..." : ["mac-app", "win-app"].includes(kind) ? "Download update" : "Update now"}</button>${link(u.url)}<small style="color:var(--ink-3)">${esc(how)}</small></div><div class="res" id="updOut"></div>${["mac-app", "win-app"].includes(kind) ? opts : cerr}`;
   bindOpts();
   const btn = $("#updGo"); if (!btn) return;
   btn.onclick = async () => {
@@ -2588,9 +2730,10 @@ async function restartApp(bootBefore) {
 (async () => {
   shell();
   document.addEventListener("click", e => {          // the buttons that appear on hover under a message of yours
-    const ma = e.target.closest("[data-ma]"); if (!ma) return;
+    const ma = e.target.closest("[data-ma]"); if (!ma || !ma.closest(".msg-user")) return;   // the MCP library's Add button also has data-ma
     const text = $(".b", ma.closest(".msg-user"))?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
     if (ma.dataset.ma === "copy") navigator.clipboard.writeText(text).then(() => toast("Copied"), () => toast("Could not copy."));
+    else if (ma.dataset.ma === "rewind" || ma.dataset.ma === "fork") rewindFork(ma.dataset.ma, ma.closest(".msg-user"));
     else { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); toast("Edit it and send to ask again.", 3500); }
   });
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;

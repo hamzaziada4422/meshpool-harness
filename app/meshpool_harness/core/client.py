@@ -7,6 +7,8 @@ import sys
 import threading
 from pathlib import Path
 
+from meshpool_harness.core import usage
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -49,18 +51,22 @@ _CONTEXT_RX = None
 
 def classify_error(msg: str) -> str:
     """What a failed model call means, for the retry policy of both LiveClient.chat and the app agent (agent/core.py):
-    'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
+    'tls' (the endpoint's certificate is not trusted: retrying cannot help), 'auth' (key refused), 'model_missing' (the endpoint does not serve that model), 'quota' (a budget or quota is spent: never retried), 'rate_limit' (429), 'gateway_reject' (the gateway's 400 "rejected as invalid", which comes
     at random for valid requests: GATEWAY_ISSUES #10), 'context' (a 400 saying the request is longer than the model's
-    context), 'vision' (a 400 about images or content types), 'bad_request' (any other 400), 'transient' (5xx,
+    context), 'vision' (a 4xx about images or content types), 'bad_request' (any other 4xx not named above: 400, 405, 409,
+    415, 422 ...; the request itself is wrong, so it is not retried unchanged), 'transient' (5xx,
     connection lost, timeout) or 'fatal'."""
     global _CONTEXT_RX
     import re
     if _CONTEXT_RX is None:
         _CONTEXT_RX = (re.compile(r"context[ _-]?(?:length|window)|maximum context|too many tokens|prompt is too long|"
-                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum)|"
+                                  r"input is too long|reduce the length|exceeds? the (?:model'?s? )?(?:context|maximum (?:context|input|prompt|number of (?:input )?tokens|length))|"
                                   r"token limit", re.I),
                        re.compile(r"image|vision|multi-?modal|content[ _-]?type|content part", re.I))
     m = msg or ""
+    from meshpool_harness.core import refusals as RF
+    if RF.is_tls_error(m):
+        return "tls"
     if "HTTP 401" in m or "HTTP 403" in m:
         return "auth"
     if ("HTTP 400" in m or "HTTP 404" in m) and re.search(
@@ -73,15 +79,17 @@ def classify_error(msg: str) -> str:
         return "context"                            # any status: llama.cpp and Ollama servers use 400, 500 or 200
     if "HTTP 413" in m or re.search(r"entity too large|payload too large|request too large", m, re.I):
         return "context"                            # the request is too big: shrink it like a context overflow
-    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceeded your (current )?quota|"
+    # A thinking/reasoning/token "budget" is a request setting, not money: a 400 about it is a plain bad request.
+    money = re.sub(r"(?:thinking|reasoning|token|output)[ _.-]*budget\w*|budget[_ ]tokens", " ", m, flags=re.I)
+    if re.search(r"HTTP 402|budget (has been )?exceeded|budget_exceeded|exceededbudget|exceeded your (current )?quota|"
                  r"insufficient[_ ](credits?|balance|funds|quota)|quota[_ ]exhausted|out of credits|"
-                 r"credit balance is too low|max budget", m, re.I):
+                 r"credit balance is too low|max budget (?:for|of|has|reached)", money, re.I):
         return "quota"                              # spent: waiting or retrying cannot help (UHP: quota_exhausted)
     if "HTTP 429" in m:
         return "rate_limit"
     if "rejected as invalid" in m:
         return "gateway_reject"
-    if "HTTP 400" in m:
+    if re.search(r"HTTP 4\d\d", m):
         if _CONTEXT_RX[0].search(m):
             return "context"
         if _CONTEXT_RX[1].search(m):
@@ -142,6 +150,23 @@ def rate_limit_wait(msg: str, n429: int, backoff: bool = True, cap: float | None
 MAIN_PHASES = ("phase_2_build",)             # the user's own turn; every other phase is a side call
 CONNECT_BUDGET_S = 120.0                     # a main turn gives up on a dead connection or 5xx after this long
 SIDE_BUDGET_S = 15.0                         # compaction, classify, memory, summaries: two tries, then fail fast
+
+
+def _reply_chars(r) -> int:
+    """Characters in a reply's text, reasoning and tool-call arguments (the estimate when no usage came back)."""
+    try:
+        m = r["choices"][0]["message"]
+        n = len(m.get("content") or "") + len(m.get("reasoning_content") or "")
+        return n + sum(len((c.get("function") or {}).get("arguments") or "") for c in m.get("tool_calls") or [])
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return 0
+
+
+def _request_chars(messages) -> int:
+    try:
+        return len(json.dumps(messages))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _tell_retry(text: str) -> None:
@@ -225,6 +250,8 @@ class LiveClient:
             ex.pop(k, None)
         tried: set = set()
         tighten, shrinks = 1.0, 0
+        adapted: set = set()                     # refusals already answered by changing the request (once each)
+        max_tokens, temperature = self._apply_learned(model, ex, max_tokens, temperature)   # right the first time
         last = None
         side = (getattr(self, "phase", "phase_2_build") not in MAIN_PHASES) or role in ("router", "keepwarm")
         t_start, told = time.time(), False
@@ -242,9 +269,22 @@ class LiveClient:
                 ex2 = dict(ex, tools=sent_tools) if sent_tools is not None and "tools" in ex else ex
                 if mct:                                       # a model that refuses max_tokens takes the newer name
                     ex2 = dict(ex2, max_completion_tokens=out_tok)
-                r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
-                                     role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
-                                     extra=ex2, retries=0)
+                req_chars = _request_chars(send)
+                ubase = getattr(self.ledger, "base_url", "") or ""
+                res = usage.reserve(model, request_chars=req_chars, max_tokens=out_tok, base=ubase)   # may raise
+                from meshpool_harness.core.wire import SimpleLedger
+                sk = {"side": side} if isinstance(self.ledger, SimpleLedger) else {}   # side: no waiting out an outage
+                try:
+                    r = self.ledger.chat(model=model, messages=send, profile=profile, task_id=task_id,
+                                         role=role, job_id=job_id, max_tokens=out_tok, temperature=temperature,
+                                         extra=ex2, retries=0, **sk)
+                except BaseException:
+                    res.close()
+                    raise
+                usage.record(model, r.get("usage"), base=ubase, reservation=res, request_chars=req_chars,
+                             reply_chars=_reply_chars(r),
+                             source=os.environ.get("MH_USAGE_SOURCE")
+                             or ("engine" if self.phase in MAIN_PHASES else "helper:" + self.phase))
                 self._n429 = 0                                    # a success resets the 429 backoff
                 self._check_silent_cut(model, send, sent_tools, r, win)
                 _log_event(task_id, role, model, r)
@@ -252,6 +292,10 @@ class LiveClient:
             except RuntimeError as e:
                 last = e
                 msg = str(e)
+                if isinstance(getattr(e, "body", None), dict):     # the service's structured error (param, code)
+                    raw = json.dumps(e.body)[:2000]
+                    k = getattr(self, "api_key", "") or ""
+                    msg += " " + (raw.replace(k, "***") if len(k) >= 8 else raw)
                 kind = classify_error(msg)
                 cur = attempt
                 if kind != "rate_limit":
@@ -262,11 +306,25 @@ class LiveClient:
                         if isinstance(m, dict):
                             m.pop("reasoning_content", None)
                     continue
+                if kind == "tls":                                  # an untrusted certificate: say how to trust it
+                    from meshpool_harness.core import refusals as RF
+                    raise RuntimeError("The endpoint's TLS certificate is not trusted. "
+                                       + (RF.diagnose(msg) or {}).get("note", "") + " (" + msg[:160] + ")")
+                if kind == "context":                              # an output-size error is not a long conversation
+                    cfix = self._adapt_refusal(msg, dict(ex, model=model, messages=messages, max_tokens=max_tokens),
+                                               model, adapted)
+                    if cfix and cfix.get("action") == "max_out":
+                        max_tokens = min(max_tokens, int(cfix["max_output"]))
+                        if "max_completion_tokens" in ex:
+                            ex["max_completion_tokens"] = max_tokens
+                        if cfix.get("context_window"):
+                            win = CTX.learn(model, int(cfix["context_window"])) if int(cfix["context_window"]) < win else win
+                        continue
                 if kind == "context":                              # too long: learn the real window, shrink, retry now
                     shrinks += 1
                     said = CTX.parse_limit(msg)
                     if said and said < win:
-                        win = CTX.learn(model, said)
+                        win = CTX.learn(model, said, explicit=True)
                         CTX.tell_once(model, win, self.notify or _tell_retry)
                     tighten *= 0.7
                     if shrinks > 4:
@@ -280,6 +338,29 @@ class LiveClient:
                         for m in messages):
                     MC.learn_no_vision(base_url, model)            # text-only here: image reviews skip it from now on
                     raise
+                if kind == "bad_request":                          # the endpoint named what it cannot take: fix, not resend
+                    body = dict(ex, model=model, messages=messages, max_tokens=max_tokens)
+                    if temperature is not None:
+                        body["temperature"] = temperature
+                    fix = self._adapt_refusal(msg, body, model, adapted)
+                    if fix:
+                        if fix.get("action") == "max_out":
+                            max_tokens = min(max_tokens, int(fix["max_output"]))
+                            if "max_completion_tokens" in ex:
+                                ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "max_tokens_param":
+                            ex["max_completion_tokens"] = max_tokens
+                        elif fix.get("action") == "no_tools":
+                            ex.pop("tools", None)
+                            ex.pop("tool_choice", None)
+                        elif fix.get("action") == "drop_field":
+                            for f in fix["fields"]:
+                                MC.learn_refused(base_url, model, f)   # persisted per endpoint: the next client never sends it
+                                if f == "temperature":
+                                    temperature = None
+                                else:
+                                    ex.pop(f, None)
+                        continue
                 if "HTTP 400" in msg:                              # a refused field: drop it and resend at once
                     sent = set(ex) | {"max_tokens"} | ({"temperature"} if temperature is not None else set()) | (
                         {"prompt_cache_key", "user"} if os.environ.get("MH_CACHE_KEY") == "1" and task_id else set())
@@ -340,15 +421,64 @@ class LiveClient:
                 time.sleep(min(wait, 2.0) if side else wait)
         raise last
 
+    @staticmethod
+    def _apply_learned(model, ex: dict, max_tokens, temperature):
+        """What this endpoint+model already refused (modelcaps, persisted): applied before the first request."""
+        try:
+            from meshpool_harness import providers as PV
+            from meshpool_harness.core import modelcaps as MC
+            c = MC.resolve(PV.key_base(), model)
+            if c.source.get("max_output") == "learned" and max_tokens:
+                max_tokens = min(int(max_tokens), int(c.max_output))
+            for f in c.refused:
+                if f == "temperature":
+                    temperature = None
+                elif f not in ("model", "messages", "max_tokens"):
+                    ex.pop(f, None)
+            if c.max_tokens_param == "max_completion_tokens" or "max_tokens" in c.refused:
+                ex["max_completion_tokens"] = max_tokens
+            elif "max_completion_tokens" in ex and max_tokens:
+                ex["max_completion_tokens"] = min(int(ex["max_completion_tokens"]), int(max_tokens))
+            if c.no_tools:
+                ex.pop("tools", None)
+                ex.pop("tool_choice", None)
+        except Exception:  # noqa: BLE001 - what was learned is an optimisation
+            pass
+        return max_tokens, temperature
+
+    @staticmethod
+    def _adapt_refusal(msg: str, body: dict, model: str, adapted: set) -> dict | None:
+        """refusals.diagnose for the request-fixable actions, once per field/action in one call; what it shows is
+        remembered per endpoint+model (modelcaps.learn). None: nothing to change, fall through to the old handling."""
+        from meshpool_harness.core import modelcaps as MC
+        from meshpool_harness.core import refusals as RF
+        d = RF.diagnose(msg, body)
+        if not d or d["action"] not in ("drop_field", "max_tokens_param", "max_out", "no_tools"):
+            return None
+        if d["action"] == "drop_field":
+            d["fields"] = [f for f in d["fields"] if ("drop", f) not in adapted]
+            if not d["fields"]:
+                return None
+            adapted.update(("drop", f) for f in d["fields"])
+            d["learn"] = {"refused": list(d["fields"])}
+        else:
+            if (d["action"],) in adapted:
+                return None
+            adapted.add((d["action"],))
+        try:
+            from meshpool_harness import providers as PV
+            MC.learn(PV.key_base(), model, **d["learn"])
+        except Exception:  # noqa: BLE001
+            pass
+        return d
+
     def _check_silent_cut(self, model, sent, tools, resp, win) -> None:
-        """Ollama and some local servers cut a too-long prompt without an error. The reply's prompt_tokens then sits far
-        under what was sent: take that as the window, so the next request is trimmed to it."""
+        """Ollama and some local servers cut a too-long prompt without an error (core/context.observe_silent_cut judges
+        it: local endpoints only, total prompt tokens, two matching replies, a sane floor)."""
         try:
             from meshpool_harness.core import context as CTX
-            used = int(((resp or {}).get("usage") or {}).get("prompt_tokens") or 0)
-            sent_tok = CTX.estimate(sent) + CTX.estimate(tools or [])
-            if used and sent_tok > 1500 and sent_tok > used * 1.6 and used >= 512:
-                CTX.learn(model, int(used * 1.02) + CTX.max_output(win, None))
+            CTX.observe_silent_cut(model, CTX.estimate(sent) + CTX.estimate(tools or []), (resp or {}).get("usage") or {},
+                                   win, getattr(self.ledger, "base_url", None))
         except Exception:  # noqa: BLE001
             pass
 
@@ -390,19 +520,30 @@ def _log_event(task_id: str, role: str, model: str, resp: dict) -> None:
 class MockClient:
     """Replays a list of assistant messages (OpenAI format). Records every request for assertions."""
 
-    def __init__(self, script: list[dict] | str):
+    def __init__(self, script: list[dict] | str, usage: dict | list | None = None):
+        """usage: the usage dict of every reply, or a list with one per reply (the last one repeats)."""
         if isinstance(script, str):
             script = [json.loads(l) for l in Path(script).read_text().splitlines() if l.strip()]
         self.script = list(script)
         self.requests: list[dict] = []
+        self._usage = usage if usage is not None else {"prompt_tokens": 100, "completion_tokens": 20}
+        self._n = 0
 
     def chat(self, *, model, messages, tools=None, **kw):
+        req_chars = _request_chars(messages)
+        res = usage.reserve(model, request_chars=req_chars, max_tokens=kw.get("max_tokens") or 0)   # may raise
         self.requests.append({"model": model, "messages": json.loads(json.dumps(messages)), "tools": tools, **kw})
         if not self.script:
+            res.close()
             raise RuntimeError("MockClient script exhausted")
         msg = self.script.pop(0)
-        return {"choices": [{"message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
+        u = self._usage[min(self._n, len(self._usage) - 1)] if isinstance(self._usage, list) else self._usage
+        self._n += 1
+        out = {"choices": [{"message": msg, "finish_reason": "tool_calls" if msg.get("tool_calls") else "stop"}],
+               "usage": u}
+        usage.record(model, u, reservation=res, request_chars=req_chars, reply_chars=_reply_chars(out),
+                     source=os.environ.get("MH_USAGE_SOURCE") or "engine")
+        return out
 
     def spent(self) -> float:
         return 0.0

@@ -411,12 +411,22 @@ def sse_to_chat(lines, *, on_text=None, on_reasoning=None, data_idle=None, check
                             "usage": usage})
 
 
+class _Attempt(RuntimeError):
+    """One HTTP attempt that did not answer 200; carries what the retry loop needs."""
+    def __init__(self, status: int, raw: bytes, retry_after: str = ""):
+        super().__init__(f"meshpool HTTP {status}: {raw[:300].decode('utf-8', 'replace')}")
+        self.status, self.raw, self.retry_after = status, raw, retry_after
+
+
 class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
+    kind = ""                # class defaults: an instance made without __init__ still reads the address itself
+    api_version = ""
 
     def __init__(self, phase: str = "run"):
         from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
         self.base_url, self.api_key = PV.key_base(), PV.key()
+        self.kind, self.api_version = "", ""            # "": read from the base address (or the saved setting)
 
     def chat(self, *, max_tokens=8192, extra=None, **kw):
         """One call; a reasoning model that spends the whole output limit thinking and answers nothing (empty
@@ -429,6 +439,9 @@ class SimpleLedger:
         except (KeyError, IndexError, TypeError, AttributeError):
             empty = False
         if empty and 0 < max_tokens < 24000:
+            from meshpool_harness.core import usage   # the caller records the reply it gets; this one is billed too
+            usage.record(kw.get("model", ""), out.get("usage"), base=getattr(self, "base_url", ""),
+                         extra={"retry": "empty_reply"})
             ex = dict(extra or {})
             for k in ("max_completion_tokens",):
                 if ex.get(k):
@@ -437,7 +450,7 @@ class SimpleLedger:
         return out
 
     def _chat(self, *, model, messages, profile="deepseek", task_id="", role="worker", job_id="", max_tokens=8192,
-              temperature=None, extra=None, timeout=600, retries=2, key_only=False, **_):
+               temperature=None, extra=None, timeout=600, retries=2, key_only=False, side=False, **_):
         body = {"model": model, "messages": messages, "max_tokens": max_tokens}
         if temperature is not None:
             body["temperature"] = temperature
@@ -473,31 +486,44 @@ class SimpleLedger:
                 body["stream_options"] = {"include_usage": True}
             idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
+        from meshpool_harness.core import endpoint as EP
+        extra_h = {"X-Harness-Task-Id": task_id,
+                   **({"session_id": task_id.split("-esc")[0]}
+                      if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})}
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
+            url, hdrs = f"{base_url}/messages", AW.headers(api_key)
             body = AW.to_request(body)
             if stream:
                 body["stream"] = True
-        elif wire == "responses":
-            body = to_responses(body)
-        path = "messages" if anthropic else "responses" if wire == "responses" else "chat/completions"
-        url, auth = PV.chat_target(base_url, api_key, body.get("model", ""), path)   # Azure path, api-version, key header
-        if not anthropic and wire != "responses":
-            body = PV.adapt_body(base_url, body)
+        else:                                              # every other provider: core/endpoint.py decides URL and key header
+            if wire == "responses":
+                body = to_responses(body)
+            url, body, hdrs = EP.chat_request(base_url, api_key, body, kind=self.kind, api_version=self.api_version,
+                                              path="responses" if wire == "responses" else "chat")
+            hdrs = PV.custom_auth(hdrs, base_url, api_key)  # a header and scheme the user set for this endpoint
         req = urllib.request.Request(url, data=ST.encode_body(body), method="POST",
-                                     headers={**auth, "Content-Type": "application/json",
-                                              **({"Accept": "text/event-stream"} if stream else {}),
-                                              "X-Harness-Task-Id": task_id,
-                                              **({"session_id": task_id.split("-esc")[0]}
-                                                 if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
+                                     headers={**hdrs, "Content-Type": "application/json",
+                                              **({"Accept": "text/event-stream"} if stream else {}), **extra_h})
         status, raw, retry_after, sse_reply = 0, b"", "", False
         gw_tries = 0
         attempt = 0
-        while True:
+        from meshpool_harness.core import gateway as GW
+        model = body.get("model", "")
+
+        def probe():
+            from meshpool_harness.agent.core import _probe_once
+            return _probe_once(base_url, api_key, model, timeout=timeout)
+
+        def send_once():
+            """One HTTP attempt. A reply other than 200 raises _Attempt, so the gate counts it as a failed call and
+            the retry loop below reads the status from it."""
+            nonlocal sse_reply
+            st, rw, ra = 0, b"", ""
             try:
-                with _mhttp.open(req, timeout) as r:
-                    status = r.status
-                    sse_reply = stream and status == 200 and (
+                with EP.urlopen(req, timeout) as r:
+                    st = r.status
+                    sse_reply = stream and st == 200 and (
                         not anthropic or "event-stream" in (r.headers.get("Content-Type") or "").lower())
                     if sse_reply:
                         lines = _first_then_idle(r, idle)
@@ -505,17 +531,27 @@ class SimpleLedger:
                             asm = AW.StreamAssembler()
                             for ev_name, ev_data in ST.iter_sse(lines, data_idle=timeout):
                                 asm.feed(ev_name, ev_data)
-                            raw = json.dumps(asm.result()).encode()
+                            rw = json.dumps(asm.result()).encode()
                         else:
-                            raw = json.dumps(sse_to_chat(lines, data_idle=timeout)).encode()
+                            rw = json.dumps(sse_to_chat(lines, data_idle=timeout)).encode()
                     else:
-                        raw = ST.read_body(r, timeout)
+                        rw = ST.read_body(r, timeout)
             except urllib.error.HTTPError as e:
-                raw, status = e.read(), e.code
-                ra = ST.retry_after_seconds(getattr(e, "headers", None))
-                retry_after = f" [retry-after: {ra:g}]" if ra is not None else ""
+                rw, st = e.read(), e.code
+                ra_s = ST.retry_after_seconds(getattr(e, "headers", None))
+                ra = f" [retry-after: {ra_s:g}]" if ra_s is not None else ""
             except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError) as e:
-                raw, status = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
+                rw, st = f"timed out or connection lost: {_mhttp.explain(e, url)}".encode(), 0   # HTTPException: IncompleteRead
+            if st != 200:
+                raise _Attempt(st, rw, ra)
+            return st, rw, ra
+
+        while True:
+            try:
+                status, raw, retry_after = GW.call(base_url, api_key, model, send_once, probe=probe,
+                                                   recover_s=0 if side else None)   # a side call never waits out an outage
+            except _Attempt as a:
+                status, raw, retry_after = a.status, a.raw, a.retry_after
             if status in (200, 429):
                 break
             if gw_tries < 3 and is_gateway_blip(status, raw):
@@ -527,8 +563,15 @@ class SimpleLedger:
             attempt += 1
             time.sleep(1.5 * attempt)
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
+        if status == 0 and isinstance(payload, dict) and payload.get("raw"):             # no reply at all: the cause (a TLS certificate, a timeout) is the text
+            raise RuntimeError(f"meshpool HTTP 0: {payload['raw']}")
         if status != 200:
-            raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
+            err = RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
+                status, payload, kind=self.kind or EP.resolve(base_url)[0], host=PV.host(base_url),
+                model=body.get("model", ""), key=api_key, api_version=self.api_version or EP.resolve(base_url)[1])
+                + retry_after)
+            err.body = payload           # the service's own error (param, code): callers learn refused fields from it
+            raise err
         from meshpool_harness import provider_setup as _PS
         shape = ("openai" if anthropic and sse_reply                  # a streamed Anthropic reply is assembled as chat
                  else "anthropic" if anthropic else "responses" if wire == "responses" else "openai")

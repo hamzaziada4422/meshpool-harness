@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import shutil
 import zipfile
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness import fsio
 
 NAME_RE = re.compile(r"[^a-z0-9-]+")
 
@@ -29,14 +31,32 @@ def _state_path() -> Path:
 
 def _disabled() -> set:
     try:
-        return set(json.loads(_state_path().read_text(encoding="utf-8")))
-    except (OSError, ValueError):
+        d = fsio.read_json(_state_path(), default=[])
+        return {x for x in d if isinstance(x, str)} if isinstance(d, list) else set()
+    except fsio.CorruptFile:
         return set()
 
 
-def _save_disabled(s: set):
+def _save_disabled(s: set) -> None:
+    """Replace the whole disabled list (for callers that worked it out themselves), atomically under the lock."""
+    _edit_disabled(lambda cur: (cur.clear(), cur.update(s)))
+
+
+def _edit_disabled(fn) -> None:
+    """Change the disabled list under the cross-process lock (the app, `meshpool` and the agent's tools all toggle
+    skills); a damaged list is set aside and started again, since it only holds on/off switches (M17-01)."""
     folder().mkdir(parents=True, exist_ok=True)
-    _state_path().write_text(json.dumps(sorted(s)), encoding="utf-8")
+    p = _state_path()
+
+    def change(cur):
+        s = {x for x in cur if isinstance(x, str)} if isinstance(cur, list) else set()
+        fn(s)
+        return sorted(s)
+    try:
+        fsio.update_json(p, change, default=[])
+    except fsio.CorruptFile:
+        fsio.quarantine(p)
+        fsio.update_json(p, change, default=[])
 
 
 def slug(name: str) -> str:
@@ -88,7 +108,35 @@ REFRESHED_DEFAULTS = {
     "notebooks": {"a15b7391182d52e2b2bf66363a2962d84f02da8bbd7c6f47df556e16c9299d29"},
     "query-database": {"49bfb409b2c1c6f05042e2a8af283781b9b9ddf942ef8cfa0669783f10054f94"},
     "make-chart": {"34720b574aa2bcaf369328f618f7988701719ece76f1b12962ebb07394a2ca71"},
+    # 0.0.13: skills that asked for more than the user did (plan files, trackers, a second document, deep research)
+    "email-newsletter": {"3e006a413bbce93ac5d7fb6327fd959405c1511355dc8d99cc7cc3312ef45bc0"},
+    "blog-post": {"64329c4a7a5640120049b494a874b18fedee62b836edc8357a9e54d34b02507c"},
+    "daily-plan": {"39a7889361211ccdc75b3ae0ee7b02311f1dc45038e2d93d0d0b21f087dce450"},
+    "briefing-interview": {"244a32c6ff198ba8c57adf769e1edf0bb1e21def30f3633c3796e390482390c7"},
+    "project-plan": {"792a70ee3c312b61ec7344934e71af4e25701bc0b9b78c4ad42fdda5d46ed4fc"},
+    "competitor-analysis": {"b507ab50e61130618751871ef028a21e6f5285d1ec1fad234ba7ebdfba5eebb4"},
+    "research-brief": {"cea677509224462597685db1614e8df91209ba092f5867d7210acfbae3edb5dd"},
+    "meeting-prep": {"240458f6c4f23466eebd1626f2e23180bdb3659d5fcf171cec284e36794724da"},
+    "seo-content-brief": {"9a87b2e21973afde065dad87733e2885e92e495f130c175a41fb3ee79f266f36"},
+    "feedback-synthesis": {"15c2c58b9d1487f8da1ccd0853e1d6288012098ad8c81cb4dccc8b571b61aa53"},
+    "survey-analysis": {"406d25eb7f07630f9093481c9eae463b48c76e53788e31fd639f090c020b78d9"},
+    "interview-plan": {"5842c313a72830ea3c96f3d8624b10fb8b1671eef090e152c9c624b76475815e"},
 }
+
+
+def _install_dir(src: Path, target: Path) -> None:
+    """Copy a skill folder next to its place and swap it in, so a reader never sees half a skill (M17-03)."""
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.new")
+    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.copytree(src, tmp, copy_function=shutil.copyfile)
+    old = target.with_name(f".{target.name}.{os.getpid()}.old")
+    try:
+        if target.exists():
+            os.replace(target, old)
+        os.replace(tmp, target)
+    finally:
+        shutil.rmtree(old, ignore_errors=True)
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _refresh_unedited_defaults(src: Path, dst: Path) -> None:
@@ -97,35 +145,43 @@ def _refresh_unedited_defaults(src: Path, dst: Path) -> None:
         have, shipped = dst / name / "SKILL.md", src / name
         try:
             if have.is_file() and shipped.is_dir() and hashlib.sha256(have.read_bytes()).hexdigest() in old:
-                shutil.rmtree(dst / name)
-                shutil.copytree(shipped, dst / name, copy_function=shutil.copyfile)
+                _install_dir(shipped, dst / name)
         except OSError:
             pass                                      # a locked file: the next start tries again
 
 
+_DEFAULTS_SEEN: set = set()          # data folders whose defaults this process has already settled
+
+
 def ensure_defaults():
+    """Offer each shipped skill once. Done under a cross-process lock (two windows or a scheduled run at start-up no
+    longer copy over each other), and remembered, so reading the list never re-checks the folder (M17-03)."""
     src = C.APP / "defaults" / "skills"
     dst = folder()
-    dst.mkdir(parents=True, exist_ok=True)
-    marker = dst / ".defaults-installed"
+    key = str(dst)
+    if key in _DEFAULTS_SEEN and (dst / ".defaults-installed").exists():
+        return
     if not src.is_dir():
         return
-    done: set = set()                               # names already offered once; a removed default stays removed
-    if marker.exists():
-        try:
-            v = json.loads(marker.read_text(encoding="utf-8"))
-        except ValueError:
-            v = None
-        # 2.2 wrote "1" after installing its three defaults; anything newer is offered once
-        done = set(v) if isinstance(v, list) else {"code-review", "pull-request", "research-brief"}
-    _refresh_unedited_defaults(src, dst)
-    new = [d for d in src.iterdir() if d.is_dir() and d.name not in done]
-    if not new:
-        return
-    for d in new:
-        if not (dst / d.name).exists():
-            shutil.copytree(d, dst / d.name, copy_function=shutil.copyfile)
-    marker.write_text(json.dumps(sorted(done | {d.name for d in new})), encoding="utf-8")
+    dst.mkdir(parents=True, exist_ok=True)
+    with fsio.file_lock(dst / ".defaults"):
+        marker = dst / ".defaults-installed"
+        done: set = set()                           # names already offered once; a removed default stays removed
+        if marker.exists():
+            try:
+                v = json.loads(marker.read_text(encoding="utf-8"))
+            except ValueError:
+                v = None
+            # 2.2 wrote "1" after installing its three defaults; anything newer is offered once
+            done = set(v) if isinstance(v, list) else {"code-review", "pull-request", "research-brief"}
+        _refresh_unedited_defaults(src, dst)
+        new = [d for d in src.iterdir() if d.is_dir() and d.name not in done]
+        for d in new:
+            if not (dst / d.name).exists():
+                _install_dir(d, dst / d.name)
+        if new or not marker.exists():
+            fsio.atomic_write_json(marker, sorted(done | {d.name for d in new}), indent=None)
+    _DEFAULTS_SEEN.add(key)
 
 
 def expand_mentions(text: str) -> str:
@@ -151,7 +207,7 @@ def load_all(include_disabled: bool = True) -> list[dict]:
     out = []
     for d in sorted(folder().iterdir()) if folder().exists() else []:
         f = d / "SKILL.md"
-        if not d.is_dir() or not f.is_file():
+        if not d.is_dir() or d.name.startswith(".") or not f.is_file():
             continue
         try:
             meta, body = parse(f.read_text(encoding="utf-8", errors="replace"))
@@ -215,8 +271,9 @@ def _terms(text: str) -> list[str]:
     return out
 
 
-def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
-    """Skills ranked by word overlap with the query; a hit in the name counts three times one in the description."""
+def search(query: str, k: int = 8, rows: list | None = None, min_score: int = 1, min_terms: int = 1) -> list[dict]:
+    """Skills ranked by word overlap with the query; a hit in the name counts three times one in the description.
+    min_score and min_terms drop weak matches (one shared word such as "create" or "run")."""
     q = set(_terms(query))
     if not q:
         return []
@@ -225,7 +282,7 @@ def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
     for s in rows:
         name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(s["description"]))
         score = 3 * len(q & name) + len(q & desc)
-        if score:
+        if score and score >= min_score and len(q & (name | desc)) >= min_terms:
             scored.append((score, s))
     scored.sort(key=lambda x: (-x[0], x[1]["name"]))
     return [s for _, s in scored[:k]]
@@ -366,15 +423,14 @@ def _from_zip(data: bytes) -> list[str]:
 
 
 def toggle(sid: str, on: bool):
-    off = _disabled()
-    (off.discard if on else off.add)(sid)
-    _save_disabled(off)
+    _edit_disabled(lambda off: (off.discard if on else off.add)(sid))
 
 
 def remove(sid: str):
     d = folder() / slug(sid)
     if d.is_dir() and d.parent == folder():
         shutil.rmtree(d)
+    _edit_disabled(lambda off: off.discard(d.name))     # a removed skill leaves nothing in the disabled list (M17-02)
 
 
 def sync_to(dst: Path, only: set | None = None):
@@ -392,3 +448,22 @@ def sync_to(dst: Path, only: set | None = None):
         shutil.rmtree(t, ignore_errors=True)
         shutil.copytree(src, t, copy_function=shutil.copyfile)
         (t / ".from-meshpool").write_text("1", encoding="utf-8")
+
+
+def api_action(body: dict) -> dict:
+    """The /api/skills POST body (app and `meshpool skills`): create, update, toggle, remove, upload, open."""
+    act = body.get("action")
+    if act == "create":
+        create(body.get("name", ""), body.get("description", ""), body.get("body", ""))
+    elif act == "update":
+        update(body.get("id", ""), body.get("text", ""))
+    elif act == "toggle":
+        toggle(body.get("id", ""), bool(body.get("on")))
+    elif act == "remove":
+        remove(body.get("id", ""))
+    elif act == "upload":
+        import base64
+        add_files([(f["name"], base64.b64decode(f["data"])) for f in body.get("files") or []])
+    elif act == "open":                       # the page shows the folder in its own file tree
+        folder().mkdir(parents=True, exist_ok=True)
+    return {"skills": load_all(), "folder": str(folder())}

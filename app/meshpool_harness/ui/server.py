@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from meshpool_harness import config as C
 from meshpool_harness import harnesses as HR
 from meshpool_harness.ui import agent_api as A
+from meshpool_harness.settings_api import _key_follows_host  # noqa: F401  (test_connection and the tests use it here)
 from meshpool_harness.ui import workbench as W
 
 APP = C.APP
@@ -30,7 +31,8 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/",
+                  "/api/worktree")
 
 TOKEN = secrets.token_urlsafe(24)
 UI_VER = secrets.token_hex(4)
@@ -48,18 +50,8 @@ LOCK = threading.Lock()
 
 def get_settings() -> dict:
     from meshpool_harness import providers as PV
-    vals = C.read()
-    fields = []
-    for key, label, default, help_ in C.FIELDS:
-        v = vals.get(key, "")
-        item = {"key": key, "label": label, "default": default, "help": help_}
-        if key in C.SECRET:
-            item["set"] = bool(v)
-            item["hint"] = ("ends in " + v[-4:]) if len(v) >= 8 else ("set" if v else "")
-            item["value"] = ""
-        else:
-            item["value"] = v
-        fields.append(item)
+    from meshpool_harness import settings_api as SA
+    fields = SA.values()
     from meshpool_harness.ui import desktop as Dk
     return {"path": str(C.config_path()), "fields": fields, "system": C.system_check(),
             "desktop": DESKTOP, "home": str(C.home()), "cli": Dk.cli_status(),
@@ -70,91 +62,20 @@ def get_settings() -> dict:
             "signed_in": {p: HR.signed_in(w) for p, w in HR.LOGINS.items()}}
 
 
-def _key_follows_host(vals: dict, typed_key: str = ""):
-    """A saved key belongs to its endpoint: moving to another host needs that host's key, or the saved one is sent
-    to the new host."""
-    from meshpool_harness import providers as PV
-    new = vals.get("MESHPOOL_BASE_URL")
-    if new and PV.host(new) and PV.host(new) != PV.host(PV.key_base()) and PV.key() \
-            and not (vals.get("MESHPOOL_API_KEY") or typed_key):
-        raise ValueError(f"Enter the API key for {PV.host(new)} too: your saved key is for {PV.host(PV.key_base())} "
-                         "and is not sent anywhere else.")
-
-
 def save_settings(body: dict) -> dict:
-    allowed = {f[0] for f in C.FIELDS}
-    vals = {}
-    for k, v in (body.get("values") or {}).items():
-        if k not in allowed:
-            continue
-        v = re.sub(r"[\r\n]", "", str(v)).strip()
-        if k in C.SECRET:                # accept a key the way people paste it: quoted, or with "Bearer " in front
-            v = C.clean_key(v)           # quotes, "Bearer ", line breaks, a pasted zero-width space
-        if k in C.SECRET and v == "":
-            continue                     # blank key field = keep the saved key
-        vals[k] = v
-    if vals.get("MESHPOOL_BASE_URL"):
-        u = urlparse(vals["MESHPOOL_BASE_URL"])
-        if u.scheme not in ("http", "https") or not u.netloc:
-            raise ValueError("The server address must start with http:// or https:// and name a host.")
-    from meshpool_harness import providers as PV
-    new = vals.get("MESHPOOL_BASE_URL")
-    from meshpool_harness import provider_setup as PS
-    if new and not vals.get("MESHPOOL_API_KEY") and not PS._same_endpoint(new, PV.key_base()) and PV.key() \
-            and PV.keyless_ok(new):
-        vals["MESHPOOL_API_KEY"] = ""    # a local server needs no key: the old endpoint's key goes, not to this server
-    _key_follows_host(vals)
-    from meshpool_harness import browser_use as BU
-    BU.validate(vals)                    # a browser setting that cannot work is refused here, with the reason
-    if vals.get("GITHUB_TOKEN"):
-        try:
-            from meshpool_harness.ui import agent_api as _A
-            _A.mcp_save({"name": "github", "enabled": True})
-        except Exception:
-            pass
-    if vals:
-        C.write(vals)
-        for k, v in vals.items():
-            if v:
-                os.environ[k] = v
-            else:
-                os.environ.pop(k, None)
+    from meshpool_harness import settings_api as SA
+    SA.save_settings(body)
     return get_settings()
 
 
 def assistant_view() -> dict:
     from meshpool_harness import assistant as AS
-    rows = [dict(t, describe=AS.describe(t)) for t in AS.tasks()]
-    return {"instructions": AS.instructions(), "memory": AS.memory(), "settings": AS.settings(), "tasks": rows}
+    return AS.api_view()
 
 
 def assistant_action(b: dict) -> dict:
     from meshpool_harness import assistant as AS
-    act = b.get("action")
-    if act == "instructions":
-        AS.set_instructions(b.get("text", ""))
-    elif act == "memory":
-        AS.set_memory(b.get("text", ""))
-    elif act == "settings":
-        AS.save_settings(**{k: b[k] for k in ("memory_on", "instructions_on", "learn_from_edits", "insights_on", "quiet_hours") if k in b})
-    elif act == "task_add":
-        AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
-                    b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
-                    b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")))
-    elif act == "task_update":
-        AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
-                                                                   "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change")})
-    elif act == "task_delete":
-        AS.delete_task(b.get("id", ""))
-    elif act == "task_run":
-        t = next((x for x in AS.tasks() if x["id"] == b.get("id")), None)
-        if not t:
-            raise ValueError("That task is gone.")
-        return dict(assistant_view(), thread=A.run_scheduled(t))
-    else:
-        raise ValueError("Unknown action.")
-    return assistant_view()
+    return AS.api_action(b)
 
 
 def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
@@ -171,6 +92,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     except ValueError as e:
         return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
     from meshpool_harness import provider_setup as PS
+    from meshpool_harness.core import endpoint as EP
     base_in = v.get("MESHPOOL_BASE_URL") or PV.key_base()
     try:
         base = PS.normalise_base(base_in)
@@ -183,17 +105,22 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
                 "endpoint": base}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1] or PV.azure_deployment(base)
-    hdr = v.get("MH_AUTH_HEADER", PV._cfg("MH_AUTH_HEADER") if same else "")
-    sch = v.get("MH_AUTH_SCHEME", PV._cfg("MH_AUTH_SCHEME") if same else "").lower()
-    ver = v.get("MESHPOOL_AZURE_API_VERSION", PV._cfg("MESHPOOL_AZURE_API_VERSION") if same else "")
-    if "api-version=" in base_in and not ver:
-        ver = PV.azure_version(base_in)
+    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1]
+    try:
+        pp = PS.parse(base_in, v.get("MH_API_KIND", ""), v.get("MH_API_VERSION", ""))
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e), "endpoint": base_in}
+    model = model or pp.deployment
+    kind = pp.kind
+    base = pp.base                       # the chosen kind decides what a bare Azure address means (route and base)
+    hdr = v.get("MH_AUTH_HEADER", PV._ecfg("MH_AUTH_HEADER") if same else "")
+    sch = v.get("MH_AUTH_SCHEME", PV._ecfg("MH_AUTH_SCHEME") if same else "").lower()
+    ver = v.get("MH_API_VERSION") or pp.api_version
     wire = (v.get("MH_API_WIRE") or (PV.key_wire() if same else "")).lower()
     if wire not in ("openai", "anthropic"):
-        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else "openai"
+        wire = "anthropic" if PV.host(base).endswith("anthropic.com") or EP.wire_of(kind) == "anthropic" else "openai"
     t0 = time.time()
-    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
+    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver, kind)
     secs = round(time.time() - t0, 1)
     if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
         why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
@@ -208,7 +135,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
             txt = ""
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
-            "endpoint": base, "wire": wire, "api_version": ver}
+            "endpoint": base, "wire": wire, "api_version": ver, "kind": kind}
 
 
 def onboard(body: dict) -> dict:
@@ -242,8 +169,10 @@ def onboard(body: dict) -> dict:
     if which == "custom":
         vals["MH_MODEL"] = model
     from meshpool_harness import providers as PV
+    kind = r.get("kind") or "generic"
     vals.update(MH_API_WIRE=r.get("wire") or "openai", MH_AUTH_HEADER="", MH_AUTH_SCHEME="",
-                MESHPOOL_AZURE_API_VERSION=r.get("api_version") or "")      # nothing of the previous endpoint stays
+                MH_API_KIND="" if kind == "generic" else kind,        # nothing of the previous endpoint stays
+                MH_API_VERSION=(r.get("api_version") or "") if kind in ("azure-classic", "azure-foundry") else "")
     if (C.read().get("MH_SUBAGENT_MODEL") or "").strip() and not PS._same_endpoint(used, PV.key_base()):
         vals["MH_SUBAGENT_MODEL"] = ""                   # named a model of the old endpoint
     C.write(vals)
@@ -404,7 +333,7 @@ class Handler(BaseHTTPRequestHandler):
                 .replace("__MESHPOOL_DESKTOP__", "true" if DESKTOP else "false").replace("__MESHPOOL_VER__", UI_VER)
             return self._send(200, html.encode("utf-8"), "text/html; charset=utf-8",
                               {"Content-Security-Policy": "frame-ancestors 'none'"})
-        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js)", u.path)
+        m = re.fullmatch(r"/ui/(app\.js|app\.css|shell\.css|shell\.js|composer\.js|pages\.js|code\.js|company\.js|projects\.js|settings2\.js|preview\.js|editor\.js|memory\.js|memory\.css|insights\.js|insights\.css|yourwork\.js|yourwork\.css|firstrun\.js|chat010\.js|home010\.js|worktree\.js)", u.path)
         if m:
             ctype = "text/javascript; charset=utf-8" if m.group(1).endswith(".js") else "text/css; charset=utf-8"
             return self._send(200, (HERE / m.group(1)).read_bytes(), ctype)
@@ -452,8 +381,8 @@ class Handler(BaseHTTPRequestHandler):
             if not p.is_file() or p.stat().st_size > 60_000_000:
                 return self._send(404, {"error": "not found"})
             ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-            if not (ctype.startswith("image/") or ctype == "application/pdf"):
-                return self._send(415, {"error": "only images and PDFs are served"})
+            if not (ctype.startswith(("image/", "audio/", "video/")) or ctype == "application/pdf"):
+                return self._send(415, {"error": "only images, audio, video and PDFs are served"})
             return self._send(200, p.read_bytes(), ctype, {"Content-Disposition": _disposition("inline", p.name),
                                                           "X-Content-Type-Options": "nosniff",
                                                           "Content-Security-Policy": "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"})
@@ -515,7 +444,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, get_settings())
             if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
                 from meshpool_harness import provider_setup as PS
-                return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
+                return self._send(200, dict(PS.current(), catalog=PS.catalog()) if u.path == "/api/provider"
+                                  else {"logins": PS.logins()})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                return self._send(200, {**PR.list_rules(PR.user_path()), "path": str(PR.user_path())})
             if u.path == "/api/assistant":
                 return self._send(200, assistant_view())
             if u.path == "/api/import-agents":        # other agents on this computer, with a preview of every item
@@ -530,6 +463,9 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/import-chats":         # Claude Code and Codex sessions found on this computer
                 from meshpool_harness import chat_import as CI
                 return self._send(200, CI.scan_local())
+            if u.path == "/api/import-status":        # the background read of an export's context: working, done or failed
+                from meshpool_harness import chat_import as CI
+                return self._send(200, CI.context_status())
             if u.path == "/api/about":
                 import meshpool_harness as MH
 
@@ -543,7 +479,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"version": MH.__version__, "author": MH.__author__,
                                         "third_party": rd("THIRD_PARTY_NOTICES.md")})
             if u.path == "/api/agent":
-                return self._send(200, {"sessions": A.listing()})
+                q = parse_qs(u.query)
+                def _n(k):
+                    try:
+                        return max(0, int(q.get(k, ["0"])[0]))
+                    except ValueError:
+                        return 0
+                return self._send(200, A.listing_page(_n("limit"), _n("offset")))
             if u.path == "/api/styles":
                 from meshpool_harness import styles as ST
                 return self._send(200, ST.listing())
@@ -571,8 +513,9 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path == "/api/capabilities":
                     return self._send(200, {"features": SV.capabilities()})
                 if u.path == "/api/spend":
-                    return self._send(200, {"key": SV.key_spend(q.get("fresh") == "1"), "days": SV.usage_by_day(),
-                                            "billing_url": SV.BILLING_URL})
+                    from meshpool_harness import usage_view as UV
+                    r = UV.summary(fresh=q.get("fresh") == "1", parts=("days", "key"))
+                    return self._send(200, {"key": r["key"], "days": r["days"], "billing_url": SV.BILLING_URL})
                 return self._send(200, SV.data_info())
             m = re.fullmatch(r"/api/pj(?:/(p_[0-9a-f]{10}))?", u.path)
             if m:                                                  # projects: name, instructions, knowledge, memory
@@ -635,7 +578,12 @@ class Handler(BaseHTTPRequestHandler):
                     A.write_meta(m.group(1), pr={k: p_.get(k) for k in ("number", "title", "draft", "additions", "deletions", "url")} | {"repo": out.get("repo", "")})
                 return self._send(200, out)
             if u.path == "/api/usage":
-                return self._send(200, W.usage())
+                try:
+                    since = float(q.get("since") or 0)
+                except ValueError:
+                    since = 0.0
+                from meshpool_harness import usage_view as UV
+                return self._send(200, UV.summary(since=since, parts=("usage",))["usage"])
             if u.path == "/api/search":
                 return self._send(200, {"hits": A.search(q.get("q", ""))})
             if u.path.startswith("/api/hub/"):             # the shell's pages: artifacts, scheduled, search, account
@@ -696,8 +644,9 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path.endswith("/test"):
                     try:
                         return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
-                                                       j.get("env", ""), j.get("model", ""), j.get("auth_header", ""),
-                                                       j.get("auth_scheme", ""), j.get("api_version", "")))
+                                                       j.get("env", ""), j.get("model", ""), j.get("api_version", ""),
+                                                       j.get("kind", ""), j.get("auth_header", ""),
+                                                       j.get("auth_scheme", "")))
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
@@ -709,7 +658,7 @@ class Handler(BaseHTTPRequestHandler):
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
                                                         j.get("env", ""), bool(j.get("confirm_env")),
                                                         j.get("auth_header"), j.get("auth_scheme"),
-                                                        j.get("api_version")), ok=True))
+                                                        j.get("api_version", ""), j.get("kind", "")), ok=True))
                 return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))
@@ -746,6 +695,8 @@ class Handler(BaseHTTPRequestHandler):
                         gate_open = True
                         r = AU.begin_apply()
                         if not r.get("ok"):
+                            gate_open = False
+                            A.resume()                 # reopen before the reply goes out: a client that sees it can send at once
                             return self._send(200, r)
                         if r.get("mode") == "code":
                             self._send(200, {"ok": True, "mode": "code", "restarting": True, "boot": BOOT})
@@ -784,7 +735,9 @@ class Handler(BaseHTTPRequestHandler):
                         r2 = UP.apply_staged(r)
                         if not r2.get("ok"):
                             AU.install_finished(False, r2.get("error", ""))
-                            return self._send(200, r2)        # the finally below reopens the gate
+                            gate_open = False
+                            A.resume()                        # before the reply, not after it: the client sees an open gate
+                            return self._send(200, r2)
                         applied = True
                         self._send(200, {"ok": True, "action": "restarting", "boot": BOOT})
                         gate_open = False                  # the gate stays closed: the process is going away
@@ -897,10 +850,16 @@ class Handler(BaseHTTPRequestHandler):
                 from meshpool_harness import importer as IM
 
                 def learn(path=tf.name):
+                    CI.set_context_status("working")
                     try:
-                        IM.import_export(path)
-                    except Exception:  # noqa: BLE001
-                        pass
+                        got = IM.import_export(path)
+                        bad = [x for x in got.get("skipped", []) if str(x).startswith("context from conversations")]
+                        if bad:                            # the model call failed or answered badly: say so (M21-04)
+                            CI.set_context_status("failed", error=str(bad[0]).split(": ", 1)[-1], result=got)
+                        else:
+                            CI.set_context_status("done", result=got)
+                    except Exception as e:  # noqa: BLE001
+                        CI.set_context_status("failed", error=f"{type(e).__name__}: {str(e)[:200]}")
                     finally:
                         os.unlink(path)
                 threading.Thread(target=learn, daemon=True).start()
@@ -931,6 +890,16 @@ class Handler(BaseHTTPRequestHandler):
                                             "first": rows[0]["title"] if rows else ""})
                 except WEB.WebError as e:
                     return self._send(200, {"ok": False, "error": str(e)})
+            if u.path == "/api/rules":
+                from meshpool_harness.core import permrules as PR
+                b = self._json() or {}
+                kind, rule = b.get("kind"), str(b.get("rule") or "")
+                if kind not in ("allow", "deny") or b.get("action") not in ("add", "remove"):
+                    return self._send(400, {"error": "action is add or remove, kind is allow or deny"})
+                if b["action"] == "add" and PR.check_rule(rule):
+                    return self._send(400, {"error": PR.check_rule(rule)})
+                fn = PR.add_rule if b["action"] == "add" else PR.remove_rule
+                return self._send(200, {**fn(PR.user_path(), kind, rule), "path": str(PR.user_path())})
             if u.path == "/api/permissions":
                 from meshpool_harness.ui.desktop import permissions, request_permission
                 b = self._json()
@@ -970,9 +939,7 @@ class Handler(BaseHTTPRequestHandler):
                 b = self._json()
                 return self._send(200, W.set_favorite(b.get("id", ""), bool(b.get("on"))))
             if u.path == "/api/models/default":
-                C.write({"MH_MODEL": self._json().get("id", "").strip()})   # may carry a provider prefix
-                C.load_into_env(override=True)
-                return self._send(200, W.models())
+                return self._send(200, W.set_default_model(self._json().get("id", "")))
             if u.path in ("/api/profile", "/api/capabilities", "/api/data", "/api/notify", "/api/browser-use"):
                 from meshpool_harness.ui import settings_v2 as SV
                 b = self._json()
@@ -1000,36 +967,18 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/pj/(p_[0-9a-f]{10})", u.path)
             if m:
                 from meshpool_harness import project_store as PS
-                pid, b = m.group(1), self._json()
-                act = b.get("action", "update")
-                if act == "update":
-                    kw = {k: b[k] for k in ("name", "description", "instructions", "link", "pinned") if k in b}
-                    return self._send(200, PS.update(pid, **kw))
-                if act == "delete":
-                    PS.delete(pid)
-                    return self._send(200, {"ok": True})
-                if act == "memory_set":
-                    PS.memory_set(pid, b.get("text", ""))
-                elif act == "memory_add":
-                    PS.memory_add(pid, b.get("text", ""))
-                elif act == "memory_clear":
-                    PS.memory_clear(pid)
-                elif act == "knowledge_add":
-                    import base64
-                    PS.knowledge_add(pid, b.get("name", ""), base64.b64decode(b.get("data", "")))
-                elif act == "knowledge_remove":
-                    PS.knowledge_remove(pid, b.get("name", ""))
-                else:
-                    raise ValueError("Unknown project action.")
-                return self._send(200, PS.detail(pid))
+                return self._send(200, PS.api_action(m.group(1), self._json()))
             if u.path == "/api/projects":
                 b = self._json()
                 act = b.get("action", "add")
                 if act == "pick":
-                    from meshpool_harness.ui.desktop import choose_folder, has_folder_picker
-                    if not has_folder_picker():          # the UI asks the user to type or paste the path instead
+                    from meshpool_harness.ui import desktop as DK
+                    if not DK.has_folder_picker():       # the UI asks the user to type or paste the path instead
                         return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
-                    path = choose_folder(b.get("start", ""))
+                    try:
+                        path = DK.choose_folder(b.get("start", ""))
+                    except DK.PickerUnavailable:         # the dialog could not open: same typed-path fallback
+                        return self._send(200, {"projects": W.projects(), "picked": "", "no_picker": True})
                     if not path:
                         return self._send(200, {"projects": W.projects(), "picked": ""})
                     W.add_project(path)
@@ -1058,22 +1007,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"projects": W.projects()})
             if u.path == "/api/skills":
                 from meshpool_harness import skills as SK
-                b = self._json()
-                act = b.get("action")
-                if act == "create":
-                    SK.create(b.get("name", ""), b.get("description", ""), b.get("body", ""))
-                elif act == "update":
-                    SK.update(b.get("id", ""), b.get("text", ""))
-                elif act == "toggle":
-                    SK.toggle(b.get("id", ""), bool(b.get("on")))
-                elif act == "remove":
-                    SK.remove(b.get("id", ""))
-                elif act == "upload":
-                    import base64
-                    SK.add_files([(f["name"], base64.b64decode(f["data"])) for f in b.get("files") or []])
-                elif act == "open":                       # the page shows the folder in its own file tree
-                    SK.folder().mkdir(parents=True, exist_ok=True)
-                return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
+                return self._send(200, SK.api_action(self._json()))
             if u.path == "/api/plugins":
                 from meshpool_harness import plugins as PL
                 return self._send(200, PL.api_action(self._json()))
@@ -1168,24 +1102,17 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
+            if m:
+                return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(rewind|fork)", u.path)     # back to a message / a new chat from it
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
-                if act == "model":
-                    s_.set_model(b.get("model", ""))
-                elif act == "harness":
-                    s_.switch_harness(b.get("harness", ""))
-                elif act == "route":
-                    s_.set_route(b.get("spec", ""))
-                elif act == "plan":
-                    s_.set_plan(bool(b.get("on")))
-                elif act == "goal":
-                    s_.set_goal(b.get("text", ""))
-                elif act == "style":
-                    s_.set_style(b.get("style", ""))
-                else:
-                    s_.revert(int(b.get("turn", 0)))
-                return self._send(200, s_.view(int(b.get("since", 10**9))))
+                if act == "fork":
+                    return self._send(200, {"id": s_.fork(int(b.get("event_index", -1)))})
+                r = s_.rewind(int(b.get("event_index", -1)), files=b.get("files") is not False)
+                return self._send(200, dict(s_.view(int(b.get("since", 10**9))), text=r.get("text", ""),
+                                            forked=r.get("forked"), undo=r.get("undo")))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:
                 s, b = A.get(m.group(1)), self._json()
@@ -1193,24 +1120,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, s.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(send|stop|answer|mode|compact|grade)", u.path)
             if m:
-                s, act, b = A.get(m.group(1)), m.group(2), self._json()
-                if act == "send":
-                    r = s.send(b.get("text", ""), images=b.get("images") or None, interrupt=bool(b.get("interrupt")))
-                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), sent=r))
-                elif act == "stop":
-                    s.stop()
-                elif act == "grade":
-                    s.grade()
-                elif act == "answer":
-                    s.answer(int(b.get("id", 0)), b.get("decision", "no"), b.get("note", ""))
-                elif act == "compact":
-                    if s.state in ("working", "waiting"):
-                        raise ValueError("Wait for the task to finish or stop it, then compact.")
-                    r = s.agent.compact_now() if hasattr(s.agent, "compact_now") else None
-                    return self._send(200, dict(s.view(int(b.get("since", 10**9))), compacted=r))
-                else:
-                    s.set_mode(b.get("mode", "ask"))
-                return self._send(200, s.view(int(b.get("since", 10**9))))
+                return self._send(200, A.session_action(m.group(1), m.group(2), self._json()))
         except KeyError as e:
             msg = str(e).strip("'\"")
             if not msg or msg == "None":
@@ -1255,17 +1165,13 @@ def _open_web(url: str) -> bool:
     return False
 
 
-def _client_error(e: Exception) -> str:
-    if isinstance(e, zipfile.BadZipFile):
-        return "That file is not a valid zip file."
-    if isinstance(e, (TypeError, AttributeError)):
-        return f"The request has a missing or wrong value ({e})."
-    return str(e).strip("'\"")
+from meshpool_harness.errors import plain as _client_error  # noqa: E402  (the terminal says the same)
 
 
 class _Server(ThreadingHTTPServer):
     # Windows' SO_REUSEADDR lets a second server bind a port already in use, so the free-port search never moved on
     allow_reuse_address = os.name != "nt"
+    request_queue_size = 128                     # P-13: the default of 5 drops connections when many tabs reconnect at once
 
 
 def _running() -> bool:
@@ -1302,6 +1208,11 @@ def _watchdog(idle_s: float):
 
 
 def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on_ready=None) -> int:
+    try:                                                       # OSS-36: old per-chat Codex folders
+        from meshpool_harness.harnesses import prune_codex_homes
+        prune_codex_homes()
+    except Exception:  # noqa: BLE001
+        pass
     global DESKTOP
     DESKTOP = desktop
     RUNS.mkdir(parents=True, exist_ok=True)
@@ -1331,9 +1242,17 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     if desktop:
         LAST_PING[0] = time.time()
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
+    threading.Thread(target=A.purge_due, daemon=True).start()          # chats deleted before the last close
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
+    try:
+        from meshpool_harness.agent import mcp as _M
+        _M.raise_file_limit()                       # 30 chats = hundreds of pipes; macOS allows 256 by default
+        _M.start_reaper()                           # helpers of chats reopened after a restart are reaped when idle
+    except Exception:  # noqa: BLE001
+        pass
     threading.Thread(target=A.probe_mcp, daemon=True).start()
     ON_QUIT.append(HR.stop_login)                   # an unfinished ChatGPT sign-in does not outlive the app
+    threading.Thread(target=A.recover_worktrees, daemon=True).start()   # copies a crash or a deleted chat left
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU

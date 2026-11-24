@@ -104,12 +104,12 @@ def test_settings_test_connection_azure_and_custom_header(home, monkeypatch):
     try:
         r = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": "Bearer " + KEY32, "MH_MODEL": "dd"})
         assert r["ok"], r
-        assert f.log[-1]["path"].startswith("/openai/deployments/dd/chat/completions?api-version=2024-10-21")
+        assert f.log[-1]["path"] == "/openai/v1/chat/completions"         # 0.0.14: a bare Azure address -> v1 route
         bad = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": "0" * 32, "MH_MODEL": "dd"})
-        assert not bad["ok"] and "rejected the key" in bad["detail"]
+        assert not bad["ok"] and "key was rejected" in bad["detail"]
         r = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": KEY32, "MH_MODEL": "dd",
-                                "MESHPOOL_AZURE_API_VERSION": "2025-04-01-preview"})
-        assert f.log[-1]["path"].endswith("api-version=2025-04-01-preview")
+                                "MH_API_KIND": "azure-classic", "MH_API_VERSION": "2025-04-01-preview"})
+        assert r["ok"] and f.log[-1]["path"] == "/openai/deployments/dd/chat/completions?api-version=2025-04-01-preview"
     finally:
         f.close()
 

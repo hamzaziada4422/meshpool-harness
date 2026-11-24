@@ -12,7 +12,8 @@ Order of precedence for every field: the user's override (MH_CAPS json, MH_REASO
 "caps" mapping) > what the endpoint's replies taught (learn_*) > the endpoint's kind (host) > the name-pattern table
 (app/defaults/model_hints.json, or <data folder>/model_hints.json) > conservative defaults: chat completions, no
 reasoning parameter, no cache fields, parallel calls on. An unknown model therefore sends nothing a strict server could
-refuse; a field the server refuses with a 400 is dropped and remembered by the caller (agent/core.py _REFUSED)."""
+refuse; a field the server refuses with a 400 is dropped and remembered here (learn_refused, persisted per endpoint; the
+agent's `_REFUSED` is a view of that same record)."""
 from __future__ import annotations
 
 import json
@@ -25,6 +26,9 @@ from urllib.parse import urlparse
 _LOCK = threading.Lock()
 _CACHE: dict[tuple, "ModelCaps"] = {}
 _LEARNED: dict[tuple, dict] = {}            # (host, model) -> fields learned from replies
+_PERSIST = ("refused", "no_tools", "strict_roles", "tool_id_style", "schema_subset", "max_tokens_param", "first_byte_s",
+            "window", "max_output", "reasoning")      # usage_cached / usage_reasoning change every reply: memory only
+_DISK = {"path": None, "mtime": None}       # what was last read from model_caps_learned.json (None path: not loaded)
 
 
 @dataclass
@@ -42,6 +46,13 @@ class ModelCaps:
     usage_cached: bool = False
     usage_reasoning: bool = False
     keep_reasoning: bool = False                     # send reasoning_content back inside a tool-call turn (DeepSeek, Kimi thinking)
+    refused: tuple = ()               # body fields this endpoint+model refused (dropped from every request)
+    no_tools: bool = False            # cannot take tools: tool use goes through a text protocol
+    strict_roles: bool = False        # needs strictly alternating roles / one leading system message
+    tool_id_style: str = ""           # "alnum9": tool call ids must be 9 letters/digits
+    schema_subset: bool = False       # accepts only a simple subset of JSON schema in tools
+    max_tokens_param: str = ""        # "max_completion_tokens" when max_tokens is refused
+    first_byte_s: float = 0.0         # slowest observed time to the first reply byte (local servers load models)
     source: dict = field(default_factory=dict)       # field -> where it came from (for docs and debugging)
 
     def effort(self, lane: str = "task", override: str = "") -> str:
@@ -79,14 +90,159 @@ def _host(base: str) -> str:
         return ""
 
 
+def _hostkey(base: str) -> str:
+    """The key learned facts are stored under: host and port, so two servers on one machine do not share them."""
+    try:
+        u = urlparse(base or "")
+        h = (u.hostname or "").lower()
+        return f"{h}:{u.port}" if h and u.port else h
+    except ValueError:
+        return ""
+
+
 def _local(base: str) -> bool:
     from meshpool_harness.core import context as CX
     return CX._is_local(base or "")
 
 
+def is_local(base: str) -> bool:
+    return _local(base)
+
+
+def _bare(model: str) -> str:
+    m = model or ""
+    return m.split(":", 1)[-1] if m.startswith(("chatgpt:", "meshpool:")) else m
+
+
+def _learned_path():
+    """The learned-facts file, or None when persistence is off (MH_CAPS_LEARNED=off)."""
+    raw = os.environ.get("MH_CAPS_LEARNED", "").strip()
+    if raw.lower() == "off":
+        return None
+    if raw:
+        return raw
+    from meshpool_harness import config as C
+    return str(C.home() / "model_caps_learned.json")
+
+
+def _stamp(path):
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def _merge(cur: dict, new: dict) -> None:
+    for k, v in new.items():
+        if k == "refused":
+            cur[k] = tuple(sorted(set(cur.get(k) or ()) | set(v or ())))
+        else:
+            cur[k] = v
+
+
+def _ensure_loaded() -> None:
+    """Read the persisted facts into _LEARNED (once, and again when the file changed). Never raises."""
+    try:
+        path = _learned_path()
+        if path is None:
+            return
+        stamp = _stamp(path)
+        if _DISK["path"] == path and _DISK["mtime"] == stamp:
+            return
+        from meshpool_harness import fsio
+        try:
+            data = fsio.read_json(path, default={})
+        except fsio.CorruptFile:
+            fsio.quarantine(path)
+            data = {}
+        changed = False
+        with _LOCK:
+            for host, models in (data.items() if isinstance(data, dict) else ()):
+                for model, fields in (models.items() if isinstance(models, dict) else ()):
+                    if not isinstance(fields, dict):
+                        continue
+                    ok = {k: (tuple(v) if k == "refused" and isinstance(v, list) else v)
+                          for k, v in fields.items() if k in _PERSIST}
+                    cur = _LEARNED.setdefault((host, model), {})
+                    before = dict(cur)
+                    _merge(cur, ok)
+                    changed = changed or cur != before
+            _DISK["path"], _DISK["mtime"] = path, stamp
+            if changed:
+                _CACHE.clear()
+    except Exception:  # noqa: BLE001 - a damaged or unreadable file never stops a request
+        pass
+
+
+def _persist(host: str, bare: str, delta: dict) -> None:
+    try:
+        path = _learned_path()
+        if path is None or not delta:
+            return
+        from meshpool_harness import fsio
+
+        def fn(cur):
+            cur = cur if isinstance(cur, dict) else {}
+            slot = cur.setdefault(host, {}).setdefault(bare, {})
+            old = tuple(slot.get("refused") or ())
+            _merge(slot, delta)
+            if "refused" in slot:
+                slot["refused"] = sorted(set(old) | set(slot["refused"]))
+            return cur
+        try:
+            fsio.update_json(path, fn, default={})
+        except fsio.CorruptFile:
+            fsio.quarantine(path)
+            fsio.update_json(path, fn, default={})
+        _DISK["path"], _DISK["mtime"] = path, _stamp(path)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def first_byte_timeout(base: str, model: str, default: float) -> float:
+    """Seconds to wait for the first reply byte: a local server may be loading the model (MH_LOCAL_FIRST_BYTE_S, 900),
+    and a model seen to be slow gets three times its slowest first byte. At most an hour."""
+    t = float(default)
+    if _local(base):
+        try:
+            t = max(t, float(os.environ.get("MH_LOCAL_FIRST_BYTE_S") or 900))
+        except ValueError:
+            t = max(t, 900.0)
+    _ensure_loaded()
+    with _LOCK:
+        fb = float((_LEARNED.get((_hostkey(base), _bare(model))) or {}).get("first_byte_s") or 0)
+    if fb:
+        t = max(t, 3 * fb)
+    return min(t, 3600.0)
+
+
+def probe_timeout(base: str, default: float) -> float:
+    """Seconds for a health or model probe: a local server may be busy loading a model (MH_LOCAL_PROBE_S, 120)."""
+    if not _local(base):
+        return float(default)
+    try:
+        return max(float(default), float(os.environ.get("MH_LOCAL_PROBE_S") or 120))
+    except ValueError:
+        return max(float(default), 120.0)
+
+
+def observe_first_byte(base: str, model: str, seconds: float) -> None:
+    """Remember a slow first byte (over 5 s), decaying the old value so one bad call does not stick for good."""
+    if not seconds or seconds <= 5:
+        return
+    _ensure_loaded()
+    with _LOCK:
+        prev = float((_LEARNED.get((_hostkey(base), _bare(model))) or {}).get("first_byte_s") or 0)
+    new = round(max(prev * 0.8, float(seconds)), 1)
+    if prev and abs(new - prev) < 0.1 * prev:
+        return
+    learn(base, model, first_byte_s=new)
+
+
 def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
-    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
-    key = (_host(base), bare, json.dumps((profile or {}).get("caps") or {}, sort_keys=True), os.environ.get("MH_CAPS", ""),
+    bare = _bare(str(model))
+    _ensure_loaded()
+    key = (_hostkey(base), bare, json.dumps((profile or {}).get("caps") or {}, sort_keys=True), os.environ.get("MH_CAPS", ""),
            os.environ.get("MH_WIRE", ""))
     with _LOCK:
         hit = _CACHE.get(key)
@@ -109,7 +265,7 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
                 put("efforts", tuple(row["efforts"]), "name")
             break
     # 2. the kind of endpoint
-    h = key[0]
+    h = _host(base)
     if h.endswith("anthropic.com"):
         put("wire", "messages", "host")
         put("cache", "explicit", "host")
@@ -125,11 +281,12 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
     # 3. what replies taught
     for f, v in learned.items():
         put(f, v, "learned")
-    try:
-        from meshpool_harness.core import context as CX
-        put("window", CX.window(model, base, "", probe_endpoint=False), "context")
-    except Exception:  # noqa: BLE001
-        pass
+    if "window" not in learned:                  # a window the replies taught beats the context module's guess
+        try:
+            from meshpool_harness.core import context as CX
+            put("window", CX.window(model, base, "", probe_endpoint=False), "context")
+        except Exception:  # noqa: BLE001
+            pass
     # 4. the user: a profile's "caps" mapping, MH_CAPS (json), then the dedicated variables
     over = dict((profile or {}).get("caps") or {})
     try:
@@ -148,14 +305,23 @@ def resolve(base: str, model: str, profile: dict | None = None) -> ModelCaps:
 
 
 def learn(base: str, model: str, **fields) -> None:
-    """Remember what a reply showed (usage_cached, usage_reasoning, reasoning "none" after a refused parameter)."""
-    bare = (model or "").split(":", 1)[-1]
+    """Remember what a reply showed (usage_cached, usage_reasoning, reasoning "none" after a refused parameter, a refused
+    field, no_tools ...). "refused" is merged, not replaced. Persisted per endpoint+model (see _PERSIST)."""
+    _ensure_loaded()
+    host, bare = _hostkey(base), _bare(model)
     with _LOCK:
-        d = _LEARNED.setdefault((_host(base), bare), {})
-        changed = any(d.get(k) != v for k, v in fields.items())
-        d.update(fields)
-        if changed:
+        d = _LEARNED.setdefault((host, bare), {})
+        delta = {}
+        for k, v in fields.items():
+            nv = tuple(sorted(set(d.get(k) or ()) | set(v or ()))) if k == "refused" else v
+            if d.get(k) != nv:
+                d[k] = nv
+                if k in _PERSIST:
+                    delta[k] = nv
+        if delta or any(k not in _PERSIST for k in fields):
             _CACHE.clear()
+    if delta:
+        _persist(host, bare, delta)
 
 
 def observe_usage(base: str, model: str, usage: dict) -> None:
@@ -208,7 +374,7 @@ def _mem_read() -> dict:
     try:
         p = _mem_path()
         mt = p.stat().st_mtime_ns if p.exists() else None
-    except OSError:
+    except (OSError, RuntimeError):                       # no data folder can be named (no home): memory only
         return _MEM["data"] if _MEM["path"] else {}
     if _MEM["path"] == str(p) and _MEM["mtime"] == mt:
         return _MEM["data"]
@@ -298,6 +464,65 @@ def refused(base: str, model: str) -> set:
     return out
 
 
+def clear_refused() -> None:
+    """Forget every refused-field mark (memory and file). For tests and "reset what Meshpool learned"."""
+    for src in (_mem_read(), _FALLBACK):
+        for ep in src.values():
+            for row in ep.values():
+                row.pop("refused", None)
+    try:
+        from meshpool_harness import fsio
+        p = _mem_path()
+        if p.exists():
+            data = _mem_read()
+            fsio.atomic_write_json(p, data)
+            _MEM.update(mtime=p.stat().st_mtime_ns)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class RefusedView:
+    """The agent's `_REFUSED` ({model: {fields}}), backed by learn_refused/refused so there is one record: the same
+    mapping calls the agent always made (get, setdefault(...).add, [], in, clear), on the key endpoint."""
+
+    @staticmethod
+    def _base() -> str:
+        try:
+            from meshpool_harness import providers as PV
+            return PV.key_base()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def get(self, model, default=()):
+        got = refused(self._base(), str(model))
+        return got if got else default
+
+    def __getitem__(self, model):
+        got = refused(self._base(), str(model))
+        if not got:
+            raise KeyError(model)
+        return got
+
+    def __contains__(self, model) -> bool:
+        return bool(refused(self._base(), str(model)))
+
+    def setdefault(self, model, default=None):
+        view, m = self, str(model)
+
+        class _Marks(set):
+            def add(self, f):
+                learn_refused(view._base(), m, f)
+                super().add(f)
+        return _Marks(refused(self._base(), m))
+
+    def __setitem__(self, model, fields) -> None:
+        for f in fields:
+            learn_refused(self._base(), str(model), f)
+
+    def clear(self) -> None:
+        clear_refused()
+
+
 def learn_no_vision(base: str, model: str) -> None:
     _mem_mark(base, model, "no_vision")
 
@@ -310,5 +535,6 @@ def reset() -> None:
     with _LOCK:
         _CACHE.clear()
         _LEARNED.clear()
+        _DISK["path"] = _DISK["mtime"] = None
     _MEM.update(path=None, mtime=None, data={})
     _FALLBACK.clear()

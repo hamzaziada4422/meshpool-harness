@@ -341,7 +341,7 @@ def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeyp
     monkeypatch.delenv("MH_MAX_INFLIGHT", raising=False)
     GW._CFG["t"] = 0
     h = GW.health("http://x/v1", "key-12345678")
-    assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 4
+    assert h is GW.health("http://x/v1/", "other-12345678") and h.limit == 8
     assert h.check(lambda: "HTTP 0: timed out") == "down" and h.limit == 1
     probes, results = [], []
 
@@ -369,7 +369,7 @@ def test_chats_share_one_prober_and_one_slot_while_the_endpoint_recovers(monkeyp
     assert got
     for _ in range(3):
         h.release(True)
-    assert h.limit == 4                                            # open again after calls go through
+    assert h.limit == 8                                            # open again after calls go through
 
 
 def test_a_known_outage_holds_new_calls_until_the_endpoint_is_back(tmp_path, monkeypatch):
@@ -526,7 +526,8 @@ def test_a_500_from_one_model_is_an_answer_not_an_outage(monkeypatch):
             raise urllib.error.HTTPError(req.full_url, code, "x", {}, None)
         return fake
     for code, want in ((500, "ok"), (429, "ok"), (401, "auth"), (502, "HTTP 502"), (503, "HTTP 503")):
-        monkeypatch.setattr(core._mhttp, "open", answer(code))
+        from meshpool_harness.core import endpoint as EP              # the probe opens through the no-redirect helper
+        monkeypatch.setattr(EP, "urlopen", answer(code))
         assert core._probe_once("http://x", "k", "m") == want
 
 

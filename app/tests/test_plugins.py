@@ -44,8 +44,8 @@ def test_install_folder_adds_prefixed_skills_commands_and_disabled_servers(home)
     notes = servers["demo-notes"]
     assert notes["args"][0] == str(home / "plugins" / "demo").replace("\\", "/") + "/servers/notes.js"
     assert notes["env"] == {"NOTES_TOKEN": "${NOTES_TOKEN}"} and "node" in notes["description"]
-    assert any("hooks" in n for n in rec["notes"])
-    assert not list(home.rglob("SHOULD_NOT_RUN"))            # hooks never run
+    assert any("hook" in n for n in rec["notes"])            # G-06: converted and listed, no longer skipped
+    assert not list(home.rglob("SHOULD_NOT_RUN"))            # installing never runs a hook
     rows = P.list_plugins()
     assert rows[0]["name"] == "demo" and rows[0]["enabled"] is True
     assert [s["enabled"] for s in rows[0]["server_status"]] == [False, False]

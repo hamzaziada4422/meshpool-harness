@@ -26,8 +26,8 @@ def _env(monkeypatch):
 def test_startup_header_notices_box_and_footer():
     t, out, scr = S.startup_scene()
     text = scr.text()
-    assert "MeshPool v0.0.7" in text
-    assert "deepseek-v4.1-flash · MeshPool API" in text
+    assert "Meshpool v0.0.7" in text
+    assert "deepseek-v4.1-flash · Meshpool API" in text
     assert "~/projects/demo" in text
     assert "1 more notice hidden" in text
     assert 'Try "fix the failing test in tests/"' in text
@@ -185,7 +185,7 @@ def test_no_color_keeps_layout_drops_colours(monkeypatch):
     out = S.FakeTTY()
     t = T.Terminal(out=out, width=80, interactive=True)
     assert t.st.depth == 0
-    t.version, t.model, t.provider, t.cwd, t.branch = "0.0.7", "m", "MeshPool API", "~/d", "main"
+    t.version, t.model, t.provider, t.cwd, t.branch = "0.0.7", "m", "Meshpool API", "~/d", "main"
     t.status_fn = lambda: []
     t.startup()
     t.emit({"type": "tool_start", "id": "1", "name": "bash", "summary": "ls"})
@@ -290,6 +290,9 @@ def test_slash_commands(monkeypatch, tmp_path):
     sess.command("/status")
     sess.command("/auto edits")
     assert a.mode == "edits"
+    sess.command("/access ask")                     # the old /mode name is now /access (and /permissions)
+    assert a.mode == "ask"
+    sess.command("/auto edits")
     sess.command("/model gpt-x")
     assert a.model == "gpt-x"
     sess.command("/compact")
@@ -308,7 +311,7 @@ def test_slash_commands(monkeypatch, tmp_path):
                                                        "error": "", "models": [{"id": "alpha", "context": 64000},
                                                                                {"id": "beta"}]})
     monkeypatch.setattr(PS, "save", lambda *a, **k: saved.update(args=a, kw=k) or {})
-    ks = FakeKeys("\r", "\x1b[B", "\r")      # MeshPool key, then the second model
+    ks = FakeKeys("\r", "\x1b[B", "\r")      # Meshpool key, then the second model
     t.keys_factory = lambda: ks
     sess.command("/login")
     assert saved["args"][2:4] == ("openai", "beta") and "sk-test" not in S.screen(out).text()

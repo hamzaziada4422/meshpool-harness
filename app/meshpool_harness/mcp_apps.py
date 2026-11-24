@@ -26,6 +26,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+from meshpool_harness.core import http as _HTTP
 from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
@@ -193,11 +195,9 @@ def _state_file() -> Path:
 
 
 def _read(p: Path) -> dict:
-    try:
-        d = json.loads(p.read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    """A missing file is empty; a damaged or unreadable one raises (never reads as empty: the page would show every
+    connector as signed out, and the next save would wipe them)."""
+    return _read_rw(p)
 
 
 def _read_rw(p: Path) -> dict:
@@ -344,6 +344,9 @@ def add_custom(name: str, url: str, token: str = "", client_id: str = "", client
             try:
                 _discover(url)
             except ValueError:
+                if not probe_mcp(url):
+                    raise ValueError(f"This address is not an MCP server ({host} did not answer like one). "
+                                     "Check the URL: an MCP server address usually ends in /mcp or /sse.")
                 raise ValueError(f"{row['name']} needs a token or API key. Paste it in the token field (for a "
                                  "header other than Authorization, paste it as Header-Name: value).")
             row["auth"] = "oauth"
@@ -362,6 +365,23 @@ def add_custom(name: str, url: str, token: str = "", client_id: str = "", client
             store[cid] = {"client": _own_client(client_id, client_secret)}
         _write(_auth_file(), store)
     return dict(get(cid), tools=r["tools"])
+
+
+def probe_mcp(url: str) -> bool:
+    """Does this address speak MCP at all? One initialize request: an MCP server answers with JSON-RPC (or an event
+    stream), or refuses with a Bearer challenge. A web page, a login form or an API that wants a key answers
+    otherwise, and asking the user for a token would send them the wrong way."""
+    st, h, j = _http(url, data={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "meshpool", "version": _VERSION}}},
+        headers={"Accept": "application/json, text/event-stream"})
+    www = next((v for k, v in h.items() if k.lower() == "www-authenticate"), "").lower()
+    ctype = next((v for k, v in h.items() if k.lower() == "content-type"), "").lower()
+    if st in (200, 202):
+        return "jsonrpc" in j or "result" in j or "event-stream" in ctype
+    if st in (401, 403):
+        # a JSON refusal may well be an MCP server that wants a key; a web page or login form is not one
+        return "jsonrpc" in j or "resource_metadata" in www or "bearer" in www or ("json" in ctype and "html" not in ctype)
+    return "jsonrpc" in j
 
 
 def _own_client(client_id: str, client_secret: str = "") -> dict:
@@ -421,7 +441,7 @@ def _http(url: str, data: dict | None = None, form: dict | None = None, headers:
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=h, method="POST" if body is not None else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _HTTP.open(req, timeout) as r:                  # same-host redirects only: a token never follows a hop away
             raw = r.read()
             return r.status, dict(r.headers), (json.loads(raw) if raw.strip() else {})
     except urllib.error.HTTPError as e:

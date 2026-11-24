@@ -121,6 +121,51 @@ def _chat_dir(base: Path, chat: str) -> Path:
     return base / "chats" / re.sub(r"[^\w.-]", "_", chat) if chat else base
 
 
+def prune_codex_homes(max_age_days: float = 30, now: float | None = None) -> list[str]:
+    """OSS-36: per-chat CODEX_HOME folders pile up (one per chat, forever). Remove those of chats that no longer exist
+    and those not touched for max_age_days. Returns the names removed. Called at start-up."""
+    import re
+    import shutil
+    import time
+    base = codex_home() / "chats"
+    if not base.is_dir():
+        return []
+    sess = C.runs_dir() / "sessions"
+    live = {re.sub(r"[^\w.-]", "_", d.name) for d in sess.iterdir()} if sess.is_dir() else None
+    cutoff = (now or time.time()) - max_age_days * 86400
+    gone = []
+    for d in base.iterdir():
+        try:
+            if d.is_dir() and ((live is not None and d.name not in live) or d.stat().st_mtime < cutoff):
+                shutil.rmtree(d, ignore_errors=True)
+                gone.append(d.name)
+        except OSError:
+            pass
+    return gone
+
+
+_SANDBOX_FAIL = (
+    "bwrap:", "No permissions to create new namespace", "creating new namespace", "unshare: ", "Can't mount proc",
+    "Failed RTM_NEWADDR", "sandbox setup", "sandbox failed", "failed to set up the sandbox", "CreateRestrictedToken",
+    "windows sandbox", "setup_refresh", "ACL", "landlock", "seccomp", "Sandbox(", "sandbox denied")
+
+
+def codex_sandbox_failure(text: str, platform: str | None = None) -> str | None:
+    """OSS-02: Codex's own sandbox could not start (Windows ACLs, bubblewrap inside a container or another bwrap, a
+    kernel without user namespaces). Returns the plain-language note for the user, or None when the text is something else."""
+    t = str(text or "")
+    low = t.lower()
+    if not any(k.lower() in low for k in _SANDBOX_FAIL) or ("sandbox" not in low and "bwrap" not in low and "namespace" not in low and "acl" not in low):
+        return None
+    win = (platform or sys.platform).startswith("win")
+    return ("Codex could not start its own sandbox on this computer" + (" (Windows file permissions block it)" if win else
+            " (it needs bubblewrap and user namespaces, which are not available here)") + ". Its commands did not run. "
+            + ("Switch this chat to Full access to run Codex without its sandbox, or use the Meshpool agent: the command sandbox "
+               "is not available on Windows either, so approvals and Undo are the safety net." if win else
+               "Switch this chat to Full access to run Codex without its sandbox (Meshpool's Undo still covers the edits), "
+               "or use the Meshpool agent, which runs commands in its own sandbox."))
+
+
 def prepare_codex(model: str | None = None, chat: str = "") -> dict:
     """Point Codex at the API key endpoint and model: its own config.toml, in a folder of the chat's own (its
     CODEX_HOME), so chats starting at once never run on each other's model. Codex reads the key from MESHPOOL_API_KEY
@@ -133,11 +178,16 @@ def prepare_codex(model: str | None = None, chat: str = "") -> dict:
     model = bare if prov == "key" and bare else "deepseek-v4.1-flash"
     q = lambda v: '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
     from meshpool_harness import fsio
+    extra = ""
+    if PV.key_kind() == "azure-classic":       # Codex's documented Azure provider: base .../openai and an api-version
+        from meshpool_harness.core import endpoint as EP
+        base = base.rstrip("/") + "/openai"
+        extra = f"query_params = {{ api-version = {q(PV.key_api_version() or EP.AZURE_DEFAULT_VERSION)} }}\n"
     fsio.atomic_write_text(home / "config.toml",
         f"model = {q(model)}\nmodel_provider = \"meshpool\"\nmodel_context_window = 128000\n"
         "\n"
         f"[model_providers.meshpool]\nname = \"Meshpool\"\nbase_url = {q(base)}\nenv_key = \"MESHPOOL_API_KEY\"\n"
-        "wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", fsync=False)
+        f"{extra}wire_api = \"responses\"\nrequest_max_retries = 6\nstream_max_retries = 6\n", fsync=False)
     return {"CODEX_HOME": str(home)}
 
 
@@ -168,7 +218,7 @@ def prepare_opencode(model: str | None = None, chat: str = "") -> dict:
         env = chatgpt_relay.env()               # the relay holds the sign-in; OpenCode only sees its address and token
         base, key_env = env["MESHPOOL_CHATGPT_RELAY_URL"], "MESHPOOL_CHATGPT_RELAY_KEY"
     else:
-        base, key_env, bare = PV.key_base(), "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
+        base, key_env, bare = PV.agent_endpoint("key")[0], "MESHPOOL_API_KEY", bare or PV.DEFAULT_MODEL
     home = opencode_home()
     home.mkdir(parents=True, exist_ok=True)
     # "permission": OpenCode allows everything by default, so it never asked and Supervised and Plan meant nothing.
@@ -207,7 +257,7 @@ def prepare_hermes(model: str | None = None) -> dict:
     cfg = cfg if isinstance(cfg, dict) else {}
     m = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
     prov = PV.for_harness("hermes", model or os.environ.get("MH_MODEL")) or "key"
-    base, key = PV.endpoint(prov)
+    base, key = PV.agent_endpoint(prov)         # the key endpoint, or the local relay when it needs more than Bearer
     p_, bare = PV.split(model or os.environ.get("MH_MODEL") or "")
     env = {HERMES_ENV["base_url"]: base, HERMES_ENV["default"]: bare if p_ == prov and bare else "deepseek-v4.1-flash",
            HERMES_ENV["api_key"]: key or "",
@@ -695,7 +745,7 @@ def _launch(hid: str, prov: str | None) -> dict:
         return {"prepare": "hermes"}
     if hid == "opencode":
         return {"prepare": "opencode", "env": {"OPENCODE_CONFIG": str(opencode_home() / "opencode.json"),
-                                               "MESHPOOL_API_KEY": PV.key()},
+                                               "MESHPOOL_API_KEY": PV.agent_endpoint("key")[1]},
                 "env_unset": ["OPENAI_API_KEY", "OPENAI_BASE_URL"]}
     return {}
 

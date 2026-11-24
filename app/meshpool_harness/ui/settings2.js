@@ -101,7 +101,12 @@ async function providerPage(b, close) {
   let cur, lg;
   try { [cur, lg] = await Promise.all([api("/api/provider"), api("/api/provider/logins").catch(() => ({logins: []})), loadSettings()]); }
   catch (e) { b.innerHTML = `${close}<h3>Models and providers</h3><div class="res bad">${esc(e.message)}</div>`; return; }
-  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", header: cur.auth_header || "", scheme: cur.auth_scheme || "", ver: cur.api_version || "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false};
+  const cat = cur.catalog || [];
+  const st = {base: cur.base_url || "", wire: cur.wire || "auto", env: "", changeKey: !cur.key_set, models: null, picked: "", typed: "", q: "", ok: false,
+              kind: "", header: cur.auth_header || "", scheme: cur.auth_scheme || "", version: cur.api_version || "", dep: cur.deployment ? (cur.default_model || "") : "", seen: cur.kind || ""};
+  const AZ = /\.(openai|cognitiveservices|services\.ai)\.azure\.(com|us|cn)(\/|$|:)/i;
+  const isAz = () => (st.kind || st.seen || "").startsWith("azure") || AZ.test(st.base);
+  const catKind = id => cat.find(c => c.id === (st.kind || st.seen));
   const logins = (lg.logins || []);
   const row = (title, text, btn, id, badge) => `<li><span class="tg"><b>${title}</b><small>${text}</small></span>${badge ? `<span class="badge added">${badge}</span>` : ""}${btn ? `<button class="btn ${badge ? "" : "primary"}" id="${id}">${btn}</button>` : ""}</li>`;
   const found = [];
@@ -118,17 +123,30 @@ async function providerPage(b, close) {
     ${found.length ? `<h4 class="sr-h first">Use an existing login</h4><ul class="rows2">${found.join("")}</ul>` : ""}
     <h4 class="sr-h ${found.length ? "" : "first"}">Connection</h4>
     <div class="provnow">${cur.provider === "chatgpt" ? "Using your ChatGPT sign-in." : cur.default_model ? `Using <b>${esc(cur.default_model)}</b> on ${esc(cur.host || PV_host(cur.base_url))}.` : "No default model chosen yet."}</div>
+    <label class="field"><span>Provider</span><select id="pvKind"><option value="">Detect from the address</option>${cat.map(c => `<option value="${esc(c.id)}">${esc(c.label)}</option>`).join("")}</select><small id="pvKindNote">Pick one to see what to paste, or paste an address and Meshpool recognises it.</small></label>
     <label class="field"><span>Base URL</span><input id="pvBase" spellcheck="false" autocomplete="off" value="${esc(st.base)}" placeholder="https://api.example.com/v1"><small>The address of your model service. It usually ends in /v1.</small></label>
+    <div id="pvAz" hidden><label class="field"><span id="pvDepLbl">Deployment name</span><input id="pvDep" spellcheck="false" autocomplete="off" placeholder="the name you gave the model in Azure" value="${esc(st.dep)}"><small>Azure runs your own named deployments. Type the deployment name exactly as it appears in Azure AI Foundry, Deployments (not the model's own name).</small></label>
+      <label class="field" id="pvVerRow"><span>API version</span><input id="pvVer" spellcheck="false" autocomplete="off" placeholder="2024-10-21" value="${esc(st.version)}"><small>Leave it empty: Meshpool then uses Azure's newer route, which needs no version. Fill it only if your resource uses the older deployment route. A version pasted inside the address is picked up too.</small></label></div>
     <div class="field"><span>API key</span><span class="keyrow" id="pvKeyRow">${st.changeKey ? `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your key"><button class="btn" id="pvShow" type="button">Show</button>` : `<input id="pvMask" value="${esc(keyHint)}" readonly aria-label="Saved key"><button class="btn" id="pvChange" type="button">Change</button>`}</span></div>
     <details class="pvadv"${st.header || st.scheme || st.ver ? " open" : ""}><summary>Key header and Azure options</summary>
       <label class="field"><span>Key header</span><input id="pvHeader" spellcheck="false" autocomplete="off" value="${esc(st.header)}" placeholder="automatic (api-key for Azure, otherwise Authorization)"><small>Only if your service wants the key in another header, for example api-key or x-api-key.</small></label>
       <label class="field"><span>Key scheme</span><select id="pvScheme"><option value="">Automatic</option>${["bearer", "basic", "token", "raw"].map(x => `<option value="${x}"${st.scheme === x ? " selected" : ""}>${{bearer: "Bearer key", basic: "Basic user:password", token: "Token key", raw: "The key alone"}[x]}</option>`).join("")}</select></label>
-      <label class="field"><span>Azure api-version</span><input id="pvVer" spellcheck="false" autocomplete="off" value="${esc(st.ver)}" placeholder="automatic (2024-10-21)"><small>For Azure OpenAI addresses (https://NAME.openai.azure.com). The model is your deployment name.</small></label>
     </details>
     <div class="pvact"><button class="btn primary" id="pvTest">Test connection</button><span class="pvres" id="pvRes" role="status"></span></div>
     <div id="pvModels" hidden></div>
+    <div class="pnote" id="pvAgentNote" hidden></div>
     <div class="pvact"><button class="btn primary" id="pvSave" disabled>Save</button><span class="pvres" id="pvSaveRes" role="status"></span></div>`;
   const say = (id, cls, t) => { const el = $("#" + id, b); el.className = "pvres " + cls; el.textContent = t; };
+  const syncKind = () => {
+    const c = catKind(), az = isAz() || !!(c && (c.deployment || c.lists === false));
+    $("#pvAz", b).hidden = !az;
+    $("#pvVerRow", b).hidden = !((st.kind || st.seen) === "azure-classic" || (st.kind || st.seen) === "azure-foundry" || (!st.kind && !st.seen && AZ.test(st.base)));
+    $("#pvDepLbl", b).textContent = c && c.deployment || AZ.test(st.base) ? "Deployment name" : "Model name";
+    $("#pvKindNote", b).textContent = c ? `${c.note || ""} Key: ${c.key_hint || ""}`.trim() : "Pick one to see what to paste, or paste an address and Meshpool recognises it.";
+    const an = $("#pvAgentNote", b), notes = Object.values(cur.agent_notes || {});
+    an.hidden = !(notes.length && (st.kind || st.seen).startsWith("azure")); an.textContent = notes.join(" ");
+  };
+  $("#pvKind", b).value = ""; $("#pvKind", b).onchange = e => { st.kind = e.target.value; const c = catKind(); if (c && c.base && !st.base) { st.base = c.base; $("#pvBase", b).value = st.base; } if (c && c.base) $("#pvBase", b).placeholder = c.base; touched(); syncKind(); };
   const key = () => ($("#pvKey", b)?.value || "").trim();
   const drawModels = () => {
     const box = $("#pvModels", b); box.hidden = !st.models;
@@ -144,14 +162,12 @@ async function providerPage(b, close) {
   };
   const gate = () => { $("#pvSave", b).disabled = !(st.ok && (st.models?.length ? st.picked : st.typed)); };
   const touched = () => { st.ok = false; st.models = null; st.picked = ""; $("#pvModels", b).hidden = true; $("#pvRes", b).textContent = ""; gate(); };
-  $("#pvBase", b).oninput = e => { st.base = e.target.value.trim(); st.env = ""; touched(); };
-  b.addEventListener("input", e => {
-    if (e.target.id === "pvKey") touched();
-    if (e.target.id === "pvHeader") { st.header = e.target.value.trim(); touched(); }
-    if (e.target.id === "pvVer") { st.ver = e.target.value.trim(); touched(); }
-  });
+  $("#pvBase", b).oninput = e => { st.base = e.target.value.trim(); st.env = ""; st.seen = ""; touched(); syncKind(); };
+  b.addEventListener("input", e => { if (e.target.id === "pvDep") { st.dep = e.target.value.trim(); touched(); } if (e.target.id === "pvVer") { st.version = e.target.value.trim(); touched(); } });
+  syncKind();
+  b.addEventListener("input", e => { if (e.target.id === "pvKey") touched(); if (e.target.id === "pvHeader") { st.header = e.target.value.trim(); touched(); } });
   b.addEventListener("change", e => { if (e.target.id === "pvScheme") { st.scheme = e.target.value; touched(); } });
-  const adv = () => ({auth_header: st.header, auth_scheme: st.scheme, api_version: st.ver});
+  const adv = () => ({auth_header: st.header, auth_scheme: st.scheme});
   b.addEventListener("click", e => {
     if (e.target.closest("#pvChange")) { st.changeKey = true; $("#pvKeyRow", b).innerHTML = `<input id="pvKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste the new key"><button class="btn" id="pvShow" type="button">Show</button>`; $("#pvKey", b).focus(); touched(); }
     if (e.target.closest("#pvShow")) { const i = $("#pvKey", b); i.type = i.type === "password" ? "text" : "password"; $("#pvShow", b).textContent = i.type === "password" ? "Show" : "Hide"; }
@@ -160,10 +176,13 @@ async function providerPage(b, close) {
     if (!st.base) { $("#pvBase", b).focus(); return say("pvRes", "bad", "Enter the base URL first."); }
     const btn = $("#pvTest", b); btn.disabled = true; say("pvRes", "", "Testing…");
     try {
-      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, model: st.typed || cur.default_model || "", ...adv(), ...(st.env ? {env: st.env} : {})});
-      if (!r.ok) { st.ok = false; st.models = null; drawModels(); say("pvRes", "bad", r.error || "That didn't work."); }
+      const r = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, ...(st.env ? {env: st.env} : {}),
+        model: st.dep, api_version: st.version, kind: st.kind, ...adv()});
+      if (r.kind) { st.seen = r.kind; if (r.api_version && !st.version && (r.kind === "azure-classic" || r.kind === "azure-foundry")) { st.version = r.api_version; $("#pvVer", b).value = st.version; } if (r.model && !st.dep) { st.dep = r.model; $("#pvDep", b).value = st.dep; } syncKind(); }
+      if (!r.ok) { st.ok = false; st.models = null; drawModels(); say("pvRes", "bad", r.error || "That didn't work."); if (r.needs_model) $("#pvDep", b).focus(); }
       else {
         st.ok = true; st.base = r.base_url || st.base; st.wire = r.wire || st.wire; st.models = r.models || []; $("#pvBase", b).value = st.base;
+        if (r.deployment && st.models.length === 1) st.picked = st.models[0].id;
         if (st.picked && !st.models.some(m => m.id === st.picked)) st.picked = "";
         say("pvRes", "ok", `Connected in ${r.latency_ms} ms.${st.models.length ? ` ${st.models.length} model${st.models.length === 1 ? "" : "s"} available.` : ""}${r.error ? " " + r.error : ""}`);
         drawModels();
@@ -177,11 +196,7 @@ async function providerPage(b, close) {
     if (st.env) { if (!await ask({title: `Use ${st.env} from your environment?`, text: `Meshpool saves this key in its settings on this computer, and sends it only to ${PV_host(st.base)}.`, ok: "Use this key"})) return; confirm_env = true; }
     const btn = $("#pvSave", b); btn.disabled = true; say("pvSaveRes", "", "Saving…");
     try {
-      if (!st.models?.length) {   // a typed model or deployment name: check it with a real call before saving
-        const t = await post("/api/provider/test", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, model, ...adv(), ...(st.env ? {env: st.env} : {})});
-        if (!t.ok) { say("pvSaveRes", "bad", t.error || "That didn't work."); btn.disabled = false; return; }
-      }
-      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length, ...adv(), ...(st.env ? {env: st.env, confirm_env} : {})});
+      await post("/api/provider/save", {base_url: st.base, ...(key() ? {api_key: key()} : {}), wire: st.wire, default_model: model, allow_custom: !st.models?.length || st.models.length === 1 && st.models[0].id === st.dep, api_version: st.version, kind: st.kind || st.seen, ...adv(), ...(st.env ? {env: st.env, confirm_env} : {})});
       await loadSettings(); await loadModels(true); await loadHarnesses(); S.draft.model = S.models.default; store("model", S.draft.model); renderBar(); renderHero?.();
       toast("Saved. New chats use " + model + "."); providerPage(b, close);
     } catch (err) { say("pvSaveRes", "bad", err.message); btn.disabled = false; }
@@ -192,6 +207,7 @@ async function providerPage(b, close) {
   $("#lgChatgptIn", b)?.addEventListener("click", async () => { try { const r = await post("/api/harness-login", {id: "codex"}); toast(r.message || "Finish signing in in the Browser panel.", 6000); setTimeout(() => { if ($("#pvBase", b)) providerPage(b, close); }, 6000); } catch (err) { toast(err.message, 6000); } });
   for (const l of logins.filter(x => x.kind === "env_key" && x.found)) $("#lgEnv-" + l.env, b)?.addEventListener("click", () => {
     st.env = l.env; st.base = l.base_url || st.base; st.wire = l.wire || "auto"; $("#pvBase", b).value = st.base;
+    st.seen = l.provider || ""; if (l.deployment) { st.dep = l.deployment; $("#pvDep", b).value = st.dep; } if (l.api_version) { st.version = l.api_version; $("#pvVer", b).value = st.version; } syncKind();
     $("#pvKeyRow", b).innerHTML = `<input id="pvMask" value="${esc(l.env)}: ${esc(l.key_hint || "••••")}" readonly aria-label="Key from your environment"><span class="pvnote">from your environment</span>`;
     st.ok = false; st.models = null; $("#pvModels", b).hidden = true; $("#pvTest", b).click();
   });
@@ -214,7 +230,7 @@ async function stylesPage(b, close) {
         <label class="field"><span>Name</span><input id="stName" maxlength="40" value="${esc(ed.name)}" placeholder="For example: Plain and friendly"></label>
         <label class="field"><span>Instructions</span><textarea id="stIns" rows="5" maxlength="2000" placeholder="How should Meshpool write? For example: Write in short, warm sentences. Avoid jargon.">${esc(ed.instruction)}</textarea></label>
         ${ed.showSample ? `<label class="field"><span>Your writing sample</span><textarea id="stSample" rows="5" maxlength="6000" placeholder="Paste a few paragraphs you wrote.">${esc(ed.sample)}</textarea><small>One short model call turns it into instructions. Without a key, your text is kept as the instructions.</small></label>
-          <div class="stact"><button class="btn" type="button" id="stMake" ${ed.busy ? "disabled" : ""}>${ed.busy ? "Reading…" : "Make instructions"}</button></div>`
+          <div class="stact"><button class="btn" type="button" id="stMake" ${ed.busy ? `disabled title="Working on it..."` : ""}>${ed.busy ? "Reading…" : "Make instructions"}</button></div>`
           : `<button class="linkbtn" type="button" id="stSampleOn">Start from a writing sample</button>`}
         <div class="res ${ed.note ? "ok" : ""}" id="stNote" role="status">${esc(ed.note)}</div>
         <div class="stact" style="margin-top:8px"><button class="btn primary" type="submit">Save style</button><button class="btn" type="button" id="stCancel">Cancel</button></div></form>`
@@ -304,9 +320,9 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
       await window.renderSuggestSettings?.(b, close);
     } else if (sec === "caps") {
       const [feat, st] = await Promise.all([api("/api/capabilities"), loadSettings()]);
-      const mode = get0("MH_AGENT_PERMISSIONS") || "ask";
+      const mode = normMode(get0("MH_AGENT_PERMISSIONS"));
       const bu = (feat.features.find(f => f.id === "browser") || {}).browser_use;
-      const row = f => toggleRow(f.id, f.name, f.desc, f.on, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : "", !f.available);
+      const row = f => toggleRow(f.id, f.name, f.desc, f.on && f.available, f.id === "memory" ? `<button class="linkbtn" data-go="personal" style="padding:0;text-align:left">Manage memory</button>` : f.reason ? `<small class="why" style="color:var(--del)">Not available here: ${esc(f.reason)}</small>` : "", !f.available);
       b.innerHTML = `${close}<h3>Capabilities</h3><p class="lead">What Meshpool can do for you. Changes apply to new chats; chats already open keep what they started with.</p>
         <ul class="rows2" id="capL">${feat.features.filter(f => !f.advanced).map(row).join("")}</ul>
         <h3 style="font-size:16px;margin:20px 0 4px">Always available</h3><p class="lead">Making Word documents, slides, spreadsheets and PDFs, reading your files, and running scripts are part of Meshpool. Meshpool asks first, unless you change that here.</p>
@@ -323,7 +339,7 @@ const PV_host = u => { try { return new URL(u).host; } catch (e) { return String
         catch (e) { x.checked = !x.checked; res("capRes", "bad", e.message); }
       });
       $("#capHarness").onchange = () => { const v = $("#capHarness").value; store("harness_default", v === "meshpool-auto" ? null : v); if (!S.cur) { S.draft.harness = modeHarness(); renderBar(); renderHero(); } res("capRes", "ok", "Saved. New chats use it."); };
-      $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = $("#capMode").value; store("mode", S.draft.mode); renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
+      $("#capMode").onchange = async () => { try { await post("/api/settings", {values: {MH_AGENT_PERMISSIONS: $("#capMode").value}}); S.draft.mode = ""; renderBar(); res("capRes", "ok", "Saved. New chats start this way."); } catch (e) { res("capRes", "bad", e.message); } };
       if (bu) {
         const showBu = () => { const m = bu.modes.find(x => x.id === $("#capBrowser").value) || {}; $("#capBrowserD").textContent = `${m.desc || ""} (${m.detail || ""})`; $("#capCdpW").hidden = m.id !== "attach"; };
         $("#capBrowser").onchange = $("#capCdp").onchange = $("#capShow").onchange = async () => { showBu(); try { await post("/api/browser-use", {mode: $("#capBrowser").value, cdp_url: $("#capCdp").value, show_window: $("#capShow").value === "1"}); res("capRes", "ok", "Saved. New chats use it."); } catch (e) { res("capRes", "bad", e.message); } };

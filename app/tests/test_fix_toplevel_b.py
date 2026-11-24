@@ -105,7 +105,7 @@ def test_scrub_env_removes_injected_connector_keys(monkeypatch):
     env = {"PERPLEXITY_API_KEY": "k", "MDB_MCP_CONNECTION_STRING": "mongodb://u:p@h", "SLACK_MCP_XOXP_TOKEN": "t",
            "MH_MODEL": "m", "MY_OWN_TOKEN": "mine"}
     out = C.scrub_env(env)
-    assert set(out) == {"MH_MODEL", "MY_OWN_TOKEN"}               # a key the user set themselves stays
+    assert set(out) == {"MH_MODEL"}               # S-06: every secret-named variable goes, the user's own too (MH_SHELL_ENV_ALLOW keeps one)
 
 
 def test_checkpoint_writes_are_atomic(tmp_path, monkeypatch):
@@ -123,8 +123,8 @@ def test_checkpoint_writes_are_atomic(tmp_path, monkeypatch):
     # a failed write leaves the old index intact
     before = cp.index_path.read_text()
     monkeypatch.setattr(os, "replace", lambda a, b: (_ for _ in ()).throw(OSError("boom")))
-    with pytest.raises(OSError):
-        cp._save_turns([])
+    cp.begin_turn("t2")                           # its index write fails: reported, never half-written
+    assert cp.warning and not cp._flush()
     monkeypatch.undo()
     assert cp.index_path.read_text() == before
 

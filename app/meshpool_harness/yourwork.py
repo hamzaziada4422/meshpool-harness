@@ -314,6 +314,19 @@ def build(months: int = 3, now: float | None = None) -> dict:
             turns_by[r["harness"]] += 1
     tok_in = sum(int(r.get("tokens_in") or 0) for r in rows)
     tok_out = sum(int(r.get("tokens_out") or 0) for r in rows)
+    tok_cached = sum(int(r.get("tokens_cached") or 0) for r in rows)
+    cost, unpriced, from_ledger = None, 0, False
+    try:                                         # the call ledger: every model call with its own price, chats shown here only
+        from meshpool_harness.core import usage as U
+        U.flush()
+        led = U.summarize(r for r in U.read_records(since=cutoff, until=now + 60) if r.get("chat") in ids)
+        if led["calls"]:
+            from_ledger = True
+            tok_in, tok_out, tok_cached = led["in"], led["out"], led["cached"]
+            unpriced = led["unpriced_calls"]
+            cost = round(led["cost"], 4) if led["calls"] > unpriced else None
+    except Exception:  # noqa: BLE001
+        pass
     art = _artifacts(chats)
     skills = _skills_used(chats)
     conns = _connectors_used(chats)
@@ -329,10 +342,15 @@ def build(months: int = 3, now: float | None = None) -> dict:
                    for h, n in agents_c.most_common(6)],
         "models": [{"name": m, "chats": n} for m, n in models_c.most_common(6)],
         "usage": {"tokens_in": tok_in, "tokens_out": tok_out, "tokens": tok_in + tok_out,
-                  "cached": sum(int(r.get("tokens_cached") or 0) for r in rows), "measured_turns": len(rows),
-                  "cost_usd": None, "routing_savings_usd": None,
-                  "note": "Tokens are counted from your outcome log. Cost and routing savings are shown only when "
-                          "Meshpool has measured them, so they are blank here."},
+                  "cached": tok_cached, "measured_turns": len(rows),
+                  "cost_usd": cost, "unpriced_calls": unpriced, "routing_savings_usd": None,
+                  "note": ("Tokens and cost are counted from every model call Meshpool made for these chats, "
+                           "engines and checks included. A cost is shown only for calls with a known price"
+                           + (f"; {unpriced} call{'s' if unpriced != 1 else ''} had none." if unpriced else ".")
+                           + " Routing savings are shown only when Meshpool has measured them, so they are blank here."
+                           if from_ledger else
+                           "Tokens are counted from your outcome log. Cost and routing savings are shown only when "
+                           "Meshpool has measured them, so they are blank here.")},
         "when": {"weekday": wd, "hour": hr, "busiest_weekday": WEEKDAYS[wd.index(max(wd))] if any(wd) else "",
                  "busiest_hour": hr.index(max(hr)) if any(hr) else None,
                  "busiest_days": [{"date": d, "turns": n} for d, n in days.most_common(3)]},

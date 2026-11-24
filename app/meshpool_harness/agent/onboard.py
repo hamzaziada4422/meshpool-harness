@@ -73,7 +73,7 @@ def _short(p: Path) -> str:
 
 # ---------- step 1: the key ---------------------------------------------------------------------------------------
 
-KEY_ENV = ("MESHPOOL_BASE_URL", "MH_MODEL", "MESHPOOL_API_KEY")
+KEY_ENV = ("MESHPOOL_BASE_URL", "MH_MODEL", "MESHPOOL_API_KEY", "MH_API_KIND", "MH_API_VERSION")
 
 
 def key_step(st, header: bool = False, n: int | None = None, custom: bool = False) -> bool:
@@ -137,24 +137,38 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
         _p()
     old_base = os.environ.get("MESHPOOL_BASE_URL")
     if custom:
-        _p(st.dim("  Any OpenAI-compatible provider: OpenAI, OpenRouter, Together, Groq, a local server, and others."))
+        _p(st.dim("  OpenAI, Anthropic, Azure OpenAI, OpenRouter, Groq, Together, Fireworks, Mistral, xAI, DeepSeek, Gemini,"))
+        _p(st.dim("  Bedrock, GitHub Models, NVIDIA, Cerebras, Ollama, LM Studio, vLLM, LiteLLM and other servers."))
+        _p(st.dim("  Paste the address as your provider shows it; a full Azure call address works too."))
         _p()
-        base = _ask(st, "Provider address, ending in /v1", old_base if old_base and "meshpool" not in old_base
+        from meshpool_harness import provider_setup as PS
+        from meshpool_harness.core import endpoint as EP
+        base = _ask(st, "Provider address", old_base if old_base and "meshpool" not in old_base
                     else "https://api.openai.com/v1")
         if not base:
             return False
-        from meshpool_harness import provider_setup as PS
         try:
-            base = PS.normalise_base(base)               # "localhost:11434", a pasted .../chat/completions
+            pp = PS.parse(base)
         except PS.SetupError as e:
-            _p(st.red("    " + str(e)))
+            _p(st.red(f"  {e}"))
             return False
-        os.environ["MESHPOOL_BASE_URL"] = base
-        model = _ask(st, "Model id", os.environ.get("MH_MODEL") if not (os.environ.get("MH_MODEL") or "").startswith(
-            "deepseek-v4") else "gpt-4.1-mini")
+        os.environ["MESHPOOL_BASE_URL"] = pp.base
+        kind, ver = pp.kind, pp.api_version
+        _p(st.dim(f"  Recognised: {EP.caps(kind)['label']} at {pp.base}"))
+        if EP.is_azure(kind):
+            _p(st.dim("  Azure: the model is the deployment name you chose in Azure, and the key is Key 1 or Key 2 "
+                      "from Keys and Endpoint."))
+            model = _ask(st, "Deployment name", pp.deployment or os.environ.get("MH_MODEL") or "")
+            if kind in ("azure-classic", "azure-foundry"):
+                ver = _ask(st, "API version", ver or EP.caps(kind)["version"]) or ver
+        else:
+            model = _ask(st, "Model id", os.environ.get("MH_MODEL") if not (os.environ.get("MH_MODEL") or "").startswith(
+                "deepseek-v4") else "gpt-4.1-mini")
         if not model:
             return False
         os.environ["MH_MODEL"] = model
+        os.environ["MH_API_KIND"] = "" if kind == "generic" else kind
+        os.environ["MH_API_VERSION"] = ver if kind in ("azure-classic", "azure-foundry") else ""
         _p()
     else:
         _p(f"  No key yet? Get one at {st.blue(KEY_URL)} and run every model 20% cheaper.")
@@ -164,7 +178,8 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
     saved_base = (C.read().get("MESHPOOL_BASE_URL") or "").rstrip("/")
     if not custom and saved_base not in ("", "https://llm.meshpool.ai/v1"):
         # Back to the Meshpool key from another provider: its address and model do not apply any more.
-        reset = {"MESHPOOL_BASE_URL": "", "MH_MODEL": ""}
+        reset = {"MESHPOOL_BASE_URL": "", "MH_MODEL": "", "MH_API_KIND": "", "MH_API_VERSION": ""}
+        os.environ["MH_API_KIND"] = os.environ["MH_API_VERSION"] = ""
         os.environ["MESHPOOL_BASE_URL"] = "https://llm.meshpool.ai/v1"
         os.environ.pop("MH_MODEL", None)
     for _ in range(5):
@@ -186,8 +201,10 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
         os.environ["MESHPOOL_API_KEY"] = key
         _p(st.dim(_checking_text(os.environ["MESHPOOL_BASE_URL"], custom)))
         # the typed endpoint and key, not the saved ones (those win over the environment and went to the new host)
-        r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key)
-        if custom and not r["ok"] and "HTTP 404" in r["detail"]:     # a server that serves /v1 only
+        r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key,
+                 kind=os.environ.get("MH_API_KIND", ""), api_version=os.environ.get("MH_API_VERSION", ""))
+        if custom and not r["ok"] and (r.get("status") == 404 or "HTTP 404" in r["detail"]) and EP.caps(os.environ.get("MH_API_KIND") or "generic")["wire"] == "openai" \
+                and not EP.is_azure(os.environ.get("MH_API_KIND") or "generic"):     # a server that serves /v1 only
             from meshpool_harness import provider_setup as PS
             for cand in PS._candidates(os.environ["MESHPOOL_BASE_URL"])[1:]:
                 r2 = ping(_check_model(custom), base=cand, key=key)
@@ -197,7 +214,9 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
                     break
         save = {"MESHPOOL_API_KEY": key, **reset}
         if custom:
-            save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"])
+            save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"],
+                        MH_API_KIND=os.environ.get("MH_API_KIND", ""), MH_API_VERSION=os.environ.get("MH_API_VERSION", ""))
+            save["MH_API_WIRE"] = EP.wire_of(os.environ.get("MH_API_KIND") or EP.detect(os.environ["MESHPOOL_BASE_URL"]))
         if r["ok"]:
             C.write(save)
             _use("custom" if custom else "meshpool")
@@ -358,10 +377,10 @@ def _where_step(st, start: Path) -> Path | None:
     _p()
     _p(f"  {st.bold('What can it do without asking?')}")
     _p()
-    modes = [("ask", "Ask me first", "before it changes a file or runs a command (recommended)"),
-             ("edits", "Edit files freely", "ask only before running commands"),
+    modes = [("ask", "Ask", "before it changes a file or runs a command (recommended)"),
+             ("edits", "Accept edits", "edit files freely, ask only before running commands"),
              ("auto", "Full access", "never ask")]
-    cur = os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+    cur = C.permission_mode()
     d = next((i for i, m in enumerate(modes, 1) if m[0] == cur), 1)
     c = _choose(st, [(m[1], m[2]) for m in modes], d)
     if c is None:

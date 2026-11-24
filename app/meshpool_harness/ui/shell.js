@@ -60,7 +60,7 @@ function shell() {
         <div class="hintline" id="hintline"><span class="hl-status" id="statusSlot"></span><span class="hl-hint" id="hintTxt"></span></div>
       </div>
     </main>
-    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs" role="tablist"></div><div class="pbody" id="pbody"></div></aside>
+    <aside class="panel" id="panel" aria-label="Side panel" ${S.panel ? "" : "hidden"}><div class="rz" id="rz"></div><div class="ptabs" id="ptabs"></div><div class="pbody" id="pbody"></div></aside>
   </div>`;
   $("#updBar").onclick = e => e.currentTarget.dataset.act === "apply" ? applyUpdate() : openSettings("about");
   $("#hideSide").onclick = toggleSide;
@@ -150,7 +150,8 @@ async function pickProject() {
 }
 async function loadThreads() {
   const was = new Map((S.threads || []).map(t => [t.id, t.state]));
-  S.threads = (await api("/api/agent")).sessions;
+  const pg = await api(`/api/agent?limit=${S.threadLimit || 300}`);        // P-07: the newest chats; "Load more" widens the window
+  S.threads = pg.sessions; S.threadsMore = !!pg.more; S.threadsTotal = pg.total || S.threads.length;
   for (const t of S.threads) {
     const w = was.get(t.id);
     if (w === "working" && t.state === "waiting") window.notifyEvent?.("wait", t.title);
@@ -254,6 +255,7 @@ function renderSide() {
     html += `<div class="sec"><button class="sechd" id="togArch" aria-expanded="${!!S.showArchived}"><span>Archived</span><span class="cnt">${arch.length}</span><span class="chev">${ICON.chev}</span></button></div>`;
     if (S.showArchived) html += `<ul class="threads">${arch.map(t => thHTML(t, {})).join("")}</ul>`;
   }
+  if (S.threadsMore) html += `<button class="linkbtn moreproj" id="moreThreads">Load more chats (${Math.max(0, (S.threadsTotal || 0) - S.threads.length)} older)</button>`;
   // Rewriting identical HTML drops hover, eats a click that lands mid-rewrite, and flickers: skip it. When only the status
   // dots changed, patch them in place.
   if (el._html === html) return;
@@ -299,6 +301,7 @@ function bindSide() {
     const sec = e.target.closest("[data-sec]"); if (sec) { const k = sec.dataset.sec; S.collapsed.has(k) ? S.collapsed.delete(k) : S.collapsed.add(k); store("collapsed", [...S.collapsed]); return renderSide(); }
     if (e.target.closest("#codeFilter")) return codeFilterMenu(e.target.closest("#codeFilter"));
     if (e.target.closest("#togArch")) { S.showArchived = !S.showArchived; return renderSide(); }
+    if (e.target.closest("#moreThreads")) { S.threadLimit = (S.threadLimit || 300) + 300; S.allRecents = true; loadThreads(); return; }
     if (e.target.closest("#moreRecents")) { S.allRecents = !S.allRecents; return renderSide(); }
     const va = e.target.closest("[data-vall]"); if (va) return openProject(va.dataset.vall);
     if (e.target.closest(".rn")) return;
@@ -488,7 +491,7 @@ function renderTop() {
     ${folderChat ? `<button class="chip" id="projChip" data-tip="${esc(isMgd(root) ? projName(root) : root)}" data-tip-pos="below">${ICON.dir}<span class="cl">${esc(projName(root))}</span></button>` : ""}
     <span id="branchChip">${v && curMode() !== "cowork" && !v.scratch ? (S.branchHTML || {})[root] || "" : ""}</span>
     <span class="sp"></span>
-    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
+    ${v ? `<button class="tbtn stepbtn" id="panelBtn" aria-label="${open ? "Hide" : "Show"} progress" aria-pressed="${open}" data-tip="${open ? "Hide" : "Show"} progress" data-kbd="${MOD}." data-tip-pos="below">${ICON.list}<span id="stepLbl">${esc(stepLabel())}</span></button><button class="tbtn" id="shareBtn" aria-label="Export chat" data-tip="Copy or save this chat" data-tip-pos="below" aria-haspopup="menu">${ICON.share}<span>Export</span></button>` : ""}
     ${!v && !onPage && !onProject ? `<button class="tbtn" id="flagBtn" data-tip="Report a problem" data-tip-pos="below" aria-label="Report a problem">${ICON.flag}</button>` : ""}`;
   if (!setHTML($("#topbar"), topHTML, true)) { renderBranch(); return; }      // nothing changed: leave the header alone
   $("#showSide")?.addEventListener("click", toggleSide);
@@ -595,7 +598,7 @@ const PANELS = {cowork: ["session", "progress", "outputs", "browser"], code: ["s
 function curMode() { return S.cur?.view?.kind || "cowork"; }
 // A chat with its own private folder has no repository, so it gets the simple tabs; a chat in a real folder gets
 // the developer tabs when it is a code chat.
-function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : PANELS[curMode()]; }
+function panelSet() { const v = S.cur?.view; return !v || v.scratch ? PANELS.cowork : v.worktree ? ["worktree", ...PANELS[curMode()]] : PANELS[curMode()]; }
 function linkOf(pid) { return (S.pj.find(p => p.id === pid) || {}).link || null; }
 function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.draft.pid)?.path || ""; }
 
@@ -604,7 +607,17 @@ function curRoot() { return S.cur?.view?.workdir || S.draft.project || linkOf(S.
   const FOC = 'a[href],button:not([disabled]),input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
   const top = () => { const all = document.querySelectorAll("body > .scrim"); return all[all.length - 1] || null; };
   const openers = new WeakMap();
+  // B9: while a modal is open the page behind it is inert: no focus, no clicks, hidden from screen readers.
+  const syncInert = () => {
+    const app = document.getElementById("app"); if (!app) return;
+    const modal = top();
+    if (modal) {
+      app.inert = true;
+      if (!modal.contains(document.activeElement)) { const t = modal.querySelector('[autofocus],.modal,[role=dialog]'); if (t) { if (!t.hasAttribute("tabindex") && !/^(BUTTON|INPUT|A)$/.test(t.tagName)) t.setAttribute("tabindex", "-1"); t.focus?.({preventScroll: true}); } }
+    } else app.inert = false;
+  };
   new MutationObserver(ms => {
+    syncInert();
     for (const m of ms) {
       for (const n of m.addedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) openers.set(n, m.target === document.body ? lastFocus : null);
       for (const n of m.removedNodes) if (n.nodeType === 1 && n.classList?.contains("scrim")) { const o = openers.get(n); if (o && o.isConnected && !top()) setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) o.focus?.({preventScroll: true}); }, 0); }

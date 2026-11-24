@@ -91,9 +91,11 @@ class _KeyedRedirect(urllib.request.HTTPRedirectHandler):
 
 
 # ------------------------------------------------------------------ open
-def open(req, timeout, handlers=(), refuse_redirects: bool = False):  # noqa: A001 - the module's one verb
+def open(req, timeout, handlers=(), refuse_redirects: bool = True):  # noqa: A001 - the module's one verb
     """urllib's urlopen for a request that carries a key. `handlers` are extra urllib handlers (the agent's
-    connection trackers); refuse_redirects=True turns every redirect into an HTTPError (setup shows it to the user)."""
+    connection trackers). A request with a key never follows a redirect (0.0.14): every redirect becomes an
+    HTTPError that names the target host, says the key was not sent there and which address to set.
+    refuse_redirects=False follows a same-host redirect only (never another host, never https to http)."""
     if isinstance(req, str):
         req = urllib.request.Request(req)
     host = urlparse(req.full_url).hostname or ""

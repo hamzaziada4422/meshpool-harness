@@ -29,10 +29,14 @@ FAKE_ACP = textwrap.dedent('''
     def known(): return json.load(open(store)) if os.path.exists(store) else []
     def note(m):
         with open(log, "a") as f: f.write(json.dumps(m) + "\\n")
-    mine, slow = set(), {}
+    mine, slow, ask = set(), {}, {}
     for line in sys.stdin:
         m = json.loads(line)
         if "method" not in m:
+            if m.get("id") in ask:                         # the answer to a permission request: finish that prompt
+                psid, pmid = ask.pop(m["id"])
+                upd(psid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "asked-done"}})
+                send({"jsonrpc": "2.0", "id": pmid, "result": {"stopReason": "end_turn"}})
             continue
         meth, mid, p = m["method"], m.get("id"), m.get("params", {})
         note({"method": meth, "params": {k: v for k, v in p.items() if k != "mcpServers"},
@@ -70,6 +74,12 @@ FAKE_ACP = textwrap.dedent('''
                 send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32000, "message": "Session not found"}})
             elif "SLOW" in key:
                 slow[sid] = mid                            # runs until session/cancel
+            elif "ASKME" in key:                           # Codex-style: a permission request inside the turn
+                ask[9001] = (sid, mid)
+                send({"jsonrpc": "2.0", "id": 9001, "method": "session/request_permission", "params": {
+                    "sessionId": sid, "toolCall": {"toolCallId": "t1", "title": "run ls", "kind": "execute"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                                {"optionId": "deny", "name": "Deny", "kind": "reject_once"}]}})
             elif "USAGE" in key:
                 upd(sid, {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "counted"}})
                 send({"jsonrpc": "2.0", "id": mid, "result": {"stopReason": "end_turn", "usage": {
@@ -246,6 +256,18 @@ def test_acp_prompt_usage_reaches_the_turn_and_the_chat(fake_acp):
     assert a.usage["in"] == 140 and a.usage["out"] == 20
 
 
+def test_ws04_one_ledger_row_per_acp_turn(fake_acp):
+    """The harness's usage is in the chat's own counts (ws17) and in the usage ledger (ws04): once each, not twice."""
+    from meshpool_harness.core import usage
+    make, _, _ = fake_acp
+    a = make(mode="auto", events=[])
+    a.usage_task = usage.start_task(chat="ws04-acp", label="turn")
+    assert a.send("USAGE please") == "counted"
+    t = a.usage_task.totals()
+    assert sum(b["calls"] for b in t["by_source"].values()) == 1
+    assert a.usage["in"] == 140 and a.usage["out"] == 20      # not doubled by the ledger row
+
+
 def test_m05_05_undo_gives_the_harness_a_session_without_the_undone_turns(fake_acp):
     from meshpool_harness.ui import agent_api as A
     make, calls, manifest = fake_acp
@@ -256,7 +278,8 @@ def test_m05_05_undo_gives_the_harness_a_session_without_the_undone_turns(fake_a
     s.emit = lambda ev: s.events.append(dict(ev, i=len(s.events)))
     s._persist = lambda **kw: None
     a.emit_cb = s.emit
-    s.cp = type("CP", (), {"revert_to_before": lambda self, n: {"message_index": None}})()
+    s.cp = type("CP", (), {"revert_to_before": lambda self, n: {"message_index": None},
+                         "turns": lambda self: []})()
     assert a.send("keep this") == "fresh:keep this"
     assert a.send("undo this") == "fresh:undo this"
     s.revert(2)                                                 # Undo the second turn
@@ -645,5 +668,132 @@ def test_m03_02_a_message_queued_after_stop_runs_and_its_chip_clears(fake_acp, m
         texts = [e.get("text", "") for e in s.events if e.get("type") == "assistant"]
         assert any("fresh:next one" in t for t in texts)        # was: dropped silently
         assert [e for e in s.events if e.get("type") == "queued"][-1]["n"] == 0   # the chip clears
+    finally:
+        s.close()
+
+
+
+# ---------- ws22: OSS-09 watchdog, OSS-02 Codex sandbox failure, OSS-36 CODEX_HOME pruning, OSS-29 harness log ------
+
+def test_oss09_a_hung_harness_ends_the_turn_and_restarts_next_time(fake_acp, monkeypatch):
+    make, calls, _ = fake_acp
+    monkeypatch.setenv("MH_ACP_IDLE_S", "1.5")
+    evs = []
+    a = make(events=evs)
+    t0 = time.time()
+    a.send("SLOW forever")                                        # the fake never answers this prompt
+    assert time.time() - t0 < 15
+    assert any(e.get("type") == "error" and "sent nothing" in e["text"] for e in evs)
+    assert a.send("again") == "fresh:again"                      # the next message restarts it
+
+
+def test_oss09_default_idle_limit_is_300_seconds(monkeypatch):
+    monkeypatch.delenv("MH_ACP_IDLE_S", raising=False)
+    assert ACPAgent._idle_s() in (300.0, float(C.read().get("MH_ACP_IDLE_S") or 300))
+
+
+def test_oss36_old_codex_homes_are_pruned(home):
+    from meshpool_harness import harnesses as H
+    base = H.codex_home() / "chats"
+    sess = C.runs_dir() / "sessions"
+    for name in ("alive", "gone", "old"):
+        (base / name).mkdir(parents=True)
+        (base / name / "config.toml").write_text("x")
+    (sess / "alive").mkdir(parents=True)
+    (sess / "old").mkdir(parents=True)
+    t = time.time() - 40 * 86400
+    os.utime(base / "old", (t, t))
+    assert sorted(H.prune_codex_homes()) == ["gone", "old"]
+    assert [d.name for d in base.iterdir()] == ["alive"]
+
+
+def test_oss02_codex_sandbox_failure_is_explained():
+    from meshpool_harness.harnesses import codex_sandbox_failure as f
+    win = f("windows sandbox: CreateRestrictedToken failed", "win32")
+    assert win and "Windows" in win and "Full access" in win
+    note = f("bwrap: No permissions to create new namespace", "linux")
+    assert note and "Full access" in note and "bubblewrap" in note
+    assert f("error: file not found", "linux") is None
+
+
+def test_oss29_harness_stderr_is_logged_without_secrets(fake_acp):
+    import io
+    make, calls, manifest = fake_acp
+    a = make()
+    key = "sk-" + "Zz9y" * 8
+
+    class P:
+        stderr = [f"boom OPENAI_API_KEY=abcdefgh12345 and {key}\n".encode()]
+    log = io.StringIO()
+    a._pump_stderr(P, log)
+    assert key not in log.getvalue() and "abcdefgh12345" not in log.getvalue() and "boom" in log.getvalue()
+
+
+# ---------- a finished turn leaves the chat idle (the page's working indicator clears) ---------------------------
+
+def _wait_idle(s, n_prompts=None, calls=None, limit=15):
+    end = time.time() + limit
+    while time.time() < end:
+        if s.state == "idle" and any(e.get("type") == "turn_end" for e in s.events) \
+                and (calls is None or len(calls("session/prompt")) >= n_prompts):
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_an_acp_turn_through_session_ends_idle(fake_acp, monkeypatch):
+    from meshpool_harness import harnesses as HR
+    from meshpool_harness.ui import agent_api as A
+    make, calls, manifest = fake_acp
+    pass
+    HR.add(json.dumps({k: manifest[k] for k in ("id", "name", "mode", "command", "args", "office", "share_mcp")}))
+    s = A.Session(str(Path(manifest["args"][0]).parent / "proj"), harness="fake", kind="cowork")
+    try:
+        for _ in range(100):
+            if s.state == "idle":
+                break
+            time.sleep(0.05)
+        s.send("hello there")
+        assert _wait_idle(s, 1, calls), (s.state, [e.get("type") for e in s.events])
+        assert s.view(0)["state"] == "idle"
+    finally:
+        s.close()
+
+
+def test_a_pi_turn_through_session_ends_idle(fake_pi, monkeypatch):
+    from meshpool_harness.ui import agent_api as A
+    make, rows = fake_pi
+    monkeypatch.setenv("MH_AUTO_RESUME", "0")
+    proj = Path(os.environ["MESHPOOL_HOME"]).parent / "proj"
+    s = A.Session(str(proj), harness="pi", kind="code")
+    try:
+        for _ in range(100):
+            if s.state == "idle":
+                break
+            time.sleep(0.05)
+        s.send("hello there")
+        assert _wait_idle(s), (s.state, [e.get("type") for e in s.events])
+        assert s.view(0)["state"] == "idle"
+    finally:
+        s.close()
+
+
+def test_an_acp_turn_with_an_approval_ends_idle(fake_acp, monkeypatch):
+    from meshpool_harness import harnesses as HR
+    from meshpool_harness.ui import agent_api as A
+    make, calls, manifest = fake_acp
+    HR.add(json.dumps({k: manifest[k] for k in ("id", "name", "mode", "command", "args", "office", "share_mcp")}))
+    s = A.Session(str(Path(manifest["args"][0]).parent / "proj"), harness="fake", kind="cowork", mode="ask")
+    try:
+        s.send("ASKME please")
+        end, answered = time.time() + 15, False
+        while time.time() < end and not answered:
+            for aid in list(s.pendings):
+                s.answer(aid, "allow")
+                answered = True
+            time.sleep(0.05)
+        assert answered, [e.get("type") for e in s.events]
+        assert _wait_idle(s), (s.state, [e.get("type") for e in s.events])
+        assert any("asked-done" in e.get("text", "") for e in s.events if e.get("type") == "assistant")
     finally:
         s.close()

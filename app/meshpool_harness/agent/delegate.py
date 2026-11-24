@@ -15,6 +15,11 @@ process (nothing is trusted across processes), several at once, and the chat sho
   restarts need nothing special.
 - Results: per task a status, the report (capped; the full text goes to a file), steps, time, tokens, files
   written and a short tool trace. Their tokens count toward the chat's usage.
+- Isolation: when two or more sub-agents may edit files, each works in its own isolated copy of the project
+  (worktrees.py: a git worktree made from the project's files as they are now, unsaved edits included; a plain copy
+  without git). When all have reported, the chat applies their changes to the project one by one, without a commit,
+  so the turn's checkpoint and Undo still cover them. Changes that conflict with an earlier sub-agent's are not
+  applied: the report says so and, in a git project, they stay on a branch.
 """
 from __future__ import annotations
 
@@ -26,6 +31,8 @@ import threading
 import time
 import uuid
 
+from meshpool_harness.core import usage
+
 BLOCKED = {"ask_user"}                                  # needs a person
 ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, schedules, run_subtasks: none for them
 # a goal that is nothing but a placeholder ("TODO", "task 3", "<goal>", "{task}"); "<title> tags" or
@@ -35,7 +42,6 @@ _PLACEHOLDER = re.compile(r"^\s*(todo|tbd|task\s*\d*|goal\s*\d*|\.\.\.|placehold
 # office_task counts as a command for sub-agents: its engines run model-written code
 NO_COMMANDS = {"bash", "bash_start", "bash_many", "probe", "trace", "run_tests", "office_task"}
 REPORTS_BUDGET = 60000
-_USAGE_LOCK = threading.Lock()
 
 
 # ---------- settings ----------------------------------------------------------------------------------------------
@@ -183,7 +189,7 @@ def check_goals(tasks) -> list[dict]:
             tasks = json.loads(tasks)
         except ValueError:
             tasks = [{"goal": tasks}]
-    rows = []
+    rows, seen = [], set()
     for t in tasks or []:
         t = {"goal": t} if isinstance(t, str) else t
         if not isinstance(t, dict):
@@ -202,9 +208,14 @@ def check_goals(tasks) -> list[dict]:
                 raise ValueError("output_schema is not valid JSON. Give it as a JSON Schema object.")
         if t.get("output_schema") is not None and not isinstance(t.get("output_schema"), dict):
             raise ValueError("output_schema must be a JSON Schema object, like {\"type\": \"object\", ...}.")
-        rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
-                     "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
-                     "title": str(t.get("title") or goal.splitlines()[0])[:80]})
+        row = {"goal": goal, "context": str(t.get("context") or "").strip(),
+               "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
+               "title": str(t.get("title") or goal.splitlines()[0])[:80]}
+        key = json.dumps([row["goal"], row["context"], row["schema"]], sort_keys=True, default=str)
+        if key in seen:                                 # an identical request in the same batch runs once
+            continue
+        seen.add(key)
+        rows.append(row)
     if not rows:
         raise ValueError("Give at least one task with a goal.")
     return rows
@@ -297,6 +308,8 @@ class Delegation:
         self.lock = threading.Lock()
         self.stopped = False
         self.t0 = time.time()
+        # parallel editors each get an isolated copy; read-only sub-agents and a single sub-agent share the project
+        self.isolate = cfg.get("access") != "read" and len(rows) > 1
 
     # progress relayed into the chat, tagged with the sub-agent it comes from
     def _relay(self, sid: str, index: int, rec: dict):
@@ -326,6 +339,7 @@ class Delegation:
     def _child(self, sid: str, index: int, rec: dict):
         from meshpool_harness.agent import core as K
         parent, cfg, depth = self.parent, self.cfg, self.depth
+        root = (rec.get("wt") or {}).get("workdir") or str(parent.root)   # its isolated copy, or the project
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
         if cfg["access"] == "read":                      # read and research only
             names = [n for n in names if n in K.READ_ONLY and n != "office_task"]
@@ -351,11 +365,11 @@ class Delegation:
                 if self.final_only:                      # out of steps: only the report is left
                     return False, "you are out of steps: no more tool calls; reply with your report now"
                 web = name.replace("-", "_") in ("fetch_url", "mcp__meshpool_web__web_fetch")
-                if name == "read_file" and _skill_file(args.get("path"), parent.root):
+                if name == "read_file" and _skill_file(args.get("path"), root):
                     return True, ""                      # a skill's own files: use_skill already shows SKILL.md
                 if (self._outside(name, args) and not web) or \
-                        (name == "office_task" and _paths_outside(parent.root, args.get("files") or [], _uploads())) or \
-                        (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(parent.root, args)):
+                        (name == "office_task" and _paths_outside(root, args.get("files") or [], _uploads())) or \
+                        (name.replace("-", "_").startswith(OFFICE_MCP) and _mcp_paths_outside(root, args)):
                     return False, ("sub-agents only read inside the project; ask the user to attach the file")
                 if name in ("write_file", "edit"):
                     rec["pending_path"] = args.get("path")
@@ -375,11 +389,13 @@ class Delegation:
                     raise K.Interrupted()
                 super()._check_stop()
 
-        a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
+        a = Child(root, mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
                   sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_rec = rec                            # its own sub-agents' files count as its files
+        a.usage_source = "subagent"                      # its calls are recorded under a task of its own, below
+        a.usage_task = usage.start_task(chat=parent.id, parent=parent._ensure_task(), label="subagent")
         a._delegate_depth = depth + 1
         a._delegate_top = top
         a.always = top.always                            # "Allow ... in this chat" grants cover its sub-agents
@@ -387,7 +403,7 @@ class Delegation:
 
         def grep_in_project(pattern, path=".", glob=None, **opts):   # a symlink must not carry a read outside the project
             # the places a sub-agent may read: the project, its own folder (full tool outputs), attached files
-            return grep(pattern, path, glob, inside_only=[parent.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
+            return grep(pattern, path, glob, inside_only=[a.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
         a.ws.grep = grep_in_project
         glob = a.ws.glob
 
@@ -401,7 +417,10 @@ class Delegation:
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
-        block += f"\n\nWORKSPACE: {parent.root} (the project's instructions above apply to you too)"
+        block += f"\n\nWORKSPACE: {root} (the project's instructions above apply to you too)"
+        if rec.get("wt"):
+            block += (f"\n(This is your own isolated copy of the project {parent.root}: work only in the copy. Other "
+                      "sub-agents cannot see your edits; the chat applies them to the project when you report.)")
         block += ("\n\nWhen you are done, reply with a tight report: what you did, what you found (with a file path "
                   "or link for every fact), files you created or changed, and anything you could not do. You cannot "
                   "ask the user anything; if something needs them, say so in the report.")
@@ -425,6 +444,8 @@ class Delegation:
             return self._entry(sid, rec)
         a = None
         try:
+            if self.isolate:
+                rec["wt"] = self._copy(row)
             a = rec["agent"] = self._child(sid, index, rec)
             cfg_steps0 = a.max_steps
             reply = a.send(row["goal"]) or ""
@@ -515,14 +536,9 @@ class Delegation:
         p = self.parent
         if isinstance(getattr(p, "_delegate_rec", None), dict):   # a sub-agent's sub-agent wrote these
             p._delegate_rec["files"].update(rec["files"])
-        turn = getattr(p, "_turn_usage", None)            # and in this turn's total
-        with _USAGE_LOCK:                                 # children finish on several threads at once
-            for k in ("in", "cached", "out", "calls"):    # the chat pays for its sub-agents: count it there
-                p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
-                if isinstance(turn, dict):
-                    turn[k] = turn.get(k, 0) + rec["usage"][k]
-        if getattr(p, "_delegate_depth", 0) > 0:          # a sub-agent's own sub-agents: pass it up the chain
-            p.emit({"type": "usage", **{k: rec["usage"][k] for k in ("in", "cached", "out", "calls")}})
+        turn = getattr(p, "_turn_usage", None)
+        if hasattr(p, "_absorb_usage"):
+            p._absorb_usage(turn)                         # the sub-agents' calls sit in the chat's task: count them once
         summary = str(rec.get("summary") or "")
         # every report of one call shares a budget (about 60k characters) so the result fits the chat's context;
         # a report cut to fit is kept in full in a file the model can read
@@ -554,6 +570,50 @@ class Delegation:
                           "status": e["status"], "text": f"{e['status']} in {e['duration_seconds']:.0f} s"})
         return e
 
+    def _copy(self, row: dict) -> dict | None:
+        """An isolated copy of the project for one sub-agent, or None (it then works in the project itself)."""
+        from meshpool_harness import worktrees as WT
+        return WT.subagent_copy(self.parent.root, self.id, row["title"])
+
+    def _apply(self, results: list) -> None:
+        """Bring each sub-agent's changes into the project, in task order, and remove its copy. A sub-agent whose
+        changes conflict with earlier ones is reported (and its work kept on its branch), never forced in."""
+        from meshpool_harness import worktrees as WT
+        by_sid = {r.get("subagent_id"): r for r in results}
+        with self.lock:
+            items = sorted(self.children.items(), key=lambda kv: kv[1]["index"])
+        for sid, rec in items:
+            wt = rec.pop("wt", None)
+            if not wt:
+                continue
+            res = WT.apply_subagent_copy(wt)
+            kept = res["kept_branch"]
+            e = by_sid.get(sid)
+            if e is None:
+                continue
+            base, root = str(wt["workdir"]), str(self.parent.root)
+            e["files_written"] = [root + f[len(base):] if f.startswith(base + os.sep) else f
+                                  for f in e["files_written"]]
+            e["changes_applied"] = res["ok"]
+            if not res["ok"]:
+                bad = res["bad"]
+                e["conflicts"] = bad[:50]
+                e["summary"] = (e["summary"] + "\n\nIts changes were NOT applied to the project: "
+                                + res["reason"]
+                                + (f" Files: {', '.join(bad[:10])}." if bad else "")
+                                + (f" They are kept on git branch {kept}." if kept else ""))
+
+    def _drop_copies(self) -> None:
+        from meshpool_harness import worktrees as WT
+        with self.lock:
+            wts = [r.pop("wt", None) for r in self.children.values()]
+        for wt in wts:
+            if wt:
+                try:
+                    WT.discard(wt["id"], keep_work=True)
+                except Exception:  # noqa: BLE001
+                    pass
+
     def run(self, cancelled=lambda: False) -> dict:
         """Run every task (at most cfg['parallel'] at once) until done, the time limit, or Stop."""
         from concurrent.futures import ThreadPoolExecutor
@@ -570,6 +630,7 @@ class Delegation:
         futs = [ex.submit(self._one, i) for i in range(len(self.rows))]
         try:
             results = [f.result() for f in futs]
+            self._apply(results)
         except BaseException:                            # Ctrl+C in the terminal agent: stop them all, wait, go on
             self.stop_all("Stop")
             while True:
@@ -580,6 +641,7 @@ class Delegation:
                     continue
             self.why = "Ctrl+C"
             self.partial = self._result([f.result() for f in futs if f.done() and not f.exception()])
+            self._drop_copies()                           # unapplied work stays on its branch
             raise
         finally:
             done.set()

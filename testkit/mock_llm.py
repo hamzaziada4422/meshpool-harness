@@ -42,6 +42,12 @@ def plan(messages, tools):
         if step == 0:
             return ("tool", "write_file" if "write_file" in names else "write", {"path": f"goal{n}.txt", "content": f"part {n}\n"})
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
+    mf = __import__("re").search(r"make the file (\S+)", u)
+    if mf:                                                 # Undo and rewind tests: one file per message
+        if step == 0:
+            return ("tool", "write_file" if "write_file" in names else "write",
+                    {"path": mf.group(1).strip(".,"), "content": "made for " + mf.group(1) + "\n"})
+        return ("text", "Made " + mf.group(1).strip(".,") + ".")
     if "remember that" in u:                              # memory: shared by every agent through meshpool-assistant
         mem = next((n for n in names if n.endswith("memory_save")), None)
         if step == 0 and mem:
@@ -119,9 +125,14 @@ def plan(messages, tools):
                 return ("tool", rd, {"path": "model.pbix"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
     if "hello" in u:
+        codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
         if step == 0:
+            if codex:
+                return ("tool", "apply_patch", {"input": "*** Begin Patch\n*** Add File: hello.py\n+print('hello from meshpool')\n*** End Patch\n"})
             return ("tool", "write_file" if "write_file" in names else "write", {"path": "hello.py", "content": "print('hello from meshpool')\n"})
         if step == 1:
+            if codex and "shell" in names:
+                return ("tool", "shell", {"command": ["bash", "-lc", "python3 hello.py || python hello.py"]})
             sh = "bash" if "bash" in names else "terminal" if "terminal" in names else "bash"   # Hermes: terminal
             return ("tool", sh, {"command": "python3 hello.py || python hello.py"})
         return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
@@ -139,7 +150,7 @@ class H(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
+        out = json.dumps({"object": "list", "data": [{"id": m, "object": "model", "owned_by": o, "context_length": 131072} for m, o in [("deepseek-v4.1-flash","deepseek"),("deepseek-v4.1","deepseek"),("z-ai/glm-5","z-ai"),("mistralai/devstral-2","mistralai"),("openai/gpt-5.1","openai"),("openai/gpt-5.1-mini","openai"),("deepseek/deepseek-v4.1-flash","deepseek"),("qwen/qwen3-coder","qwen"),("moonshotai/kimi-k2","moonshotai")]]}).encode()
         self.send_response(200); self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(out))); self.end_headers(); self.wfile.write(out)
 
@@ -164,7 +175,9 @@ class H(BaseHTTPRequestHandler):
                    "function": {"name": p[1], "arguments": json.dumps(p[2])}}]}
         else:
             msg = {"role": "assistant", "content": p[1]}
-        usage = {"prompt_tokens": 1000, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
+        # an honest prompt size for a big request: a fixed 1000 reads as a server that cut the prompt (H-02, _prompt_cut)
+        sent = int(len(json.dumps([body.get("messages"), body.get("tools") or []])) / 3.5) + 1
+        usage = {"prompt_tokens": max(1000, sent), "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
         if not body.get("stream"):
             out = json.dumps({"id": "x", "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}], "usage": usage}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")

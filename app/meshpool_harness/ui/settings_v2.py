@@ -100,8 +100,29 @@ def capabilities() -> list[dict]:
             row["browser_use"] = browser_use()              # which browser: Meshpool's, the installed one, or attached
         if c["id"] == "computer":
             row["computer_status"] = computer_status()      # what is missing (macOS permissions, Windows lock, Linux)
+        why = unavailable_reason(c["id"], row)
+        if why:                                             # not a switch that looks usable and then fails in a chat
+            row.update(available=False, on=False, reason=why)
         out.append(row)
     return out
+
+
+def unavailable_reason(cid: str, row: dict | None = None) -> str:
+    """Why this capability cannot work on this computer at all ("" when it can, or only needs setting up)."""
+    if cid == "computer":
+        st = (row or {}).get("computer_status") or computer_status()
+        if not st.get("supported"):
+            return st.get("summary") or "Computer use is not supported on this computer."
+    if cid == "browser":
+        import importlib.util
+        if importlib.util.find_spec("playwright") is None:
+            return ("Browser use needs the Playwright package, which is not installed with this copy of Meshpool. "
+                    "Reinstall Meshpool or run: pip install playwright")
+        bu = (row or {}).get("browser_use") or browser_use()
+        cur = next((m for m in bu.get("modes") or [] if m["id"] == bu.get("mode")), None)
+        if cur is not None and not cur.get("available"):
+            return f"The chosen browser is not available: {cur.get('detail') or cur.get('name')}. Pick another under Browser for browser use."
+    return ""
 
 
 def browser_use() -> dict:
@@ -144,6 +165,9 @@ def set_capability(cid: str, on: bool) -> list[dict]:
         from meshpool_harness.agent import mcp as M
         if _server_on(c["server"]) is None:
             raise ValueError(f"{c['name']} isn't set up on this computer.")
+        why = unavailable_reason(c["id"]) if on else ""
+        if why:
+            raise ValueError(why)
 
         def toggle(servers):
             s = servers[c["server"]]
@@ -173,12 +197,11 @@ def key_spend(force: bool = False) -> dict:
         key, base = PV.key(), PV.key_base()
         if key:
             model = C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
-            mdl = PV.split(model)[1]
-            body = json.dumps(PV.adapt_body(base, {"model": mdl, "max_tokens": 16 if PV.is_azure(base) else 1,
-                                                   "messages": [{"role": "user", "content": "1"}]})).encode()
-            url, auth = PV.chat_target(base, key, mdl)
-            r = urllib.request.Request(url, data=body, headers={**auth, "Content-Type": "application/json"})
-            with _mhttp.open(r, 20) as resp:
+            from meshpool_harness.core import endpoint as EP
+            url, out, hdrs = EP.chat_request(base, key, {"model": PV.split(model)[1], "max_tokens": 1,
+                                                         "messages": [{"role": "user", "content": "1"}]})
+            r = urllib.request.Request(url, data=json.dumps(out).encode(), headers=hdrs)
+            with EP.urlopen(r, timeout=20) as resp:
                 sp, mx = resp.headers.get("x-litellm-key-spend"), resp.headers.get("x-litellm-key-max-budget")
                 if sp not in (None, ""):
                     res.update(available=True, spent=round(float(sp), 4))
@@ -191,9 +214,18 @@ def key_spend(force: bool = False) -> dict:
 
 
 def usage_by_day(days: int = 30) -> list[dict]:
-    """Tokens per day from the saved chats (a chat counts on the day it was last used)."""
+    """Tokens and cost per day from the call ledger (by the day of each call). Days before the first ledger record
+    come from the saved chats (a chat counts on the day it was last used) and have no cost."""
     from meshpool_harness.agent.core import SESSIONS
+    from meshpool_harness.core import usage as U
+    U.flush()
+    recs = list(U.read_records())
+    first = min((float(r.get("ts") or 0) for r in recs), default=0.0)
     buckets: dict[str, dict] = {}
+    for day, b in U.summarize(recs)["by_day"].items():
+        buckets[day] = {"day": day, "in": b["in"], "out": b["out"], "calls": b["calls"], "cost": b["cost"],
+                        "unpriced_calls": b["unpriced_calls"]}
+    first_day = time.strftime("%Y-%m-%d", time.localtime(first)) if first else ""
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
             d = json.loads(p.read_text(encoding="utf-8"))
@@ -201,10 +233,13 @@ def usage_by_day(days: int = 30) -> list[dict]:
             continue
         u = d.get("usage") or {}
         day = time.strftime("%Y-%m-%d", time.localtime(d.get("updated", 0) or 0))
-        b = buckets.setdefault(day, {"day": day, "in": 0, "out": 0, "calls": 0})
+        if first_day and day >= first_day:
+            continue
+        b = buckets.setdefault(day, {"day": day, "in": 0, "out": 0, "calls": 0, "cost": 0.0, "unpriced_calls": 0})
         b["in"] += int(u.get("in") or 0)
         b["out"] += int(u.get("out") or 0)
         b["calls"] += int(u.get("calls") or 0)
+        b["unpriced_calls"] += int(u.get("calls") or 0)
     return sorted(buckets.values(), key=lambda r: r["day"], reverse=True)[:days]
 
 
@@ -255,6 +290,7 @@ def clear_chats() -> int:
     for sid in ids:
         try:
             A.thread_action(sid, {"action": "delete"})
+            A._purge(sid)                          # "Clear all chats" has its own confirmation: no Undo window
             n += 1
         except Exception:  # noqa: BLE001
             pass
