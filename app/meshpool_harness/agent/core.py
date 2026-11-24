@@ -1891,7 +1891,7 @@ class Agent:
                 if shots:
                     self._attach_images(shots)
                 self._track_progress(calls, step_out, g)
-                note = self._refusal_escalation(g) or self._budget_escalation(g, turn)
+                note = self._refusal_escalation(g) or self._budget_escalation(g, turn) or self._step_budget(g)
                 if note:
                     self.messages.append({"role": "user", "content": "[Meshpool] " + note})
                 if V3 and not cx:
@@ -2602,6 +2602,32 @@ class Agent:
             return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Converge now: pick the "
                     "one check that decides whether the task is done, fix what it shows with a small patch, run it "
                     "once more, and answer. Do not write new probe scripts.")
+        return ""
+
+    def _step_budget(self, g: dict) -> str:
+        """Lean lane: a dynamic step budget (arXiv 2510.16786: start low, extend once; 24-68% less cost at about the same
+        solve rate). The runaway budget above only sees steps that change nothing; a run of distinct probes that all
+        succeed (final21: 34-43 steps on regex-redos and window-median, where Codex took 9-18) is invisible to it. At
+        MH_STEP_NOTE tool steps (off until measured; 14 is the candidate) the model is told where it stands; at twice that, to finish; at MH_STEP_WRAP
+        (default 40) tools go off. 0 turns it off."""
+        if not self._lean():
+            return ""
+        try:
+            soft = int(os.environ.get("MH_STEP_NOTE", "0") or 0)
+            wrap = int(os.environ.get("MH_STEP_WRAP", "0") or 0)
+        except ValueError:
+            soft, wrap = 0, 0
+        n = g["lean_steps"] = g.get("lean_steps", 0) + 1
+        if wrap and n >= wrap and not g.get("hard_wrap"):
+            g["hard_wrap"] = True
+            return (f"That is {n} steps. Tools are off now. Give your final answer: what you changed, what works, "
+                    "and what you could not finish.")
+        if soft and n == 2 * soft:
+            return (f"That is {n} steps, far more than tasks like this need. Finish now: make the one remaining fix if "
+                    "there is one, run the deciding check once, and answer.")
+        if soft and n == soft:
+            return (f"That is {n} steps; most tasks like this are done in under 10. Stop probing: decide what is left, "
+                    "fix it, run one check that asserts the requested behaviour, and finish.")
         return ""
 
     def _failure_escalation(self, g: dict) -> str:

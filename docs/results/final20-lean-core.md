@@ -1,6 +1,6 @@
-# Meshpool vs Codex: final measurement (build 0fc488b1 (lean core, asserting final check))
+# Meshpool vs Codex: final measurement (build 0fc488b1)
 
-Updated 2026-11-24 15:59 UTC. 52 coding tasks (v2_eval), model deepseek-v4.1-flash via llm.meshpool.ai, list prices $0.15 in / $0.003 cached / $0.60 out per 1M tokens. Every arm ran twice in the same window; every run had its own private /tmp (earlier runs shared /tmp, which skewed them). Cost is metered at the proxy for every model call.
+Updated 2026-11-24 16:26 UTC. 52 coding tasks (v2_eval), model deepseek-v4.1-flash via llm.meshpool.ai, list prices $0.15 in / $0.003 cached / $0.60 out per 1M tokens. Every arm ran twice in the same window; every run had its own private /tmp (earlier runs shared /tmp, which skewed them). Cost is metered at the proxy for every model call.
 
 | Arm | Solved | Solve rate | $/task | $/solved | Calls/task (mean / median) | Median s/task | p90 s/task |
 |---|---|---|---|---|---|---|---|
@@ -9,9 +9,9 @@ Updated 2026-11-24 15:59 UTC. 52 coding tasks (v2_eval), model deepseek-v4.1-fla
 
 Paired against Codex over the same tasks (bootstrap over tasks, 95% interval):
 
-| Arm | Cost per solved (x Codex) | Time per task (x Codex) | Solve rate minus Codex |
-|---|---|---|---|
-| Meshpool core (lean profile) | 0.71x (0.56-0.91) | 1.03x (0.63-1.73) | +2.9 pts (-5.8 to +12.5) |
+| Arm | Cost per solved (x Codex) | Total time (x Codex) | Median per-task time ratio | Solve rate minus Codex |
+|---|---|---|---|---|
+| Meshpool core (lean profile) | 0.71x (0.56-0.91) | 1.03x (0.63-1.73) | 0.81x (0.69-0.99) | +2.9 pts (-5.8 to +12.5) |
 
 Verdict (target: at least 20% cheaper per solved task, not slower, solve rate not lower):
 
