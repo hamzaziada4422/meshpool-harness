@@ -37,7 +37,7 @@ def fmt_code(fmt: str) -> str:
     f = str(fmt)
     if f in FMT or f.lower() in FMT:
         return FMT.get(f) or FMT[f.lower()]
-    if _TOKEN.match(f) and f.lower() != "general":
+    if _TOKEN.match(f) and f.lower() != "general" and not re.fullmatch(r"[ymdhsYMDHS]+", f):   # yyyy, mmm: real codes
         raise ValueError(f"unknown number format {f!r}: use one of {', '.join(FMT)} or an Excel format string "
                          "such as '#,##0.00'")
     return f

@@ -30,3 +30,8 @@ def test_input_cell_amounts_are_numbers_not_dates():
     f = B.formula(ws, "A3", "=SUM(A1:A1)", "num2")
     assert c.number_format == '#,##0.00;(#,##0.00)' and not c.is_date
     assert t.number_format == "@" and not f.is_date
+
+
+def test_bare_excel_date_codes_still_pass_through():
+    from engines.sheets.builder import fmt_code
+    assert fmt_code("yyyy") == "yyyy" and fmt_code("mmm") == "mmm"
