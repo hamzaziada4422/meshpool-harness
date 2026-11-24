@@ -2355,7 +2355,7 @@ class Agent:
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
-            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out)
+            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out) + self._cycle_note(c, g)
         g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
         # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
         # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
@@ -2638,6 +2638,31 @@ class Agent:
         except OSError:
             pass
         return h
+
+    def _cycle_note(self, c: dict, g: dict) -> str:
+        """broad2 (swe_sympy): core looped patch -> test -> patch (4.8 edits and 9.3 checks a run, 5 runs at the step
+        cap) where Codex read, edited once and checked once. After MH_CYCLE_NOTE project edits that were each followed
+        by a failing check (0, the default, is off until measured), the result says once to stop patching and find the
+        cause."""
+        try:
+            limit = int(os.environ.get("MH_CYCLE_NOTE", "0") or 0)
+        except ValueError:
+            limit = 0
+        if limit <= 0 or g.get("cycle_done") or (c.get("function") or {}).get("name") not in ("shell", "bash"):
+            return ""
+        cmds = getattr(self.ws, "commands", None) or []
+        last = cmds[-1] if cmds else None
+        edits = getattr(self.ws, "edits", 0)
+        if not last or not edits or last.get("code") in (0, None) or \
+                not self.ws._CHECKISH.search(str(last.get("cmd", ""))):
+            return ""
+        failed = g.setdefault("cycle_fail", set())
+        failed.add(last.get("after_edit", edits))
+        if len(failed) < limit:
+            return ""
+        g["cycle_done"] = True
+        return (f"\n[Meshpool] The check still fails after {len(failed)} rounds of edits. Stop patching: read the "
+                "failing test and the code it runs, find the root cause, then make one fix that addresses it.")
 
     def _scratch_rewrite_note(self, c: dict, g: dict) -> str:
         """Eval (4530fc66): 3.3 run calls and 0.8 failed runs a task against Codex's 2.1 and 0.2, mostly the same

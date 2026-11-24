@@ -183,3 +183,23 @@ def test_step_budget_counts_every_step_and_notes_on_crossing(tmp_path, monkeypat
     monkeypatch.delenv("MH_STEP_NOTE")
     monkeypatch.delenv("MH_STEP_WRAP")
     assert not any(a._step_budget({}) for _ in range(50))          # off by default
+
+
+def test_cycle_note_after_repeated_failing_patch_rounds(tmp_path, monkeypatch):
+    """MH_CYCLE_NOTE=n: after n project edits each followed by a failing check, one note to find the cause."""
+    from meshpool_harness.agent.core import Agent
+    a = Agent(str(tmp_path), mode="auto")
+    call = {"function": {"name": "shell", "arguments": "{}"}}
+    g = {}
+    assert a._cycle_note(call, g) == ""                           # off by default
+    monkeypatch.setenv("MH_CYCLE_NOTE", "3")
+    for e in (1, 2):
+        a.ws.edits = e
+        a.ws.commands = [{"cmd": "python -m pytest t.py", "code": 1, "after_edit": e}]
+        assert a._cycle_note(call, g) == ""
+    a.ws.commands = [{"cmd": "ls", "code": 2, "after_edit": 2}]     # not a check
+    assert a._cycle_note(call, g) == ""
+    a.ws.edits = 3
+    a.ws.commands = [{"cmd": "python -m pytest t.py", "code": 1, "after_edit": 3}]
+    assert "Stop patching" in a._cycle_note(call, g)
+    assert a._cycle_note(call, g) == ""                           # once per turn
