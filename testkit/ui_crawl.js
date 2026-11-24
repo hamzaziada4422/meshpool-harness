@@ -42,12 +42,12 @@ async function watch(p) {
     await p.click("#oDone");
     await p.waitForSelector("#onbSetup", {timeout: 10000});
     check("setup step shown", true);
-    await p.waitForFunction(() => document.querySelector("#oImport") && !/Looking for/.test(document.querySelector("#oImport").textContent), null, {timeout: 30000});
+    await p.waitForFunction(() => document.querySelector("#oImport") && !/Looking/.test(document.querySelector("#oImport").textContent), null, {timeout: 30000});
     const n = await p.$$eval("#oImport [data-key]", x => x.length);
     check("setup step lists skills and MCP servers from other apps", n >= 5, n);
     check("setup step leaves sign-ins to the provider step", !(await p.$("#oSubs")));   // providers are chosen in step 1
     await p.screenshot({path: out + "/u2-setup.png"});
-    await p.click("#impNone"); await p.click("#impAll");
+    await p.$$eval("#oImport [data-key]", xs => xs.forEach(x => { if (!x.disabled) x.checked = true; }));   // the panel has no select-all buttons since 0.0.10
     // Start imports what is ticked (there is no separate Import button in onboarding)
     await p.click("#oFinish"); await p.waitForFunction(() => !document.querySelector("#onb"), null, {timeout: 30000}).catch(() => {});
     const imp = await p.evaluate(() => api("/api/skills").then(r => r.skills.map(s => s.name)));
