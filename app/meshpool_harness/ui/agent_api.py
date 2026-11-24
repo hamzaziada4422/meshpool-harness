@@ -1470,6 +1470,67 @@ def create(body: dict) -> dict:
     return s.view(0)
 
 
+def _real_user(m: dict) -> bool:
+    """A message the user typed (not one of Meshpool's own notes, which start with a zero-width space)."""
+    c = m.get("content")
+    if isinstance(c, list):
+        c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
+    return m.get("role") == "user" and not str(c or "").startswith("\u200b")
+
+
+def fork(sid: str, upto: int = 0) -> dict:
+    """Branch a chat: a new chat that starts with this one's conversation up to and including turn `upto` (all of it
+    when 0), with the same agent, folder and project. The original stays as it was; both go on separately."""
+    src = get(sid)
+    with src.lock:
+        evs = [{k: v for k, v in e.items() if k != "i"} for e in src.events]
+    users = [i for i, e in enumerate(evs) if e.get("type") == "user"]
+    if not users:
+        raise ValueError("There is nothing to branch from yet.")
+    upto = int(upto or 0)
+    if upto < 0 or upto > len(users):
+        raise ValueError("That turn is not in this chat.")
+    cut = users[upto] if 0 < upto < len(users) else len(evs)
+    if 0 < upto == len(users) or not upto:                 # the whole chat: not while a turn is still running
+        if src.state in ("working", "waiting"):
+            raise ValueError("Wait for the current reply to finish, or branch from an earlier reply.")
+    shown = [e for e in evs[:cut] if e.get("type") not in _SKIP and not e.get("delta")]
+    meta = read_meta(sid)
+    scratch = bool(meta.get("scratch"))
+    v = create({"workdir": "" if scratch else src.workdir, "harness": src.harness.get("id"), "kind": src.kind,
+                "project_id": meta.get("project_id") or "", "plan": False})
+    s = get(v["id"])
+    if scratch:                                              # a private folder: the branch gets a copy of its files
+        import shutil
+        try:
+            shutil.copytree(src.workdir, s.workdir, dirs_exist_ok=True)
+        except OSError:
+            pass
+    a, old = s.agent, src.agent
+    if hasattr(a, "messages") and hasattr(old, "messages"):  # Meshpool's agent: the exact conversation, tool calls too
+        keep, n = [], 0
+        for m in old.messages[1:]:
+            if _real_user(m):
+                n += 1
+                if upto and n > upto:
+                    break
+            keep.append(m)
+        a.messages = [a.messages[0]] + [dict(m) for m in keep]
+    elif hasattr(a, "events"):                               # an outside agent: the conversation as context
+        a.events = [e for e in shown if e.get("type") in ("user", "assistant", "tool_start")]
+        a._carry = any(e.get("type") in ("user", "assistant") for e in a.events)
+    title = meta.get("title") or nice_title(getattr(old, "title", "") or "")
+    with s.lock:
+        s.events = [dict(e, i=i) for i, e in enumerate(shown)]
+    s.emit({"type": "status", "text": f"Branched from \u201c{title}\u201d" +
+            (f" after message {upto}." if upto and upto < len(users) else ".")})
+    write_meta(s.id, title=f"{title} (branch)"[:120], forked_from=sid, forked_turn=upto or len(users))
+    if hasattr(a, "save"):
+        a.save()
+    s._persist(running=False)
+    return s.view(0)
+
+
 def _short_harness(name: str) -> str:
     """'Meshpool Work' and 'Meshpool Code' read as MeshPool; Codex, Pi, OpenCode and Hermes keep their names."""
     return "MeshPool" if str(name).lower().startswith("meshpool") else str(name)

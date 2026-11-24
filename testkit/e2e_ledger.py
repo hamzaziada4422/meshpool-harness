@@ -163,6 +163,28 @@ check("and back to the main checkout, changes included",
       os.path.realpath(r.get("workdir") or "") == os.path.realpath(G) and
       open(os.path.join(G, "app.py")).read() == "x = 2  # work in progress\n", r)
 
+# ---- branch: a new chat from an earlier reply; the original stays as it was
+v = call("/api/agent", {"workdir": G, "kind": "cowork", "mode": "auto"})
+fid = v.get("id")
+turn(fid, "show python code")
+idle(fid)
+turn(fid, "think out loud")
+idle(fid)
+b = call(f"/api/agent/{fid}/fork", {"turn": 1})
+bu = [e.get("text") for e in b.get("events", []) if e.get("type") == "user"]
+check("a branch from the first reply keeps only that part", bu == ["show python code"], bu)
+check("the branch says where it came from", any(e.get("type") == "status" and "Branched from" in (e.get("text") or "")
+                                                for e in b.get("events", [])) and b.get("workdir") == v.get("workdir"), b.get("title"))
+ou = [e.get("text") for e in call(f"/api/agent/{fid}?since=0").get("events", []) if e.get("type") == "user"]
+check("the original chat is unchanged", ou == ["show python code", "think out loud"], ou)
+turn(b.get("id"), "show python code")
+bu2 = [e.get("text") for e in call(f"/api/agent/{b.get('id')}?since=0").get("events", []) if e.get("type") == "user"]
+check("the branch goes on by itself", bu2 == ["show python code", "show python code"] and
+      len([e for e in call(f"/api/agent/{fid}?since=0").get("events", []) if e.get("type") == "user"]) == 2, bu2)
+w = call(f"/api/agent/{fid}/fork", {"turn": 0})
+check("a branch of the whole chat has all of it", [e.get("text") for e in w.get("events", []) if e.get("type") == "user"] == ou)
+check("a turn that is not there is refused", call(f"/api/agent/{fid}/fork", {"turn": 9}).get("_http") == 400)
+
 ok = sum(1 for _, x in RESULTS if x)
 print(f"\n{ok}/{len(RESULTS)} passed")
 sys.exit(0 if ok == len(RESULTS) else 1)

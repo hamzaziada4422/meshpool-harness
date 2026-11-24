@@ -1305,6 +1305,10 @@ function applyEv(ev) {
       cur.lastFoot = foot;
       const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
       pvTurnCards(cur, foot, cur.turn);
+      if (cur.turn && !$("[data-fork]", foot)) {
+        foot.insertAdjacentHTML("beforeend", `<button data-fork="${cur.turn}" title="A new chat with the conversation up to here; this one stays as it is">${ICON.branch} Branch</button>`);
+        const fb = $("[data-fork]", foot); fb.onclick = () => forkChat(+fb.dataset.fork);
+      }
       if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button><button data-undomore="${t.n}" aria-label="More undo choices" title="Undo only the files, or only the conversation">${ICON.chev || "▾"}</button>`); bindFoot(foot); }
       if (cur.view?.plan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
@@ -1420,6 +1424,14 @@ function bindFoot(foot) {
   $$("[data-undomore]", foot).forEach(b => b.onclick = e => ctxMenu(e, [{head: "Undo this reply and the ones after it"},
     {label: "Only the files", desc: "Files go back; the chat stays and Meshpool is told", fn: () => undoPart(+b.dataset.undomore, "code")},
     {label: "Only the conversation", desc: "The chat goes back; files stay as they are", fn: () => undoPart(+b.dataset.undomore, "chat")}]));
+}
+async function forkChat(n) {                       // a new chat from this one's history up to reply n
+  if (!S.cur) return;
+  try {
+    const v = await post(`/api/agent/${S.cur.id}/fork`, {turn: n});
+    await loadThreads(); openThread(v.id);
+    toast("Branched into a new chat. The original is unchanged.");
+  } catch (e) { toast(e.message, 5000); }
 }
 async function undoPart(n, what) {                 // files only, or the conversation only
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");

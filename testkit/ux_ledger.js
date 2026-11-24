@@ -111,6 +111,14 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.evaluate(() => moveCheckout(S.cur.view.id, "worktree", false)); await p.waitForTimeout(1500);
   check("Move to a new worktree moves the open chat", /\.meshpool[\\/]worktrees[\\/]task-\d+$/.test(await p.evaluate(() => S.cur?.view?.workdir || "")),
         await p.evaluate(() => S.cur?.view?.workdir));
+  // Branch under a reply opens a new chat with the history up to there
+  const before = await p.evaluate(() => S.cur?.id);
+  const fork = await p.$(".turnfoot [data-fork]");
+  check("each reply has a Branch button", !!fork);
+  if (fork) { await fork.click(); await p.waitForTimeout(1500); }
+  check("Branch opens a new chat with the conversation so far", await p.evaluate(b4 => !!S.cur && S.cur.id !== b4 &&
+        (S.cur.log || []).some(e => e.type === "user") && /\(branch\)/.test(S.cur.view?.title || ""), before),
+        await p.evaluate(() => S.cur?.view?.title));
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);
