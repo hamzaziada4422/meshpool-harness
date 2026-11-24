@@ -1149,6 +1149,7 @@ class Agent:
         self.id = session_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
+        self.ws.engine_libs = False                    # the user's project runs its own Python (core/tools._py_env)
         self.ws.visible = self._text_visible        # re-read pointers only while the text is really there
         self.ws.should_stop = lambda: self._stop
         self.ws.get_mode = lambda: self.mode
@@ -1606,6 +1607,7 @@ class Agent:
         self.unfinished = False
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
+        self.ws.engine_libs = False                    # the user's project runs its own Python (core/tools._py_env)
         self.ws.visible = self._text_visible
         self.ws.should_stop = lambda: self._stop
         self.ws.get_mode = lambda: self.mode

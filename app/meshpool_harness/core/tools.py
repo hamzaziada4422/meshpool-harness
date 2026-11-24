@@ -684,6 +684,17 @@ class Workspace:
 
     max_tool_chars = MAX_TOOL_CHARS          # lowered for a small context window (core/context.py)
 
+    engine_libs = True        # an engine's own scripts import its helper libraries (from engines.sheets import ...)
+
+    def _py_env(self, env: dict) -> dict:
+        """The Python environment for a command: the user's project gets its own Python only (the chat agent sets
+        engine_libs False); an engine's workspace also gets Meshpool's app folder, for its helper libraries."""
+        env = _user_python_env(env)
+        if self.engine_libs:
+            app = str(Path(__file__).resolve().parents[2])
+            env["PYTHONPATH"] = app + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        return env
+
     def _cap(self, text: str, label: str) -> str:
         text = _squeeze(clean(text))
         cap = self.max_tool_chars
@@ -1384,7 +1395,7 @@ class Workspace:
             if _C.packaged():                                       # the user's own tools, not Meshpool's Python
                 env = _C.user_env()
             else:
-                env = _user_python_env(_C.scrub_env(dict(os.environ)))
+                env = self._py_env(_C.scrub_env(dict(os.environ)))
             if self.container and not command.lstrip().startswith("docker "):
                 cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
                 r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
@@ -1452,7 +1463,7 @@ class Workspace:
         if _C.packaged():
             env = _C.user_env()
         else:
-            env = _user_python_env(_C.scrub_env(dict(os.environ)))
+            env = self._py_env(_C.scrub_env(dict(os.environ)))
         env.setdefault("PYTHONUTF8", "1")
         env["PYTHONUNBUFFERED"] = "1"
         self._scratch(env)
