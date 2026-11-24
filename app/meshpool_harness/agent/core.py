@@ -976,8 +976,8 @@ def _requirements(text: str) -> int:
 
 
 REQ_NOTE = ("\n\n\u200b[Meshpool] Before you finish, list each rule the request states, one line each, and next to it "
-            "the check (command and output) that shows it holds. Test the edge cases the request names. A rule you did "
-            "not check is not done.")
+            "the check (command and output) that shows it holds. Test the edge cases the request names, and if the input "
+            "could be large, time it on a large input too. A rule you did not check is not done.")
 KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
              "the current code and save its exact output; after your edits, run it again and compare line by line.")
 
