@@ -415,6 +415,13 @@ def read_document(path: str, sheet: str | None = None, pages: str | None = None,
     return docread.extract(p, sheet=sheet, pages=pages, lang=language or "auto", ocr=ocr or "auto"), False
 
 
+XLSX_OPS = "set_cell, add_row, add_comment, clear_cell, set_range, delete_rows, add_sheet, delete_sheet, freeze_panes"
+# names models reach for (seen in office1-3 transcripts: set_formula 58x, delete_rows 34x, set_value 30x, clear_cell 28x)
+_XLSX_ALIASES = {"set_formula": "set_cell", "set_value": "set_cell", "write_cell": "set_cell", "delete_row": "delete_rows",
+                 "remove_rows": "delete_rows", "clear": "clear_cell", "clear_range": "clear_cell", "remove_sheet": "delete_sheet",
+                 "create_sheet": "add_sheet", "write_range": "set_range", "append_row": "add_row"}
+
+
 def edit_office_file(path: str, operations: list, output: str | None = None, in_place: bool = False):
     """Change an existing .docx, .xlsx or .pptx without rebuilding it: styles, formulas and layout stay. Works without
     LibreOffice. By default the result is a copy '<name> (edited).<ext>'; in_place=true changes the file itself."""
@@ -429,7 +436,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
         return ("Give `operations`: a list of {op, ...} steps. Word: replace_text{find,replace}, "
                 "tracked_replace{find,replace}, tracked_delete{find}, tracked_insert_after{find,text}, "
                 "append_paragraph{text}, add_comment{find,text}. Excel: set_cell{sheet,cell,value or =formula}, "
-                "add_row{values}, add_comment{sheet,cell,text}. PowerPoint: replace_text{find,replace}, "
+                "add_row{values}, add_comment{sheet,cell,text}, clear_cell{sheet,cell or range}, set_range{sheet,start,values[[...]]}, "
+                "delete_rows{sheet,row,count}, add_sheet{name}, delete_sheet{sheet}, freeze_panes{sheet,cell}. PowerPoint: replace_text{find,replace}, "
                 "set_notes{slide,text}."), True
     out = p if in_place else (_resolve(output) if output else _free(p.with_name(f"{p.stem} (edited){ext}")))
     if out != p:
@@ -440,7 +448,7 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
             from docx import Document
             doc = Document(str(out))
             for o in operations:
-                op = o.get("op")
+                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
                     op = "tracked_replace"                  # replace_text{tracked: true} asks for a tracked change
                 if op == "replace_text":
@@ -480,9 +488,55 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                 except KeyError:
                     errors.append(f"no sheet {o.get('sheet')!r}: sheets are {wb.sheetnames}")
                     continue
+                op = _XLSX_ALIASES.get(op, op)
                 if op == "set_cell":
-                    ws[o["cell"]] = o.get("value")
+                    v = o.get("value", o.get("formula"))
+                    if isinstance(v, str) and o.get("formula") is not None and not v.startswith("="):
+                        v = "=" + v
+                    ws[o["cell"]] = v
                     done.append(f"{ws.title}!{o['cell']} set")
+                elif op == "clear_cell":
+                    refs = [r for r in (o.get("cells") or [o.get("cell") or o.get("range")]) if r]
+                    if not refs:
+                        errors.append("clear_cell needs cell, range or cells")
+                        continue
+                    for ref in refs:
+                        rows = ws[ref] if ":" in str(ref) else ((ws[ref],),)
+                        for row in rows:
+                            for cell in row:
+                                cell.value = None
+                    done.append(f"cleared {', '.join(map(str, refs))} on {ws.title}")
+                elif op == "set_range":
+                    start = openpyxl.utils.cell.coordinate_from_string(o.get("start") or o.get("cell") or str(o.get("range", "A1")).split(":")[0])
+                    c0, r0 = openpyxl.utils.column_index_from_string(start[0]), start[1]
+                    for i, vals in enumerate(o.get("values") or []):
+                        for j, v in enumerate(vals if isinstance(vals, list) else [vals]):
+                            ws.cell(row=r0 + i, column=c0 + j, value=v)
+                    done.append(f"{ws.title}: {len(o.get('values') or [])} row(s) written from {start[0]}{start[1]}")
+                elif op == "delete_rows":
+                    first = int(o.get("row") or o.get("start") or o.get("idx") or 0)
+                    n = int(o.get("count") or o.get("amount") or 1)
+                    if first < 1:
+                        errors.append("delete_rows needs row (1-based) and optional count")
+                        continue
+                    ws.delete_rows(first, n)
+                    done.append(f"deleted {n} row(s) from row {first} on {ws.title}")
+                elif op == "add_sheet":
+                    name = o.get("name") or o.get("title") or o.get("new_sheet")
+                    if not name or name in wb.sheetnames:
+                        errors.append(f"add_sheet needs a new name (sheets are {wb.sheetnames})")
+                        continue
+                    wb.create_sheet(name)
+                    done.append(f"added sheet {name!r}")
+                elif op == "delete_sheet":
+                    if len(wb.sheetnames) < 2:
+                        errors.append("cannot delete the only sheet")
+                        continue
+                    wb.remove(ws)
+                    done.append(f"deleted sheet {ws.title!r}")
+                elif op == "freeze_panes":
+                    ws.freeze_panes = o.get("cell") or "A2"
+                    done.append(f"froze panes at {ws.freeze_panes} on {ws.title}")
                 elif op == "add_row":
                     ws.append(o.get("values") or [])
                     done.append(f"row added to {ws.title}")
@@ -490,13 +544,13 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     ws[o["cell"]].comment = Comment(o.get("text", ""), o.get("author") or "Meshpool")
                     done.append(f"comment on {ws.title}!{o['cell']}")
                 else:
-                    errors.append(f"unknown op {op!r} (set_cell, add_row, add_comment)")
+                    errors.append(f"unknown op {op!r} ({XLSX_OPS})")
             wb.save(str(out))
         else:
             from pptx import Presentation
             prs = Presentation(str(out))
             for o in operations:
-                op = o.get("op")
+                op = {"replace": "replace_text", "find_replace": "replace_text"}.get(o.get("op"), o.get("op"))
                 if op == "replace_text":
                     paras = [pp for sl in prs.slides for sh in sl.shapes if sh.has_text_frame for pp in sh.text_frame.paragraphs]
                     n = _replace_in_paragraphs(paras, o.get("find", ""), o.get("replace", ""))
@@ -891,10 +945,11 @@ TOOLS = {
                       "email, HTML or image file as text (OCR for scans). `sheet`, `pages` (\"1-3,7\"), `language`, "
                       "`ocr` (auto, always, never) are optional.",
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
-    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx without rebuilding it (formatting "
-                         "and formulas stay). Saves '<name> (edited)' unless in_place=true. `operations`: list of "
-                         "{op, ...}; ops are listed if one is missing. Word tracked changes: tracked_replace{find,replace} "
-                         "(every place, formatting kept), tracked_delete{find}, tracked_insert_after{find,text}.",
+    "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx; formatting and formulas stay. "
+                         "Saves '<name> (edited)' unless in_place=true. operations: [{op,...}]. Word: replace_text, "
+                         "tracked_replace{find,replace}, tracked_delete, tracked_insert_after, add_comment. Excel: "
+                         "set_cell{sheet,cell,value; =formula}, set_range{start,values}, clear_cell, add_row, "
+                         "delete_rows{row,count}, add_sheet, delete_sheet, freeze_panes.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
     "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
