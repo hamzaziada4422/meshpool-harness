@@ -769,9 +769,10 @@ def test_harness_configs_for_azure(home, mk):
     cfg = json.loads((HR.opencode_home() / "opencode.json").read_text())
     base = cfg["provider"]["meshpool"]["options"]["baseURL"]
     assert base.startswith("http://127.0.0.1:") and base != p.base and KEY not in json.dumps(cfg)
-    HR.prepare_hermes("my-gpt4o")
+    henv = HR.prepare_hermes("my-gpt4o") or {}          # M23-05: the shared file names ${VAR}s; each chat's env holds the values
     h = yaml.safe_load((HR.hermes_home() / "config.yaml").read_text())
-    assert h["model"]["base_url"].startswith("http://127.0.0.1:") and h["model"]["api_key"] != KEY
+    resolve = lambda v: henv.get(v[2:-1], v) if isinstance(v, str) and v.startswith("${") else v   # noqa: E731
+    assert resolve(h["model"]["base_url"]).startswith("http://127.0.0.1:") and resolve(h["model"]["api_key"]) != KEY
     HR.prepare_codex("my-gpt4o")
     toml = (HR.codex_home() / "config.toml").read_text()
     assert f'base_url = "{p.origin}/openai"' in toml and 'query_params = { api-version = "2025-04-01-preview" }' in toml

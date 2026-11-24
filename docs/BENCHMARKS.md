@@ -45,6 +45,15 @@ What changed since 0.0.12, and what it did:
   the budget (values, not formulas linked to the assumptions) and the PDF report (time limit). Pi failed the budget
   once in this run.
 
+**Re-run after the compaction fix (24 November 2026, same tasks and model, one run).** The summarize-every-step loop
+is gone. Meshpool CLI 6/7 at $0.036 and 108 s per task; Meshpool Work 6/7 at $0.093 and 194 s; Meshpool on Codex 4/7
+at $0.030 and 103 s; Meshpool on Pi 5/7 at $0.049 and 139 s (Codex 7/7 at $0.011 and 45 s, Pi 6/7 at $0.006 and
+35 s, from the run above). Still more expensive and slower than both. What still costs more: Meshpool's own loop
+wrongly concludes the model's context window is 9k-50k tokens and shrinks its context, after which it repeats work
+(chart deck 229 calls, PDF report 209); and it has no brake on near-identical repeated edits (one CLI run appended a
+line to a scratch file 122 times). Both are being fixed in the agent's context handling. The default Work agent stays
+Meshpool Work: it is the only app option at 6/7. Raw rows: `docs/results/v4/fix-8dc9f501-office/`.
+
 Default agent: on these numbers the cheapest agent that passes is vanilla Pi or Codex; Meshpool keeps its own loop as
 the Work default only until a re-measure shows it at or under Codex. The decision is recorded in
 `hrouter` `builtin_for()` when the re-measure is done.
@@ -53,6 +62,25 @@ Coding sanity check (3 Exercism tasks: Python forth and zipper, Rust react with 
 GPT-6 Luna, one run): Pi 3/3 at $0.0025 and 32 s per task, Meshpool on Pi 3/3 at $0.0041 and 32 s, Meshpool Code
 3/3 at $0.0051 and 45 s, Codex 2/3 at $0.0063 and 54 s, Meshpool on Codex 2/3 at $0.0050. The full coding
 comparison is the 52-task evaluation below.
+
+## Public office suites (24 November 2026)
+
+Small fixed subsets of two public suites, graded with ports of their official evaluation code (kit:
+`testkit/bench3/public/`, sources and licences in its `SOURCES.md`): 6 SpreadsheetBench (verified 400) tasks, graded
+cell by cell after a LibreOffice recalculation, and 4 file-only OfficeBench tasks (no calendar or email apps).
+DeepSeek V4.1 Flash, one run per agent, same metering proxy.
+
+| Agent | SpreadsheetBench passed | $ per task | s per task | OfficeBench passed | $ per task | s per task |
+|---|---|---|---|---|---|---|
+| Codex CLI | 5/6 | $0.0070 | 25 | 4/4 | $0.0048 | 10 |
+| Meshpool Work | 6/6 | $0.0079 | 27 | 2/4 | $0.040 | 171 |
+| Meshpool on Codex | 3/6 | $0.0088 | n/a | 1/4 | $0.023 | n/a |
+
+On spreadsheet edits Meshpool Work solved one more task than Codex at 13% more cost and about the same time. On the
+OfficeBench file tasks it solved half as many at 8x the cost (one task looped for 201 calls). Meshpool on Codex hit
+the app's "still working after the turn ended" bug, so its times are not shown and its runs were stopped at the time
+limit; treat its pass rate as a lower bound. Six and four tasks are too few to rank on; they show where Meshpool
+stands on public tasks, not a final score.
 
 ## App agent, measured directly (12 November 2026, dev tasks)
 
