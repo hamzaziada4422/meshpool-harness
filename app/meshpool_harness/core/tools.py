@@ -1586,6 +1586,10 @@ class Workspace:
         h, where = self._known()[str(p)]
         if h != self._hash(text):
             return ""                             # changed since: a real read
+        vis = getattr(self, "visible", None)
+        if vis is not None and not vis(text):    # the history was compacted or trimmed: the text is gone, print it
+            self._known().pop(str(p), None)
+            return ""
         rel = os.path.relpath(p, self.root)
         return (f"[exit 0]\n[Meshpool] {rel} is unchanged since {where}; its full text is already in this "
                 "conversation above, so it was not printed again. Use it from there (or read a line range if you "

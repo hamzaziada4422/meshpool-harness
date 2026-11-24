@@ -128,3 +128,15 @@ def test_recheck_skips_writes_and_off_by_default(tmp_path):
     ws2.recheck = True
     ws2.shell(["bash", "-lc", "python3 -c 'print(1)' > out.txt"])
     assert "re-ran" not in ws2.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch")
+
+
+def test_a_reread_is_printed_again_once_the_text_has_left_the_history(tmp_path):
+    from meshpool_harness.agent.core import Agent
+    (tmp_path / "a.py").write_text("def total_price(items):\n    return sum(item.price * item.qty for item in items)\n")
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    text = (tmp_path / "a.py").read_text()
+    a.ws.remember_text(tmp_path / "a.py", text, "an earlier read")
+    a.messages.append({"role": "tool", "tool_call_id": "t", "content": "[exit 0]\n" + text})
+    assert "is unchanged since" in a.ws._reread("cat a.py", None)          # still in the conversation: pointer
+    a.messages[-1]["content"] = "[output trimmed]"                         # compaction dropped it
+    assert a.ws._reread("cat a.py", None) == ""                            # printed for real again
