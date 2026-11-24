@@ -360,6 +360,16 @@ def urlopen(req, timeout: float = 30, handlers=(), refuse_redirects: bool = Fals
     return _keyed().open(req, timeout, handlers, refuse_redirects=refuse_redirects)
 
 
+class _Opener:
+    """OPENER.open(req, timeout): the setup test's opener. Every redirect is refused (core.http.open with
+    refuse_redirects), so a key is never carried to another address."""
+    def open(self, req, timeout: float = 30):
+        return urlopen(req, timeout, refuse_redirects=True)
+
+
+OPENER = _Opener()
+
+
 # ---------- plain-words errors ---------------------------------------------------------------------------------------
 
 _KEY_PREFIXES = (("sk-ant-", "anthropic"), ("sk-or-", "openrouter"), ("gsk_", "groq"), ("AIza", "gemini"),
