@@ -3031,8 +3031,9 @@ class Agent:
             step["err"] = out[:160]
         with self._trace_lock:                         # one line per tool call: the benchmark's trace
             self.trace.append(step)
-        self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,
-                   "output": out[:6000] + ("\n..." if len(out) > 6000 else "")})
+        from meshpool_harness.redact import redact
+        self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,   # shown: secrets hidden
+                   "output": redact(out[:6000]) + ("\n..." if len(out) > 6000 else "")})
         return out
 
     # ---------- questions (ask_user) -----------------------------------------------------------------------------

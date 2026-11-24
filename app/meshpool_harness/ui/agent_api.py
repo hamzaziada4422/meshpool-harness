@@ -58,6 +58,11 @@ def _messages_from_events(events: list) -> list:
     return out
 
 
+def _redact(text: str) -> str:
+    from meshpool_harness.redact import redact
+    return redact(text)
+
+
 def events_from_messages(messages: list) -> list:
     """Rebuild a transcript from saved messages (for sessions reopened after the app restarted)."""
     evs, outputs = [], {m.get("tool_call_id"): m.get("content", "") for m in messages if m.get("role") == "tool"}
@@ -86,7 +91,7 @@ def events_from_messages(messages: list) -> list:
                             "mcp": f.get("name", "").startswith("mcp__"), "diff": ""})
                 evs.append({"type": "tool_end", "id": c.get("id"), "name": f.get("name", ""),
                             "ok": not out.startswith(("ERROR", "The user denied")),
-                            "denied": out.startswith("The user denied"), "output": out[:6000]})
+                            "denied": out.startswith("The user denied"), "output": _redact(out[:6000])})
     for i, e in enumerate(evs):
         e["i"] = i
     return evs
