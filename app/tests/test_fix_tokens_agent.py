@@ -877,3 +877,31 @@ def test_scratch_folders_are_removed_with_the_workspace_and_stale_ones_pruned(tm
     os.utime(old, (time.time() - 3 * 86400,) * 2)
     T._prune_scratch(str(tmp_path))
     assert not old.exists() and new.exists()
+
+
+def test_sigterm_ends_commands_still_running_in_their_own_process_group(tmp_path):
+    import os, signal, subprocess, sys, textwrap, time
+    script = tmp_path / "run.py"
+    marker = tmp_path / "child.pid"
+    script.write_text(textwrap.dedent(f"""
+        import sys; sys.path.insert(0, {str(os.getcwd())!r})
+        from meshpool_harness.core import tools as T
+        T.exit_cleanly_on_sigterm()
+        ws = T.Workspace({str(tmp_path)!r}, {str(tmp_path / "run")!r})
+        ws.bash("echo $$ > {marker}; sleep 60", 120)
+    """))
+    p = subprocess.Popen([sys.executable, str(script)])
+    for _ in range(100):
+        if marker.exists() and marker.read_text().strip():
+            break
+        time.sleep(0.1)
+    child = int(marker.read_text())
+    p.send_signal(signal.SIGTERM)
+    assert p.wait(20) == 143
+    time.sleep(0.5)
+    try:
+        os.kill(child, 0)
+        alive = True
+    except OSError:
+        alive = False
+    assert not alive                                      # the command's process group went with the agent

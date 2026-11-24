@@ -260,6 +260,22 @@ def _kill_all_background() -> None:
 __import__("atexit").register(_kill_all_background)
 
 
+def exit_cleanly_on_sigterm() -> None:
+    """SIGTERM (a supervisor, a benchmark, `kill`) skips atexit by default, so commands this process started in their
+    own process group outlived it and kept running (eval: check scripts at 99% CPU minutes after their agent was
+    gone). Turn it into a normal exit, so _kill_all_background runs. Only from the main thread, only when no one
+    else has set a handler."""
+    import signal
+    import threading
+    if os.name == "nt" or threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+            signal.signal(signal.SIGTERM, lambda *_: (_kill_all_background(), __import__("sys").exit(143)))
+    except (ValueError, OSError):
+        pass
+
+
 class AllStr(str):
     """An `old` text that edit replaces everywhere (replace_all)."""
 
@@ -1173,6 +1189,7 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
+        _BG_ALL.add(p)                                   # killed at exit too if this process ends mid-command
         box: dict = {}
         bufs = {"out": _Capped(), "err": _Capped()}
         over = threading.Event()
@@ -1241,6 +1258,7 @@ class Workspace:
                     p.kill()
                 th.join(5)
                 break
+        _BG_ALL.discard(p)                              # finished, stopped or timed out: no longer ours to kill
         out, err = box.get("out") or "", box.get("err") or ""
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
