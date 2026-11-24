@@ -331,10 +331,14 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
                                            or caps["wire"] == "anthropic" else ["openai", "anthropic"])
     auth_code = 0
     saw_missing = False
+    missing_base = ""
     last_status = 0
     for b in _candidates(base):
         for w in order:
             status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, auth_header.strip(), auth_scheme.strip().lower()))
+            if err == "tls" and urlparse(b).scheme == "https" and PV.keyless_ok(b):
+                plain = "http://" + base.split("://", 1)[1]           # a local server speaking plain http
+                return test(plain, api_key, wire, env, model, api_version, kind, auth_header, auth_scheme)
             if err:
                 out["error"] = _net_error(err, b) or "No server at that address. Check the address and your connection."
                 out["latency_ms"] = int((time.time() - t0) * 1000)
@@ -352,18 +356,44 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
                 return out
             if status in (401, 403):
                 auth_code = auth_code or status
-            elif status == 404 or (status == 200 and items is None):
+            elif status in (404, 405) or (status == 200 and items is None):
                 saw_missing = True
+                missing_base = missing_base or b
     out["latency_ms"] = int((time.time() - t0) * 1000)
     if auth_code:
         out["error"] = EP.explain(auth_code, None, kind=kind, host=host, key=key)
     elif saw_missing and model:          # no list, but a model was typed: a chat call proves the key
         return probe_now()
-    elif saw_missing:      # something answers, but has no /models: the key stays unchecked, the user types a model
-        out.update(ok=True, wire=("openai" if wire == "auto" else wire), base_url=base,
-                   error="Connected, but this endpoint does not list models: type a model name.")
+    elif saw_missing:
+        # Something answers but lists no models (or answered 200 with an error body or a web page): a tiny real call
+        # per wire finds the wire and checks the key. A 200 that is not a model's reply never counts as connected.
+        pm = "meshpool-connection-test"
+        hdr_name, hdr_scheme = auth_header.strip(), auth_scheme.strip().lower()
+        note = ""
+        for w in order:
+            st, dt, er = probe_chat(missing_base, key, pm, w, hdr_name, hdr_scheme, kind=kind)
+            if er:
+                out["error"] = _net_error(er, missing_base) or str(er)
+                return out
+            msg = ((dt.get("error") or {}).get("message") if isinstance(dt.get("error"), dict) else dt.get("error")) \
+                if isinstance(dt, dict) else ""
+            if st in (401, 403):
+                out["error"] = EP.explain(st, dt, kind=kind, host=host, key=key)
+                return out
+            named_model = st in (400, 404, 422) and "model" in str(msg or "").lower()
+            if (st == 200 and _is_reply(w, dt)) or st == 429 or named_model:
+                out.update(ok=True, wire=w, base_url=missing_base.rstrip("/"),
+                           error="Connected, but this endpoint does not list models: type a model name.")
+                return out
+            if st == 200 and not note:
+                note = _not_reply_msg(dt)
+        out["error"] = (note + " " if note and not note.startswith("The address answered") else "") + \
+            f"The address answered, but not like a model API ({last_status}). Check the address: it should end in " \
+            "/v1 for most services."
     elif last_status >= 500:
         out["error"] = f"The server answered with an error ({last_status}). Try again in a moment."
+    elif last_status == 402:
+        out["error"] = "The server asks for payment (402): add credit or check the billing for this key."
     elif last_status == 429:
         out["error"] = "The server is limiting requests right now (429). Try again in a moment."
     elif last_status:
@@ -398,7 +428,7 @@ def current() -> dict:
             "default_model": (C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "").strip(),
             "key_set": bool(k), "key_hint": k[-4:] if len(k) >= 8 else "",
             "provider": (C.read().get("MH_PROVIDER") or os.environ.get("MH_PROVIDER") or "meshpool"),
-            "host": PV.host(PV.key_base()), "kind": kind, "label": EP.caps(kind)["label"],
+            "host": PV.host(PV.key_base()), "azure": EP.is_azure(kind) or PV.is_azure(PV.key_base()), "kind": kind, "label": EP.caps(kind)["label"],
             "api_version": PV.key_api_version(), "deployment": EP.caps(kind)["deployment"],
             "auth_header": PV._ecfg("MH_AUTH_HEADER"), "auth_scheme": PV._ecfg("MH_AUTH_SCHEME"),
             "agent_notes": {h: PV.direct_agent_ok(h) for h in ("codex",) if PV.direct_agent_ok(h)}}
@@ -499,6 +529,10 @@ def chatgpt_login() -> dict:
     tok = d.get("tokens") if isinstance(d.get("tokens"), dict) else {}
     if not (tok.get("access_token") and tok.get("refresh_token")):
         out["note"] = "Codex is signed in with an API key, not a ChatGPT account. Sign in with ChatGPT instead."
+        return out
+    st = CG.signin_state()
+    if not st["ok"]:
+        out["note"] = st["reason"]              # e.g. ChatGPT refused the refresh token: sign in again
         return out
     out["usable"] = True
     idc = _claims(tok.get("id_token", ""))

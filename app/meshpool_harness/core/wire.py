@@ -420,6 +420,8 @@ class _Attempt(RuntimeError):
 
 class SimpleLedger:
     """Minimal drop-in for eval.ledger.Ledger when the harness is installed on its own."""
+    kind = ""                # class defaults: an instance made without __init__ still reads the address itself
+    api_version = ""
 
     def __init__(self, phase: str = "run"):
         from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
@@ -562,10 +564,12 @@ class SimpleLedger:
             time.sleep(1.5 * attempt)
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
-            raise RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
+            err = RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
                 status, payload, kind=self.kind or EP.resolve(base_url)[0], host=PV.host(base_url),
                 model=body.get("model", ""), key=api_key, api_version=self.api_version or EP.resolve(base_url)[1])
                 + retry_after)
+            err.body = payload           # the service's own error (param, code): callers learn refused fields from it
+            raise err
         from meshpool_harness import provider_setup as _PS
         shape = ("openai" if anthropic and sse_reply                  # a streamed Anthropic reply is assembled as chat
                  else "anthropic" if anthropic else "responses" if wire == "responses" else "openai")
