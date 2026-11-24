@@ -59,22 +59,6 @@ def test_cloned_workspaces_in_the_data_folder_are_not_trusted(env):         # H3
     assert TR.is_trusted(env / "home")
 
 
-def test_saved_rules_are_narrow(env):                                         # M3
-    rf = core.rule_for
-    assert rf("bash", {"command": "python -m pytest -q"}) == ["bash:python -m pytest", "bash:python -m pytest *"]
-    assert rf("bash", {"command": "node build.js --prod"}) == ["bash:node build.js", "bash:node build.js *"]
-    for c in ("bash scripts/x.sh", "env FOO=1 make", "sudo make install", "git -C x log", "npx something",
-              "python -c 'print(1)'", "make && make install"):
-        assert rf("bash", {"command": c}) == [], c
-    assert rf("bash", {"command": "npm test"}) == ["bash:npm test", "bash:npm test *"]
-    proj = env / "p"
-    proj.mkdir()
-    core.save_folder_rules(proj, rf("bash", {"command": "npm test"}))
-    b = core.Agent(str(proj), approve=lambda *x: ("no", ""), mode="ask")
-    assert b._permit("bash", {"command": "npm test"})[0] and b._permit("bash", {"command": "npm test -- --ci"})[0]
-    assert not b._permit("bash", {"command": "npm testify"})[0]            # a word boundary, not a prefix
-
-
 def test_save_with_nothing_narrow_is_allowed_once_only(env):                  # M4
     a = core.Agent(str(env), approve=lambda *x: ("save", ""), mode="ask")
     assert a._permit("bash", {"command": "make && make install"}) == (True, "")
@@ -196,19 +180,6 @@ def test_git_config_worktree_and_core_worktree_are_caught(env):               # 
     assert not T.git_config_safe(r2)
 
 
-@pytest.mark.parametrize("cmd", ["FOO=1 bash x", "powershell.exe -c x", "pwsh.exe x", "cmd.exe /c x", "setsid bash x",
-                                 "busybox sh", "stdbuf -o0 make", "npm run", "docker run --rm x"])
-def test_rule_for_saves_nothing_for_wide_commands(cmd):                        # R4
-    assert core.rule_for("bash", {"command": cmd}) == [], cmd
-
-
-def test_rule_for_keeps_the_runner_target():                                   # R4
-    assert core.rule_for("bash", {"command": "npm run build -- --prod"}) == ["bash:npm run build", "bash:npm run build *"]
-    assert core.rule_for("bash", {"command": "python3.12 manage.py migrate"}) == \
-        ["bash:python3.12 manage.py migrate", "bash:python3.12 manage.py migrate *"]
-    assert core.rule_for("bash", {"command": "cargo run release"}) == ["bash:cargo run release", "bash:cargo run release *"]
-
-
 @pytest.mark.parametrize("cmd", ["git log -- --output=x", "git diff -- ..", "git log .."])
 def test_words_after_double_dash_and_bare_dotdot(cmd):                         # R5
     assert not T.git_read_only(cmd)
@@ -233,13 +204,6 @@ def test_a_repo_with_its_own_git_hooks_gets_no_shortcut(env):                 # 
     assert not T.git_config_safe(r)
 
 
-@pytest.mark.parametrize("cmd", ["uv run python x.py", "poetry run python x", "npm exec node x", "docker exec ctr sh",
-                                 "kubectl exec pod ls", "pkexec ls", "systemd-run ls", "git config core.hooksPath x",
-                                 "make test", "conda run python x"])
-def test_rule_for_has_no_known_widening(cmd):                                   # N3
-    assert core.rule_for("bash", {"command": cmd}) == [], cmd
-
-
 def test_power_file_guard_maps_container_paths(env):                           # N4
     a, asked = _edits_agent(env)
     a.ws.container, a.ws.cdir = "ctr", "/workspace"
@@ -252,3 +216,126 @@ def test_power_file_commands_skip_saved_rules(env, cmd):                        
     core.save_folder_rules(env, ["bash:cp", "bash:cp *", "bash:sort", "bash:sort *", "bash:find", "bash:find *"])
     a, asked = _edits_agent(env)
     assert not a._permit("bash", {"command": cmd})[0] and asked
+
+
+# ---------------------------------------------------------------- saved rules: the exact command (fourth review F5)
+@pytest.mark.parametrize("cmd", ["python -m pytest -q", "npm test", "cargo test --release", "go test ./..."])
+def test_known_test_commands_keep_any_arguments(cmd):
+    rules = core.rule_for("bash", {"command": cmd})
+    assert len(rules) == 2 and rules[1].endswith(" *")
+
+
+@pytest.mark.parametrize("cmd", ["git log --oneline", "git fetch origin", "tar xf a.tar", "find src -name x",
+                                 "docker compose up", "uv run python x.py", "npm exec node x", "pkexec ls",
+                                 "powershell.exe -c x", "node build.js", "npm run build", "git config core.x y"])
+def test_other_commands_save_exactly_what_was_approved(env, cmd):
+    rules = core.rule_for("bash", {"command": cmd})
+    assert len(rules) == 1, rules
+    core.save_folder_rules(env, rules)
+    a = core.Agent(str(env), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._permit("bash", {"command": cmd})[0]                               # what was approved
+    assert not a._permit("bash", {"command": cmd + " --output=/tmp/x"})[0]       # never anything wider
+
+
+@pytest.mark.parametrize("cmd", ["FOO=1 bash x", "make && make install", "rm -rf build", "git log\rcalc"])
+def test_nothing_is_saved_for_prefixed_chained_or_destructive_commands(cmd):
+    assert core.rule_for("bash", {"command": cmd}) == []
+
+
+def test_saved_rule_respects_word_boundaries(env):
+    core.save_folder_rules(env, core.rule_for("bash", {"command": "npm test"}))
+    b = core.Agent(str(env), approve=lambda *x: ("no", ""), mode="ask")
+    assert b._permit("bash", {"command": "npm test -- --ci"})[0]
+    assert not b._permit("bash", {"command": "npm testify"})[0]
+
+
+# ---------------------------------------------------------------- fourth review
+@pytest.mark.parametrize("patch", [
+    "*** Begin Patch\n  *** Add File: .meshpool/hooks.json\n+{}\n*** End Patch",
+    "*** Begin Patch\n\t*** Add File: .mcp.json\n+{}\n*** End Patch",
+    "*** Begin Patch\r*** Add File: .meshpool/permissions.json\r+{}\r*** End Patch",
+    "*** Begin Patch\u2028*** Add File: .meshpool/mcp.json\u2028+{}\u2028*** End Patch",
+    "*** Begin Patch\n*** Add File: notes.md\n+hi\n *** Add File: .meshpool/hooks.json\n+{}\n*** End Patch",
+])
+def test_power_file_guard_reads_patches_like_the_tool(env, patch):              # F1
+    a, asked = _edits_agent(env)
+    assert not a._permit("apply_patch", {"input": patch})[0] and asked
+
+
+def test_bash_many_needs_every_command_allowed(env):                            # F2
+    core.save_folder_rules(env, ["bash:npm test", "bash:npm test *"])
+    a = core.Agent(str(env), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._permit("bash_many", {"commands": ["npm test", "npm test -- --ci"]})[0]
+    assert not a._permit("bash_many", {"commands": ["npm test", "touch pwned"]})[0]
+    (env / "home" / "permissions.json").write_text(json.dumps({"deny": ["bash:curl *"]}))
+    assert not core.Agent(str(env), approve=lambda *x: ("yes", ""), mode="auto")._permit(
+        "bash_many", {"commands": ["ls", "curl x"]})[0]                         # deny applies to each command
+
+
+def test_untrusted_folders_run_no_project_executables(env):                     # F3
+    from meshpool_harness.hrouter import packs
+    r = env / "repo"
+    (r / ".venv" / "bin").mkdir(parents=True)
+    tool = r / ".venv" / "bin" / "ruff"
+    tool.write_text("#!/bin/sh\ntouch pwned\n")
+    tool.chmod(0o755)
+
+    class W:
+        root = r
+    assert packs._tool(W, "ruff") != str(tool)
+    TR.trust(r)
+    assert packs._tool(W, "ruff") == str(tool)
+    TR.revoke(r)
+    asked = []
+    a = core.Agent(str(r), approve=lambda *x: (asked.append(x), ("no", ""))[1], mode="ask")
+    assert not a._permit("diagnostics", {"paths": ["a.py"]})[0] and asked
+
+
+def test_git_shortcut_off_for_unknown_config_and_submodules(env):               # F4
+    r = env / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    assert T.git_config_safe(r)
+    subprocess.run(["git", "-C", str(r), "config", "remote.origin.uploadpack", "touch x"], check=True)
+    assert not T.git_config_safe(r)
+    r2 = env / "repo2"
+    r2.mkdir()
+    subprocess.run(["git", "init", "-q", str(r2)], check=True)
+    (r2 / ".gitmodules").write_text("[submodule \"x\"]\n")
+    assert not T.git_config_safe(r2)
+
+
+def test_power_files_at_any_depth_are_guarded(env):                             # F6
+    a, asked = _edits_agent(env)
+    assert not a._permit("write_file", {"path": ".meshpool/worktrees/x/.meshpool/hooks.json", "content": "{}"})[0]
+
+
+@pytest.mark.parametrize("cmd", ["git log\rcalc.exe", "git status\u2028calc", "git log\tx"])
+def test_git_shortcut_refuses_control_and_unicode_breaks(cmd):                   # F7
+    assert not T.git_read_only(cmd)
+
+
+def test_saved_rules_never_cover_globs_on_paths(env):                            # F8
+    core.save_folder_rules(env, ["bash:cp *"])
+    a = core.Agent(str(env), approve=lambda *x: ("no", ""), mode="ask")
+    assert not a._permit("bash", {"command": "cp a .me?hpool/hook?.json"})[0]
+
+
+def test_container_patch_with_a_relative_base_does_not_crash(env):              # F9
+    a, asked = _edits_agent(env)
+    a.ws.container, a.ws.cdir = "ctr", "/workspace"
+    cmd = ["apply_patch", "*** Begin Patch\n*** Add File: notes.md\n+x\n*** End Patch"]
+    ok, _ = a._permit("shell", {"command": cmd, "workdir": "sub"})
+    assert ok in (True, False)
+
+
+def test_no_worktrees_in_a_repo_whose_git_runs_programs(env):                    # F10
+    from meshpool_harness import worktrees as WT
+    r = env / "repo"
+    r.mkdir()
+    subprocess.run("git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m i", shell=True,
+                   cwd=r, check=True)
+    subprocess.run(["git", "-C", str(r), "config", "core.fsmonitor", "touch pwned"], check=True)
+    with pytest.raises(WT.WorktreeError, match="run programs"):
+        WT.create(r, "x")
+

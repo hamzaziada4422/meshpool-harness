@@ -449,7 +449,17 @@ def _summary(name: str, args: dict) -> str:
 
 
 def _patch_files(patch: str) -> list:
-    return re.findall(r"(?m)^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$", str(patch or ""))
+    """Every path a patch writes, read by the same parser apply_patch uses (so the two can never disagree), plus
+    anything that looks like a header line, however it is indented or split."""
+    text = str(patch or "")
+    out = re.findall(r"\*\*\* (?:(?:Add|Update|Delete) File|Move to): ([^\r\n\x0b\x0c\x1c-\x1e\x85\u2028\u2029]+)", text)
+    try:
+        from meshpool_harness.core import applypatch as AP
+        for h in AP.parse(text):
+            out += [x for x in (getattr(h, "path", None), getattr(h, "move", None)) if x]
+    except Exception:  # noqa: BLE001 - a patch the tool cannot parse writes nothing
+        pass
+    return list(dict.fromkeys(x.strip() for x in out if x and x.strip()))
 
 
 def _summary_of(name: str, args: dict) -> str:
@@ -807,53 +817,29 @@ def _folder_key(root) -> str:
 _CHAINED = re.compile(r"[;&|`<>\n(){}$]")       # chaining, redirects, substitutions (bash and PowerShell)
 
 
-_WRAPPERS = {"env", "sudo", "doas", "time", "nohup", "xargs", "nice", "timeout", "watch", "exec", "eval", "command",
-             "builtin", "su", "ssh", "sh", "bash", "zsh", "fish", "dash", "pwsh", "powershell", "cmd", "npx", "uvx",
-             "pipx", "bunx", "dlx", "setsid", "busybox", "ionice", "stdbuf", "strace", "valgrind", "gdb", "chroot",
-             "unshare", "nsenter", "flock", "script", "expect", "start", "invoke-expression", "iex", "pkexec",
-             "runuser", "systemd-run", "firejail", "proxychains", "proxychains4", "torsocks", "ltrace", "hyperfine",
-             "parallel", "xvfb-run", "watchexec", "entr", "dbus-run-session", "caffeinate", "chronic", "with-contenv",
-             "bundle", "conda", "mamba", "pixi", "hatch", "tox", "nox", "just", "task", "make"}
-_INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "java"}   # uv, poetry: run verbs below
-_RUN_VERBS = {"run", "exec", "x", "dlx", "start", "run-script"}
+_ANY_ARGS = ("npm test", "npm run test", "pnpm test", "pnpm run test", "yarn test", "yarn run test", "bun test",
+             "pytest", "python -m pytest", "python3 -m pytest", "cargo test", "cargo build", "cargo check", "go test",
+             "go build", "go vet", "dotnet test", "dotnet build", "mvn test", "gradle test", "./gradlew test",
+             "ruff check", "ruff format", "black", "mypy", "eslint", "tsc", "make test", "make build", "ls")
 
 
 def rule_for(name: str, args: dict) -> list[str]:
-    """The narrow rules an "Always in this folder" answer saves: the command and its subcommand ("bash:npm test*"),
-    the edit tools, or this one tool. Nothing for a chained, destructive or empty command."""
+    """What an "Always in this folder" answer saves: for a command, that exact command; for a known test, build or
+    lint command (npm test, pytest, cargo test...), that command with any arguments. Edit tools or this one tool
+    otherwise. Nothing for a chained, redirected, destructive or VAR=value command."""
     if name in ("bash", "shell", "bash_start"):
         cmd = (T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")).strip()
-        if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}):
+        if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}) or re.search(r"[^\x20-\x7e]", cmd):
             return []
         w = cmd.split()
-        if "=" in w[0]:                            # FOO=1 cmd: an environment prefix, what follows is unknowable
+        if "=" in w[0]:                            # FOO=1 cmd: an environment prefix
             return []
-        prog = re.sub(r"\.(exe|cmd|bat|com|ps1)$", "", w[0].replace("\\", "/").rsplit("/", 1)[-1].casefold())
-        prog = re.sub(r"[\d.]+$", "", prog) or prog  # python3.12 -> python
-        if prog in _WRAPPERS:                          # env, sudo, sh -c, xargs...: what they run is unknowable
-            return []
-        plain = lambda x: bool(re.fullmatch(r"[A-Za-z][\w:.-]*", x))
-        if prog in _INTERPRETERS:                      # python -m pytest, node build.js: keep the module or script
-            if len(w) > 2 and w[1] == "-m" and re.fullmatch(r"[\w.-]+", w[2]):
-                keep = w[:3]
-            elif len(w) > 1 and not w[1].startswith("-") and re.fullmatch(r"[\w./-]+", w[1]):
-                keep = w[:3] if len(w) > 2 and plain(w[2]) else w[:2]   # python manage.py migrate
-            else:
-                return []
-            return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
-        if len(w) > 1 and w[1] in _RUN_VERBS:          # npm run build, cargo run, docker run: keep what it runs
-            target = re.sub(r"[\d.]+$", "", w[2].casefold()) if len(w) > 2 else ""
-            if len(w) < 3 or not plain(w[2]) or target in _WRAPPERS or target in _INTERPRETERS \
-                    or prog in ("docker", "podman", "kubectl", "nerdctl", "conda", "mamba"):
-                return []                              # uv run python, docker exec ctr: what runs is anything
-            return ["bash:" + " ".join(w[:3]), "bash:" + " ".join(w[:3]) + " *"]
-        if len(w) > 1 and not re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]):
-            return []                                  # an option or a path after the program: too wide to guess
-        if prog == "git" and len(w) > 1 and w[1] in ("config", "submodule", "filter-branch", "bisect", "rebase", "am",
-                                                     "apply", "hook", "difftool", "mergetool", "daemon", "archive"):
-            return []                                  # git config can name programs git will run later
-        keep = w[:2] if len(w) > 1 else w[:1]
-        return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
+        for pre in _ANY_ARGS:
+            pw = pre.split()
+            if w[:len(pw)] == pw:
+                return ["bash:" + pre, "bash:" + pre + " *"]
+        import glob as _glob
+        return ["bash:" + _glob.escape(" ".join(w))]   # exactly what was approved, nothing wider
     if name in ("edit", "write_file", "apply_patch", "notebook_edit"):
         return ["edit", "write_file", "apply_patch", "notebook_edit"]
     if name in ("bash_many",):
@@ -901,14 +887,27 @@ def _rule_hit(rules: list, name: str, args: dict) -> str:
 
 
 def _allow_hit(rules: list, name: str, args: dict) -> str:
-    """An allow rule that covers this call. A command rule ("bash:npm test*") covers one plain command only: never
-    one chained with ;, &&, ||, a pipe, a redirect or a $( ), unless the rule itself spells that out."""
+    """An allow rule that covers this call. A command rule covers one plain command only: never one chained or
+    redirected (; && || | < > ( ) { } $ and backquotes), never one with a control or non-ASCII character (a carriage
+    return separates statements in PowerShell), never one with a glob on a path. bash_many is allowed only when
+    every command is covered on its own."""
+    cmds = [str(c) for c in (args.get("commands") or [])]
+    if cmds:
+        hits = [_allow_hit(rules, "bash", {"command": c}) for c in cmds]
+        return hits[0] if all(hits) else ""
     hit = _rule_hit(rules, name, args)
     if hit.startswith("bash:"):
-        cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])))
-        if _CHAINED.search(cmd) and not _CHAINED.search(hit[5:]):
+        cmd = str(args.get("command") or args.get("cmd") or "")
+        if (_CHAINED.search(cmd) and not _CHAINED.search(hit[5:])) or re.search(r"[^\x20-\x7e]", cmd) or \
+                (re.search(r"[*?\[]", cmd) and re.search(r"/|(^|\s)\.", cmd)):
             return ""
     return hit
+
+
+def _deny_hit(rules: list, name: str, args: dict) -> str:
+    """A deny rule that matches the call, or any one command of a bash_many."""
+    return _rule_hit(rules, name, args) or next(
+        (h for h in (_rule_hit(rules, "bash", {"command": str(c)}) for c in (args.get("commands") or [])) if h), "")
 
 
 def _destructive(args: dict) -> bool:
@@ -2628,12 +2627,16 @@ class Agent:
             decision, note = self.approve("edit", f"Change {guard}? It decides what runs without asking.",
                                           self._diff(name, args))
             return decision in ("yes", "always", "save"), note or ""
-        hit = _rule_hit(rules["deny"], name, args)
+        hit = _deny_hit(rules["deny"], name, args)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
         if _allow_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
+        if name == "diagnostics" and self.mode != "auto" and not risky:
+            from meshpool_harness import trust as TRD
+            if not TRD.is_trusted(self.root):      # cargo check, dotnet build run the project's own build code
+                risky = "Run this folder's checks? Build checks run the project's own code, and the folder is not trusted."
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if not risky and name in ("bash", "shell") and not args.get("workdir") and \
@@ -2730,15 +2733,17 @@ class Agent:
         cdir = str(getattr(self.ws, "cdir", "") or "").rstrip("/") if getattr(self.ws, "container", None) else ""
         if cdir:                                   # container mode: /workspace/x is the project's x
             paths = [p[len(cdir) + 1:] if p.startswith(cdir + "/") else p for p in paths]
-            bases = [self.root / str(b)[len(cdir) + 1:] if str(b).startswith(cdir + "/") else b
+            bases = [self.root / str(b)[len(cdir) + 1:] if str(b).startswith(cdir + "/") else self.root / str(b)
                      for b in (args.get("_bases") or [""])] if args.get("_bases") else bases
+        tails = ("/.meshpool/hooks.json", "/.meshpool/permissions.json", "/.meshpool/mcp.json", "/.mcp.json")
         for p in filter(None, paths):
             for base in bases:
                 try:
                     q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
                 except (OSError, RuntimeError):
                     continue
-                hit = guarded.get(norm(q))
+                n = norm(q).replace("\\", "/")
+                hit = guarded.get(norm(q)) or next((t.lstrip("/") for t in tails if n.endswith(t)), "")
                 if hit:
                     return hit
         return ""

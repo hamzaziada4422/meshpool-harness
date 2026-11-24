@@ -115,6 +115,8 @@ def git_read_only(cmd: str) -> bool:
     only), every flag comes from a list of flags known to read, and no path leaves the project. Everything else
     asks. The caller also checks the repo's own config (git_config_safe), since git status and diff can run
     programs named there."""
+    if re.search(r"[^\x20-\x7e]", cmd or ""):              # a CR, tab or Unicode break separates statements somewhere
+        return False
     w = (cmd or "").split()
     if len(w) < 2 or w[0] != "git" or not all(_GIT_TOKEN.match(t) for t in w):
         return False
@@ -155,6 +157,15 @@ _GIT_RISKY_CONFIG = re.compile(r"(fsmonitor|pager|external|textconv|command|prog
                                r"worktree|^include|^includeif|^filter\.|^alias\.|^gpg\.|sshcommand)", re.I)
 
 
+_GIT_SAFE_KEY = re.compile(
+    r"^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|"
+    r"eol|safecrlf|quotepath|longpaths|checkstat|trustctime)|user\.[a-z]+|remote\.[^.]+\.(url|fetch|pushurl)|"
+    r"branch\..+\.(remote|merge|rebase|description)|pull\.(rebase|ff)|init\.defaultbranch|gc\.auto|color\.[a-z.]+|"
+    r"commit\.gpgsign|merge\.ff|push\.(default|autosetupremote)|fetch\.prune|lfs\.repositoryformatversion|"
+    r"maintenance\.(auto|strategy)|index\.(version|skiphash)|extensions\.objectformat|status\.showuntrackedfiles)$",
+    re.I)                                                  # anything else in a repo's own config: the shortcut is off
+
+
 def git_config_safe(root) -> bool:
     """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
     git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias."""
@@ -165,10 +176,12 @@ def git_config_safe(root) -> bool:
         return False
     if r.returncode not in (0, 1):
         return False
-    for line in r.stdout.splitlines():                    # the user's own global and system config are theirs
+    for line in r.stdout.splitlines():   # global, system and command (-c, GIT_CONFIG_PARAMETERS) scopes are the user's
         scope, _, key = line.partition("\t")
-        if scope in ("local", "worktree", "command") and _GIT_RISKY_CONFIG.search(key):
+        if scope in ("local", "worktree") and (_GIT_RISKY_CONFIG.search(key) or not _GIT_SAFE_KEY.match(key)):
             return False
+    if (Path(root) / ".gitmodules").exists():           # submodules have configs and hooks of their own
+        return False
     try:                                                  # hooks in the repo's own .git/hooks run on some reads
         h = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
                            timeout=10).stdout.strip()

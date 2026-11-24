@@ -90,6 +90,10 @@ def _include(root: Path, dest: Path) -> list[str]:
 
 def create(path, name: str = "", base: str = "") -> dict:
     root = repo_root(path)
+    from meshpool_harness.core import tools as T
+    if not T.git_config_safe(root):
+        raise WorktreeError("This repository's own git settings or hooks run programs, so Meshpool does not make "
+                            "worktrees in it. Use git worktree yourself if you trust it.")
     name = (name or "").strip() or _next_name(root)
     if not _NAME.match(name):
         raise WorktreeError("A worktree name uses letters, digits, dots, dashes and underscores.")
@@ -101,7 +105,7 @@ def create(path, name: str = "", base: str = "") -> dict:
         raise WorktreeError(f"The branch {branch} already exists. Pick another name.")
     _exclude(root)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _git(["worktree", "add", "-b", branch, str(dest), base or "HEAD"], root, timeout=300)
+    _git(["-c", "core.hooksPath=/dev/null", "worktree", "add", "-b", branch, str(dest), base or "HEAD"], root, timeout=300)
     copied = _include(root, dest)
     return {"name": name, "path": str(dest), "branch": branch, "repo": str(root), "copied": copied}
 

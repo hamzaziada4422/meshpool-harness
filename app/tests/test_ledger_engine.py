@@ -153,8 +153,8 @@ def test_always_in_this_folder_saves_a_narrow_rule(tmp_path, monkeypatch):
 
 def test_rule_for_is_narrow():
     from meshpool_harness.agent import core
-    assert core.rule_for("bash", {"command": "git commit -m x"}) == ["bash:git commit", "bash:git commit *"]
-    assert core.rule_for("bash", {"command": "./run.sh --fast"}) == []         # an option after the program: too wide
+    assert core.rule_for("bash", {"command": "git commit -m x"}) == ["bash:git commit -m x"]   # exactly that
+    assert core.rule_for("bash", {"command": "pytest -q"}) == ["bash:pytest", "bash:pytest *"]
     assert core.rule_for("bash", {"command": "make && make install"}) == []
     assert core.rule_for("bash", {"command": "rm -rf build"}) == []
     assert core.rule_for("edit", {}) == ["edit", "write_file", "apply_patch", "notebook_edit"]
