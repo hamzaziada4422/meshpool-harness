@@ -70,6 +70,13 @@ def _long(p) -> str:
 def _rm_readonly(func, path, _exc):
     try:
         os.chmod(path, stat.S_IWRITE | stat.S_IREAD)     # git's pack files are read-only: Windows refuses to delete them
+        parent = os.path.dirname(path)
+        if parent and not os.access(parent, os.W_OK):   # POSIX: an entry is removed through its folder, which must be writable
+            os.chmod(parent, stat.S_IRWXU)
+        if func in (os.rmdir, getattr(os, "rmdir", None)) and os.path.isdir(path) and os.listdir(path):
+            os.chmod(path, stat.S_IRWXU)                # a read-only folder whose entries could not be removed: unlock, retry
+            shutil.rmtree(path, **{"onexc" if sys.version_info >= (3, 12) else "onerror": _rm_readonly})
+            return
         func(path)
     except FileNotFoundError:
         pass
