@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>meshpool in Office</title>
+<style>body{font:15px/1.5 "Segoe UI",-apple-system,system-ui,sans-serif;max-width:680px;margin:32px auto;padding:0 16px;color:#0b131f}
+code{background:#f4f6f8;padding:1px 4px;border-radius:4px}@media(prefers-color-scheme:dark){body{background:#1b1d21;color:#eef0f3}code{background:#25282d}}</style>
+</head><body>
+<h1>meshpool in Excel, PowerPoint and Word</h1>
+<p>The meshpool panel lets you ask about what you selected and put the answer back into your workbook, deck or document. It talks only to the meshpool app running on this computer, which sends your request to the model you set up in meshpool, like any other chat.</p>
+<h2>Set it up</h2>
+<ol>
+<li>Run <code>meshpool office install</code>. It makes a certificate for localhost, asks before it trusts it, and adds the add-in to desktop Office.</li>
+<li>Start the meshpool app, then restart Excel, PowerPoint or Word.</li>
+<li>Click meshpool on the Home tab.</li>
+</ol>
+<p>Office on the web: Home, Add-ins, More add-ins, Upload My Add-in, then choose the manifest file that <code>meshpool office install</code> printed.</p>
+<h2>What the panel sends</h2>
+<p>Only when "Include the selection" is ticked: the selected cells (up to 4,000), the selected text, or, with nothing selected in Word or PowerPoint, the document's text (up to 60,000 characters). Nothing is written to your file until you click an Insert button. In Excel, Undo insert puts back what was there.</p>
+<h2>Remove it</h2>
+<p>Run <code>meshpool office uninstall</code>.</p>
+</body></html>

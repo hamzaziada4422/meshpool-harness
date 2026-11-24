@@ -109,6 +109,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 - **Quiet suggestions.** At most one short nudge at a time, only when a chat ends or you open the app, and always with what Meshpool saw. Switch it off in Settings.
 - **Receipts.** Time, cost where known, the agent chosen and the checks that ran, under each reply.
 - **Scheduled tasks and parallel sub-agents.**
+- **meshpool in Excel, PowerPoint and Word** (new, not yet checked in real Office): a panel on the Home tab that answers about your selection and inserts the answer ([setup](docs/setup/office-add-in.md)).
 - **You stay in control:** Enter adds to the task, Interrupt redirects it, Esc stops, and Undo reverses any reply.
 
 ## For developers

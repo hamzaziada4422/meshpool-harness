@@ -119,7 +119,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree", "office"}
 
 
 def _agent_parser():
@@ -349,6 +349,9 @@ def main(argv=None):
         return _trust_cli(argv[1:])
     if argv[0] == "worktree":                  # meshpool worktree list | add [name] | remove NAME [--force]
         return _worktree_cli(argv[1:])
+    if argv[0] == "office":                    # meshpool office install | status | uninstall | manifest
+        from meshpool_harness import office as OF
+        return OF.cli(argv[1:])
     if argv[0] == "run-due":
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)

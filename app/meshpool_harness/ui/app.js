@@ -2200,6 +2200,23 @@ async function renderSection(sec) {
       <div class="res ${c.installed ? "ok" : ""}">${c.available ? (c.installed ? (c.new_window ? "Installed. Open a new terminal window and type meshpool." : "Installed. In any terminal window, type meshpool.") : "Not on your PATH yet.") : "The meshpool command comes with the Meshpool app for Mac and Windows. On other computers, install it with the one-line installer on the Meshpool download page."}</div>
       ${c.available && !c.installed ? `<button class="btn primary" id="cliBtn" style="margin-top:8px">Install the meshpool command</button>` : ""}`;
     $("#cliBtn")?.addEventListener("click", async () => { try { const r = await post("/api/install-cli"); $(".res", b).textContent = r.message; } catch (e) { $(".res", b).textContent = e.message; } });
+  } else if (sec === "office") {
+    b.innerHTML = `${close}<h3>Excel, PowerPoint and Word</h3><p class="lead">Add a meshpool panel to the Home tab of Excel, PowerPoint and Word. Ask about what you selected, then insert the answer into your sheet, slide or document. The panel talks only to meshpool on this computer, and nothing changes in your file until you click Insert.</p>
+      <div class="res" id="ofRes">Checking…</div>
+      <p class="pnote" id="ofNote" hidden></p>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" id="ofInstall" hidden>Add meshpool to Office</button><button class="btn" id="ofRemove" hidden>Remove from Office</button></div>
+      <pre class="pnote" id="ofLines" hidden style="white-space:pre-wrap"></pre>`;
+    const show = r => {
+      const on = !!(r.manifest && r.certificate);
+      $("#ofRes").className = "res" + (on && r.running ? " ok" : "");
+      $("#ofRes").textContent = !on ? "Not added yet." : r.running ? `Added${r.sideloaded.length ? " to " + r.sideloaded.map(x => ({excel: "Excel", powerpoint: "PowerPoint", word: "Word"})[x]).join(", ") : ""}. Restart those apps, then click meshpool on the Home tab.` : "Added, but the panel is not being served. Quit and reopen meshpool.";
+      $("#ofNote").hidden = on; $("#ofNote").textContent = r.trust_note + (r.desktop_office ? " Your system asks you to confirm." : " There is no desktop Office here: use Office on the web and upload the manifest (Home, Add-ins, Upload My Add-in).");
+      $("#ofInstall").hidden = on; $("#ofRemove").hidden = !on;
+    };
+    const act = async (action, btn) => { btn.disabled = true; try { const r = await post("/api/office", {action}); show(r); $("#ofLines").hidden = false; $("#ofLines").textContent = (r.lines || []).join("\n"); } catch (e) { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; } btn.disabled = false; };
+    $("#ofInstall").onclick = e => act("install", e.currentTarget);
+    $("#ofRemove").onclick = e => act("uninstall", e.currentTarget);
+    api("/api/office").then(show).catch(e => { $("#ofRes").className = "res bad"; $("#ofRes").textContent = e.message; });
   } else if (sec === "advanced") {
     const CH = {MH_AGENT_PERMISSIONS: [["ask", "Supervised"], ["edits", "Auto-accept edits"], ["auto", "Full access"]], MH_AUTO_SUBSCRIPTIONS: [["0", "Off"], ["1", "On"]], MH_SUBAGENTS: [["1", "On"], ["0", "Off"]], MH_SUBAGENT_ACCESS: [["inherit", "Same as the chat"], ["edit", "Read and edit files, no commands"], ["read", "Read and research"]], MH_SUBAGENT_AUTO_APPROVE: [["0", "Off"], ["1", "On"]], MH_SUBAGENT_DEPTH: [["1", "1"], ["2", "2"], ["3", "3"]]};
     // Search keys and the GitHub token have their own pages (Web search, Connectors).

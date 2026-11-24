@@ -29,9 +29,15 @@ HERE = Path(__file__).resolve().parent
 RUNS = C.runs_dir()
 UPLOADS = RUNS / "_uploads"
 EXTRA_PREFIXES = ("/api/memory", "/api/xray", "/api/insights", "/api/work", "/api/summaries", "/api/receipt",
-                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/", "/api/trust", "/api/worktree")
+                  "/api/checks", "/api/firstrun", "/api/away", "/api/scheduler", "/api/fs", "/api/browser/", "/api/trust", "/api/worktree", "/api/office")
 
 TOKEN = secrets.token_urlsafe(24)
+OF_DIR = HERE.parent / "office"
+_ICONS: dict = {}
+# Only Office may show the add-in panel in a frame (Office on the web frames it; the desktop apps do not frame it).
+OFFICE_FRAMES = ("frame-ancestors 'self' https://*.officeapps.live.com https://*.office.com https://*.office365.com "
+                 "https://*.microsoft365.com https://*.sharepoint.com https://*.cloud.microsoft https://*.live.com")
+OFFICE_HTTPD: list = []
 UI_VER = secrets.token_hex(4)
 DESKTOP = False
 LAST_PING = [time.time()]
@@ -289,6 +295,18 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             return
 
+    def _office(self, name: str, size: str | None):
+        from meshpool_harness import office as OF
+        if size:
+            png = _ICONS.get(size) or _ICONS.setdefault(size, OF.icon_png(int(size)))
+            return self._send(200, png, "image/png", {"Cache-Control": "max-age=86400"})
+        data = (OF_DIR / name).read_bytes()
+        if name == "taskpane.html":
+            data = data.replace(b"__MESHPOOL_TOKEN__", TOKEN.encode())
+        ctype = {"html": "text/html; charset=utf-8", "js": "text/javascript; charset=utf-8",
+                 "css": "text/css; charset=utf-8"}[name.rsplit(".", 1)[1]]
+        return self._send(200, data, ctype, {"Content-Security-Policy": OFFICE_FRAMES} if name.endswith(".html") else None)
+
     def do_GET(self):
         if not self._host_ok():
             return self._send(403, {"error": "forbidden"})
@@ -327,6 +345,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200 if ok else 400, page.encode("utf-8"), "text/html; charset=utf-8")
         if u.path == "/healthz":
             return self._send(200, {"ok": True, "app": "meshpool"})
+        m = re.fullmatch(r"/office/(taskpane\.html|taskpane\.js|taskpane\.css|commands\.html|help\.html|icon-(16|32|64|80)\.png)", u.path)
+        if m:                                         # the Excel, PowerPoint and Word panel (meshpool_harness/office)
+            return self._office(m.group(1), m.group(2))
         if u.path == "/favicon.svg":
             return self._send(200, (HERE / "favicon.svg").read_bytes(), "image/svg+xml")
         m = re.fullmatch(r"/brand/((?:fonts/)?[\w.-]+\.(png|woff2))", u.path)
@@ -1130,6 +1151,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
         threading.Thread(target=_watchdog, args=(float(os.environ.get("MH_IDLE_EXIT_S", "1200")),), daemon=True).start()
     threading.Thread(target=A.scheduler_loop, daemon=True).start()
     threading.Thread(target=A.probe_mcp, daemon=True).start()
+    office = _start_office()
     if desktop:                                     # background update checks and downloads; install on quit
         try:
             from meshpool_harness import autoupdate as AU
@@ -1144,6 +1166,8 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print(f"  Open {url} in your browser if it did not open by itself.")
     print(f"  Settings file: {C.config_path()}")
     print(f"  Task outputs:  {RUNS}")
+    if office:
+        print(f"  Office panel:  {office}")
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
     print("")
     if open_browser:
@@ -1155,7 +1179,49 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     finally:
         A.close_all()
         httpd.server_close()
+        for srv in OFFICE_HTTPD:
+            srv.shutdown()
+            srv.server_close()
     return 0
+
+
+def _start_office() -> str:
+    """The HTTPS listener Excel, PowerPoint and Word load the meshpool panel from, once `meshpool office install`
+    made a certificate. Same handler and token as the app; localhost only (IPv4 and, where there is one, IPv6)."""
+    if os.environ.get("MH_OFFICE") == "0":
+        return ""
+    import socket
+    import ssl
+    from meshpool_harness import office as OF
+    cp = OF.cert_paths()
+    if not cp or not (OF.folder() / "manifest.xml").exists():     # only once the add-in was set up here
+        return ""
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.load_cert_chain(str(cp[0]), str(cp[1]))
+    except (OSError, ssl.SSLError) as e:
+        print(f"  The Office panel is off: its certificate did not load ({e}). Run: meshpool office install")
+        return ""
+
+    class _V6(_Server):
+        address_family = socket.AF_INET6
+
+    for cls, host in ((_Server, "127.0.0.1"), (_V6, "::1")):
+        try:
+            srv = cls((host, OF.port()), Handler)
+        except OSError as e:
+            if host == "127.0.0.1":
+                print(f"  The Office panel is off: port {OF.port()} is in use ({e}). Set MH_OFFICE_PORT to another one "
+                      "and run: meshpool office install")
+                return ""
+            continue                                      # no IPv6 loopback here
+        # the TLS handshake happens in the request's own thread, so a slow client never holds up the others
+        srv.socket = ctx.wrap_socket(srv.socket, server_side=True, do_handshake_on_connect=False)
+        srv.handle_error = lambda *a: None                # a client that refused the certificate: nothing to log
+        OFFICE_HTTPD.append(srv)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return OF.base_url() + "/office/taskpane.html"
 
 
 def _default_project() -> Path:

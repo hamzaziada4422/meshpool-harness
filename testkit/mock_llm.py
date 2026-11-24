@@ -37,6 +37,12 @@ def plan(messages, tools):
     done = [m for m in messages[last_user + 1:] if m["role"] == "tool"]
     step = len(done)
     u = utext.lower()
+    if "office table demo" in u:                          # the Office panel: a table to insert into a sheet
+        return ("text", "Here is the table:\n\n| Region | Sales | Share |\n|---|---:|---|\n| North | 120 | =B2/SUM(B$2:B$3) |\n| South | 80 | =B3/SUM(B$2:B$3) |\n\nInsert it where you like.")
+    if "office slide demo" in u:
+        return ("text", "Quarterly results\n- Sales grew **12%**\n- Costs held flat\n- Two new regions")
+    if "office question demo" in u and not done:
+        return ("tool", "ask_user", {"questions": [{"question": "Which quarter?", "options": [{"label": "Q1"}, {"label": "Q2"}]}]}) if "ask_user" in names else ("text", "no ask_user")
     if "the goal of this chat" in u and "goal test" in u:   # /goal: three turns, one file each, then done
         n = sum(1 for m in messages if m["role"] == "user" and "the goal of this chat" in str(m["content"]).lower())
         if step == 0:

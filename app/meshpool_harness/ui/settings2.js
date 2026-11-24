@@ -9,7 +9,7 @@ const SET_NAV = [
   [["account", "Account", "user", ["profile"]], ["billing", "Billing", "card", ["billing"]], ["usage", "Usage", "bolt", ["usage"]]],
   [["appearance", "Appearance", "palette", ["appearance"]], ["personal", "Your Meshpool", "brain", ["personal", "styles", "import"]], ["caps", "Capabilities", "tool", ["caps", "suggest", "web"]],
    ["notify", "Notifications", "bell", ["notify"]], ["privacy", "Privacy", "shield", ["data", "permissions"]]],
-  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
+  [["plugins", "Plugins", "plug", ["connectors", "skills", "plugins", "mcp", "office"]], ["code", "Code", "codebr", ["terminal", "advanced"]]],
   [["models", "Models and providers", "cpu", ["general", "models", "harnesses"]], ["scheduled", "Scheduled tasks", "clock", ["scheduled"]],
    ["company", "Company and brand", "stack", ["company"]], ["about", "About and updates", "help", ["about"]]],
 ];
@@ -17,7 +17,7 @@ const SET_GROUPS = SET_NAV.flat().map(([k, lb, , subs]) => [k, lb, subs]);      
 const SET_NAMES = {profile: "Profile", appearance: "Appearance", notify: "Notifications", suggest: "Suggestions", caps: "Features", personal: "Instructions and memory", styles: "Styles", web: "Web search",
   connectors: "Directory", skills: "Skills", plugins: "Plugins", mcp: "Custom tools", general: "Connection", models: "Models", harnesses: "Agents",
   usage: "Usage", billing: "Plan and billing", permissions: "Permissions", data: "Your data", import: "Import chats",
-  about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options"};
+  about: "About and updates", scheduled: "Scheduled tasks", terminal: "Terminal command", advanced: "More options", office: "Office apps"};
 // company.js adds "Company and brand" to this list, as it did before.
 const SECTIONS = Object.entries(SET_NAMES);
 const setName = k => SET_NAMES[k] || (SECTIONS.find(x => x[0] === k) || [])[1] || k;
