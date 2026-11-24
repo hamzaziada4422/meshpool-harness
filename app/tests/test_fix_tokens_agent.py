@@ -794,3 +794,21 @@ def test_a_success_or_a_changed_file_resets_the_failure_count(tmp_path, monkeypa
     g["fseq"] = 2
     a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
     assert g["fseq"] == 2                                   # a refusal is counted by the refusal guard, not here
+
+
+def test_keep_behaviour_clause_adds_a_hidden_capture_note(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    assert C._KEEP.search("Keep the current English output byte-for-byte identical.")
+    assert C._KEEP.search("The public API must remain unchanged.")
+    assert C._KEEP.search("Refactor it without changing the existing behavior")
+    assert not C._KEEP.search("Add French plurals to the report")
+    assert not C._KEEP.search("keep going until the tests pass")
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_turn", lambda: "done")
+    a.send("Add French. Keep the current English output byte-for-byte identical.")
+    assert a.messages[-1]["content"].endswith(C.KEEP_NOTE)
+    a.send("Add French plurals.")
+    assert C.KEEP_NOTE not in a.messages[-1]["content"]
+    monkeypatch.setenv("MH_KEEP_NOTE", "0")
+    a.send("Keep the output identical.")
+    assert C.KEEP_NOTE not in a.messages[-1]["content"]

@@ -955,6 +955,13 @@ def _bad_reply(resp) -> str:
     return ""
 
 
+# a request that says existing behaviour must not change: the agent is reminded to capture it before editing
+_KEEP = re.compile(r"byte[- ]for[- ]byte|\b(?:keep|leave|preserve)\b[^.\n]{0,60}\b(?:identical|unchanged|the same|as it is|"
+                   r"as is|intact)\b|\b(?:must|should|has to|have to)\s+(?:stay|remain)\s+(?:unchanged|identical|the same)"
+                   r"|\bwithout changing (?:the |its )?(?:current|existing) (?:output|behaviou?r|api)", re.I)
+KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
+             "the current code and save its exact output; after your edits, run it again and compare line by line.")
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
@@ -1400,6 +1407,9 @@ class Agent:
         if getattr(self, "unfinished", False):
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
+        if self.profile == "code" and not self.plan and os.environ.get("MH_KEEP_NOTE", "1") != "0" and _KEEP.search(text):
+            body += KEEP_NOTE                        # eval: the agent changed output it was told to keep, and its own
+                                                     # check printed the regressed line without it noticing
         if images:
             parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})
