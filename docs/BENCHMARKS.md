@@ -54,9 +54,18 @@ wrongly concludes the model's context window is 9k-50k tokens and shrinks its co
 line to a scratch file 122 times). Both are being fixed in the agent's context handling. The default Work agent stays
 Meshpool Work: it is the only app option at 6/7. Raw rows: `docs/results/v4/fix-8dc9f501-office/`.
 
-Default agent: on these numbers the cheapest agent that passes is vanilla Pi or Codex; Meshpool keeps its own loop as
-the Work default only until a re-measure shows it at or under Codex. The decision is recorded in
-`hrouter` `builtin_for()` when the re-measure is done.
+**Final run on the 0.0.15 release line (24 November 2026, same tasks and model, one run).** The gateway returned
+errors (HTTP 503) on 24% of office requests during this run, so 20 of the 28 office cells and most public-suite
+cells are marked gateway-hit and not counted either way. On the 8 clean office cells: mail-merge letters passed on
+every Meshpool option at $0.006-0.011 and 19-50 s; the budget passed on Meshpool on Codex ($0.014, 60 s) and on Pi
+($0.026, 144 s) but failed on Meshpool Work and CLI (values not linked to the assumptions); the PDF report failed on
+Meshpool Work and CLI (no chart in the PDF); Meshpool on Pi ran out of time on the invoices. Per-task calls, cost
+and seconds, with every gateway-hit cell marked: `docs/results/v4/final-cc8361db-office/NOTES.md`. This run does not
+show Meshpool at Codex or Pi quality on office work, so the comparison above (Codex 7/7 at $0.011 and 45 s, Pi 6/7
+at $0.006 and 35 s) still stands.
+
+Default agent: no Meshpool option has matched Codex or Pi at equal quality, cost and time, so `builtin_for()` is
+unchanged (Meshpool Work for Work chats) until a clean re-measure shows one that does.
 
 Coding sanity check (3 Exercism tasks: Python forth and zipper, Rust react with every test including ignored ones,
 GPT-6 Luna, one run): Pi 3/3 at $0.0025 and 32 s per task, Meshpool on Pi 3/3 at $0.0041 and 32 s, Meshpool Code
