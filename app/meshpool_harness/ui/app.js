@@ -1648,6 +1648,7 @@ async function panelGit(body) {
     <div><h4>Changes (${g.dirty})</h4><ul class="flist" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px;max-height:180px;overflow:auto">${g.files.map(f => `<li><span class="badge modified">${esc(GIT_WORD[String(f.status).trim()] || f.status)}</span><span class="p">${esc(f.path)}</span></li>`).join("") || `<li class="pnote" style="padding:6px 10px">Nothing to commit.</li>`}</ul></div>
     <div><h4>Commit</h4><textarea id="gmsg" rows="2" placeholder="What changed and why" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn primary" id="gcommit" ${g.dirty ? "" : "disabled"}>Commit all</button><button class="btn" id="gpush" ${g.remote ? "" : "disabled"}>Push</button><button class="btn" id="gpull" ${g.upstream ? "" : "disabled"}>Pull</button></div></div>
     <div id="chgBox"></div>
+    <div id="wtBox"></div>
     <div id="ciBox"><h4>Pull request, checks and deployments</h4><div class="pnote" style="padding:6px 0">Loading from GitHub...</div></div>
     <div><h4>Open a pull request</h4><input id="gprt" placeholder="Title (defaults to the last commit)" style="margin-top:6px"><textarea id="gprb" rows="3" placeholder="Description" style="margin-top:6px"></textarea><div class="row" style="margin-top:6px"><button class="btn" id="gpr" ${g.github ? "" : "disabled"}>Open pull request</button>${g.github ? "" : `<span class="stat">Needs a GitHub remote.</span>`}</div><div class="stat" id="gres"></div></div>
   </div>`;
@@ -1658,7 +1659,32 @@ async function panelGit(body) {
   $("#gpull").onclick = () => gitAct({action: "pull"});
   $("#gpr").onclick = () => gitAct({action: "pr", title: $("#gprt").value, body: $("#gprb").value});
   api("/api/git/changes?root=" + encodeURIComponent(root)).then(ch => { const b = $("#chgBox"); if (b) b.innerHTML = changesHTML(ch, g.branch); }).catch(() => {});
+  drawWorktrees(root);
   if (g.github) drawCI(root); else $("#ciBox").innerHTML = `<h4>Pull request, checks and deployments</h4><div class="stat">Pull requests, checks and deployments show here for repositories on GitHub.</div>`;
+}
+/* Worktrees meshpool made for this repository: a second checkout on its own branch, so a task never edits this one. */
+async function drawWorktrees(root) {
+  const box = $("#wtBox"); if (!box) return;
+  let r; try { r = await api("/api/worktree?root=" + encodeURIComponent(root)); } catch (e) { box.innerHTML = ""; return; }
+  const ws = r.worktrees || [];
+  const trim = x => String(x || "").replace(/[\\/]+$/, "");
+  const here = w => trim(curRoot()) === trim(w.path);
+  const state = w => w.missing ? "folder missing" : [w.dirty ? "uncommitted changes" : "", w.unpushed ? `${w.unpushed} commit${w.unpushed === 1 ? "" : "s"} not on another branch` : ""].filter(Boolean).join(", ") || "no changes";
+  box.innerHTML = `<h4>Worktrees (${ws.length})</h4>
+    ${ws.length ? `<ul class="flist wtl" style="border:1px solid var(--line-2);border-radius:var(--r-s);margin-top:6px">${ws.map((w, i) => `<li data-wt="${i}"><span class="cn"><b>${esc(w.name)}</b> <span class="dir">${esc(w.branch || "detached")}</span><br><span class="stat">${esc(state(w))}${here(w) ? " · this chat works here" : ""}</span></span>
+      <span class="row" style="gap:4px">${w.missing || here(w) ? "" : `<button class="linkbtn" data-wto="${i}">New chat here</button>`}<button class="linkbtn" data-wtr="${i}">Remove</button></span></li>`).join("")}</ul>`
+      : `<div class="stat" style="margin-top:6px">None. A worktree is a second checkout of this repository on its own branch, so a task can work there without touching this one.</div>`}
+    <div class="row" style="margin-top:6px"><button class="btn" id="wtNew">New worktree</button></div>`;
+  $("#wtNew").onclick = async () => { try { const w = await post("/api/worktree", {root, action: "create"}); toast(`Made ${w.name} on branch ${w.branch}`); drawWorktrees(root); } catch (e) { toast(e.message, 5000); } };
+  $$("[data-wto]", box).forEach(b => b.onclick = () => newThread(ws[+b.dataset.wto].path));
+  $$("[data-wtr]", box).forEach(b => b.onclick = async () => {
+    const w = ws[+b.dataset.wtr];
+    const lose = w.dirty ? " Its uncommitted changes are lost." : "";
+    const keep = w.unpushed ? ` Its branch ${w.branch} stays, with its commits.` : ` The branch ${w.branch} goes too when nothing would be lost.`;
+    if (!await ask({title: `Remove the worktree ${w.name}?`, text: `This deletes its folder.${lose}${keep}`, ok: w.dirty ? "Remove and discard changes" : "Remove"})) return;
+    try { const x = await post("/api/worktree", {root, action: "remove", path: w.path, force: !!(w.dirty || w.unpushed)}); toast(`Removed ${w.name}` + (x.branch_deleted ? "" : `; branch ${x.branch} kept`)); drawWorktrees(root); }
+    catch (e) { toast(e.message, 6000); }
+  });
 }
 const CK = {success: ["ok", "Passed"], failure: ["bad", "Failed"], timed_out: ["bad", "Timed out"], cancelled: ["bad", "Cancelled"],
   action_required: ["bad", "Needs action"], skipped: ["", "Skipped"], neutral: ["", "Neutral"]};

@@ -824,3 +824,56 @@ def test_sub_agent_grep_searches_attached_files_and_its_own_full_outputs(monkeyp
     out = c.ws.grep("needle", ".")
     spill = out.split("full output in ")[1].split("]")[0]
     assert "SPECIAL" in c.ws.grep("SPECIAL", spill)
+
+
+# ---------------------------------------------------------------- isolation: worktree
+def _repo(proj):
+    import subprocess
+    (proj / "app.py").write_text("x = 1\n")
+    subprocess.run("git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init", shell=True,
+                   cwd=proj, check=True)
+
+
+def test_sub_agents_in_worktrees_edit_the_same_file_without_colliding(monkeypatch, _env):
+    _repo(_env)
+    import re as _re
+
+    def child(b):
+        n = sum(1 for m in b["messages"] if m["role"] == "tool")
+        goal = _goal(b)
+        if n == 0:
+            val = "2" if "two" in goal else "3"
+            return _msg(calls=[("write_file", {"path": "app.py", "content": f"x = {val}\n"})])
+        return _msg("changed app.py")
+    seen = []
+    fake(monkeypatch, child, seen=seen)
+    a = _agent(_env)
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Set x to two in app.py", "isolation": "worktree"},
+                                       {"goal": "Set x to three in app.py", "isolation": "worktree"}]})
+    assert ok, out
+    data = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
+    wts = [r["worktree"] for r in data["results"]]
+    assert all(w["kept"] and w["uncommitted"] for w in wts)
+    vals = sorted((__import__("pathlib").Path(w["path"]) / "app.py").read_text() for w in wts)
+    assert vals == ["x = 2\n", "x = 3\n"]                                   # each in its own checkout
+    assert (_env / "app.py").read_text() == "x = 1\n"                      # the user's checkout untouched
+    assert all(w["branch"].startswith("meshpool/sub-") for w in wts) and "worktree: " in out
+    child_sys = [s["system"] for s in seen if s["child"]]
+    assert all("You work in your own git worktree" in s for s in child_sys)
+    assert all(_re.search(r"WORKSPACE: \S*\.meshpool/worktrees/sub-", s) for s in child_sys)
+
+
+def test_an_unchanged_worktree_is_removed(monkeypatch, _env):
+    _repo(_env)
+    fake(monkeypatch, lambda b: _msg("nothing to change"))
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Look at app.py and report", "isolation": "worktree"}]})
+    data = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
+    w = data["results"][0]["worktree"]
+    assert ok and not w["kept"] and "removed" in w["note"]
+    assert not __import__("pathlib").Path(w["path"]).exists()
+
+
+def test_worktree_isolation_outside_git_says_why(monkeypatch, _env):
+    fake(monkeypatch, lambda b: _msg("done"))
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Edit something here", "isolation": "worktree"}]})
+    assert not ok and "no worktree for this sub-agent" in out

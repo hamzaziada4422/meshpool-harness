@@ -87,6 +87,18 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
     return im.naturalWidth;
   });
   check("an image named in a reply is shown inline", loaded === 2, loaded);
+  // the Git panel lists meshpool's worktrees, opens a chat in one, and takes one away after asking
+  await p.evaluate(async () => { const d = document.createElement("div"); d.id = "wtPanelTest"; document.body.appendChild(d); await panelGit(d); });
+  const wtRow = await p.waitForSelector("#wtBox li[data-wt]", {timeout: 15000}).then(() => true, () => false);
+  check("Git panel lists the worktree with its branch and state", wtRow && /task-1[\s\S]*meshpool\/task-1[\s\S]*no changes/.test(await p.textContent("#wtBox")),
+        wtRow ? await p.textContent("#wtBox") : "no rows");
+  await p.click("#wtBox [data-wto]"); await p.waitForTimeout(400);
+  check("New chat here starts a chat in the worktree", /\.meshpool[\\/]worktrees[\\/]task-1$/.test(await p.evaluate(() => S.draft.project)));
+    await p.click("#wtBox [data-wtr]");
+  await p.waitForSelector(".dlg [data-a='1']"); await p.click(".dlg [data-a='1']");
+  await p.waitForFunction(() => /Worktrees \(0\)/.test(document.querySelector("#wtBox")?.textContent || ""), null, {timeout: 15000}).catch(() => {});
+  check("Remove asks, then deletes the worktree folder", /Worktrees \(0\)/.test(await p.textContent("#wtBox")) && !fs.existsSync(wdir));
+  await p.evaluate(() => document.getElementById("wtPanelTest")?.remove());
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

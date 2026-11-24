@@ -25,6 +25,7 @@ import shutil
 import threading
 import time
 import uuid
+from pathlib import Path
 
 BLOCKED = {"ask_user"}                                  # needs a person
 ASSISTANT_MCP = "mcp__meshpool_assistant__"           # memory, other chats, schedules, run_subtasks: none for them
@@ -163,7 +164,12 @@ def schema(max_children: int) -> dict:
         "context": {"type": "string", "description": "Background this sub-agent needs: file paths, error messages, "
                     "constraints, the language and tone of the result. Each sub-agent sees only its own context."},
         "output_schema": {"type": "object", "description": "Optional JSON Schema the final answer must match "
-                          "(the sub-agent then replies with JSON only)."}}, "required": ["goal"]}
+                          "(the sub-agent then replies with JSON only)."},
+        "isolation": {"type": "string", "enum": ["none", "worktree"], "description": "worktree: the sub-agent works "
+                      "in its own git worktree (a separate folder on its own branch), so sub-agents editing code at "
+                      "the same time never touch each other's files or the user's checkout. Its report gives the "
+                      "folder and branch; an unchanged worktree is removed. Git repositories only."}},
+        "required": ["goal"]}
     return {"type": "function", "function": {"name": "delegate_task", "description": (
         "Hand self-contained parts of a job to sub-agents that work at the same time, each in a fresh context with "
         "your tools and permissions; only each one's final report comes back. Use it for independent parts: "
@@ -204,7 +210,8 @@ def check_goals(tasks) -> list[dict]:
             raise ValueError("output_schema must be a JSON Schema object, like {\"type\": \"object\", ...}.")
         rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
                      "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
-                     "title": str(t.get("title") or goal.splitlines()[0])[:80]})
+                     "title": str(t.get("title") or goal.splitlines()[0])[:80],
+                     "isolation": "worktree" if str(t.get("isolation") or "").lower() == "worktree" else ""})
     if not rows:
         raise ValueError("Give at least one task with a goal.")
     return rows
@@ -386,7 +393,8 @@ class Delegation:
                     raise K.Interrupted()
                 super()._check_stop()
 
-        a = Child(str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
+        wt = rec.get("worktree")                         # isolation: worktree, its own folder and branch
+        a = Child(wt["path"] if wt else str(parent.root), mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
                   sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
                   mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
@@ -398,7 +406,7 @@ class Delegation:
 
         def grep_in_project(pattern, path=".", glob=None, **opts):   # a symlink must not carry a read outside the project
             # the places a sub-agent may read: the project, its own folder (full tool outputs), attached files
-            return grep(pattern, path, glob, inside_only=[parent.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
+            return grep(pattern, path, glob, inside_only=[parent.root, a.root, a.dir] + ([_uploads()] if _uploads() else []), **opts)
         a.ws.grep = grep_in_project
         glob = a.ws.glob
 
@@ -412,7 +420,11 @@ class Delegation:
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
-        block += f"\n\nWORKSPACE: {parent.root} (the project's instructions above apply to you too)"
+        block += f"\n\nWORKSPACE: {a.root if wt else parent.root} (the project's instructions above apply to you too)"
+        if wt:
+            block += (f"\n\nYou work in your own git worktree, {wt['path']}, on the branch {wt['branch']}: a separate "
+                      "checkout of the same repository, so other sub-agents and the user's checkout are never affected. "
+                      "Change files only here. Commit your work on this branch when it is done and tested.")
         block += ("\n\nWhen you are done, reply with a tight report: what you did, what you found (with a file path "
                   "or link for every fact), files you created or changed, and anything you could not do. You cannot "
                   "ask the user anything; if something needs them, say so in the report.")
@@ -437,6 +449,12 @@ class Delegation:
             return self._entry(sid, rec)
         a = None
         try:
+            if row["isolation"] == "worktree":
+                from meshpool_harness import worktrees as WT
+                try:
+                    rec["worktree"] = WT.create(self.parent.root, "sub-" + sid.rsplit("-", 1)[-1])
+                except WT.WorktreeError as e:
+                    raise RuntimeError(f"no worktree for this sub-agent: {e}") from None
             a = rec["agent"] = self._child(sid, index, rec)
             cfg_steps0 = a.max_steps
             reply = a.send(row["goal"]) or ""
@@ -507,6 +525,8 @@ class Delegation:
                         pass
                 shutil.rmtree(a.dir, ignore_errors=True)
                 rec["steps"] = sum(1 for m in a.messages if m.get("role") == "assistant")
+            if rec.get("worktree"):
+                rec["worktree"] = _settle_worktree(rec["worktree"])
         return self._entry(sid, rec)
 
     @staticmethod
@@ -556,7 +576,7 @@ class Delegation:
              "files_written": sorted(rec["files"])[:50],
              "tool_trace": [f"{t['tool']}({t['target'][:60]}){'' if t['ok'] is not False else ' failed'}"
                             for t in rec["trace"][-30:]]}
-        for k in ("error", "schema_valid", "schema_errors", "schema_retries"):
+        for k in ("error", "schema_valid", "schema_errors", "schema_retries", "worktree"):
             if k in rec:
                 e[k] = rec[k]
         rec["entry"] = e
@@ -614,6 +634,32 @@ class Delegation:
                 a.stop()
 
 
+def _settle_worktree(w: dict) -> dict:
+    """After a sub-agent in its own worktree: remove the worktree if nothing changed in it, else keep it and say
+    what is there, so the chat can review and merge the branch."""
+    from meshpool_harness import worktrees as WT
+    try:
+        st = next((x for x in WT.listing(w["path"]) if Path(x["path"]).resolve() == Path(w["path"]).resolve()), {})
+    except WT.WorktreeError:
+        st = {}
+    dirty, commits = bool(st.get("dirty")), int(st.get("unpushed") or 0)
+    out = {"path": w["path"], "branch": w["branch"], "kept": bool(dirty or commits), "uncommitted": dirty,
+           "commits": commits}
+    if not out["kept"]:
+        try:
+            WT.remove(w["path"])
+            out["note"] = f"no changes, so {w['branch']} and its folder were removed"
+            return out
+        except WT.WorktreeError as e:
+            out["kept"] = True
+            out["note"] = f"kept at {w['path']} (could not remove it: {e})"
+            return out
+    what = ", ".join(x for x in (f"{commits} commit(s)" if commits else "", "uncommitted changes" if dirty else "") if x)
+    out["note"] = (f"{what} on branch {w['branch']} in {w['path']}. Review it (git -C {w['path']} diff, git log) and "
+                   f"merge the branch, or remove it with: meshpool worktree remove {Path(w['path']).name}")
+    return out
+
+
 # ---------- the tool -------------------------------------------------------------------------------------------------
 def report(result: dict) -> str:
     """The results as the model reads them: a short text, then the JSON."""
@@ -622,6 +668,7 @@ def report(result: dict) -> str:
         lines.append(f"## Task {r['task_index'] + 1}: {r['goal'][:80]}\nstatus: {r['status']} ({r['exit_reason']}), "
                      f"{r['duration_seconds']} s, {r['steps']} steps"
                      + (f", files: {', '.join(r['files_written'][:10])}" if r["files_written"] else "")
+                     + (f"\nworktree: {r['worktree']['note']}" if r.get("worktree") else "")
                      + "\n\n" + r["summary"])
     head = f"{len(result['results'])} sub-agent report(s) (delegation {result['delegation_id']})."
     if result.get("note"):
