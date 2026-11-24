@@ -149,7 +149,8 @@ def main():
     from meshpool_harness.agent import office_mcp_server as O
     for fn, name in ((O.make_document, "smoke.docx"), (O.make_pdf, "smoke.pdf")):
         out, bad = fn("# Smoke test\n\nRevenue grew 12% to $4.2m.\n\n| a | b |\n|---|---|\n| 1 | 2 |", name)
-        if bad or not (proj / "Meshpool outputs" / name).stat().st_size:
+        made = proj / name            # a name the user gives is saved where they asked (the project folder)
+        if bad or not made.exists() or not made.stat().st_size:
             raise SystemExit(f"smoke: FAILED, {name}: {out}")
 
     bundled_media(proj)
