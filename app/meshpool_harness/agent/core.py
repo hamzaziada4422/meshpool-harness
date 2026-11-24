@@ -1844,8 +1844,15 @@ class Agent:
                 said = ""
                 shots = []
                 step_out = []
+                edit_failed = False
                 for batch in _batches(calls):
                     self._check_stop()
+                    if edit_failed:                  # an edit in this turn failed: what was meant to follow it is moot
+                        for c in batch:
+                            self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": (
+                                "Not run: an edit earlier in this turn failed, so this call was skipped. Fix the edit "
+                                "first, then run it again.")})
+                        continue
                     if len(batch) > 1:               # independent lookups: run together, answer in the asked order
                         from concurrent.futures import ThreadPoolExecutor
                         with ThreadPoolExecutor(max_workers=min(6, len(batch))) as ex:
@@ -1855,6 +1862,9 @@ class Agent:
                     step_out += outs
                     for c, out in zip(batch, outs):
                         self.messages.append({"role": "tool", "tool_call_id": c["id"], "content": clean(out)})
+                        if (c.get("function") or {}).get("name") in ("apply_patch", "edit", "write_file", "edit_file") \
+                                and str(out).lstrip().startswith(("ERROR", "Error", "error:")):
+                            edit_failed = True
                     if self.mcp is not None and getattr(self.mcp, "last_images", None):
                         shots += [(batch[-1].get("function", {}).get("name", ""), im) for im in self.mcp.last_images]
                         self.mcp.last_images = []

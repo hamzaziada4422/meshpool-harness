@@ -64,3 +64,22 @@ def test_a_scratch_file_write_is_allowed_but_is_not_project_progress(tmp_path):
     assert ws.edits == e0 and not ws.turn_files                       # written, but nothing counted as progress
     ws.write_file("real.py", "x = 1\n")
     assert ws.edits == e0 + 1
+
+
+def test_calls_after_a_failed_edit_in_the_same_turn_are_skipped(tmp_path):
+    import json
+    from tests.test_turnloop_caps import _agent
+    replies = iter([
+        {"tool_calls": [
+            {"id": "a", "type": "function", "function": {"name": "apply_patch", "arguments": json.dumps(
+                {"input": "*** Begin Patch\n*** Update File: missing.py\n@@\n-x\n+y\n*** End Patch"})}},
+            {"id": "b", "type": "function", "function": {"name": "shell", "arguments": json.dumps(
+                {"command": ["bash", "-lc", "echo ran > ran.txt"]})}}]},
+        {"content": "done"},
+    ])
+    a = _agent(tmp_path, lambda n, b: next(replies))
+    a.send("go")
+    tool = {m["tool_call_id"]: m["content"] for m in a.messages if m.get("role") == "tool"}
+    assert str(tool["a"]).startswith("ERROR") or "Failed" in str(tool["a"])
+    assert tool["b"].startswith("Not run: an edit earlier in this turn failed")
+    assert not (a.root / "ran.txt").exists()
