@@ -22,6 +22,15 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
     const n = await ends(); await p.fill("#input", text); await p.keyboard.press("Enter");
     await p.waitForFunction(k => S.cur?.view?.state === "idle" && (S.cur.log || []).filter(e => e.type === "turn_end").length > k, n, {timeout: 60000}).catch(() => {});
   };
+  // a new chat in a git folder can start in its own worktree (the plus menu)
+  require("child_process").execSync("git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init", {cwd: proj});
+  await p.evaluate(dir => { S.draft.project = dir; renderBar(); }, proj); await p.waitForTimeout(300);
+  await p.click("#attBtn"); await p.waitForTimeout(300);
+  let wt = false; for (const x of await p.$$("#ctx .mi")) if (/Work in a new worktree/.test(await x.textContent())) { await x.click(); wt = true; break; }
+  await p.waitForTimeout(1200);
+  const wdir = await p.evaluate(() => S.draft.project);
+  check("Work in a new worktree moves the new chat to its own checkout", wt && /\.meshpool[\\/]worktrees[\\/]task-1$/.test(wdir) && fs.existsSync(wdir), wdir);
+  await p.evaluate(dir => { S.draft.project = dir; renderBar(); }, proj);
   // a chat in the project: the trust note, then a code block
   await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(800);
   await send("show python code");

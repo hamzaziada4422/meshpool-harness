@@ -76,3 +76,10 @@ def test_cli_and_api(repo, monkeypatch, capsys, tmp_path):
     st, out = F.handle("POST", urlparse("/api/worktree"), json.dumps(
         {"root": str(repo), "action": "remove", "path": str(repo / ".meshpool" / "worktrees" / "api-1")}).encode())
     assert out["removed"] == "api-1"
+
+
+def test_the_app_routes_reach_the_worktree_api(repo):
+    """/api/work is a prefix of /api/worktree: the worktree route must win (a bug the browser test caught)."""
+    from meshpool_harness.ui import routes_extra as R
+    st, out = R.handle("GET", urlparse("/api/worktree?root=" + str(repo)))
+    assert st == 200 and out == {"worktrees": []}
