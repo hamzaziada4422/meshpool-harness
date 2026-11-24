@@ -26,6 +26,10 @@
   "core": {
    "extends": "codex",
    "lean_core": true
+  },
+  "c171": {
+   "extends": "codex",
+   "codex171": true
   }
  },
  "_source": "Lean core for every code route (docs/design/lean-core.md): Codex's design with a short codex-tuned prompt, workspace preload, re-check on edit and no extra verification layers. Measured on the 52 eval tasks, paired against Codex 0.171 on the same model, 3 rounds (docs/results/final20-22, verified in docs/results/verify-final20-22.md): 294/312 vs 280/312 solved, cost per solved 0.77x (95% CI 0.64-0.89), median per-task time 0.74x. The previous default is kept as the \"codex\" profile (MH_PROFILE=codex)."

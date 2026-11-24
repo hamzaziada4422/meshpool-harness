@@ -423,6 +423,90 @@ SCHEMAS["update_plan"] = _fn(
          "required": ["step", "status"], "additionalProperties": False}}}, ["plan"])
 
 
+# Codex CLI 0.171's exec_command (harness profile "c171", agent/core.py _c171): the definition exactly as Codex sent it
+# (docs/results/codex171-request/tools.json; Apache-2.0, see THIRD_PARTY_NOTICES.md), less the Responses API's
+# "strict": false, which is the chat API's default. It runs on the same command runner as bash and shell; the result
+# is formatted as Codex formats it (exec_result). There is no PTY and no session to come back to (no write_stdin):
+# tty, shell, justification, sandbox_permissions and prefix_rule are accepted and not used.
+SCHEMAS["exec_command"] = {"type": "function", "function": {
+    "name": "exec_command",
+    "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "cmd": {"type": "string", "description": "Shell command to execute."},
+            "justification": {"type": "string", "description":
+                              "User-facing approval question for `require_escalated`; omit otherwise."},
+            "login": {"type": "boolean", "description": "Request login-shell startup. Omit to inherit."},
+            "max_output_tokens": {"type": "number", "description":
+                                  "Output token budget. Defaults to 10000 tokens; larger requests may be capped by "
+                                  "policy."},
+            "prefix_rule": {"type": "array", "description":
+                            "Reusable approval prefix for `cmd`, only with "
+                            "`sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+                            "items": {"type": "string"}},
+            "sandbox_permissions": {"type": "string", "description":
+                                    "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` "
+                                    "for unsandboxed execution.", "enum": ["use_default", "require_escalated"]},
+            "shell": {"type": "string", "description": "Shell binary to launch. Defaults to the user's default shell."},
+            "tty": {"type": "boolean", "description":
+                    "True allocates a PTY for the command; false or omitted uses plain pipes."},
+            "workdir": {"type": "string", "description":
+                        "Working directory for the command. Defaults to the turn cwd."},
+            "yield_time_ms": {"type": "number", "description":
+                              "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."},
+        },
+        "required": ["cmd"],
+        "additionalProperties": False,
+    }}}
+EXEC_TOKENS = 10000         # exec_command's default max_output_tokens
+EXEC_POLICY_BYTES = 10000   # the model's truncation policy on top: Codex cut long outputs to 10,000 bytes (outputs.json)
+
+
+def _exec_tokens(text: str) -> int:
+    """Codex's token estimate: UTF-8 bytes / 4, rounded up (51 for 203 bytes, 7354 for 29,415: outputs.json)."""
+    return -(-len(text.encode("utf-8", "surrogatepass")) // 4)
+
+
+def _exec_truncate(text: str, budget: int) -> str:
+    """Codex's cut of a long output: a warning and the line count, then the first and last budget/2 bytes around
+    "…N chars truncated…" (outputs.json, "long": 29,415 bytes -> 5,000 + 5,000, "…19415 chars truncated…")."""
+    raw = text.encode("utf-8", "surrogatepass")
+    if len(raw) <= budget:
+        return text
+    half = budget // 2
+    head = raw[:half].decode("utf-8", "ignore")                      # whole characters only
+    tail = raw[len(raw) - (budget - half):]
+    while tail and (tail[0] & 0xC0) == 0x80:                          # never start inside a character
+        tail = tail[1:]
+    tail = tail.decode("utf-8", "ignore")
+    cut = len(text) - len(head) - len(tail)
+    lines = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
+    return (f"Warning: truncated output (original token count: {_exec_tokens(text)})\nTotal output lines: {lines}\n\n"
+            f"{head}…{cut} chars truncated…{tail}")
+
+
+def exec_result(output: str, code, wall_s: float, max_output_tokens=None, chunk_id: str | None = None) -> str:
+    """exec_command's result, byte for byte as Codex 0.171 writes it (docs/results/codex171-request/outputs.json)."""
+    import secrets
+    try:
+        tokens = int(max_output_tokens) if max_output_tokens is not None else EXEC_TOKENS
+    except (TypeError, ValueError):
+        tokens = EXEC_TOKENS
+    budget = min(max(1, tokens) * 4, EXEC_POLICY_BYTES)
+    parts = [f"Chunk ID: {chunk_id or secrets.token_hex(3)}", f"Wall time: {wall_s:.4f} seconds"]
+    if code is not None:
+        parts.append(f"Process exited with code {code}")
+    parts += [f"Original token count: {_exec_tokens(output)}", "Output:", _exec_truncate(output, budget)]
+    return "\n".join(parts)
+
+
+def exec_exit_code(out: str):
+    """The exit code an exec_command result reports, or None."""
+    m = re.match(r"Chunk ID: [0-9a-f]+\nWall time: [^\n]*\nProcess exited with code (-?\d+)\n", str(out or ""))
+    return int(m.group(1)) if m else None
+
+
 def _delegate_schema():
     from meshpool_harness.agent.delegate import schema
     return schema(12)
@@ -1386,7 +1470,7 @@ class Workspace:
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = d
         return env
 
-    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
+    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None, login=False):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -1410,9 +1494,11 @@ class Workspace:
                     env["CHERE_INVOKING"] = "1"
                     if _SB.requested(mode):
                         _SB.wrap(["x"], self.root, platform="win32")     # says once that it is not available here
-                    r = self._proc([bash, "-c", fix_nul_redirect(command)], env, timeout_s, encoding="utf-8", cwd=cwd)
+                    r = self._proc([bash, "-lc" if login else "-c", fix_nul_redirect(command)], env, timeout_s,
+                                   encoding="utf-8", cwd=cwd)
                 elif bash:
-                    r = self._proc(_SB.wrap([bash, "-c", command], self.root, cwd=cwd, mode=mode), env, timeout_s, cwd=cwd)
+                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode),
+                                   env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
@@ -1618,6 +1704,37 @@ class Workspace:
         out = self._run(script, secs, "bash", cwd=cwd)[0]
         self._remember_cat(script, cwd, out)
         return out
+
+    def exec_command(self, cmd, workdir=None, yield_time_ms=None, max_output_tokens=None, login=None, shell=None,
+                     tty=None, justification=None, sandbox_permissions=None, prefix_rule=None):
+        """Codex 0.171's exec_command (profile "c171"): `cmd` runs with bash -lc (bash -c when login is false) in
+        workdir (default: the project folder), on the same runner as bash and shell (stop, private $TMPDIR, the
+        user's own Python, the sandbox, the command log). Not a PTY session: the command runs to the end, and
+        yield_time_ms, when given, is its time limit (default: the bash tool's). The result is Codex's format
+        (exec_result): no Meshpool notes, no saved-output pointer, no error-context excerpts. An apply_patch given
+        as a heredoc is applied as a patch, as Codex intercepts it."""
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise ToolError("exec_command: `cmd` is empty")
+        cwd = None
+        if workdir:
+            d = self._path(str(workdir))
+            if not d.is_dir() and not (self.container and not self.mounted):
+                raise ToolError(f"workdir not found: {workdir}")
+            cwd = d
+        t0 = time.time()
+        hit = patch_from_shell(cmd)
+        if hit:
+            try:
+                out, code = self.apply_patch(hit[0], base=hit[1] or workdir), 0
+            except ToolError as e:
+                out, code = str(e), 1
+            return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
+        secs = None
+        if isinstance(yield_time_ms, (int, float)) and not isinstance(yield_time_ms, bool):
+            secs = max(1, -(-int(max(250, yield_time_ms)) // 1000))
+        text, code = self._run(cmd, secs, "bash", raw=True, cwd=cwd, login=login is not False)
+        out = text.split("\n", 1)[1] if text.startswith("[exit ") and "\n" in text else text
+        return exec_result(out, code, time.time() - t0, max_output_tokens)
 
     # -- subsumed retrieval: a whole-file read of text the model already has, unchanged, is answered from memory.
     # Measured on coding agents, re-reading code already in context occurs 2-6 times per task (arXiv 2609.30725);

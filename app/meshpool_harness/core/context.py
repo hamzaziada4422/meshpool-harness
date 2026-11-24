@@ -558,9 +558,9 @@ def tell_once(model: str, win: int, say, source: str | None = None) -> None:
 
 
 # ---------- tool schemas ------------------------------------------------------------------------------------------
-ESSENTIAL = ("read_file", "edit", "write_file", "apply_patch", "bash", "grep", "glob", "finish", "run_tests",
-             "diagnostics")
-MINIMAL = ("read_file", "edit", "write_file", "bash", "finish")
+ESSENTIAL = ("read_file", "edit", "write_file", "apply_patch", "bash", "exec_command", "grep", "glob", "finish",
+             "run_tests", "diagnostics")
+MINIMAL = ("read_file", "edit", "write_file", "bash", "exec_command", "finish")
 
 
 def compact_tools(tools: list | None, win: int) -> list | None:

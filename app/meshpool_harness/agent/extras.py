@@ -163,8 +163,9 @@ def hooks(root: Path) -> dict:
 
 
 # A hook names a tool the way Claude Code or Meshpool's classic tools do; the lean (Codex-style) lanes run "shell" and
-# "apply_patch". Each family matches every tool that does that job, in any letter case ("Bash", "Edit|Write" from a
-# Claude Code plugin; "bash", "edit" from a Meshpool hooks file). Saved permission rules use the same map.
+# "apply_patch", the "c171" profile "exec_command" (its script is `cmd`, read through permrules.commands_of). Each
+# family matches every tool that does that job, in any letter case ("Bash", "Edit|Write" from a Claude Code plugin;
+# "bash", "edit" from a Meshpool hooks file). Saved permission rules use the same map.
 
 
 def _hook_commands(name: str, args: dict) -> list[str]:

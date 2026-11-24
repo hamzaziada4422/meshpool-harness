@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextvars
 import copy
+import datetime
 import difflib
 import http.client
 import itertools
@@ -129,6 +130,36 @@ def _codex_prompt(lean: bool = False, work: bool = False) -> str:
         except OSError:
             pass
     return text
+
+
+def _c171_prompt() -> str:
+    """Codex CLI 0.171's base instructions (app/defaults/engines/codex/prompt-171.md, Apache-2.0): the text after the
+    NOTICE comment, exactly as the file has it (the comment is for readers of the file and is not sent)."""
+    try:
+        text = (C.APP / "defaults" / "engines" / "codex" / "prompt-171.md").read_text(encoding="utf-8")
+    except OSError:
+        return _codex_base()
+    return re.sub(r"\A<!--.*?-->\n", "", text, count=1, flags=re.S)
+
+
+def _local_timezone() -> str:
+    """The IANA name of this computer's time zone, as Codex's <timezone> gives it (Etc/UTC when it cannot tell)."""
+    tz = (os.environ.get("TZ") or "").lstrip(":").strip()
+    if tz and "/" in tz and not tz.startswith("/"):
+        return tz
+    try:
+        link = os.path.realpath("/etc/localtime")
+        if "zoneinfo/" in link:
+            return link.split("zoneinfo/", 1)[1].replace("posix/", "", 1).replace("right/", "", 1)
+    except OSError:
+        pass
+    try:
+        name = Path("/etc/timezone").read_text(encoding="utf-8").strip()
+        if name:
+            return name
+    except OSError:
+        pass
+    return "Etc/UTC"
 
 
 def _codex_base(lean: bool = False) -> str:
@@ -596,6 +627,8 @@ def _summary_of(name: str, args: dict) -> str:
     if name == "shell":
         cmd = T.shell_script(args.get("command"))
         return (f"cd {args['workdir']} && " if args.get("workdir") else "") + cmd
+    if name == "exec_command":
+        return (f"cd {args['workdir']} && " if args.get("workdir") else "") + str(args.get("cmd") or "")
     if name == "apply_patch":
         files = _patch_files(args.get("input"))
         return ", ".join(files[:6]) + (f" (+{len(files) - 6} more)" if len(files) > 6 else "") if files else "patch"
@@ -1220,11 +1253,41 @@ class Agent:
         """MH_LARGE_REPO_STYLE=codex (opt-in, unmeasured): a lean-core code chat in a repo too large to preload runs the
         plain Codex design instead (swe3: lean core 2.6x Codex's cost per solved task on swe_sympy): Codex's own
         prompt and loop, without preload, re-check, the keep and requirement notes, the route card or the grader."""
+        if self._c171():                                 # Codex 0.171's request: none of those layers either
+            return True
         try:
             return (self.profile == "code" and os.environ.get("MH_LARGE_REPO_STYLE", "") == "codex" and self._style()
                     and bool(self.hsettings().get("lean_core")) and self._large_repo())
         except Exception:  # noqa: BLE001
             return False
+
+    def _c171(self) -> bool:
+        """Harness profile "c171" (codex171, opt-in: MH_PROFILE=c171): a code chat sends the request Codex CLI 0.171
+        sends. Its base instructions (prompt-171.md), one tool, exec_command (core/tools.py), plus the user's own MCP
+        tools, and its <environment_context> as a user message of its own (_c171_env). Like _bare_codex: no preload,
+        re-check, keep or requirement notes, route card or grader. The loop guards and compaction stay."""
+        try:
+            return self.profile == "code" and self._style() and bool(self.hsettings().get("codex171"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _c171_env(self) -> str:
+        """Codex 0.171's environment context (docs/results/codex171-request/03-user.txt), fixed for the chat so the
+        prompt prefix stays the same from call to call. Meshpool has no sandbox for the agent's commands (its
+        permission modes ask before running them), so the file system part reads as Codex's full-access run did."""
+        env = getattr(self, "_c171_env_text", "")
+        if not env:
+            from meshpool_harness.config import find_bash
+            shell = "bash" if find_bash() else ("powershell" if os.name == "nt" else "sh")
+            root = str(self.root)
+            env = self._c171_env_text = (
+                f"<environment_context>\n  <cwd>{root}</cwd>\n  <shell>{shell}</shell>\n"
+                f"  <current_date>{datetime.date.today().isoformat()}</current_date>\n"
+                f"  <timezone>{_local_timezone()}</timezone>\n"
+                f"  <filesystem><workspace_roots><root>{root}</root></workspace_roots><permission_profile "
+                f"type=\"disabled\"><file_system type=\"unrestricted\" /></permission_profile></filesystem>\n"
+                "</environment_context>")
+        return env
 
     def _large_repo(self) -> bool:
         if not hasattr(self, "_is_large"):
@@ -1255,12 +1318,14 @@ class Agent:
         from meshpool_harness.config import find_bash
         bash = find_bash()
         if self._style():
-            text = _codex_prompt(lean=self._lean(), work=self.profile == "work")
+            c171 = self._c171()
+            text = _c171_prompt() if c171 else _codex_prompt(lean=self._lean(), work=self.profile == "work")
             for name in PROJECT_FILES:
                 pf = self.root / name
                 if pf.is_file():
                     body = pf.read_text(encoding="utf-8", errors="replace")[:20000]
-                    text += f"\n\n# {name} instructions for {self.root}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
+                    text = (text.rstrip("\n") if c171 else text) + \
+                        f"\n\n# {name} instructions for {self.root}\n\n<INSTRUCTIONS>\n{body}\n</INSTRUCTIONS>"
                     break
             return text
         if os.name == "nt":
@@ -1371,6 +1436,8 @@ class Agent:
                     return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             mcp = [x for x in self.mcp.schemas() if keep(x["function"]["name"])] if self.mcp else []
+            if self._c171():                       # Codex 0.171: exec_command, then the user's MCP tools
+                return T.schemas(["exec_command"]) + mcp
             if not self._office_direct():
                 return T.schemas(self._tool_names()) + mcp
             # MH_OFFICE_DIRECT=1: the engine tools come last and only once a message asked for a deck, report or
@@ -1423,6 +1490,8 @@ class Agent:
 
     def _tool_names(self) -> list:
         if self._codex():
+            if self._c171():
+                return ["exec_command"]
             if self._office_direct():                  # office_task only once a message asked for a deck or model
                 return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + \
                     (["office_task"] if self.office_engines else [])
@@ -1841,7 +1910,9 @@ class Agent:
         # re-check on edit (core/tools.py _recheck) follows the chat's lane on every turn: a resumed chat, or one whose
         # first message was not in Codex style, gets it too (and a chat that left the lean lane stops it)
         self.ws.recheck = bool(cx) and self._lean()
-        if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
+        if cx and len(self.messages) <= 2 and not self._c171():   # the route's method rides on the first message
+            # (hrouter). c171: Codex 0.171's environment context is a user message of its own, added to each request
+            # (_body), and nothing rides on the user's message
             extra = self._codex_env()
             if self._lean() and os.environ.get("MH_PRELOAD", "1") != "0" and not getattr(self.ws, "container", None):
                 try:                                 # the files, git state and source up front (agent/preload.py)
@@ -2276,7 +2347,8 @@ class Agent:
             name = str(t.get("tool", "")).replace("-", "_")
             if re.search(r"(^|__)check_(deck|workbook|document)$", name):
                 last_ok = i if t.get("ok", True) and not re.search(r"\bfail", str(t.get("arg", "")), re.I) else None
-            elif name in ("write_file", "edit", "apply_patch", "shell", "bash") or re.search(r"(^|__)(make_|edit_|add_|convert_)", name):
+            elif name in ("write_file", "edit", "apply_patch", "shell", "exec_command", "bash") or \
+                    re.search(r"(^|__)(make_|edit_|add_|convert_)", name):
                 last_write = i
         return last_ok is not None and last_ok > last_write
 
@@ -2453,7 +2525,8 @@ class Agent:
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
     _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
-    _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\])")
+    _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\]"
+                         r"|Chunk ID: \w+\nWall time: [^\n]*\nProcess exited with code (?!0\n))")   # exec_command
 
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
         out = self._guarded_tool_inner(c, g, cut)
@@ -2502,14 +2575,16 @@ class Agent:
             exact = name + ":" + args[:2000]
             # numbers-only variation (od -c | sed -n '8,9p', '9,10p') is a loop for shell commands only: read_file on
             # other line ranges or files numbered chunk_01, chunk_02 is real progress through a file
-            shape = name + ":" + re.sub(r"\d+", "#", args[:2000]) if name in ("bash", "bash_many", "shell") else exact
+            shape = (name + ":" + re.sub(r"\d+", "#", args[:2000])
+                     if name in ("bash", "bash_many", "shell", "exec_command") else exact)
             book = g.setdefault("loop", {})
             edits = self.ws.edits
             for key, limit in ((exact, self._LOOP_EXACT), (shape, self._LOOP_SHAPE)):
                 runs = [e for e in book.get(key, []) if e == edits]
                 if len(runs) + 1 >= limit and name not in ("todo_write", "update_plan", "ask_user", "finish"):
                     g["refused"] = g.get("refused", 0) + 1
-                    shown = ("what the command printed" if name in T.CODEX_TOOLS else "what read_file shows")
+                    shown = ("what the command printed" if name in T.CODEX_TOOLS or name == "exec_command"
+                             else "what read_file shows")
                     return ("[Meshpool] Not run: you already made this call (or the same call with only numbers "
                             f"changed) {len(runs)} times and no file has changed since, so the result would be the "
                             f"same. The file contents are exactly {shown} (plain text, no hidden "
@@ -2570,7 +2645,7 @@ class Agent:
         MH_FAILURE_HINT=1   the second identical failure gets a note to change approach."""
         f = c.get("function", {})
         key = str(f.get("name", "")) + ":" + str(f.get("arguments", ""))[:2000]
-        if os.environ.get("MH_REPEAT_SHAPE") == "1" and f.get("name") in ("shell", "bash", "bash_many"):
+        if os.environ.get("MH_REPEAT_SHAPE") == "1" and f.get("name") in ("shell", "exec_command", "bash", "bash_many"):
             key = re.sub(r"\d+", "#", key)
         runs = g.setdefault("same", [])
         edits = self.ws.edits
@@ -2612,7 +2687,7 @@ class Agent:
             return ("[Meshpool] Not run: this exact call has run three times with the same result. Running it again "
                     "changes nothing. Change the command or the files first, or finish and tell the user what is "
                     "blocking you.")
-        sh = (nm in ("shell", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
+        sh = (nm in ("shell", "exec_command", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
               and not self._POLL.search(str(f.get("arguments", ""))))     # a poll of a job or service may repeat
         sig = self._tree_sig() if sh else None
         if sh and sig is not None:
@@ -2634,7 +2709,8 @@ class Agent:
         out = self._run_tool(c, cut=cut)
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
-        failed = bool(re.search(r"\[exit (?!0\b)\d+\]|timed out|Traceback|Error|failed|not found", str(out)))
+        failed = bool(re.search(r"\[exit (?!0\b)\d+\]|Process exited with code (?!0\b)-?\d+|timed out|Traceback|Error|"
+                                r"failed|not found", str(out)))
         if os.environ.get("MH_FAILURE_HINT") == "1" and failed and \
                 any(r[0] == key and r[1] == h and r[2] == edits for r in runs):
             out = str(out) + ("\n[Meshpool] The same call failed the same way again. Do not repeat it: narrow it (one "
@@ -2663,7 +2739,8 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit code (137|124)\b|\bKilled\b|timed out", str(out)))
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit(?:ed with)? code (137|124)\b|\bKilled\b|timed out",
+                             str(out)))
         runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
@@ -2673,12 +2750,12 @@ class Agent:
         """A call that only reads: read_file, grep, glob, or shell commands that core/tools.read_only accepts."""
         if name in ("read_file", "grep", "glob"):
             return True
-        if name in ("bash", "bash_many", "shell"):
+        if name in ("bash", "bash_many", "shell", "exec_command"):
             try:
                 a = json.loads(args or "{}")
             except ValueError:
                 return False
-            cmds = a.get("commands") if name == "bash_many" else [a.get("command")]
+            cmds = a.get("commands") if name == "bash_many" else [a.get("cmd" if name == "exec_command" else "command")]
             if name == "shell" and a.get("command") is not None:
                 cmds = [T.shell_script(a["command"])]          # the script inside ["bash", "-lc", script]
             cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
@@ -2695,7 +2772,7 @@ class Agent:
         Inspection commands already have a refusal for this; this covers runs. 4th in a row: a note; 8th: tools off.
         MH_SHAPE_NUDGE / MH_SHAPE_WRAP tune it (0 turns it off)."""
         f = c.get("function", {})
-        if f.get("name") not in ("shell", "bash", "bash_many"):
+        if f.get("name") not in ("shell", "exec_command", "bash", "bash_many"):
             return ""
         if self._FAILED.match(str(out)):               # failing runs are the failure guard's: start over
             g.pop("shape_key", None)
@@ -2777,7 +2854,7 @@ class Agent:
             return ""
         f = c.get("function", {})
         args = str(f.get("arguments", ""))
-        if f.get("name") not in ("shell", "bash", "bash_many") or "<<" not in args and "tee" not in args:
+        if f.get("name") not in ("shell", "exec_command", "bash", "bash_many") or "<<" not in args and "tee" not in args:
             return ""
         edits = getattr(self.ws, "edits", 0)
         seen = g.setdefault("scratch_w", {})
@@ -2919,7 +2996,8 @@ class Agent:
             for c in calls:
                 f = c.get("function", {})
                 if f.get("name") in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write",
-                                     "update_plan", "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+                                     "update_plan", "edit", "write_file", "apply_patch", "shell", "exec_command",
+                                     "probe", "trace"):
                     continue
                 k = f.get("name", "") + ":" + str(f.get("arguments", ""))[:500]
                 seen[k] = seen.get(k, 0) + 1
@@ -3153,15 +3231,21 @@ class Agent:
         model = self.current_model()
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
+        c171 = self._c171()
         if (self.profile == "code" and os.environ.get("MH_STEP_MAX_TOKENS", "4096") != "0"
-                and not getattr(self, "_need_more", False)):
+                and not getattr(self, "_need_more", False) and not c171):   # c171: Codex writes whole files, uncapped
             # a coding step is a patch or a command, not a book: a step that runs to the limit again and again (8,192
             # tokens three times in a row, $0.11 for one task) is cut short and told to split the edit. A step that
             # legitimately needed more (a long single write that ended normally) lifts the cap for the chat.
             lim = min(lim, int(os.environ.get("MH_STEP_MAX_TOKENS", "4096")))
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
-        msgs, body = apply(prof, repair_tool_pairs(list(self.messages))[0], body, "worker")   # outgoing copy only
+        src = repair_tool_pairs(list(self.messages))[0]
+        if c171 and src and src[0].get("role") == "system":
+            # Codex 0.171 sends its environment context as a user message of its own before the conversation
+            # (compat.normalize_roles keeps it apart); only the request carries it, the chat history does not
+            src = src[:1] + [{"role": "user", "content": self._c171_env()}] + src[1:]
+        msgs, body = apply(prof, src, body, "worker")   # outgoing copy only
         if os.environ.get("MH_ELIDE_OLD_CALLS", "0") == "1":      # measured: it cost solves, so off unless asked
             msgs = _elide_old_calls(msgs)
         keep = int(os.environ.get("MH_MAX_IMAGES", "4"))
@@ -4115,8 +4199,8 @@ class Agent:
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
-        if name == "shell":
-            hit = T.patch_from_shell(args.get("command"))
+        if name in ("shell", "exec_command"):
+            hit = T.patch_from_shell(args.get("command") if name == "shell" else args.get("cmd"))
             if hit:                            # apply_patch through the shell is an edit like any other
                 name, args = "apply_patch", {"input": hit[0]}
         from meshpool_harness.agent import extras as EX
@@ -4147,7 +4231,7 @@ class Agent:
                 self._diff(name, args) == "(no change)" and self._same_bytes(name, args):
             return True, ""                    # nothing would change, byte for byte: do not ask
         group = ("edit" if name in ("edit", "write_file", "apply_patch", "notebook_edit")
-                 else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell") else name)
+                 else "bash" if name in ("bash_many", "bash_start", "probe", "trace", "shell", "exec_command") else name)
         if risky:
             group = "outside-" + name
         cmds = PR.commands_of(name, args) if group == "bash" and not risky else []
@@ -4164,7 +4248,7 @@ class Agent:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky == "destructive":             # the command itself, as the other command cards show it
             shown = PR.commands_of(name, args) or [str(args.get("command") or args.get("cmd") or "")]
-            wd = f"cd {args['workdir']} && " if name == "shell" and args.get("workdir") else ""
+            wd = f"cd {args['workdir']} && " if name in ("shell", "exec_command") and args.get("workdir") else ""
             kind, title, detail = "bash", "Run this destructive command?", wd + "\n".join(shown)
         elif risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
@@ -4172,9 +4256,8 @@ class Agent:
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
         elif name == "bash_start":
             kind, title, detail = "bash", "Start this in the background?", args.get("command", "")
-        elif name == "shell":
-            kind, title, detail = "bash", "Run this command?", (
-                (f"cd {args['workdir']} && " if args.get("workdir") else "") + T.shell_script(args.get("command")))
+        elif name in ("shell", "exec_command"):
+            kind, title, detail = "bash", "Run this command?", _summary_of(name, args)
         elif name == "apply_patch":
             files = _patch_files(args.get("input"))
             kind, title, detail = "edit", "Apply a patch to " + (", ".join(files[:3]) + (" and more" if len(files) > 3
@@ -4298,7 +4381,7 @@ class Agent:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
         if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",
-                                "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+                                "edit", "write_file", "apply_patch", "shell", "exec_command", "probe", "trace"):
             rep = self.__dict__.setdefault("_hard_rep", {})
             tno = getattr(self, "_turn_no", 0)         # a run_tool outside send() has no turn counter yet
             if rep.get("turn") != tno:
@@ -4331,7 +4414,10 @@ class Agent:
         self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
                    "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
                                  args["timeout_ms"] / 1000 if name == "shell" and isinstance(
-                                     args.get("timeout_ms"), (int, float)) else None) if isinstance(args, dict) else None,
+                                     args.get("timeout_ms"), (int, float)) else
+                                 args["yield_time_ms"] / 1000 if name == "exec_command" and isinstance(
+                                     args.get("yield_time_ms"), (int, float)) else None)
+                   if isinstance(args, dict) else None,
                    "diff": self._diff(name, args) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         cp = getattr(self, "checkpoint", None)          # the chat's checkpoints (journal mode); sub-agents have none
@@ -4435,6 +4521,12 @@ class Agent:
                                type="plan", entries=items))     # entries: what older front ends read
                 done = sum(i["status"] == "completed" for i in items)
                 out = f"Plan updated: {done} of {len(items)} done."
+            elif name == "exec_command":               # Codex 0.171 (profile c171): its result format, as Codex sends it
+                before = self._tree_sig()
+                out = self.ws.exec_command(**args)
+                ok = T.exec_exit_code(out) == 0
+                if before is not None and self._tree_sig() != before:
+                    self.ws.edits += 1                 # a heredoc write is an edit: the loop guards see the progress
             else:
                 out = getattr(self.ws, name)(**args)
                 route = getattr(self, "route", None)

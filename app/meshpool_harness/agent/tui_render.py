@@ -338,7 +338,7 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
 TOOL_LABEL = {"read_file": "Read", "write_file": "Write", "edit": "Edit", "grep": "Search", "glob": "Find",
               "web_search": "Web search", "web_research": "Research", "fetch_url": "Fetch", "office_task": "Office",
               "diagnostics": "Check", "use_skill": "Skill", "find_skill": "Find skill", "delegate_task": "Delegate"}
-SHELL_TOOLS = {"bash", "bash_start", "bash_many", "terminal", "shell"}
+SHELL_TOOLS = {"bash", "bash_start", "bash_many", "terminal", "shell", "exec_command"}
 
 
 def diff_counts(diff: str) -> tuple[int, int]:

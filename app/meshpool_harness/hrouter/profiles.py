@@ -9,7 +9,8 @@ the compaction limit, the spec-text set ("methods"), lean tools, per-step method
 
 engine_style "codex" (code routes of the Meshpool engine only): Codex's base instructions, tools (shell, apply_patch,
 update_plan) and loop, with Meshpool's routing method on the first message (app/defaults/engines/codex,
-docs/plan/CODEX_ENGINE.md).
+docs/plan/CODEX_ENGINE.md). "codex171": true (profile "c171", on top of engine_style "codex"): the request Codex CLI 0.171
+sends instead (prompt-171.md, exec_command only, its environment context; agent/core.py _c171).
 
 Assignment (app/defaults/profiles.json, then <data folder>/profiles.json, then MH_PROFILES_FILE; later wins):
 
@@ -32,7 +33,8 @@ ENGINES = ("meshpool", "pi", "hermes")
 STYLES = ("meshpool", "codex")      # how the Meshpool agent itself runs: its own prompt and tools, or Codex's design
 
 FULL = {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000, "methods": None,
-        "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool", "lean_core": False}
+        "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool", "lean_core": False,
+        "codex171": False}
 
 BUILTIN = {
     "full": {},
@@ -47,6 +49,10 @@ BUILTIN = {
     # lean core (docs/design/lean-core.md): Codex's style with its short codex-tuned prompt and none of the extra
     # verification layers (route method card, grader, keep/requirement notes); the loop guards stay
     "core": {"extends": "codex", "lean_core": True},
+    # opt-in (MH_PROFILE=c171): the request Codex CLI 0.171 sends, reproduced for code chats: its base instructions
+    # (prompt-171.md), one tool (exec_command) plus the user's MCP tools, its <environment_context> as a user message,
+    # and none of the extra layers (preload, re-check, notes, route card, grader); the loop guards and compaction stay
+    "c171": {"extends": "codex", "codex171": True},
 }
 
 
@@ -60,7 +66,7 @@ def _clean(d: dict) -> dict:
     out: dict = {}
     if "plan" in d:
         out["plan"] = _plan(d["plan"])
-    for k in ("review", "mutation", "lean_tools", "step_methods", "lean_core"):
+    for k in ("review", "mutation", "lean_tools", "step_methods", "lean_core", "codex171"):
         if k in d:
             out[k] = bool(d[k])
     if "compact_chars" in d:

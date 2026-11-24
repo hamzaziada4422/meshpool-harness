@@ -46,7 +46,7 @@ def rt(spec="code.build", **kw):
 def test_builtin_profiles():
     assert PR.settings("full") == {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000,
                                    "methods": None, "lean_tools": True, "step_methods": False, "engine": "meshpool",
-                                   "engine_style": "meshpool", "lean_core": False}
+                                   "engine_style": "meshpool", "lean_core": False, "codex171": False}
     lean = PR.settings("lean")
     assert (lean["plan"], lean["review"], lean["mutation"], lean["compact_chars"], lean["methods"]) == (
         "off", False, False, 160000, "v2")

@@ -22,10 +22,12 @@ _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 # A tool name in a saved rule or a hook matcher stands for every tool that does that job: the lean (Codex-style) lanes
 # run "shell" and "apply_patch", the classic lanes "bash" and "edit". Keys are lower case (a Claude Code plugin writes
 # "Bash", "Edit|Write"). One map for hooks (agent/extras.py) and saved allow and deny rules (agent/core.py _rule_hit).
-_BASH_FAMILY = {"bash", "bash_many", "bash_start", "shell", "probe", "trace"}
+# The "c171" profile runs Codex 0.171's "exec_command": a bash rule or hook covers it too.
+_BASH_FAMILY = {"bash", "bash_many", "bash_start", "shell", "exec_command", "probe", "trace"}
 TOOL_FAMILY = {
     "bash": _BASH_FAMILY,
     "shell": _BASH_FAMILY,
+    "exec_command": _BASH_FAMILY,
     "edit": {"edit", "apply_patch", "notebook_edit"},
     "multiedit": {"edit", "apply_patch"},
     "write": {"write_file", "apply_patch"},
@@ -60,6 +62,9 @@ def commands_of(name: str, args: dict) -> list[str]:
     if n == "shell":
         c = T.shell_script(args.get("command"))
         return [c] if c else []
+    if n == "exec_command":                       # Codex 0.171 (profile "c171"): the script is `cmd`
+        c = args.get("cmd")
+        return [str(c)] if c else []
     return []
 
 

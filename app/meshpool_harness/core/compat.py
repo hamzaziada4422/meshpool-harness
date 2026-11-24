@@ -97,7 +97,10 @@ def normalize_roles(messages: list, strict: bool = False) -> list:
     merged: list = []
     for m in msgs:
         role = m.get("role")
-        if merged and role in ("user", "assistant") and merged[-1].get("role") == role:
+        if merged and role == "user" and not strict and merged[-1].get("role") == "user" and \
+                _text(merged[-1].get("content")).startswith("<environment_context>"):
+            merged.append(m)                 # Codex 0.171's environment context stays a message of its own (c171)
+        elif merged and role in ("user", "assistant") and merged[-1].get("role") == role:
             merged[-1] = (_merge_user if role == "user" else _merge_assistant)(merged[-1], m)
         else:
             merged.append(m)

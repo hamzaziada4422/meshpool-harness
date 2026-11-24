@@ -1,0 +1,1 @@
+group_anagrams(words) is far too slow on our dictionary (200k words). Make it fast; the output must stay exactly the same (groups of words that are anagrams of each other, ignoring case, each group in input order, groups ordered by their first word's position, single words included).

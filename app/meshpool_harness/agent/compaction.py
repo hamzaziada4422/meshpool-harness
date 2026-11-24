@@ -95,6 +95,9 @@ def rule_notes(middle: list) -> str:
                 out = results.get(cid, "")
                 mm = re.match(r"\[exit (\d+)\]", out)
                 cmds.append((str(args.get("command") or name)[:140], mm.group(1) if mm else "?"))
+            elif name == "exec_command":               # Codex 0.171's result format (profile c171)
+                mm = re.search(r"^Process exited with code (-?\d+)$", results.get(cid, ""), re.M)
+                cmds.append((str(args.get("cmd") or name)[:140], mm.group(1) if mm else "?"))
             elif name == "bash_many":
                 for c in args.get("commands") or []:
                     cmds.append((str(c)[:140], "?"))
