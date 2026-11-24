@@ -1,5 +1,6 @@
 """Keep test runs from writing into the package folder (the failure catalog defaults to it)."""
 import os
+import sys
 
 os.environ.setdefault("MH_FAILURES_LOG", "off")
 os.environ.setdefault("MH_RECOVER_MIN", "0")        # an outage in a test fails at once instead of waiting 30 min
@@ -45,6 +46,23 @@ def _no_slot_files_in_real_temp():
                       "MH_SLOTS_DIR. (Slot files other processes create there are not this run's concern.)")
 
 
+def _forget_chats():
+    """Chats opened live by one test (agent_api.LIVE, the deleted set, the sidebar and search caches) must not show up in the
+    next test's listing or count: a worker runs hundreds of tests in one process."""
+    api = sys.modules.get("meshpool_harness.ui.agent_api")
+    if api is None:
+        return
+    with api.LOCK:
+        api.LIVE.clear()
+    api.DELETED.clear()
+    api.QUIESCING[0] = False
+    api._METAS.clear()
+    api._ROWS.clear()
+    api._RAW.clear()
+    api._RAW_BYTES[0] = 0
+    api.list_dirty()
+
+
 def _forget_learned():
     """Windows and refused fields learned in one test (process-wide, keyed by model) must not trim the next test."""
     from meshpool_harness.agent import core as _AC
@@ -67,6 +85,7 @@ def _offline_gateway(monkeypatch, tmp_path):
     monkeypatch.setenv("MH_CAPS_LEARNED", str(tmp_path / "caps_learned.json"))   # learned facts never reach the real folder
     MCAPS.reset()
     _forget_learned()
+    _forget_chats()
     # Loopback mocks count as local servers, which wait 15 min for a first byte and 5 min between bytes (H-06): tests that
     # check the timeouts use short ones, so the local floors are off here (the H-06 test turns them on).
     monkeypatch.setenv("MH_LOCAL_FIRST_BYTE_S", "1")
@@ -95,3 +114,4 @@ def _offline_gateway(monkeypatch, tmp_path):
     GW.reset()
     MCAPS.reset()
     _forget_learned()
+    _forget_chats()

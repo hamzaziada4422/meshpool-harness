@@ -1,6 +1,7 @@
 """Harness v3 in the interactive agent: bash_many, todo follow-through, loop breaker, environment snapshot.
 No network: the transport is replaced by a script."""
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -88,12 +89,11 @@ def test_environment_snapshot_in_first_request_only(tmp_path):
     assert "<environment_snapshot>" not in seen[-1][-1]["content"]
 
 
-def test_v3_can_be_turned_off(monkeypatch):
-    monkeypatch.setenv("MH_AGENT_V3", "0")
-    import importlib
-    m = importlib.reload(core)
-    try:
-        assert "bash_many" not in m.BUILTIN and not m.V3
-    finally:
-        monkeypatch.delenv("MH_AGENT_V3")
-        importlib.reload(core)
+def test_v3_can_be_turned_off():
+    # An import-time switch, checked in a fresh interpreter: reloading core in this process left every module that had
+    # already imported Agent holding a stale class, so later tests' patches of core.Agent missed it (xdist worker order).
+    import subprocess
+    r = subprocess.run([sys.executable, "-c",
+                        "import meshpool_harness.agent.core as m; print('bash_many' not in m.BUILTIN and not m.V3)"],
+                       env={**os.environ, "MH_AGENT_V3": "0"}, capture_output=True, text=True, timeout=120)
+    assert r.stdout.strip() == "True", r.stdout + r.stderr
