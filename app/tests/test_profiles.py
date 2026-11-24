@@ -264,13 +264,15 @@ def test_step_methods_off_by_default(tmp_path, monkeypatch):
 
 
 def test_shipped_assignment(monkeypatch):
-    """app/defaults/profiles.json: the Codex-design engine for every route, the configuration measured on the 52 eval
-    tasks (47/52, a tie with Codex, half the previous cost). No per-route overrides: they were not part of that run."""
+    """app/defaults/profiles.json: lean core for every route, the configuration measured on the 52 eval tasks against
+    Codex (final20-21: 196/208 vs 186/208, cost 0.81x, time 0.82x). No per-route overrides: they were not part of
+    that run. The previous default stays available as "codex"."""
     monkeypatch.delenv("MH_PROFILES_DEFAULTS", raising=False)
     for text, kind in (("Fix the crash: KeyError total when an order has no lines", "code"),
                        ("Write thorough tests for slug.slugify in test_slug.py", "code"),
                        ("What was the total revenue in orders.csv?", "cowork")):
-        assert R.route(text, kind=kind).profile == "codex"
+        assert R.route(text, kind=kind).profile == "core"
+    assert PR.settings("core")["lean_core"] is True
     s = PR.settings("codex")
     assert s["plan"] == "off" and s["review"] is False and s["mutation"] is False and s.get("engine_style") == "codex"
 
