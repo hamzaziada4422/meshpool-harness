@@ -959,6 +959,20 @@ def _bad_reply(resp) -> str:
 _KEEP = re.compile(r"byte[- ]for[- ]byte|\b(?:keep|leave|preserve)\b[^.\n]{0,60}\b(?:identical|unchanged|the same|as it is|"
                    r"as is|intact)\b|\b(?:must|should|has to|have to)\s+(?:stay|remain)\s+(?:unchanged|identical|the same)"
                    r"|\bwithout changing (?:the |its )?(?:current|existing) (?:output|behaviou?r|api)", re.I)
+_REQ = re.compile(r"\b(?:must|should|shall|never|always|only|unless|otherwise|falls? back|instead of|before|after|"
+                  r"at most|at least|rounded|ties?|tie-break|in order|ordered|case[- ]insensitive|exactly)\b", re.I)
+
+
+def _requirements(text: str) -> int:
+    """How many separate stated rules a request has: sentences or list items carrying a constraint word."""
+    t = (text or "").split("\n\n\u200b")[0]
+    parts = [p for p in re.split(r"(?<=[.;:!?])\s+|\n+\s*(?:[-*]|\d+[.)])?\s*", t) if p.strip()]
+    return sum(1 for p in parts if _REQ.search(p))
+
+
+REQ_NOTE = ("\n\n\u200b[Meshpool] Before you finish, list each rule the request states, one line each, and next to it "
+            "the check (command and output) that shows it holds. Test the edge cases the request names. A rule you did "
+            "not check is not done.")
 KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
              "the current code and save its exact output; after your edits, run it again and compare line by line.")
 
@@ -1410,6 +1424,10 @@ class Agent:
         if self.profile == "code" and not self.plan and os.environ.get("MH_KEEP_NOTE", "1") != "0" and _KEEP.search(text):
             body += KEEP_NOTE                        # eval: the agent changed output it was told to keep, and its own
                                                      # check printed the regressed line without it noticing
+        if self.profile == "code" and not self.plan and os.environ.get("MH_REQ_NOTE", "1") != "0" \
+                and _requirements(text) >= 2:
+            body += REQ_NOTE                         # eval: short wrong answers checked the agent's reading of the task,
+                                                     # not each stated rule (line-diff: the tie-break rule went untested)
         if images:
             parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})

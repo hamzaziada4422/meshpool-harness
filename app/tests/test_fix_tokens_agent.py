@@ -812,3 +812,19 @@ def test_keep_behaviour_clause_adds_a_hidden_capture_note(tmp_path, monkeypatch)
     monkeypatch.setenv("MH_KEEP_NOTE", "0")
     a.send("Keep the output identical.")
     assert C.KEEP_NOTE not in a.messages[-1]["content"]
+
+
+def test_requests_with_several_stated_rules_get_the_requirement_check_note(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    diff = ("Implement line_diff(a, b) returning '-'/'+' lines. Use a longest common subsequence. When there is a tie, "
+            "put deletions before insertions. Lines must be compared exactly.")
+    assert C._requirements(diff) >= 2 and C._requirements("fix the typo in README") == 0
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_turn", lambda: "done")
+    a.send(diff)
+    assert C.REQ_NOTE in a.messages[-1]["content"]
+    a.send("rename foo to bar")
+    assert C.REQ_NOTE not in a.messages[-1]["content"]
+    monkeypatch.setenv("MH_REQ_NOTE", "0")
+    a.send(diff)
+    assert C.REQ_NOTE not in a.messages[-1]["content"]
