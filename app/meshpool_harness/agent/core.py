@@ -2173,7 +2173,7 @@ class Agent:
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
-            out = str(out) + self._scratch_rewrite_note(c, g)
+            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out)
         g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
         # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
         # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
@@ -2400,6 +2400,62 @@ class Agent:
 
     _SCRATCH_W = re.compile(r"(?:cat|tee)\s*(?:-a\s*)?>?\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)|"
                             r">\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)['\"]?\s*<<")
+
+    def _shape_run_note(self, c: dict, g: dict, out: str = "") -> str:
+        """The same shell command again and again with only its numbers changed and no file edited in between, each
+        run succeeding (eval 283eced2, perf-dag-paths: the fix was done at 28 s, then 50 timing runs of one python -c
+        with the input size bumped 44, 50, 56 ... 320, to 352 s; no failure, no refusal, so no other guard saw it).
+        Inspection commands already have a refusal for this; this covers runs. 4th in a row: a note; 8th: tools off.
+        MH_SHAPE_NUDGE / MH_SHAPE_WRAP tune it (0 turns it off)."""
+        f = c.get("function", {})
+        if f.get("name") not in ("shell", "bash", "bash_many"):
+            return ""
+        if self._FAILED.match(str(out)):               # failing runs are the failure guard's: start over
+            g.pop("shape_key", None)
+            return ""
+        try:
+            nudge = int(os.environ.get("MH_SHAPE_NUDGE", "4") or 0)
+            wrap = int(os.environ.get("MH_SHAPE_WRAP", "8") or 0)
+        except ValueError:
+            nudge, wrap = 4, 8
+        shape = re.sub(r"\d+", "#", str(f.get("arguments", ""))[:2000])
+        key = (shape, getattr(self.ws, "edits", 0))
+        if g.get("shape_key") == key:
+            fp = self._tree_fingerprint()              # a command that writes files (touch f1, f2 ...) is progress
+            g["shape_n"] = g.get("shape_n", 0) + 1 if fp == g.get("shape_fp") else 1
+        else:
+            fp, g["shape_n"] = None, 1
+        g["shape_key"], g["shape_fp"] = key, fp if fp is not None else self._tree_fingerprint()
+        n = g["shape_n"]
+        if wrap > 0 and n >= wrap and not g.get("hard_wrap"):
+            g["hard_wrap"] = True
+            return (f"\n[Meshpool] You have run this command {n} times with only its numbers changed and no file "
+                    "changed. Tools are off now: answer with what the runs showed.")
+        if nudge > 0 and n == nudge:
+            return (f"\n[Meshpool] This is the {n}th run of the same command with only its numbers changed, and no file "
+                    "changed in between. More sizes will not change the conclusion: decide from what you have, then "
+                    "finish or make the next change.")
+        return ""
+
+    def _tree_fingerprint(self, cap: int = 20000) -> int:
+        """Names, sizes and mtimes of the project's files (no .git, at most `cap` entries): cheap, and it changes when
+        a shell command writes a file."""
+        h, n = 0, 0
+        try:
+            for dp, dns, fns in os.walk(self.root):
+                dns[:] = [d for d in dns if d not in (".git", "node_modules", "__pycache__", ".venv")]
+                for fn in fns:
+                    try:
+                        st = os.stat(os.path.join(dp, fn))
+                    except OSError:
+                        continue
+                    h ^= hash((dp, fn, st.st_size, st.st_mtime_ns))
+                    n += 1
+                    if n >= cap:
+                        return h
+        except OSError:
+            pass
+        return h
 
     def _scratch_rewrite_note(self, c: dict, g: dict) -> str:
         """Eval (4530fc66): 3.3 run calls and 0.8 failed runs a task against Codex's 2.1 and 0.2, mostly the same

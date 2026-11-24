@@ -898,13 +898,17 @@ def test_sigterm_ends_commands_still_running_in_their_own_process_group(tmp_path
     child = int(marker.read_text())
     p.send_signal(signal.SIGTERM)
     assert p.wait(20) == 143
-    time.sleep(0.5)
-    try:
-        os.kill(child, 0)
-        alive = True
-    except OSError:
-        alive = False
-    assert not alive                                      # the command's process group went with the agent
+    def alive():
+        try:
+            with open(f"/proc/{child}/stat") as fh:
+                return fh.read().split(")")[-1].split()[0] != "Z"     # a zombie has exited; it waits to be reaped
+        except OSError:
+            return False
+    for _ in range(50):
+        if not alive():
+            break
+        time.sleep(0.1)
+    assert not alive()                                    # the command's process group went with the agent
 
 
 def test_a_long_stalled_turn_is_told_to_converge_then_wrapped_but_progress_is_never_cut(tmp_path, monkeypatch):
@@ -926,3 +930,22 @@ def test_a_long_stalled_turn_is_told_to_converge_then_wrapped_but_progress_is_ne
     assert "Converge now" in a._budget_escalation(g3, {"out": 16000})
     monkeypatch.setenv("MH_TURN_STALL", "0")
     assert a._budget_escalation({"t0": now - 9999, "np": 99}, {"out": 99999}) == ""
+
+
+def test_the_same_run_with_only_numbers_changed_is_nudged_then_wrapped(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 0]\nold 0.12s new 0.03s")
+    g = {}
+
+    def run(n):
+        cmd = {"command": ["bash", "-lc", f"python -c 'L=({n},{n+2},{n+4}); time_it(L)'"]}
+        return a._guarded_tool({"function": {"name": "shell", "arguments": json.dumps(cmd)}}, g)
+    outs = [run(44 + 6 * i) for i in range(8)]
+    assert "4th run of the same command" in outs[3] and not any("Meshpool" in o for o in outs[:3])
+    assert "Tools are off now" in outs[7] and g["hard_wrap"]
+    g = {}
+    a.ws.edits = 0
+    for i in range(3):
+        run(10 + i)
+    a.ws.edits += 1                                    # an edit in between: a fresh count
+    assert not any("Meshpool" in run(20 + i) for i in range(3))
