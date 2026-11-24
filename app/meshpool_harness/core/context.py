@@ -388,6 +388,13 @@ def learn(model: str, tokens: int, explicit: bool = False) -> int:
         return _LEARNED[bare]
 
 
+def learned(model: str) -> int:
+    """The window learned for this model in this process (0 when none), whatever a user setting says."""
+    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
+    with _LOCK:
+        return int(_LEARNED.get(bare) or 0)
+
+
 _SILENT: dict[str, list] = {}
 
 

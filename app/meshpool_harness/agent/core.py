@@ -2502,7 +2502,7 @@ class Agent:
             # or metering proxy that reports usage differently must not shrink a 1M-token model to a few thousand.
             if not CTX.observe_silent_cut(self.current_model(), sent, u, self._ctx_window(), base):
                 return False
-            win = CTX.window_info(self.current_model(), base, probe_endpoint=False)[0]
+            win = CTX.learned(self.current_model()) or int(n_in * 1.05)    # not the user's setting: it may be what is wrong
             if win >= self._ctx_window():
                 return False
             MC.learn(base, body.get("model", ""), window=win)
