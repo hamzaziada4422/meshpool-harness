@@ -124,7 +124,8 @@ def test_anthropic_cache_markers_can_be_turned_off(monkeypatch):
     assert "cache_control" not in json.dumps(out)
 
 
-def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_path):
+def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REPEAT_SHELL", "0")      # this one tests the failure breaker alone
     a = _agent(tmp_path)
     runs = []
     a._run_tool = lambda c, cut=False: runs.append(1) or "[exit 1]\nsame output"
@@ -141,6 +142,7 @@ def test_identical_call_with_identical_result_is_refused_the_fourth_time(tmp_pat
 
 
 def test_repeat_window_switch_catches_alternation_and_spares_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REPEAT_SHELL", "0")
     monkeypatch.setenv("MH_REPEAT_WINDOW", "1")
     a = _agent(tmp_path)
     runs = []
@@ -619,3 +621,68 @@ def test_work_prompt_has_the_fidelity_path_and_edit_rules():
     from meshpool_harness.agent import core as K
     for must in ("Copy values the request gives", "exact path and file name", "edit_office_file with direct edits"):
         assert must in K.WORK_SYSTEM
+
+
+def _patch(i, path="check_state.py"):
+    body = f"*** Begin Patch\n*** Update File: {path}\n@@\n+print('END{i:02d}')\n*** End Patch"
+    return {"id": f"p{i}", "function": {"name": "apply_patch", "arguments": json.dumps({"input": body})}}
+
+
+def test_tiny_edits_to_one_file_with_nothing_else_changing_are_noted_then_refused(tmp_path):
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "Success"
+    g = {}
+    outs = [a._repeat_guard(_patch(i), g) for i in range(1, 11)]
+    assert "tiny changes" not in outs[3]                      # the 4th edit goes through quietly
+    assert "tiny changes" in outs[4] and "stop editing it" in outs[4]      # the 5th carries the note
+    assert len(runs) == 8 and all("Not done" in o for o in outs[8:])      # after 8 the edit is refused
+
+
+def test_edits_are_not_a_loop_when_other_things_change(tmp_path):
+    a = _agent(tmp_path)
+    state = {"out": "[exit 1]\nfail"}
+    a._run_tool = lambda c, cut=False: state["out"] if c["function"]["name"] == "shell" else "Success"
+    g = {}
+    run = {"id": "r", "function": {"name": "shell", "arguments": '{"command": ["bash", "-lc", "python3 t.py"]}'}}
+    results = []
+    for i in range(1, 13):
+        results.append(a._repeat_guard(_patch(i), g))
+        if i % 2 == 0:
+            state["out"] = "[exit 0]\nok" if i % 4 == 0 else "[exit 1]\nfail"      # the check flips between edits
+            a._repeat_guard(run, g)
+    assert not any("tiny changes" in r or "Not done" in r for r in results)
+    big = {"id": "b", "function": {"name": "apply_patch", "arguments": json.dumps(
+        {"input": "*** Begin Patch\n*** Update File: x.py\n@@\n" + "+line\n" * 200 + "*** End Patch"})}}
+    assert all("Not done" not in a._repeat_guard(big, {}) for _ in range(10))      # real edits are never counted
+
+
+def _shell(cmd):
+    return {"id": "s", "function": {"name": "shell", "arguments": json.dumps({"command": ["bash", "-lc", cmd]})}}
+
+
+def test_same_shell_command_with_same_output_and_no_task_file_change_is_not_run_a_third_time(tmp_path):
+    (tmp_path / "m.py").write_text("x = 1\n")
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "got 9 pow 27"
+    g = {}
+    outs = [a._repeat_guard(_shell("python3 t.py"), g) for _ in range(5)]
+    assert len(runs) == 2 and all("unchanged" in o and "got 9 pow 27" in o for o in outs[2:])
+    (tmp_path / "_probe.py").write_text("print(1)\n")                 # scratch files do not count as progress
+    assert "unchanged" in a._repeat_guard(_shell("python3 t.py"), g)
+    (tmp_path / "m.py").write_text("x = 2\n")                        # a task file changed: run it again
+    assert a._repeat_guard(_shell("python3 t.py"), g) == "got 9 pow 27" and len(runs) == 3
+
+
+def test_different_checks_giving_the_same_result_get_a_note_at_six_and_are_stopped_at_ten(tmp_path):
+    (tmp_path / "m.py").write_text("x = 1\n")
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or "[] False"
+    g = {}
+    outs = [a._repeat_guard(_shell(f"python3 check_{i}.py"), g) for i in range(1, 13)]
+    assert "keep giving the same result" not in outs[4] and "keep giving the same result" in outs[5]
+    assert len(runs) == 10 and all("Shell checks stopped" in o for o in outs[10:])
+    (tmp_path / "m.py").write_text("x = 2\n")                        # progress resets it
+    assert a._repeat_guard(_shell("python3 check_99.py"), g) == "[] False"

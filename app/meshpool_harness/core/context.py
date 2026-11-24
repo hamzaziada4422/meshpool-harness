@@ -288,16 +288,19 @@ def _listed(base: str, key: str) -> dict:
 
 def window_info(model: str, base: str | None = None, key: str = "", probe_endpoint: bool = True) -> tuple[int, str]:
     """(tokens, source) for this model. Source: override, learned, provider, profile, table, default."""
+    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
+    with _LOCK:
+        learned = _LEARNED.get(bare)
     for var in ("MESHPOOL_CONTEXT_WINDOW", "MH_CONTEXT_WINDOW"):
         try:
             if os.environ.get(var):
-                return max(1024, int(float(os.environ[var]))), "override"
+                ov = max(1024, int(float(os.environ[var])))
+                # the server proved the setting too big (it cut the prompt or named a smaller limit): believe the server
+                return (learned, "learned") if learned and learned < ov else (ov, "override")
         except ValueError:
             pass
-    bare = (model or "").split(":", 1)[-1] if str(model).startswith(("chatgpt:", "meshpool:")) else (model or "")
-    with _LOCK:
-        if bare in _LEARNED:
-            return _LEARNED[bare], "learned"
+    if learned:
+        return learned, "learned"
     if base is None:
         try:
             from meshpool_harness import providers as PV
