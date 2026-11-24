@@ -1754,7 +1754,8 @@ class Workspace:
         c = self._last_check()
         if c is None:
             return ""
-        out, code = self._run(c["cmd"], 90, "bash")
+        limit = int(min(60, max(10, 3 * float(c.get("secs") or 0))))   # a check that got slow is cut short, not waited on
+        out, code = self._run(c["cmd"], limit, "bash")
         out = str(out)
         if len(out) > 4000:
             out = out[:1500] + "\n[...]\n" + out[-2000:]
