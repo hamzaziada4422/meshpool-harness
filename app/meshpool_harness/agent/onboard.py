@@ -203,7 +203,7 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
         # the typed endpoint and key, not the saved ones (those win over the environment and went to the new host)
         r = ping(_check_model(custom), base=os.environ["MESHPOOL_BASE_URL"], key=key,
                  kind=os.environ.get("MH_API_KIND", ""), api_version=os.environ.get("MH_API_VERSION", ""))
-        if custom and not r["ok"] and "HTTP 404" in r["detail"] and EP.caps(os.environ.get("MH_API_KIND") or "generic")["wire"] == "openai" \
+        if custom and not r["ok"] and (r.get("status") == 404 or "HTTP 404" in r["detail"]) and EP.caps(os.environ.get("MH_API_KIND") or "generic")["wire"] == "openai" \
                 and not EP.is_azure(os.environ.get("MH_API_KIND") or "generic"):     # a server that serves /v1 only
             from meshpool_harness import provider_setup as PS
             for cand in PS._candidates(os.environ["MESHPOOL_BASE_URL"])[1:]:

@@ -126,22 +126,24 @@ def test_keyless_hosts():
 
 def test_normalise_base_azure():
     n = PS.normalise_base
-    assert n("https://r.openai.azure.com") == "https://r.openai.azure.com"
+    # 0.0.14: a bare Azure address means the /openai/v1 route (no api-version)
+    assert n("https://r.openai.azure.com") == "https://r.openai.azure.com/openai/v1"
+    # a pasted deployment address: the base is the resource; the deployment and api-version are read separately
     assert n("r.openai.azure.com/openai/deployments/dd/chat/completions?api-version=2024-10-21") == \
-        "https://r.openai.azure.com/openai/deployments/dd"
+        "https://r.openai.azure.com"
     assert n("https://r.openai.azure.com/openai/v1/") == "https://r.openai.azure.com/openai/v1"
     assert n("https://r.services.ai.azure.com/models") == "https://r.services.ai.azure.com/models"
-    assert n("https://r.cognitiveservices.azure.com/openai") == "https://r.cognitiveservices.azure.com"
+    assert n("https://r.cognitiveservices.azure.com/openai") == "https://r.cognitiveservices.azure.com/openai/v1"
 
 
 # ------------------------------------------------------------------ explain
 
 @pytest.mark.parametrize("status,data,needle", [
-    (401, {"error": {"message": "Access denied due to invalid subscription key"}}, "rejected the key"),
-    (403, {"error": {"message": "firewall"}}, "not allowed"),
+    (401, {"error": {"message": "Access denied due to invalid subscription key"}}, "key was rejected"),
+    (403, {"error": {"message": "firewall"}}, "refused access"),
     (404, {"error": {"code": "DeploymentNotFound", "message": "The API deployment for this resource does not exist"}},
-     "No deployment named 'dd'"),
-    (404, {"error": {"code": "404", "message": "Resource not found"}}, "api-version"),
+     "no deployment named 'dd'"),
+    (404, {"error": {"code": "404", "message": "Resource not found"}}, "deployment name"),
     (400, {"error": {"message": "API version not supported"}}, "api-version"),
 ])
 def test_explain_azure(status, data, needle):
@@ -185,17 +187,18 @@ def test_azure_test_with_deployment_uses_a_chat_call(azure):
 
 def test_azure_test_without_deployment_checks_the_key_only(azure):
     f, url = azure
-    r = PS.test(url, KEY32)
-    assert r["ok"] and not r["models"] and "deployment" in r["error"]
-    assert f.log[-1]["path"].startswith("/openai/models?api-version=")
-    bad = PS.test(url, "f" * 32)
-    assert not bad["ok"] and "rejected the key" in bad["error"]
+    n0 = len(f.log)
+    r = PS.test(url, KEY32)                       # 0.0.14: no deployment typed -> ask for it, no call is made
+    assert not r["ok"] and r["needs_model"] and not r["models"] and "deployment" in r["error"]
+    assert len(f.log) == n0
+    bad = PS.test(url, "f" * 32, model="dd")
+    assert not bad["ok"] and "key was rejected" in bad["error"]
 
 
 def test_azure_wrong_deployment_and_version_messages(azure):
     f, url = azure
     r = PS.test(url, KEY32, model="nope")
-    assert not r["ok"] and "No deployment named 'nope'" in r["error"]
+    assert not r["ok"] and "no deployment named 'nope'" in r["error"]
     r = PS.test(url + "/openai/deployments/dd", KEY32, api_version="")        # deployment from the address
     assert r["ok"]
 
@@ -224,6 +227,8 @@ def test_azure_entra_token_goes_as_bearer(home, monkeypatch):
 def test_save_azure_then_real_calls(azure, home, monkeypatch):
     """Save the settings, then the real transport (SimpleLedger streamed, and the app agent's _post) uses them."""
     f, url = azure
+    # 0.0.14: the test call finds the /openai/v1 route missing (404) and falls back to the deployment route; Save keeps it
+    assert PS.test(url, KEY32, model="dd")["ok"]
     cur = PS.save(url, KEY32, "auto", "dd", allow_custom=True, api_version="2024-10-21")
     assert cur["azure"] and cur["default_model"] == "dd"
     C.load_into_env(override=True)

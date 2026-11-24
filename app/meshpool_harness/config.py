@@ -438,7 +438,8 @@ _INJECTED: set = set()          # names Meshpool itself copied into the environm
 # The endpoint names exactly as the user's own shell had them, kept apart from what load_into_env copies in from the file,
 # so a key and the address it was set for can be told from a key and an address that came from different places.
 ENDPOINT_NAMES = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_API_WIRE", "MH_AUTH_HEADER", "MH_AUTH_SCHEME",
-                  "MESHPOOL_AZURE_API_VERSION", "OPENAI_API_KEY", "OPENAI_BASE_URL")
+                  "MESHPOOL_AZURE_API_VERSION", "MH_API_KIND", "MH_API_VERSION",
+                  "OPENAI_API_KEY", "OPENAI_BASE_URL")
 SHELL: dict = {k: os.environ[k].strip() for k in ENDPOINT_NAMES if os.environ.get(k, "").strip()}
 
 

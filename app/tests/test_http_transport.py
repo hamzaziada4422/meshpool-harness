@@ -207,20 +207,29 @@ def test_https_to_http_downgrade_refused():
 
 
 @pytest.mark.parametrize("code", [307, 308])
-def test_same_host_307_and_308_resend_post_body(servers, monkeypatch, tmp_path, code):
+def test_same_host_redirect_is_refused_and_says_what_to_set(servers, monkeypatch, tmp_path, code):
+    """0.0.14: a request with a key follows no redirect at all, not even on the same host. The error names the host,
+    says the key was not sent there and which address to set."""
     def responder(h, rec):
-        if rec["path"].endswith("/chat/completions"):
-            send(h, code, location="/v1/moved/chat")
+        if rec["path"] == "/v1/chat/completions":
+            send(h, code, location="/v1/moved/chat/completions")
         else:
             send(h, 200, OK_CHAT)
     srv = servers(responder)
     use_endpoint(monkeypatch, srv.url + "/v1")
-    out = SimpleLedger("t").chat(model="key/m", messages=MSGS, max_tokens=5, retries=0)
-    assert out["choices"][0]["message"]["content"] == "ok"
+    with pytest.raises(RuntimeError) as ei:
+        SimpleLedger("t").chat(model="key/m", messages=MSGS, max_tokens=5, retries=0)
+    msg = str(ei.value)
+    assert "127.0.0.1" in msg and "did not send your key" in msg and srv.url + "/v1/moved" in msg, msg
+    assert len(srv.seen) == 1 and KEY not in msg
+    # the opt-in same-host policy still resends the POST body to the same host
+    srv.seen.clear()
+    req = urllib.request.Request(srv.url + "/v1/chat/completions", data=b'{"a":1}', method="POST",
+                                 headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
+    with H.open(req, 5, refuse_redirects=False) as r:
+        assert r.status == 200
     first, second = srv.seen
-    assert second["path"] == "/v1/moved/chat" and second["method"] == "POST"
-    assert json.loads(second["body"]) == json.loads(first["body"]) and second["body"]
-    assert second["headers"]["authorization"] == f"Bearer {KEY}"      # the same host: the key goes along
+    assert second["path"] == "/v1/moved/chat/completions" and second["method"] == "POST" and second["body"] == first["body"]
 
 
 def test_redirect_hops_are_limited(servers, monkeypatch):

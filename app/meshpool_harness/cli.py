@@ -618,8 +618,10 @@ def ping(model: str | None = None, base: str = "", key: str = "", kind: str = ""
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
         import re
+        m_st = re.match(r"^meshpool HTTP (\d+): ", str(e))
         msg = re.sub(r"^meshpool HTTP \d+: ", "", str(e))     # wire.py already explains the status in plain words
-        return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
+        return {"ok": False, "detail": msg[:400], "status": int(m_st.group(1)) if m_st else 0,
+                "model": model or "", "seconds": round(time.time() - t0, 1),
                 "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
 

@@ -112,6 +112,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
         return {"ok": False, "detail": str(e), "endpoint": base_in}
     model = model or pp.deployment
     kind = pp.kind
+    base = pp.base                       # the chosen kind decides what a bare Azure address means (route and base)
     hdr = v.get("MH_AUTH_HEADER", PV._ecfg("MH_AUTH_HEADER") if same else "")
     sch = v.get("MH_AUTH_SCHEME", PV._ecfg("MH_AUTH_SCHEME") if same else "").lower()
     ver = v.get("MH_API_VERSION") or pp.api_version

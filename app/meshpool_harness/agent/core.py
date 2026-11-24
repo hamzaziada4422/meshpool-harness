@@ -959,6 +959,7 @@ class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
+    _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
     budget_stopped = False  # the last turn ended on the spending limit
     _task = None           # the usage task of the turn that is running
 

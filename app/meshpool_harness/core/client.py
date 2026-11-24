@@ -292,6 +292,10 @@ class LiveClient:
             except RuntimeError as e:
                 last = e
                 msg = str(e)
+                if isinstance(getattr(e, "body", None), dict):     # the service's structured error (param, code)
+                    raw = json.dumps(e.body)[:2000]
+                    k = getattr(self, "api_key", "") or ""
+                    msg += " " + (raw.replace(k, "***") if len(k) >= 8 else raw)
                 kind = classify_error(msg)
                 cur = attempt
                 if kind != "rate_limit":
