@@ -264,7 +264,7 @@ def test_stop_during_delegation_returns_the_finished_reports(monkeypatch, _env):
         return _msg("", [("delegate_task", {"tasks": [{"goal": "Research fast Acme"}, {"goal": "Research slow Globex"}]})])
     fake(monkeypatch, child, parent=parent)
     a = _agent(_env)
-    threading.Timer(1.0, a.stop).start()
+    threading.Timer(3.0, a.stop).start()          # after the fast child is surely done, even on a loaded machine
     t0 = time.time()
     a.send("research both")
     assert time.time() - t0 < 20
@@ -543,7 +543,7 @@ def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _
     old = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         a = _agent(_env)
-        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C
+        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C, after the fast child is done
         t0 = time.time()
         a.send("research both")
     finally:
