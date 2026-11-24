@@ -40,7 +40,7 @@ def test_repeated_builds_are_told_to_stop(tmp_path, monkeypatch):
 def test_build_numbers_count_per_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "_project", lambda: tmp_path)
     monkeypatch.setattr(O, "WAIT", 0)
-    monkeypatch.setattr(O, "_run_job", lambda jid: None)
+    monkeypatch.setattr(O, "_run_job", lambda jid, *a: None)
     saved = dict(O.JOBS)
     O.JOBS.clear()
     try:

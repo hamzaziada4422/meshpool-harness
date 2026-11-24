@@ -227,7 +227,9 @@ def _job() -> tuple[str, list[str], set[str]]:
 
 def _header(ws) -> tuple[int, tuple]:
     """(row, values) of a sheet's header: the first of its top 50 rows that is as wide as its widest one, so a title
-    row or a blank row above the table is not taken for it. (1, ()) for an empty sheet."""
+    row or a blank row above the table is not taken for it. (1, ()) for an empty sheet or a chartsheet."""
+    if not hasattr(ws, "iter_rows"):                # a chartsheet has no cells
+        return 1, ()
     rows = [(r[0].row, tuple(c.value for c in r if c.value not in (None, "")))
             for r in ws.iter_rows(max_row=min(ws.max_row, 50)) if r]
     width = max((len(v) for _, v in rows), default=0)
@@ -237,7 +239,9 @@ def _header(ws) -> tuple[int, tuple]:
 def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
     """An edit or derivation keeps the source's structure: no Cover or Checks tab, no title or blank rows above the
     header, and the source's sheet names, unless the request asks for them. Compared with the first source workbook
-    (a renamed sheet is matched by its header); from a CSV, every header sits in row 1."""
+    (a renamed sheet is matched by its header); from a CSV, every header sits in row 1. The sheet names are kept only
+    when the output is the source itself or a copy of it under its name: a summary, pivot or extract saved as a new
+    file names its sheets for what they hold."""
     from openpyxl import load_workbook
     from engines.sheets.qa import CHECK_SHEETS
     out = load_workbook(path)
@@ -254,7 +258,8 @@ def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
         elif CHECK_SHEETS.search(name) and "checks" not in asks:
             issues.append({"check": "keep_structure", "cell": name, "detail": "a Checks tab the request did not ask "
                            "for; remove it (an edit keeps the source's sheets)"})
-    if src_names and not set(src_names) & set(out.sheetnames) and "rename" not in asks:
+    same_file = bool(src_path) and (os.path.abspath(path) == os.path.abspath(src_path) or _copy_of(path, src_path))
+    if same_file and not set(src_names) & set(out.sheetnames) and "rename" not in asks:
         issues.append({"check": "keep_structure", "cell": "", "detail": "none of the source's sheet names "
                        f"({', '.join(src_names)}) is kept; name the sheets as in the source"})
     if "title" in asks:
@@ -269,9 +274,60 @@ def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
     return issues
 
 
+def _copy_of(path: str, src: str) -> bool:
+    """The output is the source edited as a copy: the same file name, or "<source name> (edited)"."""
+    out, s = Path(path).stem.lower(), Path(src).stem.lower()
+    return out == s or out.startswith(s + " (edited)")
+
+
+_BASELINES: dict = {}
+
+
+def _source_issues(sources: list[str]):
+    """Counter of (check, detail) for the issues the user's source workbooks already have (a #DIV/0!, an #N/A
+    literal, a failing check on their own Checks tab): an edit is not asked to fix them. Cached per file version."""
+    import csv
+    from collections import Counter
+    from engines.sheets.qa import ERRORS, check
+    seen = Counter()
+    for s in sources:
+        try:
+            st = os.stat(s)
+        except OSError:
+            continue
+        key = (os.path.abspath(s), st.st_mtime_ns, st.st_size)
+        if key not in _BASELINES:
+            got = Counter()
+            try:
+                if s.lower().endswith((".xlsx", ".xlsm")):
+                    got.update((i["check"], str(i["detail"])) for i in check(s, allow_hardcoded=True)["issues"])
+                elif s.lower().endswith(".csv"):
+                    with open(s, newline="", encoding="utf-8", errors="replace") as fh:
+                        got.update(("error_literal", v) for row in csv.reader(fh) for v in row
+                                   if v.strip().startswith(ERRORS))
+            except Exception:  # noqa: BLE001 - an unreadable source has no baseline
+                pass
+            _BASELINES[key] = got
+        seen.update(_BASELINES[key])
+    return seen
+
+
+def _new_issues(issues: list[dict], baseline) -> list[dict]:
+    """The issues that are not already in the source (each source issue excuses one output issue like it)."""
+    left, out = baseline.copy(), []
+    for i in issues:
+        k = (i["check"], str(i["detail"]))
+        if left[k] > 0:
+            left[k] -= 1
+        else:
+            out.append(i)
+    return out
+
+
 def _derive_check(artifacts, ws, sources: list[str], asks: set[str]):
     """The finish gate for an edit or derivation: the workbook opens and recalculates without errors and keeps the
-    source's structure. No Cover, Checks, input-source or model rules: those are for models built from nothing."""
+    source's structure. No Cover, Checks, input-source or model rules: those are for models built from nothing. Errors
+    the source already has are not the edit's to fix: only issues that are new or changed are reported."""
     from engines.sheets.qa import check
     xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
     if not xl:
@@ -282,6 +338,7 @@ def _derive_check(artifacts, ws, sources: list[str], asks: set[str]):
             return f"ENGINE CHECK: artifact not found: {a}"
         try:
             issues = [i for i in check(p, allow_hardcoded=True)["issues"] if i["check"] != "no_formulas"]
+            issues = _new_issues(issues, _source_issues(sources)) if issues else issues
             issues += derive_issues(p, sources, asks)
         except Exception as e:  # noqa: BLE001
             return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
@@ -313,16 +370,7 @@ def finish_check(answer, artifacts, ws, report=None):
             return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
                     "openpyxl (wb.save) as a real workbook, then finish again.")
         if "Checks" in r["stats"]["sheets"]:
-            try:                               # the copy check() already recalculated: no second LibreOffice run
-                rc = r["stats"].get("recalculated_copy")
-                if rc:
-                    from openpyxl import load_workbook as _lw
-                    from engines.sheets.qa import read_ref
-                    status = read_ref(_lw(rc, data_only=True), "Checks!F3")
-                else:
-                    status = None
-            except Exception:
-                status = None
+            status = r["stats"].get("checks_status")    # read from check()'s recalculation: no second run
             if status not in (None, "OK") and not any(i["cell"] == "Checks!F3" for i in r["issues"]):
                 r["issues"].append({"check": "checks_tab", "cell": "Checks!F3", "detail": f"shows {status}"})
         if "Cover" not in r["stats"]["sheets"]:
@@ -1073,9 +1121,10 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
     from engines import max_turns as _cap
     n = _cap(max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50")))
     from meshpool_harness.office_intent import asks_for, derive_job
-    derive = derive_job(task, files)           # sort, filter, add a column ... on a workbook the user has
+    derive = derive_job(task, files, workdir)  # sort, filter, add a column ... on a workbook the user has
     job_env = {"MH_SHEETS_JOB": "derive" if derive else "build",       # read by finish_check here and by the
-               "MH_SHEETS_SOURCES": os.pathsep.join(str(f) for f in files or []) if derive else "",   # checker CLI
+               # checker CLI, which runs in another folder: absolute paths
+               "MH_SHEETS_SOURCES": os.pathsep.join(os.path.abspath(str(f)) for f in files or []) if derive else "",
                "MH_SHEETS_ASKS": ",".join(sorted(asks_for(task))) if derive else ""}
     saved = {k: os.environ.get(k) for k in job_env}
     os.environ.update(job_env)

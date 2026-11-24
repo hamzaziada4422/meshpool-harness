@@ -68,9 +68,10 @@ def _check_cmd(path: str) -> str:
     return f"PYTHONPATH={shlex.quote(str(ROOT))} {shlex.quote(sys.executable)} -m engines.sheets.check {path}"
 
 
-def test_job_kind_rules():
+def test_job_kind_rules(tmp_path):
     assert derive_job(TASK, ["/x/score.xlsx"])
-    assert derive_job("Add a Total column to grades.xlsx", [])                    # named in the request
+    (tmp_path / "grades.xlsx").write_bytes(b"x")
+    assert derive_job("Add a Total column to grades.xlsx", [], tmp_path)         # named in the request, and there
     assert derive_job("Turn orders.csv into a workbook with one row per order", ["/x/orders.csv"])
     assert not derive_job("Build a three-statement financial model from hist.xlsx", ["/x/hist.xlsx"])
     assert not derive_job("Make a sales dashboard from sales.xlsx", ["/x/sales.xlsx"])
@@ -123,7 +124,8 @@ def test_derive_gate_accepts_plain_and_refuses_banker_structure(tmp_path, monkey
     wb.active.insert_rows(1, 2)
     wb.active["A1"] = "Scores"
     wb.create_sheet("Cover", 0)
-    bad = tmp_path / "bad.xlsx"
+    (tmp_path / "out").mkdir()
+    bad = tmp_path / "out" / "score.xlsx"                               # the source, edited as a copy
     wb.save(bad)
     kinds = [i["cell"] for i in E.derive_issues(str(bad), [str(src)], set())]
     assert kinds == ["Cover", "", "Scores!A3"]          # Cover tab, no source sheet name, header moved down
@@ -164,3 +166,109 @@ def test_sheets_engine_honours_the_turn_cap(tmp_path, monkeypatch):
     c = MockClient([tool_call("bash", {"command": f"echo explore {i}"}) for i in range(10)])
     r = E.solve("Build a model", workdir=str(tmp_path), task_id="t", client=c, model="mock")
     assert r["reason"] == "turn cap 3 reached; no workbook saved" and len(c.requests) == 3
+
+
+# ---- review fixes (office engines review): each fails on the code before it --------------------------------------
+BUILDS = [
+    ("Create a DCF valuation for ACME using financials.xlsx", "financials.xlsx"),
+    ("Make an LBO for the buyout of Target Co using financials.xlsx", "financials.xlsx"),
+    ("Build a comps table for ACME against the peers in peers.xlsx", "peers.xlsx"),
+    ("Build a 3-year budget from assumptions.csv", "assumptions.csv"),
+    ("Build a forecast from sales.csv", "sales.csv"),
+    ("Build a loan amortization schedule using loan_terms.xlsx", "loan_terms.xlsx"),
+]
+
+
+@pytest.mark.parametrize("task,src", BUILDS)
+def test_model_builds_that_use_an_input_are_builds_not_derive_jobs(task, src):
+    from meshpool_harness.office_intent import styled_deliverable
+    assert styled_deliverable(task)                         # the lean Work chat offers the engines
+    assert not derive_job(task, ["/x/" + src])
+
+
+def test_the_output_name_in_the_request_is_not_a_source(tmp_path):
+    for task in ("Make a sheet of Apple's revenue by year and save it as apple_valuation.xlsx",
+                 "Put MSFT's quarterly revenue in a table, output msft.xlsx",
+                 "List the bakery's monthly costs in bakery_budget.xlsx",
+                 "Copy the figures below into totals.xlsx"):
+        assert not derive_job(task, [], tmp_path), task
+    (tmp_path / "bakery_budget.xlsx").write_bytes(b"x")                 # there now: an edit of it
+    assert derive_job("List the bakery's monthly costs in bakery_budget.xlsx", [], tmp_path)
+    assert not derive_job("Copy the figures below into bakery_budget.xlsx", [], tmp_path)
+
+
+def test_title_requests_are_seen():
+    for t in ("Insert a title at the top", "Sort it and put a title above the table", "Add a heading",
+              "Title it Q3 Sales", "Sort score.xlsx and add a bold heading"):
+        assert "title" in asks_for(t), t
+    for t in ("Sort by job title", "Add a column with each person's job title", TASK):
+        assert "title" not in asks_for(t), t
+
+
+def _errsrc(folder: Path) -> Path:
+    """A source with errors of its own: a #DIV/0! formula, an #N/A literal and a Checks tab that shows FAIL."""
+    wb = Workbook()
+    ws = wb.active
+    for r in [("name", "a", "b", "ratio"), ("Ann", 1, 0, "=B2/C2"), ("Bo", 4, 2, "=B3/C3"), ("Cy", "#N/A", 1, 1)]:
+        ws.append(r)
+    ck = wb.create_sheet("Checks")
+    ck["A1"], ck["B1"] = "Totals tie", '=IF(SUM(Sheet!B3:B3)=5,"OK","FAIL")'
+    wb.save(folder / "src.xlsx")
+    return folder / "src.xlsx"
+
+
+def test_derive_gate_reports_only_errors_the_edit_made(tmp_path, monkeypatch):
+    src = _errsrc(tmp_path)
+    monkeypatch.setenv("MH_SHEETS_JOB", "derive")
+    monkeypatch.setenv("MH_SHEETS_SOURCES", str(src))
+    ws = type("W", (), {"root": tmp_path})()
+    wb = load_workbook(src)
+    wb.active["E1"], wb.active["E2"] = "total", "=B2+C2"                 # the edit: a Total column
+    out = tmp_path / "src (edited).xlsx"
+    wb.save(out)
+    assert E.finish_check("", [str(out)], ws) is None                    # the source's own errors do not block
+    wb.active["F2"] = "=1/0"                                             # an error the edit made does
+    wb.save(out)
+    got = E.finish_check("", [str(out)], ws)
+    assert got and "Sheet!F2" in got and "Sheet!D2" not in got and "Checks" not in got
+
+
+def test_derive_gate_takes_a_chartsheet(tmp_path):
+    from openpyxl.chart import BarChart, Reference
+    src = _score(tmp_path)
+    wb = load_workbook(src)
+    ch = BarChart()
+    ch.add_data(Reference(wb.active, min_col=2, min_row=1, max_row=5), titles_from_data=True)
+    wb.create_chartsheet("Chart1").add_chart(ch)
+    out = tmp_path / "score (edited).xlsx"
+    wb.save(out)
+    assert "Chart1" in load_workbook(out).sheetnames
+    assert E.derive_issues(str(out), [str(src)], set()) == []
+
+
+def test_a_derivation_into_a_new_file_names_its_own_sheets(tmp_path):
+    src = _score(tmp_path)
+    wb = Workbook()
+    wb.active.title = "Summary"
+    wb.active.append(("count", "mean midterm1"))
+    wb.active.append((4, 73.75))
+    out = tmp_path / "summary.xlsx"
+    wb.save(out)
+    assert E.derive_issues(str(out), [str(src)], set()) == []           # a summary is not the source renamed
+    out2 = tmp_path / "score (edited).xlsx"
+    wb.save(out2)
+    assert [i["cell"] for i in E.derive_issues(str(out2), [str(src)], set())] == [""]
+
+
+def test_sheets_sources_are_absolute(tmp_path, monkeypatch):
+    _score(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def grab(*a, **k):
+        seen["src"] = os.environ.get("MH_SHEETS_SOURCES")
+        return {"ok": True}
+    monkeypatch.setattr(E, "_solve", grab)
+    E.solve(TASK, workdir=str(tmp_path / "w"), task_id="t", client=MockClient([]), model="mock",
+            files=["score.xlsx"])
+    assert seen["src"] == str(tmp_path / "score.xlsx")

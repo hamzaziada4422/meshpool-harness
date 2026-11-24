@@ -112,6 +112,15 @@ def test_check_passes_the_full_chart_in_either_orientation_and_in_thousands(tmp_
     assert DP.check_data(deck(tmp_path / "f.pptx", [(cats, bad), (cats, CSV)]), expectations()) == []
 
 
+def test_an_all_zero_or_broken_chart_fails_p22(tmp_path):
+    """The 1e6 scale gave whole numbers a tolerance of 500,000, so a chart of zeros passed as "in millions"."""
+    cats = ["Q1", "Q2", "Q3", "Q4"]
+    zero = {r: [0, 0, 0, 0] for r in CSV}
+    assert DP.check_data(deck(tmp_path / "z.pptx", [(cats, zero)]), expectations())
+    off = {r: [v + 40000 for v in vs] for r, vs in CSV.items()}
+    assert DP.check_data(deck(tmp_path / "o.pptx", [(cats, off)]), expectations())
+
+
 @needs_lo
 def test_the_computed_page_renders_a_chart_that_passes_the_check(tmp_path):
     from pptx import Presentation

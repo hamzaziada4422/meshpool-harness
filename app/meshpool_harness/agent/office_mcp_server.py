@@ -65,8 +65,8 @@ def _readable(p: Path) -> bool:
     return any(q == r or r in q.parents for r in ok)
 
 
-def _run_job(jid: str):
-    OJ.run(jid)
+def _run_job(jid: str, should_stop=None):
+    OJ.run(jid, should_stop=should_stop)
 
 
 def _report(jid: str) -> tuple[str, bool]:
@@ -94,7 +94,8 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
     if reused == "running":
         OJ.JOBS[jid]["event"].wait(WAIT)
         return _report(jid)
-    t = threading.Thread(target=_run_job, args=(jid,), daemon=True)
+    from meshpool_harness.agent.mcp_stdio import cancel_check
+    t = threading.Thread(target=_run_job, args=(jid, cancel_check()), daemon=True)   # the client's Stop ends the job
     t.start()
     t.join(WAIT)
     return _report(jid)
@@ -985,6 +986,11 @@ def handle(msg: dict, wait_s: float = 900) -> dict | None:
 
 
 def main():
+    import signal
+    try:                                     # the app ends the server with SIGTERM: exit, so atexit ends the jobs
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    except (ValueError, OSError, AttributeError):
+        pass
     sys.path.insert(0, str(APP))
     try:
         from meshpool_harness import config as C
@@ -992,8 +998,10 @@ def main():
     except Exception:
         pass
     from meshpool_harness.agent import mcp_stdio
-    mcp_stdio.serve("meshpool-office", tools())
-
+    try:
+        mcp_stdio.serve("meshpool-office", tools())
+    finally:                                 # the client went away (chat closed, app quit): its jobs go too
+        OJ.kill_jobs()
 
 if __name__ == "__main__":
     main()

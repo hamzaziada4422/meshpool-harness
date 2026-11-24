@@ -14,10 +14,13 @@ ERRORS = ("#REF!", "#DIV/0!", "#VALUE!", "#NAME?", "#N/A", "#NUM!", "#NULL!", "E
 CALC_SHEETS = re.compile(r"calc|model|output|summary|dashboard|p&l|pnl|forecast|valuation", re.I)
 INPUT_SHEETS = re.compile(r"input|assumption|data|source|raw", re.I)
 FINANCE_SHEETS = re.compile(r"comps|precedent|dcf|valuation", re.I)
+RECALC_TIMEOUT_S = 180
 
 
 def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
-    """Round-trip through LibreOffice headless so every formula gets a computed cached value."""
+    """Round-trip through LibreOffice headless so every formula gets a computed cached value. Without out_dir the copy
+    goes to a scratch folder the caller removes (recalc_values does it for you); it is also removed at exit."""
+    from engines.forge.common import _run_tree
     from meshpool_harness.office_runtime import Unavailable, find_soffice
     soffice = find_soffice()
     if not soffice:
@@ -29,10 +32,23 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
         atexit.register(shutil.rmtree, str(out), True)      # the converted copy is scratch: do not leave it in /tmp
     out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
-        subprocess.run([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
-                        "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(out), xlsx_path],
-                       check=True, capture_output=True, timeout=180)
+        # its own process group, killed whole on a timeout: soffice.bin outlives a plain kill of soffice
+        r = _run_tree([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
+                       "--convert-to", "xlsx:Calc MS Excel 2007 XML", "--outdir", str(out), xlsx_path],
+                      RECALC_TIMEOUT_S)
+    if r.returncode:
+        raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
     return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
+
+
+def recalc_values(xlsx_path: str):
+    """The workbook with values (data_only) after a LibreOffice recalculation. The recalculated copy is removed as
+    soon as it is read, so a killed run leaves no scratch folder behind."""
+    out = tempfile.mkdtemp(prefix="recalc_")
+    try:
+        return load_workbook(recalc(xlsx_path, out), data_only=True)
+    finally:
+        shutil.rmtree(out, True)
 
 
 MAX_SCAN_ROWS = 20000
@@ -167,15 +183,14 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
     issues = []
     wb_f = load_workbook(xlsx_path, data_only=False)
     try:
-        recalced = recalc(xlsx_path)
-        wb_v = load_workbook(recalced, data_only=True)
+        wb_v = recalc_values(xlsx_path)
     except RuntimeError as e:
         from meshpool_harness.office_runtime import is_unavailable
         if not is_unavailable(e):
             raise
-        recalced, wb_v = None, None                  # no LibreOffice: structure checks only
+        wb_v = None                                  # no LibreOffice: structure checks only
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
-        recalced, wb_v = None, None                  # recalculation failed: structure checks, and say so
+        wb_v = None                                  # recalculation failed: structure checks, and say so
         issues.append({"check": "recalc_failed", "cell": "",
                        "detail": f"Could not recalculate the workbook to check its values ({type(e).__name__}); "
                                  "formulas and structure were checked, values were not."})
@@ -234,15 +249,21 @@ def check(xlsx_path: str, expect_sheets: list[str] | None = None, allow_hardcode
             issues.append({"check": "missing_sheets", "cell": "", "detail": missing})
     if n_formula == 0:
         issues.append({"check": "no_formulas", "cell": "", "detail": "workbook has no live formulas"})
+    checks_status = None
+    if wb_v is not None and "Checks" in wb_f.sheetnames:
+        try:                                         # the master check cell, read from the recalculated values
+            checks_status = read_ref(wb_v, "Checks!F3")
+        except Exception:  # noqa: BLE001
+            pass
     return {"issues": issues, "stats": {"sheets": wb_f.sheetnames, "formulas": n_formula,
                                         "numeric_constants": n_numeric_const, "named_ranges": names,
-                                        "recalculated_copy": recalced, "recalculated": wb_v is not None}}
+                                        "checks_status": checks_status, "recalculated": wb_v is not None}}
 
 
 def value(xlsx_path: str, ref: str):
     """Computed value of 'Sheet!A1' or a named range after LibreOffice recalc (for gold-answer checks)."""
     try:
-        wb = load_workbook(recalc(xlsx_path), data_only=True)
+        wb = recalc_values(xlsx_path)
     except RuntimeError as e:
         from meshpool_harness.office_runtime import is_unavailable
         if is_unavailable(e):

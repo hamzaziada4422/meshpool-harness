@@ -14,7 +14,6 @@ own share: outputs, checks and validation, then assumptions, then the formula de
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -83,9 +82,8 @@ def _title(ws) -> str:
 def _values_book(path: str):
     """(recalculated workbook with values, note). Falls back to the cached values in the file."""
     try:
-        from engines.sheets.qa import recalc
-        out = recalc(path, tempfile.mkdtemp(prefix="digest_"))
-        return load_workbook(out, data_only=True), "values recalculated in LibreOffice"
+        from engines.sheets.qa import recalc_values
+        return recalc_values(path), "values recalculated in LibreOffice"
     except Exception as e:  # noqa: BLE001 - no LibreOffice or a failed conversion: cached values, said plainly
         return load_workbook(path, data_only=True), f"values are the file's cached values (recalculation failed: " \
                                                    f"{type(e).__name__})"

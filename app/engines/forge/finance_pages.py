@@ -19,9 +19,9 @@ FIRM_SRC = "Meshpool model"
 
 
 def _recalc(path: str):
-    from engines.sheets.qa import recalc
+    from engines.sheets.qa import recalc_values
     try:
-        return load_workbook(recalc(path), data_only=True), load_workbook(path)
+        return recalc_values(path), load_workbook(path)
     except RuntimeError:                                   # no LibreOffice: cached values (may be empty)
         return load_workbook(path, data_only=True), load_workbook(path)
 

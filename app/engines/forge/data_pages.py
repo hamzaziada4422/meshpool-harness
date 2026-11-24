@@ -509,15 +509,19 @@ def _dec(v) -> int:
 
 def _values_fit(pairs) -> tuple[float, list]:
     """The scale (1, 1e3, 1e6, 1e-3) at which the chart's numbers best fit the source's, and the cells that still
-    differ: within 0.6% or the rounding of the decimals shown."""
+    differ: within 0.6% or the rounding of the decimals shown, never more than half the expected value (a 0 is not
+    1,234 "in millions"). A scale at which most of the chart's numbers are 0 is no scale."""
     best = (1.0, pairs)
     for s in (1.0, 1e3, 1e6, 1e-3):
+        shown = [g for _, g, _ in pairs if g is not None]
+        if s != 1.0 and shown and sum(1 for g in shown if g * s == 0) * 2 > len(shown):
+            continue
         bad = []
         for e, g, d in pairs:
             if g is None:
                 bad.append((e, g, d))
                 continue
-            tol = max(0.006 * abs(e), (0.5 * 10 ** -d + 1e-9) * s)
+            tol = max(0.006 * abs(e), min((0.5 * 10 ** -d + 1e-9) * s, 0.5 * abs(e)))
             if abs(g * s - e) > tol:
                 bad.append((e, g, d))
         if len(bad) < len(best[1]) or s == 1.0:

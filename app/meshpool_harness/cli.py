@@ -585,6 +585,8 @@ def _main(argv=None):
         eng, conf, why = decide(a.request, a.files, a.output_format, a.workdir)
         print(json.dumps({"engines": eng, "confidence": conf, "reason": why}, indent=1))
         return 0
+    from meshpool_harness.agent.office_jobs import guard_from_env
+    guard_from_env()                          # an office job: ends at its deadline or when its starter is gone
     res = run_request(a.request, a.files, a.out, a.engine, a.workdir, output_format=a.output_format,
                       **({"model": a.model} if getattr(a, "model", None) else {}))
     print(json.dumps(res, indent=1))

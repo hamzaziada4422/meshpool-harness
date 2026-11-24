@@ -43,6 +43,10 @@ def _decimals(tok: str) -> int:
     return len(t.split(".")[1]) if "." in t else 0
 
 
+# Words that make a positive number in the answer stand for a negative one printed by the code ("fell 5.2%").
+_DOWN = re.compile(r"\b(?:decreas\w*|fell|fall(?:s|ing)?|declin\w*|down|lower\w*|negative\w*)\b", re.I)
+
+
 def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list[dict]:
     """Every non-trivial number in `answer` must match some number printed by executed code
     (allowing rounding, and percent <-> fraction). Returns untraced numbers."""
@@ -67,7 +71,9 @@ def trace_numbers(answer: str, code_output: str, rel_tol: float = 0.006) -> list
         sc = _SCALE.match(answer, m.end()) if not pct else None
         if sc:                                         # "1.2 million" against a printed 1200000
             cands.append((v * _SCALES[sc.group(1).lower()], 0))
-        cands += [(-c, nd) for c, nd in cands]   # "fell 5.2%" against a printed -5.2 (and back)
+        near = answer[max(0, m.start() - 40):m.end() + 25]
+        if _DOWN.search(near):                         # "fell 5.2%" against a printed -5.2 (and back); only then
+            cands += [(-c, nd) for c, nd in cands]
         ok = False
         for c, nd in cands:
             for l in logged:

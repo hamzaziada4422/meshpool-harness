@@ -7,6 +7,7 @@ prints its result as JSON on stdout. Files land in "<project>/Meshpool outputs/<
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -23,6 +24,47 @@ REBUILD_LIMIT = int(os.environ.get("OFFICE_REBUILD_LIMIT", "3"))   # builds of o
 REBUILD_WINDOW_S = 45 * 60
 SIMILAR = 0.6                          # word-set overlap at which a new request counts as the same one again
 _LOCK = threading.RLock()              # JOBS is shared by threads (parallel tool calls in one turn)
+_PROCS: set = set()                    # engine processes running now: each leads its own process group
+
+
+def kill_jobs() -> None:
+    """End every engine job this process started, with all it started (LibreOffice, model-written scripts). A job
+    runs in its own process group, so killing the Office MCP server's tree does not reach it: the server calls this
+    when its client goes away, and at exit and on SIGTERM."""
+    if not _PROCS:
+        return
+    from meshpool_harness.agent.mcp import kill_tree
+    for p in list(_PROCS):
+        kill_tree(p)
+        try:
+            p.kill()
+        except OSError:
+            pass
+
+
+atexit.register(kill_jobs)
+
+
+def guard_from_env() -> None:
+    """In an engine job's own process: end the job's whole process group once its deadline passes or the process that
+    started it is gone (a killed app or server cannot end it any more). run() passes both in the environment."""
+    try:                                      # taken out of the environment: not for processes the job starts
+        deadline = float(os.environ.pop("MH_JOB_DEADLINE", "") or 0)
+        parent = int(os.environ.pop("MH_JOB_PARENT", "") or 0)
+    except ValueError:
+        return
+    if not deadline and not parent:
+        return
+
+    def watch():
+        while True:
+            time.sleep(1)
+            if (deadline and time.time() > deadline) or (parent and os.getppid() != parent):
+                if os.name != "nt" and os.getpgrp() == os.getpid():
+                    import signal
+                    os.killpg(os.getpid(), signal.SIGKILL)
+                os._exit(124)
+    threading.Thread(target=watch, daemon=True, name="job-guard").start()
 
 
 # What each engine builds. A request that names a Word-type deliverable and none of these goes to make_document.
@@ -94,9 +136,21 @@ def new_job(engine: str, request: str, paths: list[str], root: Path, scope: str 
         recent = [x for x in JOBS.values() if x["engine"] == engine and x.get("scope", "") == scope
                   and now - x["started"] < REBUILD_WINDOW_S]
         JOBS[jid] = {"engine": engine, "cmd": cmd, "out": out, "started": now, "build_no": len(recent) + 1,
-                     "scope": scope, "request": request, "paths": sorted(paths or []), "event": threading.Event(),
+                     "scope": scope, "request": request, "paths": _inputs(paths), "event": threading.Event(),
                      "inputs": {Path(x).name for x in paths or []}, "env_extra": dict(env_extra or {})}
         return jid
+
+
+def _inputs(paths) -> list:
+    """The input files as (path, mtime, size), sorted: an input changed since an earlier build makes a new request."""
+    out = []
+    for p in paths or []:
+        try:
+            st = os.stat(p)
+            out.append((str(p), st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((str(p), None, None))
+    return sorted(out, key=lambda x: x[0])
 
 
 def _norm(request: str) -> str:
@@ -126,7 +180,8 @@ def start(engine: str, request: str, paths: list[str], root: Path, scope: str = 
     only rewords an earlier finished build, once the chat has REBUILD_LIMIT builds of the engine, is not started:
     ("<earlier id>", "refused"; the text is refusal_text). X-04: a sales deck took 24.5 min for 1 request: 4 decks,
     3 engine runs."""
-    key = (scope, engine, _norm(request), sorted(paths or []))
+    inputs = _inputs(paths)
+    key = (scope, engine, _norm(request), inputs)
     now = time.time()
     with _LOCK:
         mine = [(i, j) for i, j in JOBS.items() if j.get("scope", "") == scope and j["engine"] == engine
@@ -142,7 +197,7 @@ def start(engine: str, request: str, paths: list[str], root: Path, scope: str = 
             w = _words(request)
             for i, j in reversed(mine):
                 v = _words(j["request"])
-                if (j.get("done") and j.get("result") and j["paths"] == sorted(paths or []) and w and v
+                if (j.get("done") and j.get("result") and j["paths"] == inputs and w and v
                         and len(w & v) / len(w | v) >= SIMILAR and _made(j)):
                     return i, "refused"
         return new_job(engine, request, paths, root, scope, model=model, env_extra=env_extra), ""
@@ -171,11 +226,15 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
             extra = usage.child_env(usage.start_task(chat=cur.chat, parent=cur, label="office:" + j["engine"]),
                                     "engine:" + j["engine"])
     env.update(extra or {})
+    # the job ends itself after its deadline (a little after ours) or once this process is gone (guard_from_env)
+    env.update(MH_JOB_DEADLINE=str(time.time() + timeout + 60), MH_JOB_PARENT=str(os.getpid()))
     kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}   # no console flashes up;
     # its own process group, so Stop and the timeout end LibreOffice and model-written scripts too, not only the engine
+    proc = None
     try:
         proc = subprocess.Popen(j["cmd"], cwd=str(j["out"]), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 text=True, encoding="utf-8", errors="replace", **kw)
+        _PROCS.add(proc)
         end = time.time() + timeout
         while True:
             try:
@@ -200,6 +259,8 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
     except Exception as e:  # noqa: BLE001  report, never crash the caller
         j["result"], j["stderr"] = {}, f"{type(e).__name__}: {e}"
     finally:
+        if proc is not None:
+            _PROCS.discard(proc)
         j["done"] = time.time()
         if j.get("event"):
             j["event"].set()

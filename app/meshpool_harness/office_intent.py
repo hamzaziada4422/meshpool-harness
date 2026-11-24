@@ -24,7 +24,11 @@ _NOUN = (r"(?:(?:pitch |slide |board |investor |sales )?decks?|presentations?|sl
          r"|reports?|memos?|memorand(?:um|a)|briefings?|white ?papers?|proposals?"
          r"|(?:financial|three[- ]statement|3[- ]statement|dcf|lbo|valuation|operating|budget|forecast(?:ing)?"
          r"|revenue|pricing|cash ?flow|p&l|saas)\s+models?"
-         r"|dashboards?)")
+         r"|dashboards?"
+         # models named on their own ("a DCF valuation", "an LBO", "a comps table", "a 3-year budget", "an
+         # amortization schedule"); not the verb in "need to budget" or "want to schedule a call"
+         r"|dcfs?|lbos?|valuations?|comps|comparables|three[- ]statements?|3[- ]statements?|cash ?flows?"
+         r"|(?<!\bto )(?:budgets?|forecasts?|schedules?|models?))")
 # Asked for: a making verb a few words before the noun ("make a 10-slide pitch deck", "turn the notes into a deck").
 _ASK = re.compile(r"\b(?:make|create|build|prepare|draft|write|produce|design|generate|assemble|put together|"
                   r"give me|need|want|into)\b(?:\W+[\w&'-]+){0,6}?\W+" + _NOUN + r"\b", re.I)
@@ -53,14 +57,34 @@ def styled_deliverable(text: str) -> bool:
 
 
 SHEET_SOURCES = (".xlsx", ".xlsm", ".xls", ".csv")
+_SHEET_NAME = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", re.I)
+# A name the request gives to the output, not a source: "save it as x.xlsx", "into x.xlsx", "output x.xlsx".
+_OUT_CUE = re.compile(r"\b(?:as|into|output(?:\s+(?:to|it\s+(?:to|as)))?|named|called)\s*[\"'`]?\s*$", re.I)
 
 
-def derive_job(request: str, files=()) -> bool:
-    """An engine job that edits or derives from an existing workbook: a workbook or CSV is an input (or named in the
-    request) and the request does not ask for a model, dashboard, report or deck."""
-    has_source = any(Path(str(f)).suffix.lower() in SHEET_SOURCES for f in files or []) or \
-        bool(re.search(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", str(request or ""), re.I))
-    return has_source and not styled_deliverable(request)
+def _named_sources(request: str, files=(), workdir=None) -> list[str]:
+    """Workbook or CSV names in the request that are real inputs: a file handed in (`files`) or one that exists under
+    workdir, and not the output's name ("save it as apple_valuation.xlsx", "into sorted.xlsx")."""
+    t = str(request or "").split(SEP)[0]
+    given = {Path(str(f)).name.lower() for f in files or []}
+    out = []
+    for m in _SHEET_NAME.finditer(t):
+        if _OUT_CUE.search(t[max(0, m.start() - 40):m.start()]):
+            continue
+        name = m.group(0)
+        if name.lower() in given or (workdir and (Path(workdir) / name).is_file()):
+            out.append(name)
+    return out
+
+
+def derive_job(request: str, files=(), workdir=None) -> bool:
+    """An engine job that edits or derives from an existing workbook: a workbook or CSV is an input (handed in, or
+    named in the request and present under workdir) and the request does not ask for a model, dashboard, report or
+    deck. A build that uses an input ("a DCF valuation using financials.xlsx") is never a derive job."""
+    if styled_deliverable(request):
+        return False
+    return any(Path(str(f)).suffix.lower() in SHEET_SOURCES for f in files or []) or \
+        bool(_named_sources(request, files, workdir))
 
 
 def asks_for(request: str) -> set[str]:
@@ -74,6 +98,9 @@ def asks_for(request: str) -> set[str]:
         out.add("cover")
     if re.search(r"\b(?:checks?|error[- ]checks?|integrity checks?)\s*(?:sheet|tab)\b", t):
         out.add("checks")
-    if re.search(r"\btitle (?:row|line)s?\b|\badd (?:a )?title\b|\bheading rows?\b", t):
+    if re.search(r"\b(?:title|heading) (?:row|line)s?\b|\b(?:add|insert|put|place|include|write|give it|create|"
+                 r"make)(?:\s+[\w'-]+){0,2}?\s+(?:title|heading)s?\b|\btitle (?:it|the (?:sheet|table|tab|workbook|"
+                 r"report))\b|\bwith (?:a|the) (?:title|heading)\b|\b(?:a|the) (?:title|heading) (?:at|above|on top|"
+                 r"across|over)\b", t):
         out.add("title")
     return out
