@@ -1,0 +1,23 @@
+{
+ "model": "deepseek-v4.1-flash",
+ "stream": true,
+ "tool_choice": "auto",
+ "parallel_tool_calls": true,
+ "reasoning": {
+  "summary": "auto"
+ },
+ "store": false,
+ "include": [
+  "reasoning.encrypted_content"
+ ],
+ "prompt_cache_key": "01a20fba-4b4d-7323-a338-c2e7a0809f34",
+ "client_metadata": {
+  "x-codex-turn-metadata": "{\"installation_id\":\"fad45852-3c0f-4cbe-93b4-e7c2a1d751b7\",\"session_id\":\"01a20fba-4b4d-7323-a338-c2e7a0809f34\",\"thread_id\":\"01a20fba-4b4d-7323-a338-c2e7a0809f34\",\"agent_name\":\"/root\",\"turn_id\":\"01a20fba-4b65-7002-9975-4da4082c8e78\",\"window_id\":\"01a20fba-4b4d-7323-a338-c2e7a0809f34:0\",\"window_number\":0,\"context_window_id\":\"01a20fba-4b50-7c42-8114-ed849807e812\",\"request_kind\":\"turn\",\"history_initialization\":\"new\",\"root_turn_id\":\"01a20fba-4b65-7002-9975-4da4082c8e78\",\"thread_source\":\"user\",\"turn_trigger\":\"exec\",\"sandbox\":\"none\",\"sandbox_mode\":\"danger-full-access\",\"auto_review_enabled\":false,\"node_repl_auto_review_required\":false,\"node_repl_disabled\":false,\"workspaces\":{\"/root/work/mhloop-v2-perf-anagrams-o_q_w8wy\":{\"has_changes\":true}},\"turn_started_at_unix_ms\":1795560196971,\"analytics_enabled\":true,\"model\":\"deepseek-v4.1-flash\"}",
+  "turn_id": "01a20fba-4b65-7002-9975-4da4082c8e78",
+  "x-codex-window-id": "01a20fba-4b4d-7323-a338-c2e7a0809f34:0",
+  "x-codex-installation-id": "fad45852-3c0f-4cbe-93b4-e7c2a1d751b7",
+  "root_turn_id": "01a20fba-4b65-7002-9975-4da4082c8e78",
+  "session_id": "01a20fba-4b4d-7323-a338-c2e7a0809f34",
+  "thread_id": "01a20fba-4b4d-7323-a338-c2e7a0809f34"
+ }
+}
