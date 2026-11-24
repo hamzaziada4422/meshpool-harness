@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 import subprocess
 from pathlib import Path
 
@@ -46,11 +47,21 @@ def _size(p: Path) -> int:
         return 0
 
 
+def _regular(p: Path) -> bool:
+    """A plain file of its own: not a FIFO or device (opening one can block or never end) and not a symlink (it can
+    point anywhere, ~/.ssh included)."""
+    try:
+        return stat.S_ISREG(os.lstat(p).st_mode)
+    except OSError:
+        return False
+
+
 def _is_text(p: Path) -> bool:
-    if p.suffix.lower() not in TEXT_EXTS:
+    if p.suffix.lower() not in TEXT_EXTS or not _regular(p):
         return False
     try:
-        head = p.read_bytes()[:2048]
+        with open(p, "rb") as f:
+            head = f.read(2048)
     except OSError:
         return False
     return b"\0" not in head
@@ -128,8 +139,8 @@ def build(root, request: str = "", budget: int | None = None, seen=None) -> str:
     shown = []
     for i in order:
         p = files[i]
-        if not _is_text(p):
-            continue
+        if _size(p) > MAX_FILE * 4 or not _is_text(p):
+            continue                                  # never read a big file whole just to find it is too long
         try:
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:

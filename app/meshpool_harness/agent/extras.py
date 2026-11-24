@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.core.permrules import TOOL_FAMILY as _TOOL_FAMILY
 
 FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 MAX_FILE, MAX_ALL = 20000, 40000
@@ -163,32 +164,32 @@ def hooks(root: Path) -> dict:
 
 # A hook names a tool the way Claude Code or Meshpool's classic tools do; the lean (Codex-style) lanes run "shell" and
 # "apply_patch". Each family matches every tool that does that job, in any letter case ("Bash", "Edit|Write" from a
-# Claude Code plugin; "bash", "edit" from a Meshpool hooks file).
-_TOOL_FAMILY = {
-    "bash": {"bash", "bash_many", "bash_start", "shell"},
-    "shell": {"bash", "bash_many", "bash_start", "shell"},
-    "edit": {"edit", "apply_patch", "notebook_edit"},
-    "multiedit": {"edit", "apply_patch"},
-    "write": {"write_file", "apply_patch"},
-    "write_file": {"write_file", "apply_patch"},
-    "apply_patch": {"apply_patch", "edit", "write_file"},
-    "read": {"read_file"},
-    "notebookedit": {"notebook_edit"},
-}
+# Claude Code plugin; "bash", "edit" from a Meshpool hooks file). Saved permission rules use the same map.
+
+
+def _hook_commands(name: str, args: dict) -> list[str]:
+    """Every command text a bash: matcher is tested against: each command a call runs (bash_many's `commands` one by
+    one, shell's script), and the call's own `command` as it was written."""
+    from meshpool_harness.core import permrules as PR
+    out = list(PR.commands_of(name, args))
+    cmd = args.get("command") or ""
+    if isinstance(cmd, list):                       # shell takes an argv list (["bash", "-lc", "rm -rf x"])
+        cmd = cmd[-1] if len(cmd) >= 3 and str(cmd[-2]) in ("-c", "-lc") else " ".join(map(str, cmd))
+    if cmd:
+        out.append(str(cmd))
+    out += [str(c) for c in args.get("commands") or [] if c and isinstance(c, str)]
+    return list(dict.fromkeys(out))
 
 
 def _tool_matches(matcher: str, name: str, args: dict) -> bool:
     if not matcher or matcher == "*":
         return True
-    cmd = args.get("command") or ""
-    if isinstance(cmd, list):                       # shell takes an argv list (["bash", "-lc", "rm -rf x"])
-        cmd = cmd[-1] if len(cmd) >= 3 and str(cmd[-2]) in ("-c", "-lc") else " ".join(map(str, cmd))
-    cmd = str(cmd)
+    cmds = _hook_commands(name, args or {})
     for m in matcher.split("|"):
         m = m.strip()
         if m.lower().startswith("bash:") or m.lower().startswith("bash("):
             pat = m[5:].strip() if m[4] == ":" else (m[5:-1] if m.endswith(")") else m[5:]).strip()
-            if cmd and fnmatch.fnmatchcase(cmd, pat):
+            if any(fnmatch.fnmatchcase(c, pat) for c in cmds):
                 return True
         elif fnmatch.fnmatchcase(name, m) or fnmatch.fnmatchcase(name.lower(), m.lower()) \
                 or name in _TOOL_FAMILY.get(m.lower(), ()):

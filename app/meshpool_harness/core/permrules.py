@@ -19,6 +19,34 @@ _RUNNERS = {"npm", "yarn", "pnpm"}
 _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 
 
+# A tool name in a saved rule or a hook matcher stands for every tool that does that job: the lean (Codex-style) lanes
+# run "shell" and "apply_patch", the classic lanes "bash" and "edit". Keys are lower case (a Claude Code plugin writes
+# "Bash", "Edit|Write"). One map for hooks (agent/extras.py) and saved allow and deny rules (agent/core.py _rule_hit).
+_BASH_FAMILY = {"bash", "bash_many", "bash_start", "shell", "probe", "trace"}
+TOOL_FAMILY = {
+    "bash": _BASH_FAMILY,
+    "shell": _BASH_FAMILY,
+    "edit": {"edit", "apply_patch", "notebook_edit"},
+    "multiedit": {"edit", "apply_patch"},
+    "write": {"write_file", "apply_patch"},
+    "write_file": {"write_file", "apply_patch"},
+    "apply_patch": {"apply_patch", "edit", "write_file"},
+    "read": {"read_file"},
+    "notebookedit": {"notebook_edit"},
+}
+
+# A command that deletes recursively, rewrites git history, wipes a disk, pipes the web into a shell or uses sudo: it
+# always needs a person's yes (agent/core.py _destructive) and is never re-run unasked (core/tools.py _recheckable).
+# git's global options may stand before the subcommand (git --no-pager reset --hard, git -C . push --force).
+_GIT = r"\bgit(?:\s+(?:-[Cc]\s*(?:\"[^\"]*\"|'[^']*'|\S+)|--?[\w-]+(?:=\S*)?))*\s+"
+DESTRUCTIVE = re.compile(
+    r"(\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+|--recursive|--force)|" + _GIT +
+    r"(push\s+.*(--force|-f\b|--delete)|reset\s+--hard|clean\s+-[a-z]*f|branch\s+-D|checkout\s+--\s|checkout\s+\.(\s|$)|restore\s+(--\S+\s+)*\.(\s|$)|worktree\s+remove\s+.*(-f\b|--force)|stash\s+(drop|clear))"
+    r"|\bdd\s+if=|\b(mkfs|shred|wipefs|fdisk|diskutil\s+erase)\b|\b(curl|wget)\b[^|;&]*\|\s*(sudo\s+)?(ba|z|fi)?sh\b"
+    r"|\bchmod\s+-R\s+777|\bsudo\b|>\s*/dev/sd|\bdrop\s+(table|database)\b|\bformat\s+[a-z]:|\bRemove-Item\b.*-Recurse|\bdel\s+/[sq]\b|\brmdir\s+/s\b)",
+    re.I)
+
+
 def commands_of(name: str, args: dict) -> list[str]:
     """The shell command strings a tool call runs ([] for a tool that runs none)."""
     from meshpool_harness.core import tools as T
@@ -109,17 +137,18 @@ def grant_patterns(cmd: str) -> list[str]:
 def granted(cmd: str, patterns) -> bool:
     """A later command is covered by a chat grant only when it is one plain command that starts with a pattern."""
     c = cmd.strip()
-    if not patterns or not c or compound(c) or writes(c):
-        return False
+    if not patterns or not c or "$" in c or compound(c) or writes(c):
+        return False                    # any $ (ANSI-C $'...' quoting can hide a ; from the compound check)
     return any(c == p or c.startswith(p + " ") for p in patterns)
 
 
 def _inside(arg: str, root) -> bool:
+    """The path resolves inside the project with symlinks followed: a relative `docs/id_rsa` where docs -> ~/.ssh is
+    outside. A drive-relative Windows path (C:x, relative to that drive's own current folder) is never inside, nor is
+    a drive or UNC path when checked off Windows."""
     p = os.path.expanduser(arg)
-    absolute = (p.startswith(("/", "\\")) or os.path.isabs(p)
-                or bool(re.match(r"^[A-Za-z]:[\\/]", p)))      # C:/..., C:\..., UNC, also when checked on Linux
-    if not (absolute or arg.startswith("~") or ".." in arg):
-        return True
+    if re.match(r"^[A-Za-z]:(?![\\/])", p):
+        return False
     if (re.match(r"^[A-Za-z]:[\\/]", p) or p.startswith("\\")) and os.name != "nt":
         return False                                  # a drive or UNC path is never inside a POSIX project root
     try:
@@ -128,6 +157,20 @@ def _inside(arg: str, root) -> bool:
         return rp == r or r in rp.parents
     except (OSError, ValueError):
         return False
+
+
+def _arg_paths(a: str) -> list[str]:
+    """The paths one argument may name: a plain word itself; an option's value after = (--file=/x); and for an option
+    with / \\ or ~ in it, every tail after its dash(es), so `file -f/etc/passwd` and `grep -rf~/.ssh/x` are checked."""
+    if not a.startswith("-"):
+        return [a]
+    out = [a.split("=", 1)[1]] if "=" in a else []
+    if any(ch in a for ch in "/\\~"):
+        body = a.lstrip("-")
+        if not a.startswith("--"):
+            out += [body[i:] for i in range(1, len(body))]
+        out = [v for v in out if v not in ("/", "\\")]          # cut -d/ : a delimiter, not the root folder
+    return [v for v in out if v]
 
 
 def safe_read(cmd: str, root) -> bool:
@@ -147,11 +190,7 @@ def safe_read(cmd: str, root) -> bool:
         return False
     if prog in ("xxd", "less") and (prog == "less" or "-r" in rest or len(pos) > 1):
         return False
-    for a in rest:
-        v = a.split("=", 1)[1] if a.startswith("-") and "=" in a else a
-        if (not a.startswith("-") or "=" in a) and not _inside(v, root):
-            return False
-    return True
+    return all(_inside(v, root) for a in rest for v in _arg_paths(a))
 
 
 def approve_with_scope(approve, kind, title, detail, scope: str):

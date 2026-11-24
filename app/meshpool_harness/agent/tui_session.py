@@ -29,6 +29,9 @@ DESTRUCTIVE_HINT = ("commands that delete recursively, rewrite git history or us
 
 def _denied(ev: dict) -> dict:
     """What a -p run reports about a refused action: a destructive command by its text, not the bare word."""
+    if ev.get("title") == "Run this destructive command?":     # the card shows the command itself
+        return {"kind": "bash", "title": ev.get("title"), "destructive": True,
+                "command": " ".join(str(ev.get("detail") or "").split())[:300]}
     if ev.get("title") != "destructive":
         return {"kind": ev.get("kind"), "title": ev.get("title")}
     cmd = ""
