@@ -38,5 +38,6 @@
   "budget_cap": "the driver stops scheduling new runs once the summed usd reaches the cap; runs already started finish; unstarted runs are missing for both arms of that task and the task is excluded from paired stats",
   "timeouts": "a run past the timeout is killed and counted as failed (pass=false, why=timeout) with secs = the timeout",
   "non_model_requests": "status 404 rows from core are the model-metadata lookups (GET /show, /v0/models/...) Meshpool makes once per run; they carry no tokens and no cost"
- }
+ },
+ "commit": "7b69cc03"
 }
