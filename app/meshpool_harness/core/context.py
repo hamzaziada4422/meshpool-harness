@@ -405,21 +405,40 @@ def observe_silent_cut(model: str, sent_tokens: int, usage: dict, win: int, base
         if base is None:
             from meshpool_harness import providers as PV
             base = PV.key_base()
-        if not _is_local(base or "") or window_info(model, base, probe_endpoint=False)[1] not in ("default", "learned"):   # never below a size the table or provider states
+        src = window_info(model, base, probe_endpoint=False)[1]
+        if not _is_local(base or "") or src not in ("default", "learned", "override"):   # never below a size the table or provider states
             return False
         implied = used + max_output(win, None)
-        if used < 512 or sent_tokens < 1500 or sent_tokens <= used * 1.6 or implied < LEARN_FLOOR:
+        if used < 512 or sent_tokens < 1500 or sent_tokens <= used * 1.6:
             _SILENT.pop(model, None)
             return False
-        seen = _SILENT.setdefault(model, [])
-        seen.append(implied)
-        del seen[:-2]
-        if len(seen) < 2 or abs(seen[0] - seen[1]) > 0.15 * max(seen):
-            return False
-        learn(model, int(min(seen)))
+        ollama = _looks_like_model_server(base or "") or src == "override"   # the user set the window for this server
+        if not ollama:
+            # an unknown local endpoint may be a proxy in front of a big hosted model: believe it only twice in a row,
+            # above the floor
+            if implied < LEARN_FLOOR:
+                return False
+            seen = _SILENT.setdefault(model, [])
+            seen.append(implied)
+            del seen[:-2]
+            if len(seen) < 2 or abs(seen[0] - seen[1]) > 0.15 * max(seen):
+                return False
+        # a real model server's cut is as good as a stated window (Ollama's num_ctx can be 2048)
+        learn(model, int(implied) if ollama else int(min(seen)), explicit=ollama)
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+def _looks_like_model_server(base: str) -> bool:
+    """Ollama / LM Studio: answered one of their routes with real data, or sits on their usual ports. Those cut a too-long
+    prompt silently with a small num_ctx (2048 by default), so one clear observation is enough there."""
+    try:
+        from urllib.parse import urlparse
+        port = urlparse(base).port
+    except Exception:  # noqa: BLE001
+        port = None
+    return base in _SEEN_SERVER or port in (11434, 1234)
 
 
 class CompactGuard:
