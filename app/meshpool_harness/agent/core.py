@@ -1891,7 +1891,8 @@ class Agent:
                 if shots:
                     self._attach_images(shots)
                 self._track_progress(calls, step_out, g)
-                note = self._refusal_escalation(g) or self._budget_escalation(g, turn) or self._step_budget(g)
+                step_note = self._step_budget(g)        # counts every step, so it runs even when another guard speaks
+                note = self._refusal_escalation(g) or self._budget_escalation(g, turn) or step_note
                 if note:
                     self.messages.append({"role": "user", "content": "[Meshpool] " + note})
                 if V3 and not cx:
@@ -2622,10 +2623,12 @@ class Agent:
             g["hard_wrap"] = True
             return (f"That is {n} steps. Tools are off now. Give your final answer: what you changed, what works, "
                     "and what you could not finish.")
-        if soft and n == 2 * soft:
+        if soft and n >= 2 * soft and not g.get("step_note2"):
+            g["step_note2"] = g["step_note1"] = True
             return (f"That is {n} steps, far more than tasks like this need. Finish now: make the one remaining fix if "
                     "there is one, run the deciding check once, and answer.")
-        if soft and n == soft:
+        if soft and n >= soft and not g.get("step_note1"):
+            g["step_note1"] = True
             return (f"That is {n} steps; most tasks like this are done in under 10. Stop probing: decide what is left, "
                     "fix it, run one check that asserts the requested behaviour, and finish.")
         return ""

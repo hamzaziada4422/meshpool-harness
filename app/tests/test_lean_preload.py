@@ -142,3 +142,18 @@ def test_recheck_skips_writes_and_off_by_default(tmp_path):
     ws2.get_mode = lambda: "auto"
     ws2.shell(["bash", "-lc", "python3 -c 'print(1)' > out.txt"])
     assert "re-ran" not in ws2.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch")
+
+
+def test_step_budget_counts_every_step_and_notes_on_crossing(tmp_path, monkeypatch):
+    from meshpool_harness.agent.core import Agent
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    monkeypatch.setattr(a, "_lean", lambda: True)
+    monkeypatch.setenv("MH_STEP_NOTE", "3")
+    monkeypatch.setenv("MH_STEP_WRAP", "8")
+    g = {}
+    notes = [a._step_budget(g) for _ in range(9)]
+    assert "Stop probing" in notes[2] and "Finish now" in notes[5] and "Tools are off" in notes[7]
+    assert sum(bool(n) for n in notes) == 3 and g["hard_wrap"]
+    monkeypatch.delenv("MH_STEP_NOTE")
+    monkeypatch.delenv("MH_STEP_WRAP")
+    assert not any(a._step_budget({}) for _ in range(50))          # off by default
