@@ -1987,6 +1987,10 @@ class Agent:
                        "the key's limit, or pick another model or key in Settings, then send \"continue\".")
             elif re.search(r"rejected the API key|stopped accepting the API key", msg):
                 msg = "The endpoint rejected the API key. Check it in Settings, then send your message again."
+            elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I) and \
+                    "answers small requests" not in msg and self._recover_off():
+                msg = (f"Couldn't reach the model endpoint ({self._endpoint_host()}). Check the network and the "
+                       "endpoint address in Settings; `meshpool check --live` tests it.")
             elif re.search(r"HTTP 0|connection problem|timed out|urlopen error", msg, re.I):
                 msg = ("Couldn't reach the model, even after waiting for the endpoint to come back. Send \"continue\" "
                        "to pick up where it stopped; the next try starts on a fresh route."
@@ -2808,22 +2812,26 @@ class Agent:
                 rel.append(os.path.relpath(f, self.root))
             except ValueError:
                 rel.append(f)
-        stats = {}
-        try:
-            r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *rel], cwd=self.root, capture_output=True,
-                               text=True, timeout=10)
-            for line in r.stdout.splitlines():
-                a, d, name = line.split("\t", 2)
-                stats[name] = f"+{a} -{d}"
-        except Exception:  # noqa: BLE001 - not a git repo, or git missing
-            pass
+        stats = self._turn_line_stats()                 # this turn's own lines, from its checkpoint
+        if not stats:
+            try:                                         # no checkpoint: against HEAD (counts uncommitted work too)
+                r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *rel], cwd=self.root,
+                                   capture_output=True, text=True, timeout=10)
+                for line in r.stdout.splitlines():
+                    a, d, name = line.split("\t", 2)
+                    stats[name] = f"+{a} -{d}"
+            except Exception:  # noqa: BLE001 - not a git repo, or git missing
+                pass
+        stats = {k.replace("/", os.sep): v for k, v in stats.items()}
         created = {os.path.relpath(c, self.root) for c in getattr(self.ws, "turn_new", set()) if os.path.isabs(c)}
         parts = [f"{r} ({stats[r]})" if r in stats else f"{r} (new)" if r in created else r for r in rel[:12]]
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
         if after:
             last = after[-1]
-            cmd = last["cmd"].splitlines()[0][:80]
+            # the command, not the `cd <long project path> &&` the model put in front of it
+            cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
+            cmd = cmd.splitlines()[0][:80]
             check = (f"`{cmd}` passed" if last["code"] == 0 else f"`{cmd}` FAILED (exit {last['code']})")
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
@@ -2833,6 +2841,21 @@ class Agent:
             from meshpool_harness.agent import grader as GR
             check += "  \n**Independent check:** " + GR.receipt_line(rv)
         return f"**Changed:** {', '.join(parts)}{more}  \n**Checked:** {check}"
+
+    def _turn_line_stats(self) -> dict:
+        """{path: "+a -d"} of the open turn from the chat's checkpoint: the lines this turn changed, not the user's
+        uncommitted edits that `git diff HEAD` would add to them. {} without a checkpoint or an open turn."""
+        cp = getattr(self, "checkpoint", None)
+        if cp is None:
+            return {}
+        try:
+            ts = cp.turns()
+            if not ts or ts[-1].get("done"):
+                return {}
+            return {f["path"]: f"+{f['add']} -{f['del']}" for f in cp.diff(ts[-1]["n"])["files"]
+                    if not f.get("binary")}
+        except Exception:  # noqa: BLE001 - a damaged record: fall back to git
+            return {}
 
     def _delta(self, t: str):
         """Stream reply text, without any recalled-memory block the model echoed (assistant.scrub)."""
@@ -3639,10 +3662,28 @@ class Agent:
             c.connect = checked_connect
         return _probe_once(base, key, model, sink)
 
+    def _recover_off(self) -> bool:
+        """True when an outage is not waited out (a `meshpool -p` run): an error then must not say it waited."""
+        mins = os.environ.get("MH_RECOVER_MIN") or getattr(self, "recover_min", None)
+        try:
+            return mins is not None and float(mins) <= 0
+        except ValueError:
+            return False
+
+    def _endpoint_host(self) -> str:
+        try:
+            from urllib.parse import urlparse
+            from meshpool_harness import providers as PV
+            return urlparse(PV.key_base()).netloc or "the configured address"
+        except Exception:  # noqa: BLE001
+            return "the configured address"
+
     def _await_endpoint(self, h, base: str, key: str, model: str) -> bool:
         """Wait, shared with every other chat on this endpoint, until it answers a probe again: up to
-        MH_RECOVER_MIN minutes (30). False when it did not come back in time, or recovery is off."""
-        budget = max(0.0, float(os.environ.get("MH_RECOVER_MIN", "30")) * 60)   # 0: one probe, no waiting
+        MH_RECOVER_MIN minutes (30). False when it did not come back in time, or recovery is off. A run nobody watches
+        (`meshpool -p`) sets recover_min to 0 unless MH_RECOVER_MIN says otherwise: a script gets the failure now."""
+        mins = os.environ.get("MH_RECOVER_MIN") or getattr(self, "recover_min", None)
+        budget = max(0.0, float(30 if mins is None else mins) * 60)   # 0: one probe, no waiting
         return h.wait_until_up(lambda: self._wait(self._probe, base, key, model), self._sleep, self.emit, budget,
                                self._check_stop)
 

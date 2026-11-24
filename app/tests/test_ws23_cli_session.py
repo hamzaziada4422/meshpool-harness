@@ -377,3 +377,99 @@ def test_terminal_chat_shows_in_the_app(tmp_path):
         mock.kill()
         if ui:
             ui.kill()
+
+
+# ---------- 10. found by the 0.0.16 end-to-end run against a real model ---------------------------------------------
+def _ask_term(out, answer: int):
+    """A terminal that answers every approval menu with option `answer` and records the options it was offered."""
+    t = T.Terminal(print_mode=True, out=out, interactive=False)
+    t.keys_factory = lambda: FakeKeys("y")
+    t.info = out
+    t.offered = []
+    t.choose = lambda title, detail, options, **k: (t.offered.append(list(options)), answer)[1]
+    return t
+
+
+def test_approval_menu_offers_only_the_grant_the_agent_keeps(monkeypatch, proj, capfd):
+    """The terminal dropped the approval's scope: every command offered "don't ask again for commands in this
+    session", even a piped one the agent never remembers, so the user picked it and was asked again."""
+    script(monkeypatch, _call("bash", {"command": "echo hi | cat"}, "c1"), _call("bash", {"command": "echo hi | cat"}, "c2"),
+           _call("bash", {"command": f"{sys.executable} -m pytest --version"}, "c3"), "done")
+    out = io.StringIO()
+    t = _ask_term(out, 0)
+    s = chats.get(chats.create({"workdir": str(proj), "no_mcp": True})["id"])
+    T.TermFrontend(s, t, headless=True).send("go")
+    piped, _again, plain = t.offered
+    assert piped == ["Yes", "No"]                            # a chained command is approved once, never for the chat
+    assert len(plain) == 3 and "pytest" in plain[1] and "commands in this session" in plain[1]
+
+
+def test_p_json_usage_is_this_runs_on_a_resumed_chat(monkeypatch, proj, capfd):
+    """`-c -p --json` reported the whole chat's calls and steps at the top level and this run's in by_model."""
+    script(monkeypatch, _call("read_file", {"path": "x.txt"}, "c1"), "one", "two")
+    (proj / "x.txt").write_text("x\n")
+    rc, out, _ = run_main(proj, capfd, prompt="first", json_out="json", auto=True)
+    first = json.loads(out.strip().splitlines()[-1])
+    assert rc == 0 and first["usage"]["calls"] == 2 and first["steps"] == 1
+    A.LIVE.clear()
+    rc, out, _ = run_main(proj, capfd, prompt="second", session=first["chat_id"], json_out="json", auto=True)
+    res = json.loads(out.strip().splitlines()[-1])
+    assert rc == 0 and res["chat_id"] == first["chat_id"]
+    assert res["usage"]["calls"] == 1 and res["usage"]["in"] == 100 and res["steps"] == 0
+
+
+def test_p_unreachable_endpoint_fails_at_once_with_the_address(monkeypatch, proj, capfd):
+    """A wrong port made `meshpool -p` probe the endpoint for 30 minutes ("Press Stop to end"), then say it had
+    waited. A script run gets one probe and a plain error, in --json too; MH_RECOVER_MIN still opts in."""
+    monkeypatch.delenv("MH_RECOVER_MIN", raising=False)
+    s = chats.get(chats.create({"workdir": str(proj), "no_mcp": True})["id"])
+    T.TermFrontend(s, T.Terminal(print_mode=True, out=io.StringIO(), interactive=False), headless=True)
+    seen = []
+
+    class H:
+        def wait_until_up(self, probe, sleep, emit, budget, check_stop):
+            seen.append(budget)
+            return False
+    s.agent._await_endpoint(H(), "http://127.0.0.1:9/v1", "k", "m")
+    monkeypatch.setenv("MH_RECOVER_MIN", "2")
+    s.agent._await_endpoint(H(), "http://127.0.0.1:9/v1", "k", "m")
+    assert seen == [0.0, 120.0]
+    s.close()
+    A.LIVE.clear()
+    monkeypatch.delenv("MH_RECOVER_MIN", raising=False)
+    monkeypatch.setattr(core.Agent, "_chat", lambda self, turn: (_ for _ in ()).throw(
+        RuntimeError("HTTP 0: the model endpoint did not come back")))
+    rc, out, err = run_main(proj, capfd, prompt="go", json_out="json")
+    res = json.loads(out.strip().splitlines()[-1])
+    assert rc == 1 and res["ok"] is False and "Couldn't reach the model endpoint (" in res["error"]
+    assert "even after waiting" not in err
+
+
+def test_p_auto_explains_a_refused_destructive_command(monkeypatch, proj, capfd):
+    """Full access still asks before rm -rf; in -p the refusal said "re-run with --auto" (it was) and listed the
+    action as "destructive"."""
+    seen = script(monkeypatch, _call("bash", {"command": "rm -rf build"}), "I left build alone")
+    rc, out, err = run_main(proj, capfd, prompt="clean up", json_out="json", auto=True)
+    res = json.loads(out.strip().splitlines()[-1])
+    assert rc == 3 and res["denied"][0]["command"] == "rm -rf build" and res["denied"][0]["kind"] == "bash"
+    assert "`rm -rf build`" in err and "even with --auto" in err and "re-run with --auto" not in err
+    told = next(m["content"] for m in seen[-1] if m.get("role") == "tool")
+    assert "even in full access" in told and "Re-run with --auto" not in told
+
+
+def test_receipt_counts_this_turns_lines_not_uncommitted_work(monkeypatch, proj, capfd):
+    """In a repo with the user's uncommitted edits the receipt said `ops.py (+8 -0)` for a 2-line change, and the
+    check it ran showed as `cd /long/project/path && ...`."""
+    import subprocess
+    (proj / "ops.py").write_text("def div(a, b):\n    return a / b\n")
+    git = ["git", "-c", "user.email=t@t", "-c", "user.name=t"]
+    subprocess.run(["git", "init", "-q"], cwd=proj, check=True)
+    subprocess.run(git + ["add", "-A"], cwd=proj, check=True)
+    subprocess.run(git + ["commit", "-qm", "init"], cwd=proj, check=True)
+    (proj / "ops.py").write_text("def sub(a, b):\n    return a - b\n\n\ndef div(a, b):\n    return a / b\n")
+    script(monkeypatch, _call("edit", {"path": "ops.py", "old": "    return a / b", "new": "    return a / b if b else 0"}),
+           _call("bash", {"command": f"cd {proj} && {sys.executable} -c 'import ops'"}, "c2"), "done")
+    rc, out, err = run_main(proj, capfd, prompt="guard div", json_out="json", auto=True)
+    assert rc == 0 and "def sub" in (proj / "ops.py").read_text()
+    assert "ops.py (+1 -1)" in err, err[-600:]
+    assert "Checked:** `" in err and "Checked:** `cd " not in err

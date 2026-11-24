@@ -14,9 +14,34 @@ import os
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 DENIED_NOTE = ("Not allowed in -p mode: nobody can approve it. Re-run with --auto, --permission-mode edits, or "
                "--allowed-tools.")
+# Full access (--auto) still asks before a command that deletes recursively, rewrites git history or uses sudo
+# (core._destructive): "re-run with --auto" would be wrong advice for those, to the model and to the user alike.
+DESTRUCTIVE_NOTE = ("Not run: this command deletes or rewrites things (rm -r/-f, git reset --hard, sudo...), which "
+                    "always needs a person's yes, even in full access, and nobody can answer in -p mode. Do not retry "
+                    "it: get the result another way (a new folder or file name instead of deleting one, for example).")
+DESTRUCTIVE_HINT = ("commands that delete recursively, rewrite git history or use sudo always need a yes, even with "
+                    "--auto: allow a specific one with --allowed-tools \"bash:rm -rf build*\", or run it yourself.")
+
+
+def _denied(ev: dict) -> dict:
+    """What a -p run reports about a refused action: a destructive command by its text, not the bare word."""
+    if ev.get("title") != "destructive":
+        return {"kind": ev.get("kind"), "title": ev.get("title")}
+    cmd = ""
+    try:
+        args = json.loads(ev.get("detail") or "{}")
+        c = args.get("command") or args.get("cmd") or args.get("commands") or ""
+        if isinstance(c, list):                          # shell: ["bash", "-lc", script]; bash_many: [cmd, cmd...]
+            c = c[-1] if args.get("command") else "; ".join(map(str, c))
+        cmd = c
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return {"kind": "bash", "title": "Run this destructive command?", "destructive": True,
+            "command": " ".join(str(cmd).split())[:300]}
 _QUIET = ("Starting MCP servers", "No MCP servers enabled")          # status lines the terminal shows its own way
 _NO_STREAM = ("text_delta", "token", "delta", "thinking")
 
@@ -42,6 +67,7 @@ class TermFrontend:
                 s.agent.headless = True                      # one request, no one to answer questions
         if self.headless:
             s.auto_resume = False                            # a script gets the failure now, not after a 12 minute wait
+            s.agent.recover_min = 0                          # ... nor after 30 minutes of probing a dead endpoint
         self.sub = s.harness["id"] if s.harness["type"] == "acp" else None
 
     def detach(self):
@@ -86,11 +112,15 @@ class TermFrontend:
         s, term = self.s, self.term
         aid = ev["id"]
         if self.headless and not self.can_ask:
-            self.denied.append({"kind": ev.get("kind"), "title": ev.get("title")})
-            return s.answer(aid, "no", DENIED_NOTE)
-        d, note = term.approve(ev.get("kind", ""), ev.get("title", ""), ev.get("detail", ""), ev.get("options"))
+            d = _denied(ev)
+            self.denied.append(d)
+            return s.answer(aid, "no", DESTRUCTIVE_NOTE if d.get("destructive") else DENIED_NOTE)
+        # scope: what "don't ask again" would cover ("`npm test` commands", or "once" for a chained command, which is
+        # never remembered): without it the menu offered a session grant that the agent then did not keep
+        d, note = term.approve(ev.get("kind", ""), ev.get("title", ""), ev.get("detail", ""), ev.get("options"),
+                               scope=ev.get("scope") or "")
         if self.headless and d == "no" and not note and not term.stopping:
-            self.denied.append({"kind": ev.get("kind"), "title": ev.get("title")})
+            self.denied.append(_denied(ev))
         try:
             s.answer(aid, d, note)
         except ValueError:                                   # stopped meanwhile: the approval is gone
@@ -120,6 +150,10 @@ class TermFrontend:
         term.stopping = term.failed = False
         term.started = True
         self.wait_ready()
+        a = s.agent                                          # where this run starts: --json reports this run only,
+        self._u0 = dict(getattr(a, "usage", {}) or {})       # not the totals of a resumed chat (-c, --resume)
+        self._steps0 = self._tool_steps(a)
+        self._ev0 = len(getattr(s, "events", []) or [])
         term.turn_begin()
         try:
             s.send(text, images)
@@ -180,24 +214,43 @@ class TermFrontend:
         return ""
 
     @staticmethod
-    def _usage(a) -> dict:
-        """The old keys stay; cost_usd is None when no call had a price (core/usage.py has the rest)."""
+    def _tool_steps(a) -> int:
+        return len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"])
+
+    @staticmethod
+    def _usage(a, base: dict | None = None) -> dict:
+        """The old keys stay; cost_usd is None when no call had a price (core/usage.py has the rest). With `base` (the
+        agent's usage when this run started) the counts are this run's alone, as by_model already is."""
         u = dict(getattr(a, "usage", {}) or {})
+        if base:
+            for k, v in list(u.items()):
+                b = base.get(k)
+                if isinstance(v, (int, float)) and not isinstance(v, bool) and isinstance(b, (int, float)):
+                    u[k] = max(0, v - b) if isinstance(v, int) and isinstance(b, int) else max(0.0, v - b)
         try:
             from meshpool_harness.api import usage_dict
-            ud = usage_dict(a)
+            ud = usage_dict(SimpleNamespace(usage=u, _task=getattr(a, "_task", None)) if base else a)
             u.update({k: ud[k] for k in ("cost_usd", "unpriced_calls", "unreported_calls", "cache_write_tokens",
                                          "reasoning_tokens", "by_model") if k in ud})
         except Exception:  # noqa: BLE001
             pass
         return u
 
+    def _error(self) -> str:
+        """The last error this run showed (an unreachable endpoint, a rejected key), for a script reading --json."""
+        with self.s.lock:
+            evs = list(self.s.events[getattr(self, "_ev0", 0):])
+        return next((str(e.get("text") or "") for e in reversed(evs) if e.get("type") == "error"), "")
+
     def result(self, failed: bool) -> dict:
         a = self.s.agent
         out = {"type": "result", "ok": not failed, "result": self.reply(), "session_id": self.s.id,
-               "chat_id": self.s.id, "usage": self._usage(a),
-               "steps": len([m for m in getattr(a, "messages", []) or [] if m.get("role") == "tool"]),
+               "chat_id": self.s.id, "usage": self._usage(a, getattr(self, "_u0", None)),
+               "steps": max(0, self._tool_steps(a) - getattr(self, "_steps0", 0)),
                "denied": list(self.denied)}
+        err = self._error() if failed else ""
+        if err:
+            out["error"] = err
         rv = getattr(a, "last_review", None)
         if rv:                                               # the independent check of a big task (agent/grader.py)
             out["review"] = {k: v for k, v in rv.items() if k not in ("type", "turn")}
@@ -206,10 +259,13 @@ class TermFrontend:
     def denial_note(self) -> str:
         if not self.denied:
             return ""
-        titles = "; ".join(str(d.get("title") or d.get("kind")) for d in self.denied[:5])
+        titles = "; ".join(f"`{d['command'][:80]}`" if d.get("command") else str(d.get("title") or d.get("kind"))
+                           for d in self.denied[:5])
         more = f" (and {len(self.denied) - 5} more)" if len(self.denied) > 5 else ""
-        return (f"{len(self.denied)} action(s) were not allowed: {titles}{more}. In -p mode nobody can approve them; "
-                "re-run with --auto, --permission-mode edits, or --allowed-tools edit,bash:...")
+        hint = "re-run with --auto, --permission-mode edits, or --allowed-tools edit,bash:..."
+        if any(d.get("destructive") for d in self.denied):
+            hint = DESTRUCTIVE_HINT if all(d.get("destructive") for d in self.denied) else hint + "; " + DESTRUCTIVE_HINT
+        return f"{len(self.denied)} action(s) were not allowed: {titles}{more}. In -p mode nobody can approve them; {hint}"
 
 
 _IMAGES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
