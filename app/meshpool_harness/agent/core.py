@@ -79,9 +79,15 @@ SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $
                 "never in a fixed /tmp path that another task could also be using.")
 
 
-def _codex_prompt() -> str:
+def _codex_prompt(lean: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
-    for readers of the file and is not sent to the model)."""
+    for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md)."""
+    if lean:
+        try:
+            text = (C.APP / "defaults" / "engines" / "codex" / "prompt-core.md").read_text(encoding="utf-8")
+            return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S).rstrip() + SCRATCH_RULE
+        except OSError:
+            pass
     try:
         text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
     except OSError:
@@ -1036,6 +1042,13 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
+    def _lean(self) -> bool:
+        """Lean core (profile "core"): Codex style without the extra verification layers."""
+        try:
+            return self._style() and bool(self.hsettings().get("lean_core"))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _codex(self) -> bool:
         return self._style() and not self.plan           # plan mode keeps its read-only tools
 
@@ -1051,7 +1064,7 @@ class Agent:
         from meshpool_harness.config import find_bash
         bash = find_bash()
         if self._style():
-            text = _codex_prompt()
+            text = _codex_prompt(lean=self._lean())
             for name in PROJECT_FILES:
                 pf = self.root / name
                 if pf.is_file():
@@ -1428,10 +1441,12 @@ class Agent:
         if getattr(self, "unfinished", False):
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
-        if self.profile == "code" and not self.plan and os.environ.get("MH_KEEP_NOTE", "1") != "0" and _KEEP.search(text):
+        lean = self._lean()
+        if self.profile == "code" and not self.plan and not lean and os.environ.get("MH_KEEP_NOTE", "1") != "0" \
+                and _KEEP.search(text):
             body += KEEP_NOTE                        # eval: the agent changed output it was told to keep, and its own
                                                      # check printed the regressed line without it noticing
-        if self.profile == "code" and not self.plan and os.environ.get("MH_REQ_NOTE", "1") != "0" \
+        if self.profile == "code" and not self.plan and not lean and os.environ.get("MH_REQ_NOTE", "1") != "0" \
                 and _requirements(text) >= 2:
             body += REQ_NOTE                         # eval: short wrong answers checked the agent's reading of the task,
                                                      # not each stated rule (line-diff: the tie-break rule went untested)
@@ -1598,7 +1613,7 @@ class Agent:
             self._plan_start(route, g)
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
-            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0":
+            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0" and not self._lean():
                 # MH_ROUTE_CARD=0 (A/B): no method card. Eval final13: with the card, 66% more model calls than Codex
                 # (4.5 test runs and 5.1 writes per run vs 2.0 and 2.0) at an equal solve rate
                 from meshpool_harness.hrouter.route import addon
@@ -2032,7 +2047,7 @@ class Agent:
         back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
         try:
             from meshpool_harness.agent import grader as GR
-            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan
+            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan or self._lean()
                     or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
                 return False, final
             info = self._grade_info(g, final)

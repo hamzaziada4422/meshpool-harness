@@ -449,3 +449,24 @@ def test_route_card_switch_leaves_the_method_card_out(tmp_path, monkeypatch):
         a.send("fix the failing test")
         first = a.bodies[0]["messages"][1]["content"]
         assert ("[Harness:" in first) == (on == "1") and "<environment_context>" in first
+
+
+def test_core_profile_is_codex_style_without_the_extra_verification_layers(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    s = PR.settings("core")
+    assert s["engine_style"] == "codex" and s["lean_core"] is True and s["review"] is False
+    assert PR.settings("codex")["lean_core"] is False                    # the codex profile is unchanged
+    lean, full = C._codex_prompt(lean=True), C._codex_prompt()
+    assert len(lean) < len(full) / 2 and "NOTICE" not in lean and "$TMPDIR" in lean
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="core"), "fix the failing test")
+    assert a._lean() and a.system_prompt().startswith("You are a coding agent running in Meshpool")
+    _script(a, [{"role": "assistant", "content": "Done."}])
+    a.send("Fix it. Keep the current output byte-for-byte identical. Ties must go first. Lines must match exactly.")
+    first = a.bodies[0]["messages"][1]["content"]
+    assert "[Harness:" not in first and C.KEEP_NOTE.strip() not in first and C.REQ_NOTE.strip() not in first
+    assert "<environment_context>" in first
+    assert a._grade_gate({}, {}, "Done.") == (False, "Done.")               # no independent grader
+    b = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    b.set_route(_route(profile="codex"), "fix the failing test")
+    assert not b._lean() and len(b.system_prompt()) > len(a.system_prompt())
