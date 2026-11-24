@@ -52,3 +52,15 @@ def test_scratch_folder_is_writable(tmp_path):
         pass
     else:
         raise AssertionError("a write outside the project and the scratch folder must be refused")
+
+
+def test_a_scratch_file_write_is_allowed_but_is_not_project_progress(tmp_path):
+    from meshpool_harness.core import tools as T
+    ws = T.Workspace(str(tmp_path), str(tmp_path / "run"))
+    d = ws._scratch({})["TMPDIR"]
+    e0 = ws.edits
+    ws.apply_patch(f"*** Begin Patch\n*** Add File: {d}/check.py\n+print(1)\n*** End Patch")
+    ws.write_file(f"{d}/check2.py", "print(2)\n")
+    assert ws.edits == e0 and not ws.turn_files                       # written, but nothing counted as progress
+    ws.write_file("real.py", "x = 1\n")
+    assert ws.edits == e0 + 1

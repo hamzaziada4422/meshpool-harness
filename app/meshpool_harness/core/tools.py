@@ -1175,10 +1175,11 @@ class Workspace:
             write_src(p, content.lstrip("\ufeff") if fmt[1] else content, *fmt)
         after = read_src(p)[0]
         self.seen[str(p)] = self._hash(after)
-        self.edits += 1
-        self.written.add(str(p))
-        if not same:                                  # F-21: an unchanged rewrite is not a change
-            self.turn_files.add(str(p))
+        if not self._in_scratch(p):                   # a scratch file is not project progress (or a review receipt)
+            self.edits += 1
+            self.written.add(str(p))
+            if not same:                              # F-21: an unchanged rewrite is not a change
+                self.turn_files.add(str(p))
         bad = self._syntax_error(p, after) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
@@ -1274,6 +1275,13 @@ class Workspace:
             err = (err + "\n[the command finished but left a background process running; its output is not captured. "
                          "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
+
+    def _in_scratch(self, p) -> bool:
+        d = self.__dict__.get("_scratch_dir")
+        try:
+            return bool(d) and Path(d).resolve() in Path(p).resolve().parents
+        except (OSError, ValueError):
+            return False
 
     def _scratch(self, env: dict) -> dict:
         """A private temp folder per workspace for every command it runs: scratch files (check scripts, repro copies) of
@@ -1635,8 +1643,9 @@ class Workspace:
             else:
                 self.seen[key] = self._hash(after)
                 self.written.add(key)
-            self.turn_files.add(key)
-            self.edits += 1
+            if not self._in_scratch(p):               # a scratch file is not project progress (or a review receipt)
+                self.turn_files.add(key)
+                self.edits += 1
         lines = ["Success. Updated the following files:"]
         lines += [f"A {x}" for x in added] + [f"M {x}" for x in modified] + [f"D {x}" for x in deleted]
         return "\n".join(lines)
