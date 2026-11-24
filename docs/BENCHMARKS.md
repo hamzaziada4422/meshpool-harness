@@ -63,6 +63,25 @@ GPT-6 Luna, one run): Pi 3/3 at $0.0025 and 32 s per task, Meshpool on Pi 3/3 at
 3/3 at $0.0051 and 45 s, Codex 2/3 at $0.0063 and 54 s, Meshpool on Codex 2/3 at $0.0050. The full coding
 comparison is the 52-task evaluation below.
 
+## Public office suites (24 November 2026)
+
+Small fixed subsets of two public suites, graded with ports of their official evaluation code (kit:
+`testkit/bench3/public/`, sources and licences in its `SOURCES.md`): 6 SpreadsheetBench (verified 400) tasks, graded
+cell by cell after a LibreOffice recalculation, and 4 file-only OfficeBench tasks (no calendar or email apps).
+DeepSeek V4.1 Flash, one run per agent, same metering proxy.
+
+| Agent | SpreadsheetBench passed | $ per task | s per task | OfficeBench passed | $ per task | s per task |
+|---|---|---|---|---|---|---|
+| Codex CLI | 5/6 | $0.0070 | 25 | 4/4 | $0.0048 | 10 |
+| Meshpool Work | 6/6 | $0.0079 | 27 | 2/4 | $0.040 | 171 |
+| Meshpool on Codex | 3/6 | $0.0088 | n/a | 1/4 | $0.023 | n/a |
+
+On spreadsheet edits Meshpool Work solved one more task than Codex at 13% more cost and about the same time. On the
+OfficeBench file tasks it solved half as many at 8x the cost (one task looped for 201 calls). Meshpool on Codex hit
+the app's "still working after the turn ended" bug, so its times are not shown and its runs were stopped at the time
+limit; treat its pass rate as a lower bound. Six and four tasks are too few to rank on; they show where Meshpool
+stands on public tasks, not a final score.
+
 ## App agent, measured directly (12 November 2026, dev tasks)
 
 Every agent ran at the same time on DeepSeek V4.1 Flash through the Meshpool gateway, with the same task text, caps
