@@ -21,6 +21,8 @@ def _pyfiles(dirs):
 
 
 def _find_python(minor: int):
+    if sys.version_info[:2] == (3, minor):          # the interpreter running the tests is that version
+        return sys.executable
     env = os.environ.get(f"MH_PY3{minor}")
     if env and Path(env).exists():
         return env
