@@ -165,6 +165,9 @@ def schema(max_children: int) -> dict:
                     "constraints, the language and tone of the result. Each sub-agent sees only its own context."},
         "output_schema": {"type": "object", "description": "Optional JSON Schema the final answer must match "
                           "(the sub-agent then replies with JSON only)."},
+        "agent": {"type": "string", "description": "Optional: the name of a saved sub-agent (listed under Saved "
+                  "sub-agents in your instructions). It brings its own instructions and may narrow the tools "
+                  "and pick the model."},
         "isolation": {"type": "string", "enum": ["none", "worktree"], "description": "worktree: the sub-agent works "
                       "in its own git worktree (a separate folder on its own branch), so sub-agents editing code at "
                       "the same time never touch each other's files or the user's checkout. Its report gives the "
@@ -211,7 +214,8 @@ def check_goals(tasks) -> list[dict]:
         rows.append({"goal": goal, "context": str(t.get("context") or "").strip(),
                      "schema": t.get("output_schema") if isinstance(t.get("output_schema"), dict) else None,
                      "title": str(t.get("title") or goal.splitlines()[0])[:80],
-                     "isolation": "worktree" if str(t.get("isolation") or "").lower() == "worktree" else ""})
+                     "isolation": "worktree" if str(t.get("isolation") or "").lower() == "worktree" else "",
+                     "agent": str(t.get("agent") or "").strip()})
     if not rows:
         raise ValueError("Give at least one task with a goal.")
     return rows
@@ -306,8 +310,9 @@ def _hook(parent, event: str, payload: dict) -> None:
 
 
 class Delegation:
-    def __init__(self, parent, rows: list[dict], cfg: dict, depth: int):
+    def __init__(self, parent, rows: list[dict], cfg: dict, depth: int, defs: dict | None = None):
         self.parent, self.rows, self.cfg, self.depth = parent, rows, cfg, depth
+        self.defs = defs or {}                         # saved sub-agents by name (subagents.py)
         self.id = "deleg_" + uuid.uuid4().hex[:8]
         self.children: dict[str, dict] = {}            # subagent_id -> {agent, row, index, status, ...}
         self.lock = threading.Lock()
@@ -345,6 +350,10 @@ class Delegation:
         from meshpool_harness.agent import core as K
         parent, cfg, depth = self.parent, self.cfg, self.depth
         names = [n for n in parent._tool_names() if n not in BLOCKED and n != "delegate_task"]
+        defn = self.defs.get(self.rows[index]["agent"]) if self.rows[index].get("agent") else None
+        if defn:                                         # a saved sub-agent: its tools, from the chat's own
+            from meshpool_harness.agent import subagents as SA
+            names = SA.tool_names(defn, names) or [n for n in names if n in K.READ_ONLY]
         if cfg["access"] == "read":                      # read and research only
             names = [n for n in names if n in K.READ_ONLY and n != "office_task"]
         elif cfg["access"] == "edit":                    # read and edit files, never run commands
@@ -413,11 +422,13 @@ class Delegation:
         def glob_in_project(pattern):                    # nor a symlinked folder a listing outside it
             return glob(pattern, inside_only=True)
         a.ws.glob = glob_in_project
-        a.model = cfg["model"] or parent.current_model()
+        a.model = (defn or {}).get("model") or cfg["model"] or parent.current_model()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
                  "other parts at the same time. You know nothing about the conversation that started you: your task "
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
+        if defn:
+            block += f"\n\nYOUR ROLE ({defn['name']}), saved by the user:\n" + defn["prompt"][:20000]
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
         block += f"\n\nWORKSPACE: {a.root if wt else parent.root} (the project's instructions above apply to you too)"
@@ -713,7 +724,17 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
         return (f"Too many tasks ({len(rows)}): at most {cfg['max_tasks']} per call. Split the work into fewer, "
                 "larger parts, or call again for the rest."), False
     parent.__dict__.pop("_delegate_partial", None)       # never an older call's reports
-    d = Delegation(parent, rows, cfg, depth)
+    from meshpool_harness.agent import subagents as SA
+    defs = SA.definitions(parent.root) if any(r.get("agent") for r in rows) else {}
+    unknown = sorted({r["agent"] for r in rows if r.get("agent") and SA._slug(r["agent"]) not in defs})
+    if unknown:
+        return (f"No saved sub-agent named {', '.join(unknown)}. Saved ones: {', '.join(defs) or 'none'}. Leave "
+                "agent out to use a general sub-agent."), False
+    for r in rows:
+        if r.get("agent"):
+            r["agent"] = SA._slug(r["agent"])
+            r["title"] = f"{r['agent']}: {r['title']}"[:80]
+    d = Delegation(parent, rows, cfg, depth, defs)
     reg = parent.__dict__.setdefault("_delegations", {})
     reg[d.id] = d
     gen = getattr(parent, "_gen", 0)

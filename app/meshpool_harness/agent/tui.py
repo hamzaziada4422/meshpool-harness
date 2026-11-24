@@ -42,13 +42,14 @@ COMMANDS = [
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
     ("tokens", "", "tokens and cost of this session"),
+    ("agents", "", "saved sub-agents (agents/*.md)"),
     ("context", "", "what fills the context window"),
     ("resume", "[id]", "open an earlier session"),
     ("export", "[file]", "save this conversation as Markdown"),
     ("copy", "[n]", "copy the last reply (or the nth from the end)"),
     ("effort", "[auto|low|medium|high]", "how hard the model thinks"),
     ("plan", "[on|off]", "plan mode: read and plan, change nothing"),
-    ("permissions", "", "saved allow and deny rules, and folder trust"),
+    ("permissions", "", "saved allow, ask and deny rules, and folder trust"),
     ("diff", "", "uncommitted changes in this folder (git diff)"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
@@ -1177,6 +1178,20 @@ class Session:
                             "edits": "File edits are allowed; commands are still asked.",
                             "auto": "Edits and commands are allowed without asking."}[mode]))
 
+    def cmd_agents(self, arg):
+        from meshpool_harness.agent import subagents as SA
+        defs = SA.definitions(self.agent.root)
+        if not defs:
+            dirs = ", ".join(str(d) for d in SA.folders(self.agent.root)[::2])
+            self.term.p(f"  No saved sub-agents. Add a Markdown file to {dirs}: front matter with name, description "
+                        "and optionally tools and model, then the instructions.")
+            return
+        for d in defs.values():
+            self.term.p(f"  {self.term.st.bold(d['name'])}  {d['description'] or ''}")
+            self.term.p(self.term.st.dim(f"    {d['path']}" + (f" · tools: {', '.join(d['tools'])}" if d['tools'] else "")
+                                         + (f" · model: {d['model']}" if d['model'] else "")))
+        self.term.p(self.term.st.dim("  Ask for one by name, for example: use the reviewer agent on calc.py."))
+
     def cmd_tokens(self, arg):
         u = self.agent.usage
         pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
@@ -1288,8 +1303,8 @@ class Session:
         root = str(getattr(self.agent, "root", os.getcwd()))
         rules = A._rules(root)
         rows = [""]
-        for k in ("allow", "deny"):
-            rows.append(f"  {st.bold(k.capitalize())}: " + (", ".join(rules[k]) if rules[k] else st.dim("none")))
+        for k, label in (("allow", "Allow"), ("ask", "Always ask"), ("deny", "Deny")):
+            rows.append(f"  {st.bold(label)}: " + (", ".join(rules[k]) if rules[k] else st.dim("none")))
         rows.append(f"  {st.bold('This session')}: " + (", ".join(sorted(getattr(self.agent, 'always', set()) or []))
                                                         or st.dim("nothing allowed for the rest of the session")))
         risky = TR.risky_files(root)

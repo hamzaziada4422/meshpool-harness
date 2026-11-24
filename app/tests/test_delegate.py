@@ -877,3 +877,42 @@ def test_worktree_isolation_outside_git_says_why(monkeypatch, _env):
     fake(monkeypatch, lambda b: _msg("done"))
     out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Edit something here", "isolation": "worktree"}]})
     assert not ok and "no worktree for this sub-agent" in out
+
+
+# ---------------------------------------------------------------- saved sub-agents (agents/*.md)
+def _saved_agent(proj, name="reviewer", tools="Read, Grep", model=""):
+    d = proj / ".meshpool" / "agents"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{name}.md").write_text(f"---\nname: {name}\ndescription: Reviews code for bugs\ntools: {tools}\n"
+                                  + (f"model: {model}\n" if model else "") + "---\nYou are a strict reviewer. Report bugs only.\n")
+
+
+def test_a_saved_sub_agent_brings_its_role_tools_and_model(monkeypatch, _env):
+    _saved_agent(_env, model="acme/review-model")
+    seen = []
+    fake(monkeypatch, lambda b: _msg("no bugs"), seen=seen)
+    a = _agent(_env)
+    assert "reviewer: Reviews code for bugs" in a.system_prompt()          # the chat knows it can use it
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Review calc.py for bugs", "agent": "Reviewer"}]})
+    assert ok, out
+    child = [s for s in seen if s["child"]][0]
+    assert "YOUR ROLE (reviewer)" in child["system"] and "strict reviewer" in child["system"]
+    assert set(child["tools"]) <= {"read_file", "grep"} and "read_file" in child["tools"]
+    assert child["model"] == "acme/review-model"
+
+
+def test_an_unknown_saved_sub_agent_is_named(monkeypatch, _env):
+    _saved_agent(_env)
+    fake(monkeypatch, lambda b: _msg("x"))
+    out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Review calc.py for bugs", "agent": "tester"}]})
+    assert not ok and "No saved sub-agent named tester" in out and "reviewer" in out
+
+
+def test_a_saved_sub_agent_cannot_widen_its_tools(monkeypatch, _env):
+    _saved_agent(_env, name="runner", tools="Bash, Write")
+    monkeypatch.setenv("MH_SUBAGENT_ACCESS", "read")                     # the chat lets sub-agents read only
+    seen = []
+    fake(monkeypatch, lambda b: _msg("done"), seen=seen)
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Run the build and report", "agent": "runner"}]})
+    tools = [s for s in seen if s["child"]][0]["tools"]
+    assert not {"bash", "write_file"} & set(tools)

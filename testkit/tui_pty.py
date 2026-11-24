@@ -95,6 +95,11 @@ def main():
     check("/context shows a breakdown", t.wait(r"Tool definitions.*\n(.|\n)*of [\d,]+ tokens"), t.plain()[-600:])
     t.line("/permissions")
     check("/permissions lists rules", t.wait(r"Allow:(.|\n)*Deny:"), t.plain()[-400:])
+    os.makedirs(os.path.join(work, ".meshpool", "agents"), exist_ok=True)
+    open(os.path.join(work, ".meshpool", "agents", "reviewer.md"), "w").write(
+        "---\nname: reviewer\ndescription: Reviews code for bugs\ntools: Read, Grep\n---\nBe strict.\n")
+    t.line("/agents")
+    check("/agents lists saved sub-agents", t.wait(r"reviewer(.|\n)*Reviews code for bugs(.|\n)*tools: Read, Grep"), t.plain()[-400:])
     t.line("/diff")
     check("/diff shows the change", t.wait(r"a\.py(.|\n)*\+x = 2"), t.plain()[-400:])
     t.line("say hello")

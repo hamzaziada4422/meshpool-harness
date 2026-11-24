@@ -1018,6 +1018,12 @@ class Agent:
                                     searchable="find_skill" not in self._dropped())
         except Exception:
             pass
+        try:
+            if getattr(self, "_delegate_depth", 0) == 0 and _subagents_on():   # sub-agents it can name in delegate_task
+                from meshpool_harness.agent import subagents as SAG
+                text += SAG.catalog_text(self.root)
+        except Exception:  # noqa: BLE001
+            pass
         route = getattr(self, "route", None)
         if route is not None:
             from meshpool_harness.hrouter.route import addon
