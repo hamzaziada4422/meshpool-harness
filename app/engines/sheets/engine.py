@@ -88,7 +88,7 @@ find it, start the script with: import sys; sys.path.insert(0, r"{ROOT}")):
   B.input_cell(ws, "B3", 0.1, "pct", name="Growth")  B.formula(ws, "C5", "=B5*(1+Growth)", "usd", total=False)
   B.section(ws, row, text, ncols)   B.add_check(wb, label, "=diff formula")
   B.widths(ws)   B.chart(ws, "bar"|"line"|"pie", (min_col,min_row,max_col,max_row), cats_ref, "E3", "Title", "usd")
-  formats: usd, usd2, pct, int, x, num, or any Excel format string. wb.save(path).
+  formats: usd, usd2, usd0, pct, pct2, int, x, num, num0, num2, text, date, or any Excel format string. wb.save(path).
 Finance kit (all live formulas; raw numbers are blue inputs; results are workbook names you can link to):
   book = B.assumption_book(wb["Inputs"], row=3)        # Assumption | Value | Source | Evidence / rationale | Low | High
   book.section("WACC")
