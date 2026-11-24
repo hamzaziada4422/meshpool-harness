@@ -1,7 +1,9 @@
 """CLI: python -m engines.sheets.check file.xlsx  -> prints PASS or the issues; exit 1 on issues.
 
 Runs the same gate as the engine's finish (engines.sheets.engine.finish_check: workbook QA, Checks tab, Cover tab,
-forge workbook rules, input sources, model gaps), so PASS here means finish will accept the workbook."""
+forge workbook rules, input sources, model gaps), so PASS here means finish will accept the workbook. In an edit or
+derivation of an existing workbook (MH_SHEETS_JOB=derive, set by the engine) that is the lighter gate that keeps the
+source's structure (engine.derive_issues)."""
 import os
 import sys
 from pathlib import Path

@@ -12,6 +12,7 @@ from meshpool_harness.core.client import LiveClient  # noqa: E402
 from meshpool_harness.core.loop import Caps, run  # noqa: E402
 from meshpool_harness.core.tools import Workspace  # noqa: E402
 from engines.data.checks import check_quotes, trace_numbers  # noqa: E402
+from engines import max_turns as _cap  # noqa: E402
 
 SYSTEM = """You are a rigorous analyst. Every claim you make is backed by code you ran or text you can quote.
 
@@ -88,6 +89,6 @@ def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = No
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     system = SYSTEM + (LEAN if os.environ.get("MH_DATA_VARIANT", "v2") == "v2" else "")
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=system,
-            caps=Caps(max_turns=max_turns), temperature=0.0, finish_check=make_check(sources))
+            caps=Caps(max_turns=_cap(max_turns)), temperature=0.0, finish_check=make_check(sources))
     return {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
             "reason": r.reason, "usage": r.usage}

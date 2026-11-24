@@ -178,3 +178,60 @@ def test_office_direct_switch_allows_hand_built_files_and_says_so(tmp_path, monk
     assert b._engine_only("shell", hand) == ""
     sysmsg = b.messages[0]["content"]
     assert "write it yourself in one Python script" in sysmsg and "by hand" not in sysmsg
+    assert "office_task is listed only when a request asks for a new deck, report or financial model" in sysmsg
+
+
+def _send(a, text):
+    """One turn with a scripted model that answers at once; returns the tool names the model was offered."""
+    bodies = []
+
+    def fake(base, key, body, stream):
+        bodies.append(json.loads(json.dumps(body)))
+        return {"choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 10}}, True
+    a._post = fake
+    a.send(text)
+    return [t["function"]["name"] for t in bodies[0]["tools"]]
+
+
+class _OfficeMcp(_Mcp):
+    def schemas(self):
+        mk = lambda n: {"type": "function", "function": {"name": n, "description": "", "parameters": {  # noqa: E731
+            "type": "object", "properties": {}}}}
+        return [mk("mcp__demo__calculate"), mk("mcp__meshpool_office__make_deck"),
+                mk("mcp__meshpool_office__read_document"), mk("mcp__meshpool_office__edit_office_file"),
+                mk("mcp__meshpool_office__make_spreadsheet"), mk("mcp__meshpool_office__add_slides")]
+
+
+def test_office_direct_offers_the_engines_only_for_a_new_deck_report_or_model(tmp_path, monkeypatch):
+    """MH_OFFICE_DIRECT=1: an edit of an existing file gets no office_task and no make_* tools (the model uses
+    openpyxl / python-pptx through the shell, like Codex); a message asking for a deck adds them at the end of the
+    list, so the earlier tools keep their order, and they stay for the rest of the chat."""
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    a = _work(tmp_path)
+    a.mcp = _OfficeMcp()
+    assert a._tool_names() == CODEX3 + ["web_research", "fetch_url"]
+    edit = _send(a, "Sort score.xlsx descending by midterm1 into sorted_score.xlsx")
+    assert a.office_on and not a.office_engines
+    assert edit == CODEX3 + ["web_research", "fetch_url", "mcp__demo__calculate",
+                             "mcp__meshpool_office__read_document", "mcp__meshpool_office__edit_office_file"]
+    assert a._engine_only("shell", {"command": "python3 -c 'from openpyxl import Workbook; Workbook()'"}) == ""
+    deck = _send(a, "Now make a 6-slide deck for the board from the sorted scores")
+    assert a.office_engines
+    assert deck[:len(edit)] == edit                                    # appended, never reordered
+    assert deck[len(edit):] == ["office_task", "mcp__meshpool_office__make_deck",
+                                "mcp__meshpool_office__make_spreadsheet", "mcp__meshpool_office__add_slides"]
+    assert _send(a, "Rename Sheet1 in sorted_score.xlsx to Scores") == deck   # stays for the chat
+
+
+def test_office_direct_refuses_office_task_while_it_is_not_offered(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    a = _work(tmp_path)
+    assert "office_task" not in _names(a)
+    assert "office_task" not in a._tool_names()                        # a call to it is an unknown tool (validate)
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "0")
+    (tmp_path / "e").mkdir()
+    b = _work(tmp_path / "e")
+    assert _names(b) == CODEX3 + core.LEAN_WORK_TOOLS                  # flag off: unchanged

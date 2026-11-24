@@ -24,6 +24,7 @@ from engines.forge.density import DEFAULT as DEFAULT_DENSITY, FILL, STORY, WRITE
 from engines.forge.render import _PERIOD, ARCHETYPES, render  # noqa: E402
 from engines.forge.common import SCALE as _SCALE, numbers as _numbers  # noqa: E402
 from engines.forge.validate_pptx import validate  # noqa: E402
+from engines import max_turns as _cap  # noqa: E402
 
 from meshpool_harness.providers import configured_model  # noqa: E402
 MODEL = os.environ.get("FORGE_MODEL") or configured_model()
@@ -2033,7 +2034,7 @@ supports it. Choose varied archetypes that prove each title.
     research_log: list[dict] = []
     sb: dict = {"rounds": [], "research_allowed": rs_ok, "why_no_research": rs_why or None}
     if panel_on and not start:                         # a resumed run keeps its storyline; the deck panel still runs
-        max_sb = max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"]))
+        max_sb = _cap(max(1, int(os.environ.get("MH_STORYBOARD_ROUNDS") or cfg["max_storyboard_rounds"])))
         for rnd in range(1, max_sb + 1):
             mat = critics.storyboard_material(story, facts, brief, narrative_n, agenda=agenda)
             pn = critics.run_panel(client, "storyboard", mat, critics.text_models(cfg), bar=cfg["bar"],
@@ -2295,15 +2296,16 @@ choice or the number of items; never layout. Keep node and keep the point of the
         return repaired
 
     import copy as _copy
+    max_repair = _cap(rules["repair"]["max_rounds"])     # MH_ENGINE_MAX_TURNS caps it (engines.max_turns)
     best = None                                              # (score, round, slides): a repair round can make the deck
-    for rnd in range(rules["repair"]["max_rounds"] + 1):     # worse (live build: P10 and P11 passed in rounds 2-3 and
+    for rnd in range(max_repair + 1):                        # worse (live build: P10 and P11 passed in rounds 2-3 and
         r, res = draw()                                      # failed again in round 4); the best round is kept
         fails = collect(r, res)
         rounds.append({"round": rnd, "rules": res["rules"], "content_failures": sum(len(v) for v in fails.values())})
         score = (sum(1 for v in res["rules"].values() if v == "fail"), rounds[-1]["content_failures"])
         if best is None or score < best[0]:
             best = (score, rnd, _copy.deepcopy(slides))
-        if not fails or rnd == rules["repair"]["max_rounds"]:
+        if not fails or rnd == max_repair:
             break
         if len(rounds) >= 3 and rounds[-1]["content_failures"] >= rounds[-3]["content_failures"]:
             break                                            # two rounds without progress: stop paying for repairs
@@ -2474,7 +2476,7 @@ choice or the number of items; never layout. Keep node and keep the point of the
 
         best = None
         stall = 0
-        max_rv = max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"]))
+        max_rv = _cap(max(1, int(os.environ.get("MH_REVIEW_ROUNDS") or cfg["max_review_rounds"])))
         for rnd in range(1, max_rv + 1):
             n_samples = max(1, int(os.environ.get("MH_DECK_REVIEW_SAMPLES") or 1))
             if n_samples == 1:                                # the default: one panel, exactly as before

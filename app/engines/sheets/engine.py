@@ -195,9 +195,110 @@ Integrated model kit (spreading -> statements -> DCF -> scenarios -> method weig
       # "Inputs" (the factor scores and weights are inputs). B.select_methods(profile) shows the rules in Python."""
 
 
+DERIVE_SYSTEM = """You edit an Excel workbook, or derive a new one from a workbook or CSV the user has, as asked.
+
+Work only in the current folder, which is your output folder: write every file there and run every command from there.
+Do NOT read, grep or list Meshpool's engine or library source (those reads are refused).
+
+How you work:
+1. Inspect the input with one short script: sheet names, the header row, a few rows, row counts.
+2. Write ONE Python script with openpyxl (pandas to compute, if it helps) that loads the source, makes the change and
+   saves the result under the name the request gives (else "<source name> (edited).xlsx"). Run it.
+3. Run the checker: python -m engines.sheets.check <file.xlsx>. Fix what it reports and rerun until it prints PASS.
+4. Finish with a short answer (what changed and where) and list the .xlsx in artifacts.
+
+Keep the source's structure unless the request asks otherwise:
+- The same sheet names, in the same order. The header stays in the row it is in (row 1 stays row 1): no title row and
+  no blank rows above it.
+- No Cover, Checks or other extra tabs, and no new styling: keep the source's fonts, fills, number formats and widths.
+- Change only what the request is about. A new column or row follows the existing ones' formats. A value computed from
+  other cells (a total, an average) is a live formula; data that is moved or copied (sort, filter, extract) stays typed
+  values."""
+
+
+def _job() -> tuple[str, list[str], set[str]]:
+    """The job kind solve() set for this run and the checker it starts: ("derive", source files, parts the request
+    asks for) for an edit or derivation of an existing workbook, else ("build", [], set())."""
+    if os.environ.get("MH_SHEETS_JOB") != "derive":
+        return "build", [], set()
+    return ("derive", [f for f in os.environ.get("MH_SHEETS_SOURCES", "").split(os.pathsep) if f],
+            set(filter(None, os.environ.get("MH_SHEETS_ASKS", "").split(","))))
+
+
+def _header(ws) -> tuple[int, tuple]:
+    """(row, values) of a sheet's header: the first of its top 50 rows that is as wide as its widest one, so a title
+    row or a blank row above the table is not taken for it. (1, ()) for an empty sheet."""
+    rows = [(r[0].row, tuple(c.value for c in r if c.value not in (None, "")))
+            for r in ws.iter_rows(max_row=min(ws.max_row, 50)) if r]
+    width = max((len(v) for _, v in rows), default=0)
+    return next(((n, v) for n, v in rows if width and len(v) == width), (1, ()))
+
+
+def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
+    """An edit or derivation keeps the source's structure: no Cover or Checks tab, no title or blank rows above the
+    header, and the source's sheet names, unless the request asks for them. Compared with the first source workbook
+    (a renamed sheet is matched by its header); from a CSV, every header sits in row 1."""
+    from openpyxl import load_workbook
+    from engines.sheets.qa import CHECK_SHEETS
+    out = load_workbook(path)
+    src_path = next((s for s in sources if s.lower().endswith((".xlsx", ".xlsm")) and os.path.exists(s)), None)
+    src = load_workbook(src_path) if src_path else None
+    src_names = src.sheetnames if src else []
+    issues = []
+    for name in out.sheetnames:
+        if name in src_names:
+            continue
+        if name.strip().lower() == "cover" and "cover" not in asks:
+            issues.append({"check": "keep_structure", "cell": name, "detail": "a Cover tab the request did not ask "
+                           "for; remove it (an edit keeps the source's sheets)"})
+        elif CHECK_SHEETS.search(name) and "checks" not in asks:
+            issues.append({"check": "keep_structure", "cell": name, "detail": "a Checks tab the request did not ask "
+                           "for; remove it (an edit keeps the source's sheets)"})
+    if src_names and not set(src_names) & set(out.sheetnames) and "rename" not in asks:
+        issues.append({"check": "keep_structure", "cell": "", "detail": "none of the source's sheet names "
+                       f"({', '.join(src_names)}) is kept; name the sheets as in the source"})
+    if "title" in asks:
+        return issues
+    heads = {v: n for n, v in (_header(src[s]) for s in reversed(src_names))} if src else {}
+    for name in out.sheetnames:
+        got, values = _header(out[name])
+        want = _header(src[name])[0] if name in src_names else heads.get(values) if src else 1
+        if want is not None and got > want:
+            issues.append({"check": "keep_structure", "cell": f"{name}!A{got}", "detail": f"the header is in row "
+                           f"{got}, not row {want} as in the source; remove the title or blank rows above it"})
+    return issues
+
+
+def _derive_check(artifacts, ws, sources: list[str], asks: set[str]):
+    """The finish gate for an edit or derivation: the workbook opens and recalculates without errors and keeps the
+    source's structure. No Cover, Checks, input-source or model rules: those are for models built from nothing."""
+    from engines.sheets.qa import check
+    xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
+    if not xl:
+        return "ENGINE CHECK: list the produced .xlsx file in artifacts."
+    for a in xl:
+        p = a if os.path.isabs(a) else str(ws.root / a)
+        if not os.path.exists(p):
+            return f"ENGINE CHECK: artifact not found: {a}"
+        try:
+            issues = [i for i in check(p, allow_hardcoded=True)["issues"] if i["check"] != "no_formulas"]
+            issues += derive_issues(p, sources, asks)
+        except Exception as e:  # noqa: BLE001
+            return (f"ENGINE CHECK: {a} is not a valid .xlsx workbook ({type(e).__name__}: {e}). Save it with "
+                    "openpyxl (wb.save) as a real workbook, then finish again.")
+        if issues:
+            return "ENGINE CHECK: workbook check failed:\n" + "\n".join(
+                f"- {i['check']} {i['cell']}: {i['detail']}" for i in issues[:15])
+    return None
+
+
 def finish_check(answer, artifacts, ws, report=None):
     """The engine's deterministic finish gate: None when every listed workbook passes, else the issues. report (a
-    dict), when given, collects the forge rule statuses ("rules") and warning-level findings ("warnings")."""
+    dict), when given, collects the forge rule statuses ("rules") and warning-level findings ("warnings"). An edit or
+    derivation of an existing workbook (_job) gets the lighter gate that keeps the source's structure."""
+    kind, sources, asks = _job()
+    if kind == "derive":
+        return _derive_check(artifacts, ws, sources, asks)
     from engines.sheets.qa import check
     xl = [a for a in artifacts if a.endswith((".xlsx", ".xlsm"))]
     if not xl:
@@ -969,23 +1070,46 @@ def solve(task: str, *, workdir: str, task_id: str, max_turns: int | None = None
     os.environ.setdefault("MH_DOOM", "1")     # the loop guard on: a cheap model repeated one refused call 40 times
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
-    n = max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50"))
+    from engines import max_turns as _cap
+    n = _cap(max_turns or int(os.environ.get("MH_SHEETS_MAX_TURNS", "50")))
+    from meshpool_harness.office_intent import asks_for, derive_job
+    derive = derive_job(task, files)           # sort, filter, add a column ... on a workbook the user has
+    job_env = {"MH_SHEETS_JOB": "derive" if derive else "build",       # read by finish_check here and by the
+               "MH_SHEETS_SOURCES": os.pathsep.join(str(f) for f in files or []) if derive else "",   # checker CLI
+               "MH_SHEETS_ASKS": ",".join(sorted(asks_for(task))) if derive else ""}
+    saved = {k: os.environ.get(k) for k in job_env}
+    os.environ.update(job_env)
+    try:
+        return _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
+                      review_rounds)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _solve(task, workdir, ws, client, model, task_id, ctx, n, derive, files, review, review_model,
+           review_rounds) -> dict:
     task = (f"{task}\n\nTurn budget: {n} turns (one turn = one reply with its tool calls). Save a first complete "
             f"workbook by about turn {max(2, int(0.4 * n))}, stop adding features by turn {max(2, int(0.8 * n))}, "
             f"and call finish before turn {n}; if the budget runs out first, the last saved workbook is checked and "
             "delivered as it is.")
-    task += dossier_brief(task, workdir, client, model, task_id, files)
+    if not derive:                            # research, recipes and the partner review are for models
+        task += dossier_brief(task, workdir, client, model, task_id, files)
     rv = WorkbookReview(client, ws, n, model=review_model, max_rounds=review_rounds, task_id=task_id) \
-        if review_enabled(client, review) else None
+        if review_enabled(client, review) and not derive else None
     if rv:
         task += ("\n\nA bank MD and a strategy-firm senior partner review the workbook each time it passes the engine "
                  "checks; if they do not sign off, their issues come back to you to fix before you finish again.")
-    done = _pipeline(task, ws, client, model, task_id, rv)
+    done = None if derive else _pipeline(task, ws, client, model, task_id, rv)
     if done is not None:                      # a known model shape: built in code from one call's sourced inputs
         return done
     crashed = False
     try:
-        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=SYSTEM,
+        r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx,
+                system_text=DERIVE_SYSTEM if derive else SYSTEM,
                 caps=Caps(max_turns=n), temperature=0.0, finish_check=rv.gate if rv else finish_check,
                 turn_hook=rv.hook if rv else turn_budget)
     except Exception as e:                     # noqa: BLE001 - e.g. a gateway 502 on turn 47 of a run whose

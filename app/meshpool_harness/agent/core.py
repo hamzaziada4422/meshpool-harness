@@ -93,13 +93,23 @@ def _office_direct_on() -> bool:
     return os.environ.get("MH_OFFICE_DIRECT", "0") == "1"
 
 
-OFFICE_DIRECT_RULE = ("- For a small office-file job (edit an existing .docx, .xlsx or .pptx; one sheet with formulas; a "
-                      "chart; a few slides), write it yourself in one Python script with python-docx, openpyxl or "
-                      "python-pptx, save it, then reopen the file to check what the request asks for. Use office_task "
-                      "for a full deck, a multi-tab financial model or a styled report, or when those libraries are "
-                      "not installed.")
+OFFICE_DIRECT_RULE = ("- For an office-file job (edit or derive from an existing .docx, .xlsx or .pptx: sort, filter, "
+                      "fill, add a column, a chart or a slide, convert, extract; or a small new file), write it "
+                      "yourself in one Python script with python-docx, openpyxl or python-pptx, keeping the source's "
+                      "sheets, layout and styles unless asked otherwise; save it, then reopen the file to check what "
+                      "the request asks for. office_task is listed only when a request asks for a new deck, report or "
+                      "financial model; use it then for that deliverable.")
 
 LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three
+# MH_OFFICE_DIRECT=1: the tools that run an office engine's own model loop (office_task, and the office server's
+# make_* / add_slides / analyze_data). Offered only once a message asks for a new styled deliverable
+# (office_intent.styled_deliverable), and then last in the list, so offering them appends and never reorders.
+ENGINE_MCP = ("make_deck", "make_spreadsheet", "make_document", "make_pdf", "add_slides", "analyze_data")
+
+
+def _engine_tool(name: str) -> bool:
+    n = name.replace("-", "_")
+    return n == "office_task" or (n.startswith("mcp__meshpool_office__") and n.rsplit("__", 1)[-1] in ENGINE_MCP)
 
 
 def _codex_prompt(lean: bool = False, work: bool = False) -> str:
@@ -1098,6 +1108,7 @@ KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must sta
 
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
+    office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
     _turn_no = 0           # counted up by each send(); turn-scoped guards read it before the first turn too
@@ -1201,6 +1212,11 @@ class Agent:
 
     def _codex(self) -> bool:
         return self._style() and not self.plan           # plan mode keeps its read-only tools
+
+    def _office_direct(self) -> bool:
+        """MH_OFFICE_DIRECT=1 in a lean Work chat: office jobs on existing files are done by hand; the engine tools are
+        offered only for a new deck, report or model (office_engines, decided per message in send)."""
+        return self.profile == "work" and _office_direct_on() and self._codex()
 
     def _codex_env(self) -> str:
         """Codex's <environment_context>: where it is, and how much it may do without asking."""
@@ -1329,8 +1345,15 @@ class Agent:
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
-            return T.schemas(self._tool_names()) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
-                                               if self.mcp else [])
+            mcp = [x for x in self.mcp.schemas() if keep(x["function"]["name"])] if self.mcp else []
+            if not self._office_direct():
+                return T.schemas(self._tool_names()) + mcp
+            # MH_OFFICE_DIRECT=1: the engine tools come last and only once a message asked for a deck, report or
+            # model, so the list a turn starts with only ever grows at its end (the cached prefix stays)
+            head = T.schemas([n for n in self._tool_names() if not _engine_tool(n)]) + \
+                [x for x in mcp if not _engine_tool(x["function"]["name"])]
+            return head + ((T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])])
+                           if self.office_engines else [])
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
                 and os.environ.get("MH_LITE_CHAT_TOOLS", "1") != "0":
@@ -1371,6 +1394,9 @@ class Agent:
 
     def _tool_names(self) -> list:
         if self._codex():
+            if self._office_direct():                  # office_task only once a message asked for a deck or model
+                return list(T.CODEX_TOOLS) + [n for n in LEAN_WORK_TOOLS if n != "office_task"] + \
+                    (["office_task"] if self.office_engines else [])
             return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else [])
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
@@ -1574,6 +1600,7 @@ class Agent:
         if cmd:
             text = cmd
         self._auto_route(text)
+        asked = text                                      # what the user asked, before hook notes and @file contents
         ignored = EX.untrusted_config(self.root)
         if ignored and not getattr(self, "_trust_noted", False):
             self._trust_noted = True
@@ -1597,6 +1624,10 @@ class Agent:
                 self.office_on = True
         except Exception:  # noqa: BLE001
             pass
+        if self._office_direct() and not self.office_engines:   # decided here, before the turn: fixed for the turn
+            from meshpool_harness.office_intent import styled_deliverable
+            if styled_deliverable(asked):                    # a new deck, report or model: the engines join, and stay
+                self.office_engines = self.office_on = True
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
         body = text
