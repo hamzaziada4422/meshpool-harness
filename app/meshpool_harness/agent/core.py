@@ -1176,9 +1176,17 @@ class Agent:
         try:
             if not (self._style() and (self.profile == "work" or bool(self.hsettings().get("lean_core")))):
                 return False
-            if self.profile == "code" and os.environ.get("MH_LARGE_REPO_STYLE", "") == "codex" and self._large_repo():
-                return False        # opt-in (unmeasured): a large repo runs the Codex design (swe3: lean core 2.6x Codex)
-            return True
+            return not self._bare_codex()
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _bare_codex(self) -> bool:
+        """MH_LARGE_REPO_STYLE=codex (opt-in, unmeasured): a lean-core code chat in a repo too large to preload runs the
+        plain Codex design instead (swe3: lean core 2.6x Codex's cost per solved task on swe_sympy): Codex's own
+        prompt and loop, without preload, re-check, the keep and requirement notes, the route card or the grader."""
+        try:
+            return (self.profile == "code" and os.environ.get("MH_LARGE_REPO_STYLE", "") == "codex" and self._style()
+                    and bool(self.hsettings().get("lean_core")) and self._large_repo())
         except Exception:  # noqa: BLE001
             return False
 
@@ -1598,7 +1606,7 @@ class Agent:
         if getattr(self, "unfinished", False):
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
-        lean = self._lean()
+        lean = self._lean() or self._bare_codex()
         if self.profile == "code" and not self.plan and not lean and os.environ.get("MH_KEEP_NOTE", "1") != "0" \
                 and _KEEP.search(text):
             body += KEEP_NOTE                        # eval: the agent changed output it was told to keep, and its own
@@ -1782,7 +1790,8 @@ class Agent:
                     pre = ""
                 if pre:
                     extra += "\n\n" + pre
-            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0" and not self._lean():
+            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0" and not self._lean() \
+                    and not self._bare_codex():
                 # MH_ROUTE_CARD=0 (A/B): no method card. Eval final13: with the card, 66% more model calls than Codex
                 # (4.5 test runs and 5.1 writes per run vs 2.0 and 2.0) at an equal solve rate
                 from meshpool_harness.hrouter.route import addon
@@ -2240,7 +2249,7 @@ class Agent:
         try:
             from meshpool_harness.agent import grader as GR
             if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan or self._lean()
-                    or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
+                    or self._bare_codex() or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
                 return False, final
             info = self._grade_info(g, final)
             why = "you asked for it" if force else GR.large(info)

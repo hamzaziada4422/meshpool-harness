@@ -226,4 +226,5 @@ def test_large_repo_style_codex_switch(tmp_path, monkeypatch):
     assert chat(big)._lean() and chat(small)._lean()           # off by default: both lean
     monkeypatch.setenv("MH_LARGE_REPO_STYLE", "codex")
     b = chat(big)
-    assert chat(small)._lean() and not b._lean() and b._codex()
+    assert chat(small)._lean() and not b._lean() and b._codex() and b._bare_codex()
+    assert b.messages[0]["content"] != chat(small).messages[0]["content"]     # Codex's own prompt, not the lean one
