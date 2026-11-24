@@ -1052,6 +1052,8 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 .msg-ai .codewrap pre{margin:0;border-radius:0}
 .msg-ai .codewrap:last-child{margin-bottom:0}
 .codeacts{display:flex;gap:6px}
+.rimgb{display:block;padding:0;margin:8px 0;border:1px solid var(--line-3);border-radius:var(--r-m);overflow:hidden;background:var(--fill);max-width:min(100%,520px)}
+.rimg{display:block;max-width:100%;max-height:360px;object-fit:contain}
 .pvbtn{border:1px solid var(--line-3);background:var(--surface);color:var(--ink-2);border-radius:var(--r-s);padding:2px 9px;font-size:var(--fs-xs);opacity:.85}
 .pvbtn:hover,.pvbtn:focus-visible{opacity:1;background:var(--hover);color:var(--ink)}
 .pvcard{justify-content:flex-start;text-align:left}.pvcm{flex:1;align-items:flex-start}

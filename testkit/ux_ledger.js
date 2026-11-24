@@ -69,6 +69,15 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   // search inside files
   const r = await p.evaluate(dir => api(`/api/fs/search?root=${encodeURIComponent(dir)}&q=needle&content=1`), proj);
   check("search inside files finds the line", (r.lines || []).some(x => x.path === "notes.md" && x.line === 2), JSON.stringify(r).slice(0, 200));
+  // a picture a reply names is shown in the reply
+  fs.writeFileSync(path.join(proj, "pic.png"), Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAFklEQVR4nGP4z8DwnwEIGBgY/v//DwAh+gP9hW5j3QAAAABJRU5ErkJggg==", "base64"));
+  const loaded = await p.evaluate(async () => {
+    const d = document.createElement("div"); d.className = "msg-ai"; d.innerHTML = linkFiles(`Saved ${curRoot()}/pic.png for you.`); $("#col").appendChild(d);
+    const im = d.querySelector("img.rimg"); if (!im) return "no img";
+    await new Promise(r => { if (im.complete) r(); else { im.onload = r; im.onerror = r; } });
+    return im.naturalWidth;
+  });
+  check("an image named in a reply is shown inline", loaded === 2, loaded);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

@@ -61,12 +61,13 @@ async function watch(p) {
   const p = await b.newPage({viewport: {width: 1440, height: 900}}); const errs = await watch(p);
   await p.addInitScript(() => { try { localStorage.setItem("mp_permsAsked", "1"); } catch (e) {} });
   await p.goto(`http://127.0.0.1:${mainPort}/`); await p.waitForSelector(".hero");
-  await p.click("#openSettings");
+  const openSet = () => p.evaluate(() => openSettings());          // Settings opens from the account menu since 0.0.11
+  await openSet(); await p.waitForSelector(".scrim #mbody", {timeout: 10000});
   const sections = await p.evaluate(() => SECTIONS.map(s => s[0]));
   check("settings has all sections", ["personal", "scheduled", "web", "connectors", "skills", "harnesses", "mcp", "permissions", "about"].every(s => sections.includes(s)), sections);
   for (const sec of sections) {
     const before = errs.length;
-    if (!(await p.$(".scrim"))) await p.click("#openSettings");
+    if (!(await p.$(".scrim"))) await openSet();
     await p.evaluate(s => renderSection(s), sec); await p.waitForTimeout(900);
     const labels = await p.$$eval("#mbody button:not([disabled]), #mbody summary", xs => xs.map((x, i) => [i, (x.textContent || x.getAttribute("aria-label") || "").trim()]));
     let clicked = 0;
@@ -76,7 +77,7 @@ async function watch(p) {
       if (!el || !(await el.isVisible())) continue;
       try { await el.click({timeout: 2000}); clicked++; await p.waitForTimeout(350); } catch (e) { /* re-rendered */ }
       if (await p.$(".dlg")) { await p.keyboard.press("Escape"); }
-      if (!(await p.$(".scrim"))) { await p.click("#openSettings"); await p.evaluate(s => renderSection(s), sec); await p.waitForTimeout(500); }
+      if (!(await p.$(".scrim"))) { await openSet(); await p.evaluate(s => renderSection(s), sec); await p.waitForTimeout(500); }
     }
     await p.screenshot({path: `${out}/s-${sec}.png`});
     // 400s are validation messages (e.g. "No GitHub login found on this computer"), as in the whole-app check below.
@@ -98,20 +99,26 @@ async function watch(p) {
   await p.keyboard.press("Escape"); await p.$eval(".scrim", x => x.remove()).catch(() => {});
   // ---------- 3. composer, palette and panels
   const before = errs.length;
-  for (const id of ["#oPill", "#mPill"]) {
+  // the plus menu (files, Plan first, memory, style, skills, plugins) and the model menu (models, harness, effort)
+  await p.evaluate(() => newThread()); await p.waitForSelector("#attBtn", {state: "visible", timeout: 15000});   // Settings clicks can leave another page open
+  const menuItems = () => p.$$eval("#ctx .mi", xs => xs.map(x => x.textContent.trim()));
+  const clickItem = async rx => { for (const x of await p.$$("#ctx .mi")) if (rx.test((await x.textContent()).trim())) { await x.click(); return true; } return false; };
+  for (const id of ["#attBtn", "#mPill"]) {
     await p.click(id); await p.waitForTimeout(400);
-    const opts = await p.$$eval(".pop .opt[data-id], .pop .opt[data-m], .pop #oPlan", x => x.length);
-    check(`popover ${id} opens with options`, opts > 0, opts);
+    const opts = (await menuItems()).length;
+    check(`menu ${id} opens with options`, opts > 0, opts);
     await p.keyboard.press("Escape"); await p.waitForTimeout(200);
   }
-  await p.click("#oPill"); await p.click("#oAgent"); await p.waitForTimeout(300);
-  const groups = await p.$$eval(".pop .grp", x => x.map(g => g.textContent));
+  await p.click("#mPill"); await p.waitForTimeout(300); await clickItem(/^Harness/); await p.waitForTimeout(300);
+  const agents = await menuItems();
   // Agents only (Codex is an agent; a subscription is a provider, chosen in the model menu)
-  check("harness picker shows Automatic and agents, no subscription entries", groups.some(g => /Automatic/.test(g)) && !groups.some(g => /subscription/i.test(g)), groups);
-  check("each agent shows what it is best at", (await p.$$eval(".pop .opt[data-id] .od", x => x.filter(e => e.textContent.trim()).length)) >= 3);
-  await p.click(".pop .opt[data-id='meshpool-auto']"); await p.waitForTimeout(300);
-  check("pick Meshpool Auto", await p.evaluate(() => S.draft.harness === "meshpool-auto"));
-  await p.click("#oPill"); await p.click("#oPlan"); await p.waitForTimeout(200); check("plan toggle on", await p.evaluate(() => !!S.draft.plan)); await p.click("#oPill"); await p.click("#oPlan");
+  check("harness picker shows Automatic and agents, no subscription entries", agents.some(g => /Auto/.test(g)) && !agents.some(g => /subscription/i.test(g)), agents);
+  check("each agent shows what it is best at", (await p.$$eval("#ctx .mi small", x => x.filter(e => e.textContent.trim()).length)) >= 3);
+  await clickItem(/^Auto/); await p.waitForTimeout(300);
+  check("pick Meshpool Auto", await p.evaluate(() => (S.draft.harness || "meshpool-auto") === "meshpool-auto"));
+  await p.click("#attBtn"); await p.waitForTimeout(300); await clickItem(/^Plan first/); await p.waitForTimeout(200);
+  check("plan toggle on", await p.evaluate(() => !!S.draft.plan));
+  await p.click("#attBtn"); await p.waitForTimeout(300); await clickItem(/^Plan first/); await p.waitForTimeout(200);
   await p.fill("#input", "/"); await p.waitForTimeout(300); check("slash palette opens", (await p.$$(".pop .opt")).length > 3); await p.keyboard.press("Escape"); await p.fill("#input", "");
   await p.fill("#input", "$"); await p.waitForTimeout(300); check("skills palette opens", (await p.$$(".pop .opt")).length > 0); await p.keyboard.press("Escape"); await p.fill("#input", "");
   // Auto routes a real task
