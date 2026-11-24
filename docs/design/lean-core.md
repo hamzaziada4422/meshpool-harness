@@ -47,3 +47,7 @@ Default code lane ("lean core"):
 One benchmark: the 52-task suite, paired, 2 reps per arm, Codex 0.171 twice in the same window, a private /tmp per run, parallel 3. Report solved/total, paired cost per solved and time with bootstrap CI, and median calls.
 
 Bar to ship: solve rate not lower than Codex (CI lower bound above -5 points), and cost per solved below Codex with the CI upper bound below 1.0. Any layer added back must win the same paired test on cost per solve.
+
+## Work lane candidate (MH_LEAN_WORK=1, off by default)
+
+The Work (Cowork) chat runs the same lean core: Codex style, `prompt-core.md` plus `prompt-work.md` (data answers: compute with code over the full data, check duplicates, missing values, types and units first, give every requested field, respect length limits, round at the end; office and web tool pointers), workspace preload, re-check on edit, no grader or route card. Tools: shell, apply_patch, update_plan, office_task, web_research, fetch_url, and the office MCP tools whenever the office server is connected. Headless, the fixed prefix drops from about 6.2k tokens (Work prompt 3.2k + 19 tools 3.0k) to about 2.2k (0.9k + 1.3k). Not yet benchmarked.

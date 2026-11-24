@@ -79,9 +79,30 @@ SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $
                 "never in a fixed /tmp path that another task could also be using.")
 
 
-def _codex_prompt(lean: bool = False) -> str:
+def _lean_work_on() -> bool:
+    """MH_LEAN_WORK=1 (opt-in, off by default): Work chats run as lean core too (docs/design/lean-core.md), with the
+    Work section of prompt-work.md and the office and web tools in LEAN_WORK_TOOLS."""
+    return os.environ.get("MH_LEAN_WORK", "0") == "1"
+
+
+LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three
+
+
+def _codex_prompt(lean: bool = False, work: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
-    for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md)."""
+    for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md).
+    work: plus the Work section (prompt-work.md: data answers, office files, web lookups)."""
+    text = _codex_base(lean)
+    if work:
+        try:
+            add = (C.APP / "defaults" / "engines" / "codex" / "prompt-work.md").read_text(encoding="utf-8")
+            text += "\n\n" + re.sub(r"\A\s*<!--.*?-->\s*", "", add, count=1, flags=re.S).rstrip()
+        except OSError:
+            pass
+    return text
+
+
+def _codex_base(lean: bool = False) -> str:
     if lean:
         alt = os.environ.get("MH_CORE_PROMPT_FILE", "")      # A/B switch: a whole replacement lean prompt
         if alt:
@@ -1044,7 +1065,10 @@ class Agent:
     # ---------- prompt -----------------------------------------------------------------------------------------
     def _style(self) -> bool:
         """True when this chat runs in Codex style (harness profile engine_style "codex"): Codex's base instructions,
-        shell / apply_patch / update_plan and Codex's loop, under Meshpool's routing. Code chats only."""
+        shell / apply_patch / update_plan and Codex's loop, under Meshpool's routing. Code chats, and Work chats
+        under MH_LEAN_WORK=1."""
+        if self.profile == "work":
+            return _lean_work_on()
         try:
             return self.profile == "code" and self.hsettings()["engine_style"] == "codex"
         except Exception:  # noqa: BLE001
@@ -1066,9 +1090,10 @@ class Agent:
         return False
 
     def _lean(self) -> bool:
-        """Lean core (profile "core"): Codex style without the extra verification layers."""
+        """Lean core (profile "core"): Codex style without the extra verification layers. A Work chat in Codex style
+        (MH_LEAN_WORK=1) is always lean."""
         try:
-            return self._style() and bool(self.hsettings().get("lean_core"))
+            return self._style() and (self.profile == "work" or bool(self.hsettings().get("lean_core")))
         except Exception:  # noqa: BLE001
             return False
 
@@ -1087,7 +1112,7 @@ class Agent:
         from meshpool_harness.config import find_bash
         bash = find_bash()
         if self._style():
-            text = _codex_prompt(lean=self._lean())
+            text = _codex_prompt(lean=self._lean(), work=self.profile == "work")
             for name in PROJECT_FILES:
                 pf = self.root / name
                 if pf.is_file():
@@ -1179,15 +1204,16 @@ class Agent:
         if self._codex():                          # Codex's tools, and the user's own MCP tools
             # Meshpool's own servers stay out of a coding chat (about 2k tokens a call), except the office tools
             # once a message in this chat asks for a PowerPoint, document, workbook or PDF (office_on, set by the
-            # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot.
+            # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot. A Work chat
+            # (MH_LEAN_WORK=1) always has them: making documents is its job.
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):
-                    return bool(getattr(self, "office_on", False))
+                    return self.profile == "work" or bool(getattr(self, "office_on", False))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
-            return T.schemas(T.CODEX_TOOLS) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
+            return T.schemas(self._tool_names()) + ([x for x in self.mcp.schemas() if keep(x["function"]["name"])]
                                                if self.mcp else [])
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
@@ -1229,7 +1255,7 @@ class Agent:
 
     def _tool_names(self) -> list:
         if self._codex():
-            return list(T.CODEX_TOOLS)
+            return list(T.CODEX_TOOLS) + (LEAN_WORK_TOOLS if self.profile == "work" else [])
         names = PLAN_TOOLS if self.plan else (WORK_TOOLS if self.profile == "work" else BUILTIN)
         extra = []
         route = getattr(self, "route", None)
@@ -3793,9 +3819,11 @@ class Agent:
         """In Work, every slide and every workbook goes through the engines (make_deck, add_slides,
         make_spreadsheet, office_task): they carry the house style and the checks. A command or file that builds one
         by hand is not run; the reply says which tool to use instead. "" when the call is fine."""
-        if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit"):
+        if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit", "shell", "apply_patch"):
             return ""
-        text = " ".join(str(args.get(k) or "") for k in ("command", "content", "new")) + \
+        cmd = args.get("command")                    # shell (Codex style, MH_LEAN_WORK=1) takes an argv list
+        text = " ".join(str(v or "") for v in (" ".join(map(str, cmd)) if isinstance(cmd, list) else cmd,
+                                                args.get("content"), args.get("new"), args.get("input"))) + \
             " ".join(str(c) for c in args.get("commands") or [])
         m = self._HANDMADE.search(text)
         if not m:
