@@ -110,3 +110,15 @@ def test_preloaded_file_is_not_printed_again(tmp_path):
     out = ws.shell(["bash", "-lc", "cat a.py"])
     assert "the <workspace> block" in out and "x = 1" not in out
     assert "x = 1" in ws.shell(["bash", "-lc", "cat a.py | head -5"])   # anything but a plain whole-file read runs
+
+
+def test_a_reread_is_printed_again_once_the_text_has_left_the_history(tmp_path):
+    from meshpool_harness.agent.core import Agent
+    (tmp_path / "a.py").write_text("def total_price(items):\n    return sum(item.price * item.qty for item in items)\n")
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    text = (tmp_path / "a.py").read_text()
+    a.ws.remember_text(tmp_path / "a.py", text, "an earlier read")
+    a.messages.append({"role": "tool", "tool_call_id": "t", "content": "[exit 0]\n" + text})
+    assert "is unchanged since" in a.ws._reread("cat a.py", None)          # still in the conversation: pointer
+    a.messages[-1]["content"] = "[output trimmed]"                         # compaction dropped it
+    assert a.ws._reread("cat a.py", None) == ""                            # printed for real again

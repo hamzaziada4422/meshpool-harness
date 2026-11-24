@@ -1012,6 +1012,7 @@ class Agent:
         self.id = session_id or time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:4]
         self.dir = (Path(sessions_dir) if sessions_dir else SESSIONS) / self.id   # headless runs: inside workdir
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
+        self.ws.visible = self._text_visible        # re-read pointers only while the text is really there
         self.ws.should_stop = lambda: self._stop
         self.ws.get_mode = lambda: self.mode
         self.mcp = mcp
@@ -1048,6 +1049,21 @@ class Agent:
             return self.profile == "code" and self.hsettings()["engine_style"] == "codex"
         except Exception:  # noqa: BLE001
             return False
+
+    def _text_visible(self, text: str) -> bool:
+        """Is this file's text still in the conversation? Compaction and observation trimming drop old tool output, so
+        a "you already have it" pointer must only answer a re-read while the text is really there. Checked on the
+        file's most distinctive lines (cat -n and nl prefix line numbers, so the whole text never matches)."""
+        lines = sorted({ln.strip() for ln in text.splitlines() if len(ln.strip()) >= 12}, key=len, reverse=True)[:3]
+        if not lines:
+            return False
+        for m in self.messages:
+            c = m.get("content")
+            if isinstance(c, list):
+                c = " ".join(str(p.get("text", "")) for p in c if isinstance(p, dict))
+            if isinstance(c, str) and all(ln in c for ln in lines):
+                return True
+        return False
 
     def _lean(self) -> bool:
         """Lean core (profile "core"): Codex style without the extra verification layers."""
@@ -1394,6 +1410,7 @@ class Agent:
         self.unfinished = False
         self.messages = [{"role": "system", "content": self.system_prompt()}]
         self.ws = Workspace(str(self.root), str(self.dir / "tool-output"))
+        self.ws.visible = self._text_visible
         self.ws.should_stop = lambda: self._stop
         self.ws.get_mode = lambda: self.mode
         self.title = ""
