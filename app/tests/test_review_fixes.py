@@ -146,3 +146,69 @@ def test_reasoning_is_saved_once_per_call(env, monkeypatch):                   #
     assert sum(1 for e in th if e.get("delta")) == 50
     final = [e for e in th if e.get("final")]
     assert len(final) == 1 and final[0]["text"].startswith("part 0") and "part 49" in final[0]["text"]
+
+
+# ---------------------------------------------------------------- recheck of 143f0b5
+def _edits_agent(env):
+    TR.trust(env)
+    asked = []
+    a = core.Agent(str(env), approve=lambda *x: (asked.append(x[1]), ("no", ""))[1], mode="edits")
+    return a, asked
+
+
+@pytest.mark.parametrize("name,args", [
+    ("apply_patch", {"input": "*** Begin Patch\n*** Update File: notes.md\n*** Move to: .meshpool/hooks.json\n@@\n-a\n+b\n*** End Patch"}),
+    ("shell", {"command": ["bash", "-lc", "cd .meshpool && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hooks.json\n+{}\n*** End Patch\nEOF\n"]}),
+    ("shell", {"command": ["apply_patch", "*** Begin Patch\n*** Add File: hooks.json\n+{}\n*** End Patch"], "workdir": ".meshpool"}),
+    ("write_file", {"path": ".MESHPOOL/HOOKS.JSON", "content": "{}"}),
+    ("write_file", {"path": ".mcp.json.", "content": "{}"}),
+    ("bash", {"command": "echo '{}' > .meshpool/hooks.json"}),
+])
+def test_power_file_guard_has_no_known_bypass(env, name, args):               # R1
+    a, asked = _edits_agent(env)
+    assert not a._permit(name, args)[0] and asked
+
+
+def test_power_file_names_in_a_command_skip_saved_rules(env):                 # R1: allow rules do not cover it
+    core.save_folder_rules(env, ["bash:cp *"])
+    a, asked = _edits_agent(env)
+    assert not a._permit("bash", {"command": "cp x .meshpool/permissions.json"})[0] and asked
+
+
+@pytest.mark.parametrize("cmd", ["npm test (Start-Process calc)", "npm test @(Start-Process calc)", "npm test $env:X",
+                                 "npm test {a,b}"])
+def test_saved_rules_never_cover_powershell_or_substitutions(env, cmd):       # R2
+    core.save_folder_rules(env, ["bash:npm test", "bash:npm test *"])
+    a = core.Agent(str(env), approve=lambda *x: ("no", ""), mode="ask")
+    assert not a._permit("bash", {"command": cmd})[0]
+
+
+def test_git_config_worktree_and_core_worktree_are_caught(env):               # R3
+    r = env / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    subprocess.run(["git", "-C", str(r), "config", "core.worktree", "/etc"], check=True)
+    assert not T.git_config_safe(r)
+    r2 = env / "repo2"
+    r2.mkdir()
+    subprocess.run(["git", "init", "-q", str(r2)], check=True)
+    subprocess.run(["git", "-C", str(r2), "config", "extensions.worktreeConfig", "true"], check=True)
+    assert not T.git_config_safe(r2)
+
+
+@pytest.mark.parametrize("cmd", ["FOO=1 bash x", "powershell.exe -c x", "pwsh.exe x", "cmd.exe /c x", "setsid bash x",
+                                 "busybox sh", "stdbuf -o0 make", "npm run", "docker run --rm x"])
+def test_rule_for_saves_nothing_for_wide_commands(cmd):                        # R4
+    assert core.rule_for("bash", {"command": cmd}) == [], cmd
+
+
+def test_rule_for_keeps_the_runner_target():                                   # R4
+    assert core.rule_for("bash", {"command": "npm run build -- --prod"}) == ["bash:npm run build", "bash:npm run build *"]
+    assert core.rule_for("bash", {"command": "python3.12 manage.py migrate"}) == \
+        ["bash:python3.12 manage.py migrate", "bash:python3.12 manage.py migrate *"]
+    assert core.rule_for("bash", {"command": "cargo run release"}) == ["bash:cargo run release", "bash:cargo run release *"]
+
+
+@pytest.mark.parametrize("cmd", ["git log -- --output=x", "git diff -- ..", "git log .."])
+def test_words_after_double_dash_and_bare_dotdot(cmd):                         # R5
+    assert not T.git_read_only(cmd)

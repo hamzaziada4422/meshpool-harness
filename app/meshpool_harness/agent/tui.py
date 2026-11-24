@@ -1304,8 +1304,11 @@ class Session:
         t, st = self.term, self.term.st
         root = str(getattr(self.agent, "root", os.getcwd()))
         try:
-            stat = subprocess.run(["git", "-C", root, "diff", "--stat", "HEAD"], capture_output=True, text=True, timeout=20)
-            body = subprocess.run(["git", "-C", root, "diff", "HEAD"], capture_output=True, text=True, timeout=20)
+            safe = ["-c", "core.fsmonitor=false", "-c", "diff.external=", "--no-pager"]   # never a program the repo names
+            stat = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "--stat", "HEAD"],
+                                  capture_output=True, text=True, timeout=20)
+            body = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "HEAD"],
+                                  capture_output=True, text=True, timeout=20)
         except (OSError, subprocess.SubprocessError) as e:
             return t.p(st.red(f"  git diff failed: {e}"))
         if stat.returncode:

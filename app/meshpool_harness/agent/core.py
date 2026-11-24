@@ -449,7 +449,7 @@ def _summary(name: str, args: dict) -> str:
 
 
 def _patch_files(patch: str) -> list:
-    return re.findall(r"(?m)^\*\*\* (?:Add|Update|Delete) File: (.+?)\s*$", str(patch or ""))
+    return re.findall(r"(?m)^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$", str(patch or ""))
 
 
 def _summary_of(name: str, args: dict) -> str:
@@ -804,14 +804,15 @@ def _folder_key(root) -> str:
     return os.path.normcase(str(Path(root).expanduser().resolve()))
 
 
-_CHAINED = re.compile(r"[;&|`<>\n]|\$\(")
+_CHAINED = re.compile(r"[;&|`<>\n(){}$]")       # chaining, redirects, substitutions (bash and PowerShell)
 
 
 _WRAPPERS = {"env", "sudo", "doas", "time", "nohup", "xargs", "nice", "timeout", "watch", "exec", "eval", "command",
              "builtin", "su", "ssh", "sh", "bash", "zsh", "fish", "dash", "pwsh", "powershell", "cmd", "npx", "uvx",
-             "pipx", "bunx", "dlx"}
-_INTERPRETERS = {"python", "python3", "py", "node", "deno", "bun", "ruby", "perl", "php", "java", "uv", "poetry",
-                 "pipenv"}
+             "pipx", "bunx", "dlx", "setsid", "busybox", "ionice", "stdbuf", "strace", "valgrind", "gdb", "chroot",
+             "unshare", "nsenter", "flock", "script", "expect", "start", "invoke-expression", "iex"}
+_INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "java", "uv", "poetry", "pipenv"}
+_RUN_VERBS = {"run", "exec", "x", "dlx", "start", "run-script"}
 
 
 def rule_for(name: str, args: dict) -> list[str]:
@@ -822,17 +823,25 @@ def rule_for(name: str, args: dict) -> list[str]:
         if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}):
             return []
         w = cmd.split()
-        prog = w[0].rsplit("/", 1)[-1]
+        if "=" in w[0]:                            # FOO=1 cmd: an environment prefix, what follows is unknowable
+            return []
+        prog = re.sub(r"\.(exe|cmd|bat|com|ps1)$", "", w[0].replace("\\", "/").rsplit("/", 1)[-1].casefold())
+        prog = re.sub(r"[\d.]+$", "", prog) or prog  # python3.12 -> python
         if prog in _WRAPPERS:                          # env, sudo, sh -c, xargs...: what they run is unknowable
             return []
+        plain = lambda x: bool(re.fullmatch(r"[A-Za-z][\w:.-]*", x))
         if prog in _INTERPRETERS:                      # python -m pytest, node build.js: keep the module or script
             if len(w) > 2 and w[1] == "-m" and re.fullmatch(r"[\w.-]+", w[2]):
                 keep = w[:3]
             elif len(w) > 1 and not w[1].startswith("-") and re.fullmatch(r"[\w./-]+", w[1]):
-                keep = w[:2]
+                keep = w[:3] if len(w) > 2 and plain(w[2]) else w[:2]   # python manage.py migrate
             else:
                 return []
             return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
+        if len(w) > 1 and w[1] in _RUN_VERBS:          # npm run build, cargo run, docker run: keep what it runs
+            if len(w) < 3 or not plain(w[2]):
+                return []
+            return ["bash:" + " ".join(w[:3]), "bash:" + " ".join(w[:3]) + " *"]
         if len(w) > 1 and not re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]):
             return []                                  # an option or a path after the program: too wide to guess
         keep = w[:2] if len(w) > 1 else w[:1]
@@ -2592,7 +2601,8 @@ class Agent:
         if name == "shell":
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
-                name, args = "apply_patch", {"input": hit[0]}
+                base = os.path.join(str(args.get("workdir") or ""), hit[1] or "")
+                name, args = "apply_patch", {"input": hit[0], "_base": base}
         from meshpool_harness.agent import extras as EX
         hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
         if hk["blocked"]:
@@ -2601,6 +2611,8 @@ class Agent:
             return True, ""
         rules = _rules(self.root)
         guard = self._power_file(name, args)
+        if guard and name in ("bash", "shell", "bash_start", "bash_many") and self.mode == "auto":
+            guard = ""                             # full access: commands run as the user chose
         if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
             if not self.approve:
                 return False, f"Not allowed: {guard} decides what may run on this computer. Ask the user to change it."
@@ -2687,22 +2699,33 @@ class Agent:
     def _power_file(self, name: str, args: dict) -> str:
         """The hooks, permission or MCP file an edit would change (in the project or in Meshpool's own folder), or
         "". These grant the power to run commands, so a change to them is always asked."""
+        def norm(x: Path) -> str:                  # one spelling: no case, no trailing dots or spaces, no :$DATA
+            s = os.path.normcase(str(x)).casefold()
+            s = re.sub(r"::\$data$", "", s)
+            return re.sub(r"[. ]+$", "", s)
+        if name in ("bash", "shell", "bash_start", "bash_many"):
+            text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
+                                             else args.get("command")) + list(args.get("commands") or []))
+            low = text.casefold()
+            return next((f for f in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json")
+                         if f in low and not T.read_only(text)), "")
         if name not in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return ""
+        base = self.root / str(args.get("_base") or "")
         paths = _patch_files(args.get("input")) if name == "apply_patch" else \
             [str(args.get("path") or "")] + [str(c.get("path") or "") for c in (args.get("changes") or [])
                                              if isinstance(c, dict)]
         home = Path(C.home()).resolve()
+        guarded = {norm((self.root / rel).resolve()): rel for rel in self._POWER_FILES}
+        guarded.update({norm(home / n): n for n in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json")})
         for p in filter(None, paths):
             try:
-                q = (self.root / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
+                q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
             except (OSError, RuntimeError):
                 continue
-            for rel in self._POWER_FILES:
-                if q == (self.root / rel).resolve():
-                    return rel
-            if q.parent == home and q.name in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json"):
-                return q.name
+            hit = guarded.get(norm(q))
+            if hit:
+                return hit
         return ""
 
     def _same_bytes(self, name: str, args: dict) -> bool:

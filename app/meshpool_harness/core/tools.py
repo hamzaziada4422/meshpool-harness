@@ -107,7 +107,7 @@ def _git_path_ok(tok: str) -> bool:
     t = tok.split(":", 1)[-1] if ":" in tok and not tok.startswith(":") else tok
     if tok.startswith(("/", "~", ":")) or t.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", tok):
         return False
-    return ".." not in t.replace("...", "").split("/") if "/" in t else True
+    return ".." not in t.replace("...", "").split("/") if "/" in t else t != ".."
 
 
 def git_read_only(cmd: str) -> bool:
@@ -137,6 +137,8 @@ def git_read_only(cmd: str) -> bool:
         if a == "--":
             after_dashdash = True
             continue
+        if after_dashdash and a.startswith("-"):           # a shell that drops "--" would make it an option
+            return False
         if a.startswith("-") and not after_dashdash:
             if a in _GIT_FLAGS[sub] or (re.fullmatch(r"-\d{1,4}", a) and sub in ("log", "shortlog", "show")):
                 continue
@@ -150,20 +152,24 @@ def git_read_only(cmd: str) -> bool:
 
 
 _GIT_RISKY_CONFIG = re.compile(r"(fsmonitor|pager|external|textconv|command|program|askpass|editor|proxy|hookspath|"
-                               r"^include|^includeif|^filter\.|^alias\.|^gpg\.|sshcommand)", re.I)
+                               r"worktree|^include|^includeif|^filter\.|^alias\.|^gpg\.|sshcommand)", re.I)
 
 
 def git_config_safe(root) -> bool:
     """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
     git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias."""
     try:
-        r = subprocess.run(["git", "-C", str(root), "config", "--local", "--name-only", "--list"],
+        r = subprocess.run(["git", "-C", str(root), "config", "--name-only", "--list", "--show-scope"],
                            capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
         return False
     if r.returncode not in (0, 1):
         return False
-    return not any(_GIT_RISKY_CONFIG.search(k) for k in r.stdout.split())
+    for line in r.stdout.splitlines():                    # the user's own global and system config are theirs
+        scope, _, key = line.partition("\t")
+        if scope in ("local", "worktree", "command") and _GIT_RISKY_CONFIG.search(key):
+            return False
+    return True
 
 
 _PATCH_CMDS = ("apply_patch", "applypatch")
