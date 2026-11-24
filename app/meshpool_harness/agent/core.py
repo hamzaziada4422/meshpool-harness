@@ -2172,6 +2172,8 @@ class Agent:
         out = self._guarded_tool_inner(c, g, cut)
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
+        if not refused:
+            out = str(out) + self._scratch_rewrite_note(c, g)
         g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
         # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
         # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
@@ -2395,6 +2397,34 @@ class Agent:
             cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
             return bool(cmds) and all(T.read_only(x) for x in cmds)
         return False
+
+    _SCRATCH_W = re.compile(r"(?:cat|tee)\s*(?:-a\s*)?>?\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)|"
+                            r">\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)['\"]?\s*<<")
+
+    def _scratch_rewrite_note(self, c: dict, g: dict) -> str:
+        """Eval (4530fc66): 3.3 run calls and 0.8 failed runs a task against Codex's 2.1 and 0.2, mostly the same
+        check script written again and again (7 rewrites of /tmp/check.py in a row on one task) while the project
+        code stayed as it was. From the 3rd write of one scratch path with no project change, the result says so."""
+        if os.environ.get("MH_SCRATCH_NOTE", "1") == "0":
+            return ""
+        f = c.get("function", {})
+        args = str(f.get("arguments", ""))
+        if f.get("name") not in ("shell", "bash", "bash_many") or "<<" not in args and "tee" not in args:
+            return ""
+        edits = getattr(self.ws, "edits", 0)
+        seen = g.setdefault("scratch_w", {})
+        if g.get("scratch_edits") != edits:          # the project changed: rewriting the check now is fair
+            seen.clear()
+            g["scratch_edits"] = edits
+        note = ""
+        for m in self._SCRATCH_W.finditer(args):
+            path = m.group(1) or m.group(2)
+            seen[path] = seen.get(path, 0) + 1
+            if seen[path] == 3:
+                note = (f"\n[Meshpool] You have written {path} 3 times and the project code has not changed since. "
+                        "The check is not the problem to solve: keep this script, fix the project code it tests, and "
+                        "run the same script again after the edit.")
+        return note
 
     def _refusal_escalation(self, g: dict) -> str:
         """A model that keeps re-sending a call the guards refuse burns a request per refusal (eval traces: 18 and 26

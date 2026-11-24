@@ -841,3 +841,21 @@ def test_each_workspace_runs_commands_with_its_own_tmpdir(tmp_path):
     assert ea["TMPDIR"] != eb["TMPDIR"] and os.path.isdir(ea["TMPDIR"])
     assert a.ws._scratch({})["TMPDIR"] == ea["TMPDIR"]           # stable for the life of the workspace
     assert C.SCRATCH_RULE.strip() in C._codex_prompt() and "$TMPDIR" in a.system_prompt()
+
+
+def test_rewriting_one_scratch_check_three_times_without_a_project_change_gets_a_note(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 1]\nAssertionError")
+    g = {}
+
+    def write(body):
+        cmd = {"command": ["bash", "-lc", "cat > /tmp/check.py <<'EOF'\n" + body + "\nEOF\npython /tmp/check.py"]}
+        return a._guarded_tool({"function": {"name": "shell", "arguments": json.dumps(cmd)}}, g)
+    outs = [write(f"assert f({i})") for i in range(4)]
+    assert "[Meshpool] You have written /tmp/check.py 3 times" in outs[2]
+    assert "written /tmp/check.py" not in outs[0] + outs[1] + outs[3]          # said once
+    a.ws.edits = (a.ws.edits or 0) + 1                                            # a project edit resets the count
+    assert "written" not in write("x") + write("y")
+    monkeypatch.setenv("MH_SCRATCH_NOTE", "0")
+    g = {}
+    assert not any("written /tmp" in write(str(i)) for i in range(4))
