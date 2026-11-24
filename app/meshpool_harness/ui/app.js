@@ -919,11 +919,26 @@ function ingest(cur, v) {
   cur.busy = busy; cur.working = v.state === "working";
   if (v.state === "working") { if (!cur.since) cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); } else cur.since = null;
   if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  renderTrust(cur);
   if (first && S.panel) renderPanel();
   if (first) scrollConv(true);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
   return false;
+}
+/* Folder trust: a project's own hooks and allow rules are ignored until the user trusts the folder (trust.py). */
+function renderTrust(cur) {
+  const col = $("#col"), t = cur.view?.trust, have = $("#trustBar");
+  if (!col || !t || cur.trustHidden) { have?.remove(); return; }
+  if (have) return;
+  const d = document.createElement("div"); d.id = "trustBar"; d.className = "note warn trustbar"; d.setAttribute("role", "status");
+  d.innerHTML = `${esc(t.text)} <button class="linkbtn" id="trustYes">Trust this folder</button> <button class="linkbtn" id="trustNo">Not now</button>`;
+  col.prepend(d);
+  $("#trustYes", d).onclick = async () => {
+    if (!await ask({title: "Trust this folder?", text: `Its ${t.files.join(" and ")} will run commands and skip approval questions in every chat in ${cur.view.workdir}. Only trust folders you made or know.`, ok: "Trust"})) return;
+    try { await post("/api/trust", {root: cur.view.workdir, action: "trust"}); cur.view.trust = null; d.remove(); toast("Folder trusted. New messages use its hooks and rules."); } catch (e) { toast(e.message); }
+  };
+  $("#trustNo", d).onclick = () => { cur.trustHidden = true; d.remove(); };
 }
 // ---- Server-Sent Events: the open chat's events pushed as they happen
 function startStream(cur) {

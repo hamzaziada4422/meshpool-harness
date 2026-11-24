@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 from meshpool_harness import config as C
 from meshpool_harness.agent import brand as B
@@ -1285,6 +1286,28 @@ def _notices(agent, mcp) -> list[str]:
     return out
 
 
+def _trust_step(term: "Terminal", wd: str, interactive: bool) -> None:
+    """A folder with its own hooks or allow rules is asked about once; until it is trusted they are ignored."""
+    from meshpool_harness import trust as TR
+    files = TR.needs_prompt(wd)
+    if not files:
+        return
+    st = term.st
+    if not interactive:
+        print(f"meshpool: {TR.message(wd)} Run `meshpool trust` in this folder, or set MH_TRUST_PROJECT=1 for this run.",
+              file=sys.stderr)
+        return
+    pick = term.choose("Do you trust the files in this folder?",
+                       [_tilde(str(Path(wd).resolve())), f"It has {' and '.join(files)}, which can run commands on this",
+                        "computer or skip approval questions. Only trust folders you made or know."],
+                       ["Yes, trust this folder", "No, ignore its hooks and rules for now"], sel=1)
+    if pick == 0:
+        TR.trust(wd)
+        term.p(st.dim("  Trusted. Its hooks and rules are on. Undo with: meshpool trust --revoke"))
+    else:
+        term.p(st.dim("  Its hooks and allow rules are off. Trust it later with: meshpool trust"))
+
+
 def main(workdir: str | None = None, prompt: str | None = None, auto: bool = False, resume: bool = False,
          session: str | None = None, no_mcp: bool = False, first: str | None = None, onboarded: bool = False,
          json_out: bool = False) -> int:
@@ -1307,6 +1330,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         elif not ask_key():
             term.p(st.red(f"No API key yet. Run meshpool login, or add MESHPOOL_API_KEY=... to {C.config_path()}"))
             return 1
+    _trust_step(term, wd, interactive=prompt is None and sys.stdin.isatty())
     # The terminal runs MeshPool Code, or the official Codex when it is set as the default.
     hid = HR.default_for("code")
     try:

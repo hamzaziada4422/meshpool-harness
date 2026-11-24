@@ -6,7 +6,8 @@
                  {"PreToolUse": [{"matcher": "bash", "command": "./check.sh"}], "PostToolUse": [...],
                   "UserPromptSubmit": [...], "Stop": [...], "SessionStart": [...]}
                  The command gets the event as JSON on stdin. For PreToolUse and UserPromptSubmit, exit code 2 blocks
-                 and what it printed to stderr goes back to the agent (or the user).
+                 and what it printed to stderr goes back to the agent (or the user). The project's hooks.json runs
+                 only after the user trusts the folder (trust.py); the user's own always runs.
   commands       /name from <project>/.meshpool/commands/name.md or ~/.meshpool/commands/name.md. $ARGUMENTS (and
                  $1, $2) are filled from what follows the name.
   mentions       @path in a message attaches that file (or lists that folder) so no read call is needed.
@@ -87,8 +88,13 @@ def instruction_text(root: Path) -> str:
 
 # ---------------------------------------------------------------- hooks
 def hooks(root: Path) -> dict:
+    """The user's own hooks, plus the project's when the user trusts the folder (see trust.py)."""
+    from meshpool_harness import trust as TR
     out: dict = {e: [] for e in EVENTS}
-    for f in (C.home() / "hooks.json", Path(root) / ".meshpool" / "hooks.json"):
+    files = [C.home() / "hooks.json"]
+    if TR.is_trusted(root):
+        files.append(Path(root) / ".meshpool" / "hooks.json")
+    for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):

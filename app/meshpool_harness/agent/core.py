@@ -727,15 +727,19 @@ _DESTRUCTIVE = re.compile(
 def _rules(root) -> dict:
     """Saved allow and deny rules: ~/.meshpool/permissions.json and <project>/.meshpool/permissions.json, each
     {"allow": [...], "deny": [...]}. A rule is a tool name ("edit", "mcp__browser__ui_audit"), or "bash:" and a command
-    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's."""
+    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's, and its allow rules count only once the user trusts the folder (trust.py)."""
     out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
            "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
-    for f in (C.home() / "permissions.json", Path(root) / ".meshpool" / "permissions.json"):
+    from meshpool_harness import trust as TR
+    trusted = TR.is_trusted(root)
+    for f, own in ((C.home() / "permissions.json", True), (Path(root) / ".meshpool" / "permissions.json", trusted)):
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         for k in out:
+            if k == "allow" and not own:               # a stranger's repo may not pre-approve its own commands
+                continue
             out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
     return out
 

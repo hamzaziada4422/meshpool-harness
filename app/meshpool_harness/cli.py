@@ -118,7 +118,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust"}
 
 
 def _agent_parser():
@@ -182,6 +182,32 @@ def _no_console() -> bool:
         return not ctypes.windll.kernel32.GetConsoleWindow()
     except Exception:  # noqa: BLE001
         return False
+
+
+def _trust_cli(args: list) -> int:
+    from meshpool_harness import trust as TR
+    ap = argparse.ArgumentParser(prog="meshpool trust", description="Let a folder's own hooks and allow rules "
+                                 "(.meshpool/hooks.json, .meshpool/permissions.json) run. Folders are not trusted "
+                                 "until you say so.")
+    ap.add_argument("path", nargs="?", default=".", help="the folder (default: this one)")
+    ap.add_argument("--revoke", action="store_true", help="stop trusting the folder")
+    ap.add_argument("--list", action="store_true", help="list trusted folders")
+    a = ap.parse_args(args)
+    if a.list:
+        for f in TR.folders():
+            print(f)
+        return 0
+    root = Path(a.path).expanduser().resolve()
+    if not root.is_dir():
+        print(f"Folder not found: {root}")
+        return 1
+    if a.revoke:
+        print(f"No longer trusted: {root}" if TR.revoke(root) else f"{root} was not trusted.")
+        return 0
+    TR.trust(root)
+    risky = TR.risky_files(root)
+    print(f"Trusted: {root}" + (f" (its {' and '.join(risky)} now apply)" if risky else ""))
+    return 0
 
 
 def main(argv=None):
@@ -260,6 +286,8 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "trust":                     # meshpool trust [path] [--revoke] [--list]
+        return _trust_cli(argv[1:])
     if argv[0] == "run-due":
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)

@@ -1226,7 +1226,7 @@ class Session:
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
-                "mcp": self.mcp.status() if self.mcp else None}
+                "mcp": self.mcp.status() if self.mcp else None, "trust": _trust_note(self.workdir)}
 
     def close(self):
         self.stop()
@@ -1244,6 +1244,18 @@ def _default_style() -> str:
         return ST.default_id()
     except Exception:  # noqa: BLE001
         return "normal"
+
+
+def _trust_note(workdir: str) -> dict | None:
+    """When the folder has hooks or allow rules that are being ignored until the user trusts it."""
+    if not workdir:
+        return None
+    try:
+        from meshpool_harness import trust as TR
+        files = TR.needs_prompt(workdir)
+    except Exception:  # noqa: BLE001 - a status line must never break the chat view
+        return None
+    return {"files": files, "text": TR.message(workdir)} if files else None
 
 
 def create(body: dict) -> dict:

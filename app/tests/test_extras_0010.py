@@ -13,6 +13,13 @@ def _home(monkeypatch, tmp_path):
     (tmp_path / "home").mkdir(exist_ok=True)
 
 
+def _trusted(monkeypatch, tmp_path):
+    """A test folder the user has trusted, so its own .meshpool/hooks.json runs (see trust.py)."""
+    _home(monkeypatch, tmp_path)
+    from meshpool_harness import trust as TR
+    TR.trust(tmp_path)
+
+
 def test_instructions_come_from_home_parents_and_project(tmp_path, monkeypatch):
     _home(monkeypatch, tmp_path)
     (tmp_path / "home" / "MESHPOOL.md").write_text("Always reply in French.", encoding="utf-8")
@@ -28,7 +35,7 @@ def test_instructions_come_from_home_parents_and_project(tmp_path, monkeypatch):
 
 
 def test_hooks_block_and_report(tmp_path, monkeypatch):
-    _home(monkeypatch, tmp_path)
+    _trusted(monkeypatch, tmp_path)
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({
         "PreToolUse": [{"matcher": "bash:git push*", "command": "echo no pushing here 1>&2; exit 2"}],
@@ -60,7 +67,7 @@ def test_at_mentions_attach_files_inside_the_project_only(tmp_path):
 
 
 def test_hooks_can_decide_in_json_and_add_context(tmp_path, monkeypatch):
-    _home(monkeypatch, tmp_path)
+    _trusted(monkeypatch, tmp_path)
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({
         "PreToolUse": [{"matcher": "bash:ls*", "command": "echo '{\"decision\": \"allow\"}'"},
