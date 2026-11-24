@@ -92,6 +92,8 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   const wtRow = await p.waitForSelector("#wtBox li[data-wt]", {timeout: 15000}).then(() => true, () => false);
   check("Git panel lists the worktree with its branch and state", wtRow && /task-1[\s\S]*meshpool\/task-1[\s\S]*no changes/.test(await p.textContent("#wtBox")),
         wtRow ? await p.textContent("#wtBox") : "no rows");
+  check("Git panel offers Stage per file and lists recent commits", !!(await p.$("#wtPanelTest [data-gst]")) &&
+        /Recent commits/.test(await p.textContent("#wtPanelTest")));
   await p.click("#wtBox [data-wto]"); await p.waitForTimeout(400);
   check("New chat here starts a chat in the worktree", /\.meshpool[\\/]worktrees[\\/]task-1$/.test(await p.evaluate(() => S.draft.project)));
     await p.click("#wtBox [data-wtr]");

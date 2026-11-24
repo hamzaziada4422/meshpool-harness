@@ -385,8 +385,15 @@ def git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", check=False)
-    files = [{"status": line[:2].strip(), "path": line[3:]} for line in porcelain.splitlines() if line.strip()]
+    porcelain = _git(r, "status", "--porcelain", "--untracked-files=all", check=False)
+    files = [{"status": line[:2].strip(), "path": line[3:], "xy": line[:2],
+              "staged": line[0] not in (" ", "?"), "unstaged": line[1] != " " or line[0] == "?"}
+             for line in porcelain.splitlines() if line.strip()]
+    log = []
+    for line in _git(r, "log", "-15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s", check=False).splitlines():
+        p = line.split("\x1f")
+        if len(p) == 4:
+            log.append({"hash": p[0], "author": p[1], "when": p[2], "subject": p[3]})
     ahead = behind = 0
     try:
         ab = _git(r, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
@@ -397,6 +404,7 @@ def git_status(root: str) -> dict:
     remote = _git(r, "remote", "get-url", "origin", check=False).strip()
     branches = [b.strip().lstrip("* ").strip() for b in _git(r, "branch", "--format=%(refname:short)", check=False).splitlines() if b.strip()]
     return {"repo": True, "git": True, "top": top, "branch": branch, "files": files[:500], "dirty": len(files),
+            "staged": sum(1 for f in files if f["staged"]), "log": log,
             "ahead": ahead, "behind": behind, "upstream": upstream, "remote": remote, "branches": branches[:200],
             "github": _github_slug(remote)}
 
@@ -429,6 +437,20 @@ def git_action(root: str, body: dict) -> dict:
             _git(r, "switch", "-c", name)
         else:
             _git(r, "switch", name)
+    elif act in ("stage", "unstage"):
+        paths = [str(p) for p in (body.get("paths") or []) if isinstance(p, str) and p.strip()]
+        if not paths:
+            raise ValueError("Choose a file.")
+        for p in paths:                                   # files of this repository only, never an option
+            q = (r / p).resolve()
+            if p.startswith("-") or not (q == r.resolve() or r.resolve() in q.parents):
+                raise ValueError(f"{p} is not a file in this project.")
+        if act == "stage":
+            _git(r, "add", "-A", "--", *paths)
+        elif _git(r, "rev-parse", "--verify", "-q", "HEAD", check=False).strip():
+            _git(r, "reset", "-q", "HEAD", "--", *paths)
+        else:                                             # no commit yet: take them out of the index
+            _git(r, "rm", "-r", "-q", "--cached", "--", *paths)
     elif act == "commit":
         msg = (body.get("message") or "").strip()
         if not msg:
@@ -437,7 +459,11 @@ def git_action(root: str, body: dict) -> dict:
         if _git(r, "diff", "--name-only", "--diff-filter=U", check=False).strip() or (top / ".git" / "MERGE_HEAD").exists():
             raise ValueError("This repository is in the middle of a merge with conflicts. Resolve the conflicts "
                              "(look for <<<<<<< in the files), then commit.")
-        _git(r, "add", "-A", "--", ".")          # this project's folder only, not the rest of a larger repository
+        if body.get("staged_only"):               # what was staged, nothing else
+            if not _git(r, "diff", "--cached", "--name-only", check=False).strip():
+                raise ValueError("Nothing is staged. Stage some files first, or use Commit all.")
+        else:
+            _git(r, "add", "-A", "--", ".")      # this project's folder only, not the rest of a larger repository
         _git(r, "-c", "user.name=" + (_git(r, "config", "user.name", check=False).strip() or "Meshpool"),
              "-c", "user.email=" + (_git(r, "config", "user.email", check=False).strip() or "meshpool@localhost"),
              "commit", "-m", msg)
