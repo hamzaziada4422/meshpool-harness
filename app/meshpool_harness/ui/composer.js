@@ -52,8 +52,17 @@ function plusMenu(anchor) {
     {sep: true},
     {label: "Skills", icon: ICON.skill, sub: skills.length ? skills : [{label: "No skills yet", fn: () => openSettings("skills")}]},
     {label: "Plugins", icon: ICON.plug, sub: [...conns, ...(conns.length ? [{sep: true}] : []), {label: "Manage plugins", icon: ICON.gear, fn: () => goPage("plugins")}]},
+    ...(!S.cur && S.draft.project ? [{label: "Work in a new worktree", icon: ICON.branch, desc: "Its own checkout and branch, so this task never edits the main one", fn: newWorktree}] : []),
     ...(!S.cur && S.view !== "project" ? [{sep: true}, {label: S.draft.project ? "Change folder" : "Work in a folder", icon: ICON.folder, desc: S.draft.project ? projName(S.draft.project) : "", fn: chooseDraftFolder}, ...(S.draft.project ? [{label: "Don’t use a folder", icon: ICON.x, fn: () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); }}] : [])] : []),
   ], {cls: "plusmenu", up: true});
+}
+
+async function newWorktree() {
+  try {
+    const w = await post("/api/worktree", {root: S.draft.project, action: "create"});
+    S.draft.project = w.path; renderTop(); renderBar(); if (!S.cur && S.view === "chat") renderHero();
+    toast(`New worktree ${w.name} on branch ${w.branch}${w.copied?.length ? ` (copied ${w.copied.join(", ")})` : ""}. This chat works there.`, 5000);
+  } catch (e) { toast(e.message, 5000); }
 }
 
 /* ---------- writing styles: how Meshpool words its replies; per chat, new chats start with the default ---------- */

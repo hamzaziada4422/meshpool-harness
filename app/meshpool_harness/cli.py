@@ -118,7 +118,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree"}
 
 
 def _agent_parser():
@@ -154,6 +154,8 @@ def _agent_parser():
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("-w", "--worktree", nargs="?", const="", default=None, metavar="NAME",
+                    help="work in a new git worktree of this repo (.meshpool/worktrees/NAME on branch meshpool/NAME)")
     ap.add_argument("--effort", choices=["auto", "low", "medium", "high"], help="how hard the model thinks (auto: Meshpool decides)")
     from meshpool_harness import __version__
     ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
@@ -185,6 +187,38 @@ def _no_console() -> bool:
         return not ctypes.windll.kernel32.GetConsoleWindow()
     except Exception:  # noqa: BLE001
         return False
+
+
+def _worktree_cli(args: list) -> int:
+    from meshpool_harness import worktrees as WT
+    ap = argparse.ArgumentParser(prog="meshpool worktree", description="Git worktrees Meshpool makes for tasks.")
+    ap.add_argument("action", choices=["list", "add", "remove"])
+    ap.add_argument("name", nargs="?", default="")
+    ap.add_argument("--force", action="store_true", help="remove even with uncommitted changes (commits stay on the branch)")
+    a = ap.parse_args(args)
+    try:
+        if a.action == "list":
+            rows = WT.listing(os.getcwd())
+            for w in rows:
+                flags = [f for f, on in (("uncommitted changes", w.get("dirty")),
+                                         (f"{w.get('unpushed')} unpushed", w.get("unpushed"))) if on]
+                print(f"{w['name']:<20} {w['branch']:<28} {', '.join(flags) or 'clean'}")
+            if not rows:
+                print("No worktrees. Start one with: meshpool -w [name]")
+        elif a.action == "add":
+            w = WT.create(os.getcwd(), a.name)
+            print(f"{w['path']} (branch {w['branch']})")
+        else:
+            if not a.name:
+                print("Usage: meshpool worktree remove NAME [--force]")
+                return 1
+            root = WT.repo_root(os.getcwd())
+            r = WT.remove(root / WT.DIR / a.name, force=a.force)
+            print(f"Removed {r['removed']}" + ("" if r["branch_deleted"] else f"; branch {r['branch']} kept"))
+    except WT.WorktreeError as e:
+        print(f"meshpool: {e}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def _trust_cli(args: list) -> int:
@@ -254,6 +288,16 @@ def main(argv=None):
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.effort:
             os.environ["MH_EFFORT"] = a.effort
+        if a.worktree is not None:
+            from meshpool_harness import worktrees as WT
+            try:
+                w = WT.create(a.dir or os.getcwd(), a.worktree)
+            except WT.WorktreeError as e:
+                print(f"meshpool: {e}", file=sys.stderr)
+                return 1
+            print(f"Working in {w['path']} on branch {w['branch']}" + (
+                f" (copied {', '.join(w['copied'])})" if w["copied"] else ""), file=sys.stderr)
+            a.dir = w["path"]
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
         if a.permission_mode:
@@ -293,6 +337,8 @@ def main(argv=None):
         return connect_cli.disconnect(argv[1])
     if argv[0] == "trust":                     # meshpool trust [path] [--revoke] [--list]
         return _trust_cli(argv[1:])
+    if argv[0] == "worktree":                  # meshpool worktree list | add [name] | remove NAME [--force]
+        return _worktree_cli(argv[1:])
     if argv[0] == "run-due":
         from meshpool_harness import scheduler_os as SO
         print(f"ran {SO.run_due()} scheduled task(s)", flush=True)
