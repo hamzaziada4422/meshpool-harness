@@ -781,3 +781,15 @@ def test_a_cleared_call_limit_means_the_default(tmp_path, monkeypatch):
     C.write({"MH_MAX_INFLIGHT": ""})                               # the user cleared the field since
     GW._CFG["t"] = 0
     assert GW._max_inflight() == 4
+
+
+def test_stale_check_tolerates_agents_without_chat_messages(tmp_path, monkeypatch):
+    """Pi and ACP agents keep messages = [None]: the stale check must not raise once session.json exists."""
+    import types
+    from meshpool_harness.ui import agent_api as API
+    monkeypatch.setattr(API, "SESSIONS", tmp_path)
+    (tmp_path / "s1").mkdir()
+    (tmp_path / "s1" / "session.json").write_text("{}")
+    s = types.SimpleNamespace(state="idle", pendings=None, id="s1", _saved_mtime=0.0,
+                              agent=types.SimpleNamespace(messages=[None]))
+    assert API._stale(s) is False
