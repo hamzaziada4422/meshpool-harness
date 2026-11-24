@@ -162,3 +162,17 @@ def test_work_section_file_keeps_the_attribution_comment():
     text = (d / "prompt-work.md").read_text(encoding="utf-8")
     assert text.startswith("<!--") and "Apache License, Version 2.0" in text and "prompt-core.md" in text
     assert "not sent to the model" in text
+
+
+def test_office_direct_switch_allows_hand_built_files_and_says_so(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    a = _work(tmp_path)
+    hand = {"command": ["bash", "-lc", "python3 -c 'from openpyxl import Workbook; wb = Workbook(); wb.save(\"b.xlsx\")'"]}
+    assert a._engine_only("shell", hand)                          # default: the engines own workbooks
+    assert "not python-docx, openpyxl or python-pptx by hand" in a.messages[0]["content"]
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    (tmp_path / "d").mkdir()
+    b = _work(tmp_path / "d")
+    assert b._engine_only("shell", hand) == ""
+    sysmsg = b.messages[0]["content"]
+    assert "write it yourself in one Python script" in sysmsg and "by hand" not in sysmsg

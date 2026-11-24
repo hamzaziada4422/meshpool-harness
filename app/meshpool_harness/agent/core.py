@@ -86,6 +86,19 @@ def _lean_work_on() -> bool:
     return os.environ.get("MH_LEAN_WORK", "1") != "0"
 
 
+def _office_direct_on() -> bool:
+    """MH_OFFICE_DIRECT=1 (off until measured): a lean Work chat does small office-file jobs itself with python-docx,
+    openpyxl or python-pptx, as Codex does, instead of the office engines. office1 (bench3 office, 7 tasks x2): lean
+    Work cost 1.70x Codex, all of it in the nested sheets/slides engines (15-31 calls each where Codex took 5-14)."""
+    return os.environ.get("MH_OFFICE_DIRECT", "0") == "1"
+
+
+OFFICE_DIRECT_RULE = ("- For a small office-file job (edit an existing .docx, .xlsx or .pptx; one sheet with formulas; a "
+                      "chart; a few slides), write it yourself in one Python script with python-docx, openpyxl or "
+                      "python-pptx, save it, then reopen the file to check what the request asks for. Use office_task "
+                      "for a full deck, a multi-tab financial model or a styled report, or when those libraries are "
+                      "not installed.")
+
 LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three
 
 
@@ -97,7 +110,10 @@ def _codex_prompt(lean: bool = False, work: bool = False) -> str:
     if work:
         try:
             add = (C.APP / "defaults" / "engines" / "codex" / "prompt-work.md").read_text(encoding="utf-8")
-            text += "\n\n" + re.sub(r"\A\s*<!--.*?-->\s*", "", add, count=1, flags=re.S).rstrip()
+            add = re.sub(r"\A\s*<!--.*?-->\s*", "", add, count=1, flags=re.S).rstrip()
+            if _office_direct_on():
+                add = re.sub(r"^- To make a \.docx.*$", lambda _m: OFFICE_DIRECT_RULE, add, count=1, flags=re.M)
+            text += "\n\n" + add
         except OSError:
             pass
     return text
@@ -3964,6 +3980,8 @@ class Agent:
         make_spreadsheet, office_task): they carry the house style and the checks. A command or file that builds one
         by hand is not run; the reply says which tool to use instead. "" when the call is fine."""
         if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit", "shell", "apply_patch"):
+            return ""
+        if _office_direct_on() and self._lean():     # MH_OFFICE_DIRECT=1: small office jobs are done by hand
             return ""
         cmd = args.get("command")                    # shell (Codex style, MH_LEAN_WORK=1) takes an argv list
         text = " ".join(str(v or "") for v in (" ".join(map(str, cmd)) if isinstance(cmd, list) else cmd,
