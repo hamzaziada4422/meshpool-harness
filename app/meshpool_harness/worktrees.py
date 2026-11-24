@@ -170,6 +170,7 @@ def create(path, name: str = "", base: str = "", sparse: list | None = None) -> 
     copied = _include(root, dest)
     keep = os.environ.get("MH_WORKTREE_KEEP", "")
     pruned = prune(root, int(keep)) if keep.isdigit() and int(keep) > 0 else []
+    _hook(root, "WorktreeCreate", {"worktree_name": name, "worktree_path": str(dest), "branch": branch, "base": ref})
     return {"name": name, "path": str(dest), "branch": branch, "repo": str(root), "copied": copied, "base": ref,
             "sparse": sparse, "pruned": pruned}
 
@@ -189,6 +190,34 @@ def _state(path: Path, branch: str) -> dict:
              path, check=False)                       # --exclude for --branches takes the name without refs/heads/
     lone = int(r.stdout.strip() or 0) if r.returncode == 0 else 0
     return {"dirty": dirty, "unpushed": lone}
+
+
+def _hook(root: Path, event: str, payload: dict) -> None:
+    """WorktreeCreate and WorktreeRemove hooks (yours, and the project's once the folder is trusted). A hook that
+    fails never undoes the worktree."""
+    try:
+        from meshpool_harness.agent import extras as EX
+        EX.run_hooks(root, event, payload, timeout=300)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def carry(src, dest) -> str:
+    """Moves the uncommitted changes (new files too) of one checkout to another checkout of the same repository,
+    through git stash, which all worktrees share. Returns "" when done or nothing to move; otherwise why it stopped.
+    When the changes do not apply cleanly they stay safe in the stash (git stash list)."""
+    src, dest = Path(src), Path(dest)
+    if not _git(["status", "--porcelain"], src).stdout.strip():
+        return ""
+    nohooks = ["-c", "core.hooksPath=/dev/null"]
+    r = _git(nohooks + ["stash", "push", "--include-untracked", "-m", "meshpool handoff"], src, check=False)
+    if r.returncode:
+        return "could not set the changes aside: " + (r.stderr or r.stdout).strip()[:200]
+    r = _git(nohooks + ["stash", "pop"], dest, check=False)
+    if r.returncode:
+        return ("the changes did not apply cleanly there, so they are kept in git's stash (git stash list, then git "
+                "stash pop where you want them): " + (r.stderr or r.stdout).strip()[:200])
+    return ""
 
 
 def listing(path) -> list[dict]:
@@ -240,4 +269,6 @@ def remove(path, force: bool = False) -> dict:
     gone = False
     if item.get("branch"):                               # -d refuses a branch whose commits would be lost
         gone = _git(["branch", "-d", item["branch"]], root, check=False).returncode == 0
+    _hook(root, "WorktreeRemove", {"worktree_name": item["name"], "worktree_path": str(p),
+                                   "branch": item.get("branch"), "branch_deleted": gone})
     return {"removed": item["name"], "branch_deleted": gone, "branch": item.get("branch")}

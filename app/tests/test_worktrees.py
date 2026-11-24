@@ -134,3 +134,39 @@ def test_a_worktree_chat_asks_before_touching_the_main_checkout(repo, tmp_path, 
         assert not a._permit("bash", {"command": cmd})[0], cmd
     assert a._permit("bash", {"command": f"ls {w['path']}"})[0]           # its own folder is fine
     assert a._permit("bash", {"command": "make build"})[0]
+
+
+def test_carry_moves_uncommitted_changes_to_another_checkout(repo):
+    w = WT.create(repo, "hand")
+    (repo / "a.txt").write_text("changed")
+    (repo / "new.txt").write_text("new file")
+    assert WT.carry(repo, w["path"]) == ""
+    assert Path(w["path"], "a.txt").read_text() == "changed" and Path(w["path"], "new.txt").read_text() == "new file"
+    assert (repo / "a.txt").read_text() == "a" and not (repo / "new.txt").exists()   # the source is clean now
+    assert WT.carry(repo, w["path"]) == ""                                              # nothing to move: fine
+
+
+def test_carry_that_conflicts_keeps_the_changes_in_the_stash(repo):
+    w = WT.create(repo, "clash")
+    Path(w["path"], "a.txt").write_text("theirs")                     # uncommitted there, so the pop cannot apply
+    (repo / "a.txt").write_text("mine")
+    why = WT.carry(repo, w["path"])
+    assert "stash" in why
+    assert "meshpool handoff" in subprocess.run(["git", "stash", "list"], cwd=repo, capture_output=True,
+                                                text=True).stdout                      # nothing lost
+
+
+def test_worktree_hooks_run_after_create_and_remove(repo, tmp_path, monkeypatch):
+    home = tmp_path / "mphome"
+    home.mkdir()
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    log = tmp_path / "hooklog.txt"
+    (home / "hooks.json").write_text(json.dumps({
+        "WorktreeCreate": [{"command": f"cat >> {log}; echo >> {log}"}],
+        "WorktreeRemove": [{"command": f"cat >> {log}; echo >> {log}"}]}))
+    w = WT.create(repo, "hooked")
+    WT.remove(w["path"])
+    events = [json.loads(x) for x in log.read_text().splitlines() if x.strip()]
+    assert [e["event"] for e in events] == ["WorktreeCreate", "WorktreeRemove"]
+    assert events[0]["worktree_path"] == w["path"] and events[0]["branch"] == "meshpool/hooked"
+    assert events[1]["branch_deleted"] is True

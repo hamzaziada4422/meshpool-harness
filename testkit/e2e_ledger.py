@@ -132,6 +132,37 @@ check("a run that cannot get a worktree does not start, and says why",
 for x in (t, t2):
     call("/api/assistant", {"action": "task_delete", "id": x.get("id")})
 
+# ---- handoff: a chat moves to a new worktree, with its uncommitted changes, and back
+with open(os.path.join(G, "app.py"), "w") as f:
+    f.write("x = 2  # work in progress\n")
+v = call("/api/agent", {"workdir": G, "kind": "cowork", "mode": "auto"})
+hid = v.get("id")
+def idle(sid):
+    for _ in range(240):
+        if call(f"/api/agent/{sid}?since=1000000").get("state") == "idle":
+            return
+        time.sleep(0.5)
+
+
+turn(hid, "show python code")
+idle(hid)
+r = call(f"/api/agent/{hid}/checkout", {"to": "worktree", "carry": True})
+wd = r.get("workdir") or ""
+check("a chat moves to a new worktree", re.search(r"[\\/]\.meshpool[\\/]worktrees[\\/]task-\d+$", wd), r)
+check("its uncommitted changes go with it, and the checkout is left clean",
+      wd and open(os.path.join(wd, "app.py")).read() == "x = 2  # work in progress\n" and
+      open(os.path.join(G, "app.py")).read() == "x = 1\n", r.get("moved"))
+users = [e for e in call(f"/api/agent/{hid}?since=0").get("events", []) if e.get("type") == "user"]
+check("the conversation stays one chat", len(users) == 1 and "show python code" in users[0].get("text", ""), users)
+turn(hid, "show python code")
+idle(hid)
+check("the next turn runs in the worktree", call(f"/api/agent/{hid}?since=1000000").get("workdir") == wd)
+check("moving to a worktree twice is refused", call(f"/api/agent/{hid}/checkout", {"to": "worktree"}).get("_http") == 400)
+r = call(f"/api/agent/{hid}/checkout", {"to": "main", "carry": True})
+check("and back to the main checkout, changes included",
+      os.path.realpath(r.get("workdir") or "") == os.path.realpath(G) and
+      open(os.path.join(G, "app.py")).read() == "x = 2  # work in progress\n", r)
+
 ok = sum(1 for _, x in RESULTS if x)
 print(f"\n{ok}/{len(RESULTS)} passed")
 sys.exit(0 if ok == len(RESULTS) else 1)

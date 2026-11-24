@@ -1003,6 +1003,11 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/checkout", u.path)   # hand the chat to a worktree or back
+            if m:
+                s_, b = A.get(m.group(1)), self._json()
+                moved = s_.move_checkout(str(b.get("to") or ""), bool(b.get("carry")))
+                return self._send(200, dict(s_.view(int(b.get("since", 10**9))), moved=moved))
             m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()

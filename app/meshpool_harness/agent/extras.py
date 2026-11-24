@@ -29,7 +29,8 @@ RULE_DIRS = (".meshpool/rules", ".claude/rules", ".cursor/rules")
 OTHER = (".cursorrules", ".windsurfrules", ".github/copilot-instructions.md", ".clinerules")   # other agents' files
 MAX_FILE, MAX_ALL = 20000, 40000
 EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SessionStart", "SessionEnd",
-          "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Notification")
+          "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Notification", "WorktreeCreate",
+          "WorktreeRemove")
 
 
 # ---------------------------------------------------------------- instructions

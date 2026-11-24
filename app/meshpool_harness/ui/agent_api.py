@@ -331,7 +331,7 @@ class Session:
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / "checkpoints")
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / (read_meta(self.id).get("cp_dir") or "checkpoints"))
         if self.harness["type"] in ("acp", "pi"):
             self.state = "idle"
             name = self.harness["name"]
@@ -677,6 +677,51 @@ class Session:
         write_meta(self.id, routed=hid, handoff=hid)
         self.emit({"type": "status", "using": True, "text": f"Using {_short_harness(new['name'])}",
                    "handoff": {"harness": hid, "reason": why}})
+
+    def move_checkout(self, to: str, carry: bool = False) -> dict:
+        """Hand this chat over to a new worktree of its repository (to="worktree") or back to the main checkout
+        (to="main"). The conversation goes with it; carry=True moves the uncommitted changes too. Undo history
+        starts again in the new folder."""
+        from meshpool_harness import worktrees as WT
+        if self.state in ("working", "waiting"):
+            raise ValueError("Wait for the current reply to finish (or stop it) before moving this chat.")
+        own = WT.owner(self.workdir)
+        if to == "worktree":
+            if own:
+                raise ValueError("This chat already works in a worktree.")
+            try:
+                w = WT.create(self.workdir)
+            except WT.WorktreeError as e:
+                raise ValueError(str(e))
+            dest, what = w["path"], f"a new worktree, {w['name']}, on branch {w['branch']}"
+        elif to == "main":
+            if not own:
+                raise ValueError("This chat already works in the main checkout.")
+            dest, what = str(own[0]), "the main checkout"
+        else:
+            raise ValueError("to is worktree or main")
+        note = ""
+        if carry:
+            try:
+                why = WT.carry(self.workdir, dest)
+            except WT.WorktreeError as e:
+                why = str(e)
+            note = f" The uncommitted changes did not move: {why}." if why else " The uncommitted changes moved with it."
+        old = self.workdir
+        self.workdir = str(Path(dest).resolve())
+        self.handoff(self.harness["id"], f"Moved to {what}")
+        from meshpool_harness.checkpoints import Checkpoints
+        import hashlib
+        cp_dir = "checkpoints-" + hashlib.sha1(self.workdir.encode()).hexdigest()[:10]
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / cp_dir)
+        write_meta(self.id, cp_dir=cp_dir)
+        self.emit({"type": "status", "text": f"This chat now works in {what} ({self.workdir}).{note}"})
+        if hasattr(self.agent, "messages"):           # the agent knows where it is now
+            self.agent.messages.append({"role": "user", "content": f"\u200b[Meshpool] The user moved this chat from "
+                                        f"{old} to {self.workdir} ({what}). Work only there from now on.{note}"})
+            self.agent.messages.append({"role": "assistant", "content": "Understood."})
+            self.agent.save()
+        return {"workdir": self.workdir, "note": note.strip()}
 
     # ---- 0.0.10: checks, receipts, memory tracking, learning and insights around a turn. None of it may slow or
     # fail a turn: the slow parts run on a thread, every call is guarded.

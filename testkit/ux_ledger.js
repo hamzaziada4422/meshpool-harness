@@ -99,6 +99,18 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.waitForFunction(() => /Worktrees \(0\)/.test(document.querySelector("#wtBox")?.textContent || ""), null, {timeout: 15000}).catch(() => {});
   check("Remove asks, then deletes the worktree folder", /Worktrees \(0\)/.test(await p.textContent("#wtBox")) && !fs.existsSync(wdir));
   await p.evaluate(() => document.getElementById("wtPanelTest")?.remove());
+  // the chat menu hands an open chat to a new worktree
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(500);
+  await send("show python code");
+  await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 60000}).catch(() => {});
+  await p.evaluate(() => chatMenu({type: "click", clientX: 200, clientY: 200, currentTarget: document.querySelector("#ttl") || document.body, preventDefault() {}, stopPropagation() {}}));
+  await p.waitForTimeout(300);
+  const items = await p.$$eval("#ctx .mi", xs => xs.map(x => x.textContent));
+  check("the chat menu offers Move to a new worktree", items.some(t => /Move to a new worktree/.test(t)), items.join(" | "));
+  await p.keyboard.press("Escape");
+  await p.evaluate(() => moveCheckout(S.cur.view.id, "worktree", false)); await p.waitForTimeout(1500);
+  check("Move to a new worktree moves the open chat", /\.meshpool[\\/]worktrees[\\/]task-\d+$/.test(await p.evaluate(() => S.cur?.view?.workdir || "")),
+        await p.evaluate(() => S.cur?.view?.workdir));
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

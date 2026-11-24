@@ -520,10 +520,26 @@ function chatMenu(e) {
     {label: inPj ? "Move to project" : "Add to project", icon: ICON.stack, sub: projects},
     {label: "Export chat", icon: ICON.share, fn: () => exportMenu({type: "click", currentTarget: $("#shareBtn") || $("#ttl")})},
     {label: "Show every step", icon: ICON.list, checked: !!S.steps, kbd: `${MOD}E`, fn: toggleSteps},
+    ...(v.scratch ? [] : [/[\\/]\.meshpool[\\/]worktrees[\\/][^\\/]+$/.test(v.workdir || "")
+      ? {label: "Move back to the main checkout", icon: ICON.branch, sub: [
+          {label: "Bring the uncommitted changes", fn: () => moveCheckout(v.id, "main", true)},
+          {label: "Leave them in the worktree", fn: () => moveCheckout(v.id, "main", false)}]}
+      : {label: "Move to a new worktree", icon: ICON.branch, sub: [
+          {label: "Bring the uncommitted changes", desc: "Your checkout is left clean", fn: () => moveCheckout(v.id, "worktree", true)},
+          {label: "Leave them here", fn: () => moveCheckout(v.id, "worktree", false)}]}]),
     {sep: true},
     {label: "Archive", icon: ICON.archive, key: "a", kbd: "A", fn: () => threadAct(v.id, "archive")},
     {label: "Delete", icon: ICON.trash, danger: true, key: "d", kbd: "D", fn: () => confirmDelete(v.id)},
   ]);
+}
+/* Hand the open chat to a new worktree of its repository, or back to the main checkout; the conversation goes along. */
+async function moveCheckout(id, to, carry) {
+  try {
+    const r = await post(`/api/agent/${id}/checkout`, {to, carry, since: 1e9});
+    if (S.cur?.view?.id === id) { S.cur.view.workdir = r.workdir; S.cur.view.turns = r.turns; }
+    renderTop(); renderBar();
+    toast((to === "main" ? "This chat now works in the main checkout." : "This chat now works in a new worktree.") + (r.moved?.note ? " " + r.moved.note : ""), 6000);
+  } catch (e) { toast(e.message, 6000); }
 }
 function renameTop() {
   const v = S.cur?.view, ttl = $("#ttl"); if (!v || !ttl) return;
