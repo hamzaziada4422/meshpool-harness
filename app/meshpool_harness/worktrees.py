@@ -77,9 +77,14 @@ def _include(root: Path, dest: Path) -> list[str]:
                 target = dest / rel
                 if target.exists():
                     continue
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(root / rel, target)
-                copied.append(rel)
+                if (root / rel).is_symlink():          # never follow a link out of the repo
+                    continue
+                try:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(root / rel, target)
+                    copied.append(rel)
+                except OSError:
+                    continue
     return copied
 
 

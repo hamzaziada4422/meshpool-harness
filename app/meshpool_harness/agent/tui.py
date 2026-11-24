@@ -361,7 +361,7 @@ class Terminal:
             if not self._text_open and self.interactive:
                 self.scroll([""])
             self._text(ev["text"])
-        elif t == "thought":                             # the model's reasoning: one dim line while it thinks
+        elif t == "thought" and not ev.get("final"):     # the model's reasoning: one dim line while it thinks
             self._thought = (getattr(self, "_thought", "") + str(ev.get("text") or ""))[-4000:]
             last = [x for x in self._thought.splitlines() if x.strip()]
             self._label = "Thinking: " + R.clip(last[-1].strip(), max(20, self.width - 30)) if last else "Thinking"

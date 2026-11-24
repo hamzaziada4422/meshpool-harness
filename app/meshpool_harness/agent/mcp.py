@@ -61,7 +61,8 @@ def load_config(path: Path | None = None) -> dict:
     if not isinstance(data, dict):
         return {}
     a, b = data.get("mcpServers"), data.get("servers")
-    if isinstance(a, dict) and isinstance(b, dict):
+    a, b = (a if isinstance(a, dict) else None), (b if isinstance(b, dict) else None)
+    if a is not None and b is not None:
         return {**b, **a}                      # a file that ended up with both keys: show every server
     return a or b or {}
 

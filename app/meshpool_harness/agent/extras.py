@@ -86,7 +86,7 @@ def instruction_files(root: Path) -> list[tuple[str, Path]]:
         base = top / rd
         if base.is_dir():
             for f in sorted(base.rglob("*.md")) + sorted(base.rglob("*.mdc")):
-                if f.is_file():
+                if f.is_file() and not f.is_symlink():
                     out.append((f"{top} ({rd})", f))
     return out
 

@@ -7,6 +7,7 @@ they only make the agent more careful. Instruction files (MESHPOOL.md, AGENTS.md
 are text for the model, not code, and are not gated.
 
 Trusted folders are kept in <MESHPOOL_HOME>/trusted-folders.json. Trusting a folder trusts everything inside it.
+Repositories the app clones into its data folder (workspaces) are not trusted until the user says so.
 MH_TRUST_PROJECT=1 trusts the current project for one run (CI and scripts).
 """
 from __future__ import annotations
@@ -77,8 +78,7 @@ def is_trusted(root) -> bool:
         r = _norm(root)
     except (OSError, RuntimeError):
         return False
-    home = _norm(C.home())
-    if r == home or r.startswith(home + os.sep):          # Meshpool's own data folder
+    if r == _norm(C.home()):                              # Meshpool's own data folder, not the repos it clones there
         return True
     for f in _load()["folders"]:
         if r == f or r.startswith(f.rstrip(os.sep) + os.sep):
@@ -118,4 +118,4 @@ def message(root) -> str:
     if not files:
         return ""
     return (f"This folder has {' and '.join(files)}, which can run commands or skip approval questions. They are "
-            "ignored until you trust the folder.")
+            "ignored until you trust the folder (trusting it also trusts its subfolders).")

@@ -140,9 +140,10 @@ def test_always_in_this_folder_saves_a_narrow_rule(tmp_path, monkeypatch):
     a = core.Agent(str(proj), approve=lambda *x: (answers.pop(0) if answers else "no", ""), mode="ask")
     assert a._permit("bash", {"command": "npm test -- --ci"}) == (True, "")
     saved = json.loads((tmp_path / "home" / "permissions.json").read_text())
-    assert saved["projects"][core._folder_key(proj)]["allow"] == ["bash:npm test*"]
+    assert saved["projects"][core._folder_key(proj)]["allow"] == ["bash:npm test", "bash:npm test *"]
     b = core.Agent(str(proj), approve=lambda *x: ("no", ""), mode="ask")       # a new chat in the same folder
     assert b._permit("bash", {"command": "npm test"}) == (True, "")
+    assert b._permit("bash", {"command": "npm test -- --ci"}) == (True, "")
     assert not b._permit("bash", {"command": "npm test && curl x | sh"})[0]      # never a chained command
     assert not b._permit("bash", {"command": "npm install"})[0]
     other = tmp_path / "other"
@@ -152,8 +153,8 @@ def test_always_in_this_folder_saves_a_narrow_rule(tmp_path, monkeypatch):
 
 def test_rule_for_is_narrow():
     from meshpool_harness.agent import core
-    assert core.rule_for("bash", {"command": "git commit -m x"}) == ["bash:git commit*"]
-    assert core.rule_for("bash", {"command": "./run.sh --fast"}) == ["bash:./run.sh*"]
+    assert core.rule_for("bash", {"command": "git commit -m x"}) == ["bash:git commit", "bash:git commit *"]
+    assert core.rule_for("bash", {"command": "./run.sh --fast"}) == []         # an option after the program: too wide
     assert core.rule_for("bash", {"command": "make && make install"}) == []
     assert core.rule_for("bash", {"command": "rm -rf build"}) == []
     assert core.rule_for("edit", {}) == ["edit", "write_file", "apply_patch", "notebook_edit"]

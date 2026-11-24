@@ -50,7 +50,8 @@ def add_history(cwd: str, text: str) -> None:
     f = _history_file()
     try:
         f.parent.mkdir(parents=True, exist_ok=True)
-        with f.open("a", encoding="utf-8") as fh:
+        fd = os.open(f, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as fh:
             fh.write(json.dumps({"cwd": os.path.realpath(cwd), "text": text, "ts": int(time.time())},
                                 ensure_ascii=False) + "\n")
         if f.stat().st_size > 4_000_000:                  # keep the newest half when the file grows large

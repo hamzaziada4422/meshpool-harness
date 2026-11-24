@@ -84,7 +84,8 @@ def test_thinking_streams_as_thought_events(tmp_path, monkeypatch):
     seen = []
     ag.emit = seen.append
     resp, streamed = ag._post("http://x/v1", "k", {"model": "m", "messages": []}, True)
-    assert [e["text"] for e in seen if e.get("type") == "thought"] == ["Let me think. "]
+    assert [e["text"] for e in seen if e.get("type") == "thought" and e.get("delta")] == ["Let me think. "]
+    assert [e["text"] for e in seen if e.get("type") == "thought" and e.get("final")] == ["Let me think. "]
     assert resp["choices"][0]["message"]["content"] == "Answer."
 
 

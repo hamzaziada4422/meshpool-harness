@@ -66,51 +66,104 @@ def read_only(cmd: str) -> bool:
     return True
 
 
-_GIT_LIST = {"branch": {"-a", "-r", "-v", "-vv", "--all", "--remotes", "--list", "-l", "--show-current", "--merged",
-                        "--no-merged", "--contains"},
-             "tag": {"-l", "--list", "-n"}, "remote": {"-v", "--verbose", "show", "get-url"}, "stash": {"list", "show"}}
-_GIT_PLAIN = {"status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog", "cat-file",
-              "ls-tree", "grep", "merge-base", "rev-list", "reflog"}
-_GIT_BAD_ARG = re.compile(r"^(--output|--ext-diff|--textconv|--exec|--upload-pack|--receive-pack|--config|-c$|-C$|"
-                          r"--git-dir|--work-tree|--open-files-in-pager)", re.I)
+# Allowlist, not blocklist (review H1, H2, M1, M8): a token is plain characters only, so no shell (bash, sh or
+# PowerShell) can expand it; every flag is one this subcommand is known to read with; paths stay in the project.
+_GIT_TOKEN = re.compile(r"^[A-Za-z0-9_.,/:=^~+%-]+$")
+_GIT_FLAGS = {
+    "status": {"-s", "--short", "-b", "--branch", "--porcelain", "--porcelain=v1", "--porcelain=v2", "-v", "--long",
+               "-uno", "-unormal", "-uall", "--untracked-files=no", "--untracked-files=normal",
+               "--untracked-files=all", "--ignored"},
+    "log": {"--oneline", "--graph", "--decorate", "--stat", "--shortstat", "--name-only", "--name-status", "-p",
+            "--patch", "--all", "--no-merges", "--merges", "--reverse", "--first-parent", "--abbrev-commit",
+            "--date=short", "--date=iso", "--date=relative", "--no-color", "--follow"},
+    "show": {"--stat", "--shortstat", "--name-only", "--name-status", "--oneline", "-s", "--no-patch", "-p",
+             "--patch", "--no-color", "--abbrev-commit"},
+    "diff": {"--stat", "--shortstat", "--numstat", "--name-only", "--name-status", "--cached", "--staged", "-w",
+             "--ignore-all-space", "--no-color", "--word-diff", "--summary", "--check"},
+    "blame": {"-w", "-s", "--porcelain", "-e"},
+    "rev-parse": {"--abbrev-ref", "--show-toplevel", "--short", "--verify", "--is-inside-work-tree", "--git-dir",
+                  "--show-prefix", "--symbolic-full-name"},
+    "ls-files": {"-m", "--modified", "-o", "--others", "--exclude-standard", "-d", "--deleted", "-s", "--stage",
+                 "-c", "--cached"},
+    "describe": {"--tags", "--always", "--long", "--abbrev=0", "--dirty"},
+    "shortlog": {"-s", "-n", "-sn", "-ns", "-e", "--summary", "--numbered", "--all"},
+    "rev-list": {"--count", "--all", "--max-count=1"},
+    "merge-base": {"--is-ancestor"},
+    "ls-tree": {"-r", "--name-only", "-l"},
+    "cat-file": {"-t", "-s", "-p"},
+    "branch": {"-a", "-r", "-v", "-vv", "--all", "--remotes", "--list", "-l", "--show-current", "--merged",
+               "--no-merged"},
+    "tag": {"-l", "--list"},
+    "remote": {"-v", "--verbose"},
+    "stash": set(),
+}
+_GIT_VALUE_FLAGS = ("-n", "--max-count=", "--since=", "--until=", "--author=", "-L", "-U", "--unified=",
+                    "--format=", "--pretty=")      # flags that carry a value, checked as plain tokens too
+_GIT_NO_POSITIONAL = {"branch", "tag", "remote", "status"}       # their positional words create or change things
+
+
+def _git_path_ok(tok: str) -> bool:
+    """A ref, range or path argument: never absolute, never from home, never climbing out with .."""
+    t = tok.split(":", 1)[-1] if ":" in tok and not tok.startswith(":") else tok
+    if tok.startswith(("/", "~", ":")) or t.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", tok):
+        return False
+    return ".." not in t.replace("...", "").split("/") if "/" in t else True
 
 
 def git_read_only(cmd: str) -> bool:
-    """True only for a single git command that reads the repository and cannot write, run another program or look
-    outside the project: status, log, diff, show and similar, and branch, tag, remote and stash in their listing forms.
-    The approval question is skipped for these, as other agents do. Anything unusual returns False (it asks)."""
-    import shlex
-    c = (cmd or "").strip()
-    if not c or re.search(r"[|;&<>`\n]|\$\(", c):
+    """True only for one git command that reads this repository: no shell expansion is possible (plain characters
+    only), every flag comes from a list of flags known to read, and no path leaves the project. Everything else
+    asks. The caller also checks the repo's own config (git_config_safe), since git status and diff can run
+    programs named there."""
+    w = (cmd or "").split()
+    if len(w) < 2 or w[0] != "git" or not all(_GIT_TOKEN.match(t) for t in w):
         return False
-    try:
-        w = shlex.split(c)
-    except ValueError:
-        return False
-    if len(w) < 2 or w[0] != "git":
-        return False
+    if any("%" in t and not t.startswith(("--format=", "--pretty=")) for t in w):
+        return False                                      # % only in a log format, never elsewhere
     rest = w[1:]
     if rest[0] == "--no-pager":
         rest = rest[1:]
-    if not rest:
+    if not rest or rest[0] not in _GIT_FLAGS:
         return False
     sub, args = rest[0], rest[1:]
-    if any(_GIT_BAD_ARG.match(a) for a in args):
-        return False
-    if sub == "grep" and any(a in ("-O", "--open-files-in-pager") for a in args):
-        return False
-    if sub == "reflog" and args and args[0] in ("expire", "delete"):
-        return False
-    if sub in _GIT_PLAIN:
+    if sub == "stash":                                    # only "git stash list"
+        return args == ["list"]
+    if sub == "tag" and not args:
         return True
-    ok = _GIT_LIST.get(sub)
-    if ok is None:
+    if sub == "remote":                                   # "git remote" and "git remote -v": no network
+        return all(a in _GIT_FLAGS["remote"] for a in args)
+    after_dashdash = False
+    for a in args:
+        if a == "--":
+            after_dashdash = True
+            continue
+        if a.startswith("-") and not after_dashdash:
+            if a in _GIT_FLAGS[sub] or (re.fullmatch(r"-\d{1,4}", a) and sub in ("log", "shortlog", "show")):
+                continue
+            if any(a.startswith(v) and len(a) > len(v) for v in _GIT_VALUE_FLAGS) and sub in ("log", "show", "diff",
+                                                                                                 "blame", "shortlog"):
+                continue
+            return False
+        if sub in _GIT_NO_POSITIONAL or not _git_path_ok(a):
+            return False
+    return True
+
+
+_GIT_RISKY_CONFIG = re.compile(r"(fsmonitor|pager|external|textconv|command|program|askpass|editor|proxy|hookspath|"
+                               r"^include|^includeif|^filter\.|^alias\.|^gpg\.|sshcommand)", re.I)
+
+
+def git_config_safe(root) -> bool:
+    """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
+    git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "config", "--local", "--name-only", "--list"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
         return False
-    if sub == "stash":                                    # a bare "git stash" saves and resets: it writes
-        return bool(args) and args[0] in ok
-    if sub == "remote":
-        return not args or args[0] in ok and len(args) <= 2
-    return all(a in ok or (a.startswith("-") and a in ok) for a in args) if args else True
+    if r.returncode not in (0, 1):
+        return False
+    return not any(_GIT_RISKY_CONFIG.search(k) for k in r.stdout.split())
 
 
 _PATCH_CMDS = ("apply_patch", "applypatch")
@@ -525,7 +578,8 @@ class Workspace:
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
         try:
-            head = p.open("rb").read(8192)
+            with p.open("rb") as fh:
+                head = fh.read(8192)
         except OSError as e:
             raise ToolError(f"could not read {path}: {e}")
         if b"\0" in head and not head.startswith((b"\xff\xfe", b"\xfe\xff")):   # binary (UTF-16 text has a BOM)

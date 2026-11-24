@@ -417,6 +417,7 @@ class Session:
             d.mkdir(parents=True, exist_ok=True)
             with self.lock:
                 evs = [{k: v for k, v in e.items() if k != "i"} for e in self.events if e.get("type") not in _SKIP
+                       and not e.get("delta")
                        and not (e.get("type") == "subagent" and e.get("kind") == "tool")][-3000:]   # live only
             run = bool(getattr(self, "_turn_open", False)) if running is None else running
             tmp = d / "transcript.json.tmp"
@@ -1213,7 +1214,7 @@ class Session:
         """The conversation goes back to before `turn`; files on disk are not touched."""
         idx = None
         if self.cp:
-            t = next((x for x in self.cp.turns() if x.get("n") == turn), None)
+            t = next((x for x in self.cp._turns() if x.get("n") == turn), None)   # turns() leaves message_index out
             idx = (t or {}).get("message_index")
         if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
             self.agent.messages = self.agent.messages[:idx]

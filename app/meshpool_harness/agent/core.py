@@ -807,6 +807,13 @@ def _folder_key(root) -> str:
 _CHAINED = re.compile(r"[;&|`<>\n]|\$\(")
 
 
+_WRAPPERS = {"env", "sudo", "doas", "time", "nohup", "xargs", "nice", "timeout", "watch", "exec", "eval", "command",
+             "builtin", "su", "ssh", "sh", "bash", "zsh", "fish", "dash", "pwsh", "powershell", "cmd", "npx", "uvx",
+             "pipx", "bunx", "dlx"}
+_INTERPRETERS = {"python", "python3", "py", "node", "deno", "bun", "ruby", "perl", "php", "java", "uv", "poetry",
+                 "pipenv"}
+
+
 def rule_for(name: str, args: dict) -> list[str]:
     """The narrow rules an "Always in this folder" answer saves: the command and its subcommand ("bash:npm test*"),
     the edit tools, or this one tool. Nothing for a chained, destructive or empty command."""
@@ -815,8 +822,21 @@ def rule_for(name: str, args: dict) -> list[str]:
         if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}):
             return []
         w = cmd.split()
-        keep = w[:2] if len(w) > 1 and re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]) else w[:1]
-        return ["bash:" + " ".join(keep) + "*"]
+        prog = w[0].rsplit("/", 1)[-1]
+        if prog in _WRAPPERS:                          # env, sudo, sh -c, xargs...: what they run is unknowable
+            return []
+        if prog in _INTERPRETERS:                      # python -m pytest, node build.js: keep the module or script
+            if len(w) > 2 and w[1] == "-m" and re.fullmatch(r"[\w.-]+", w[2]):
+                keep = w[:3]
+            elif len(w) > 1 and not w[1].startswith("-") and re.fullmatch(r"[\w./-]+", w[1]):
+                keep = w[:2]
+            else:
+                return []
+            return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
+        if len(w) > 1 and not re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]):
+            return []                                  # an option or a path after the program: too wide to guess
+        keep = w[:2] if len(w) > 1 else w[:1]
+        return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
     if name in ("edit", "write_file", "apply_patch", "notebook_edit"):
         return ["edit", "write_file", "apply_patch", "notebook_edit"]
     if name in ("bash_many",):
@@ -831,9 +851,12 @@ def save_folder_rules(root, rules: list[str]) -> list[str]:
     f = C.home() / "permissions.json"
     try:
         d = json.loads(f.read_text(encoding="utf-8"))
-        d = d if isinstance(d, dict) else {}
-    except (OSError, ValueError):
+    except FileNotFoundError:
         d = {}
+    except (OSError, ValueError):
+        return []                                  # unreadable: never overwrite the user's own rules
+    if not isinstance(d, dict) or not isinstance(d.get("projects", {}), dict):
+        return []
     proj = d.setdefault("projects", {}).setdefault(_folder_key(root), {})
     have = proj.setdefault("allow", [])
     added = [r for r in rules if r not in have]
@@ -2453,6 +2476,8 @@ class Agent:
                             return sse_to_chat(raw_body.splitlines(keepends=True)), False
                         raise RuntimeError(f"HTTP 0: the endpoint sent an unreadable reply ({raw_body[:80]!r})")
 
+                thought: list = []
+
                 def tee(lines):
                     nonlocal got_text
                     started, t_data = False, time.time()
@@ -2475,7 +2500,8 @@ class Agent:
                                     dl = ch.get("delta") or {}
                                     th = dl.get("reasoning_content") or dl.get("reasoning")
                                     if isinstance(th, str) and th and os.environ.get("MH_SHOW_THINKING", "1") != "0":
-                                        self.emit({"type": "thought", "text": th})   # the model's reasoning, as it comes
+                                        thought.append(th)
+                                        self.emit({"type": "thought", "text": th, "delta": True})   # live only
                                     t = dl.get("content")
                                     if t:
                                         got_text = True
@@ -2485,6 +2511,8 @@ class Agent:
                         yield raw
                 resp = sse_to_chat(tee(r))
                 _header_cost(r, resp)
+                if thought:                              # one saved event for the whole reasoning of this call
+                    self.emit({"type": "thought", "text": "".join(thought)[-20000:], "final": True})
                 if not resp.get("choices") or resp["choices"][0].get("finish_reason") is None and \
                         not resp["choices"][0]["message"].get("content") and \
                         not resp["choices"][0]["message"].get("tool_calls"):
@@ -2572,6 +2600,13 @@ class Agent:
         if hk["allow"] and not _destructive(args):
             return True, ""
         rules = _rules(self.root)
+        guard = self._power_file(name, args)
+        if guard:                                  # hooks, allow rules, MCP servers: the agent never grants itself these
+            if not self.approve:
+                return False, f"Not allowed: {guard} decides what may run on this computer. Ask the user to change it."
+            decision, note = self.approve("edit", f"Change {guard}? It decides what runs without asking.",
+                                          self._diff(name, args))
+            return decision in ("yes", "always", "save"), note or ""
         hit = _rule_hit(rules["deny"], name, args)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
@@ -2581,7 +2616,8 @@ class Agent:
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
             return True, ""
         if not risky and name in ("bash", "shell") and not args.get("workdir") and \
-                T.git_read_only(T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")):
+                T.git_read_only(T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")) \
+                and T.git_config_safe(self.root):
             return True, ""                    # git status, log, diff and other reads never ask
         if self.mode == "edits" and name in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return True, ""                    # auto-accept edits: file changes go through, commands still ask
@@ -2638,12 +2674,36 @@ class Agent:
             if saved:
                 self.emit({"type": "status", "text": "Saved for this folder: " + ", ".join(
                     r for r in saved if not r.startswith(("write_file", "apply_patch", "notebook_edit")))})
-            else:
-                self.always.add(group)             # nothing narrow to save (a chained command): this chat only
+            else:                                  # nothing narrow to save: allowed this once, nothing wider
+                self.emit({"type": "status", "text": "Allowed this once. There is no narrow rule to save for it "
+                                                     "(a chained, wrapped or destructive command)."})
             return True, note or ""
         if decision == "always":
             self.always.add(group)
         return decision in ("yes", "always"), note or ""
+
+    _POWER_FILES = (".meshpool/hooks.json", ".meshpool/permissions.json", ".meshpool/mcp.json", ".mcp.json")
+
+    def _power_file(self, name: str, args: dict) -> str:
+        """The hooks, permission or MCP file an edit would change (in the project or in Meshpool's own folder), or
+        "". These grant the power to run commands, so a change to them is always asked."""
+        if name not in ("edit", "write_file", "apply_patch", "notebook_edit"):
+            return ""
+        paths = _patch_files(args.get("input")) if name == "apply_patch" else \
+            [str(args.get("path") or "")] + [str(c.get("path") or "") for c in (args.get("changes") or [])
+                                             if isinstance(c, dict)]
+        home = Path(C.home()).resolve()
+        for p in filter(None, paths):
+            try:
+                q = (self.root / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
+            except (OSError, RuntimeError):
+                continue
+            for rel in self._POWER_FILES:
+                if q == (self.root / rel).resolve():
+                    return rel
+            if q.parent == home and q.name in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json"):
+                return q.name
+        return ""
 
     def _same_bytes(self, name: str, args: dict) -> bool:
         """True when the write would leave the file's bytes exactly as they are. A diff of decoded lines hides line

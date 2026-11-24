@@ -176,7 +176,7 @@ def _search_lines(root: Path, q: str) -> list:
                 continue
             f = base / name
             try:
-                if f.stat().st_size > 2_000_000:
+                if f.is_symlink() or f.stat().st_size > 2_000_000:
                     continue
                 raw = f.read_bytes()
             except OSError:

@@ -17,6 +17,7 @@ Settings come from meshpool.config (next to the launcher); shell variables win o
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import os
 import shutil
@@ -288,6 +289,8 @@ def main(argv=None):
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.effort:
             os.environ["MH_EFFORT"] = a.effort
+        if a.worktree and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,60}", a.worktree) and a.request is None:
+            a.request, a.worktree = a.worktree, ""       # meshpool -w "fix the tests": a request, not a name
         if a.worktree is not None:
             from meshpool_harness import worktrees as WT
             try:
