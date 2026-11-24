@@ -154,6 +154,7 @@ def _agent_parser():
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    ap.add_argument("--effort", choices=["auto", "low", "medium", "high"], help="how hard the model thinks (auto: Meshpool decides)")
     from meshpool_harness import __version__
     ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
     return ap
@@ -251,6 +252,8 @@ def main(argv=None):
             os.environ["MH_AGENT_PROFILE"] = a.profile
         if a.max_turns:
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
+        if a.effort:
+            os.environ["MH_EFFORT"] = a.effort
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
         if a.permission_mode:

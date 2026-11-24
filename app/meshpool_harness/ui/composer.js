@@ -105,6 +105,15 @@ function modelsForMenu() {
   add(c.model); add(M.default); (M.favorites || []).forEach(add); M.models.forEach(m => out.length < 4 && add(m.id));
   return out.slice(0, 4);
 }
+const EFFORT_NAME = {auto: "Auto", low: "Low", medium: "Medium", high: "High"};
+function effortMenuItems(c) {
+  if (S.cur && c.effort == null) return [{head: "Effort"}, {label: "Set by this agent", desc: "This agent chooses its own effort.", checked: true, fn: () => {}}];
+  const cur = c.effort || "auto";
+  const rows = [["auto", "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps."],
+    ["low", "Least thinking: fastest and cheapest. For simple, clear asks."], ["medium", "More thinking before it acts."],
+    ["high", "The most thinking the model offers. Slower and uses more tokens. Models without effort levels ignore it."]];
+  return [{head: "Effort"}, ...rows.map(([id, desc]) => ({label: EFFORT_NAME[id], desc, checked: id === cur ? true : undefined, fn: () => setEffort(id)}))];
+}
 function modelMenu(anchor) {
   const c = cfg(), M = S.models || {models: [], groups: []};
   const rows = modelsForMenu().map((m, i) => ({label: modelName(m.id) + (provOf(m.id) === "chatgpt" ? " · ChatGPT" : ""), desc: (m.caps || []).join(", ") || (provOf(m.id) === "chatgpt" ? "Through your ChatGPT sign-in" : m.id === M.default ? "Your default model" : "From your Meshpool endpoint"), checked: m.id === c.model ? true : undefined, key: String(i + 1), fn: () => pickModel(m.id)}));
@@ -113,7 +122,7 @@ function modelMenu(anchor) {
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
     {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "MeshPool") : harnessShort(), sub: harnessMenuItems()},
-    {label: "Effort", note: "Auto", sub: [{head: "Effort"}, {label: "Auto", desc: "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps.", checked: true, fn: () => {}}]},
+    {label: "Effort", note: EFFORT_NAME[c.effort || "auto"] || "Auto", sub: effortMenuItems(c)},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
   ], {cls: "modelmenu", up: true});
 }

@@ -981,7 +981,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
-            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style)", u.path)
+            m = re.fullmatch(r"/api/agent/([\w-]+)/(model|plan|goal|revert|route|harness|style|effort)", u.path)
             if m:
                 s_, act, b = A.get(m.group(1)), m.group(2), self._json()
                 if act == "model":
@@ -996,6 +996,8 @@ class Handler(BaseHTTPRequestHandler):
                     s_.set_goal(b.get("text", ""))
                 elif act == "style":
                     s_.set_style(b.get("style", ""))
+                elif act == "effort":
+                    s_.set_effort(b.get("effort", ""))
                 else:
                     s_.revert(int(b.get("turn", 0)))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))

@@ -502,6 +502,15 @@ class Session:
         except Exception:  # noqa: BLE001 - a style never blocks a message
             return ""
 
+    def set_effort(self, effort: str):
+        from meshpool_harness.agent.core import EFFORTS, effort_choice
+        if str(effort or "").lower() not in EFFORTS:
+            raise ValueError("Effort is auto, low, medium or high.")
+        if not hasattr(self.agent, "effort"):
+            raise ValueError("This agent chooses its own effort.")
+        self.agent.effort = effort_choice(effort)
+        write_meta(self.id, effort=self.agent.effort)
+
     def set_style(self, style_id: str):
         from meshpool_harness import styles as ST
         style_id = (style_id or "").strip()
@@ -1223,6 +1232,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
+                "effort": getattr(a, "effort", None),
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1352,6 +1362,11 @@ def create(body: dict) -> dict:
         write_meta(s.id, style=picked if picked and ST.get(picked) else ST.default_id())   # fixed for this chat
     except Exception:  # noqa: BLE001
         pass
+    if body.get("effort") and hasattr(s.agent, "effort"):
+        try:
+            s.set_effort(str(body["effort"]))
+        except ValueError:
+            pass
     if pid:
         PS.touch(pid)
     with LOCK:

@@ -41,7 +41,15 @@ COMMANDS = [
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
-    ("tokens", "", "tokens used in this session"),
+    ("tokens", "", "tokens and cost of this session"),
+    ("context", "", "what fills the context window"),
+    ("resume", "[id]", "open an earlier session"),
+    ("export", "[file]", "save this conversation as Markdown"),
+    ("copy", "[n]", "copy the last reply (or the nth from the end)"),
+    ("effort", "[auto|low|medium|high]", "how hard the model thinks"),
+    ("plan", "[on|off]", "plan mode: read and plan, change nothing"),
+    ("permissions", "", "saved allow and deny rules, and folder trust"),
+    ("diff", "", "uncommitted changes in this folder (git diff)"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
     ("import", "", "bring in old chats, Claude Code and Codex sessions"),
     ("setup", "", "first-run walkthrough: key, folder, skills"),
@@ -52,7 +60,7 @@ MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
 
-HELP_TIPS = ["End a line with \\ (or press Alt+Enter) for a new line.",
+HELP_TIPS = ["End a line with \\ (or press Alt+Enter) for a new line. Esc stops the agent while it works.",
              "Shift+Tab cycles access: ask, accept edits, full access.",
              "Ctrl+O prints the last collapsed output in full. Ctrl+C stops a step; twice at the prompt quits."]
 
@@ -100,6 +108,10 @@ class Terminal:
         self.stopping = False
         self.idle = threading.Event()
         self.idle.set()
+        self.keys_free = threading.Event()      # set while the Esc watcher does not hold the keyboard
+        self.keys_free.set()
+        self.on_esc = None                      # what Esc does while the agent works (stop the turn)
+        self.typeahead: list = []               # keys typed while the agent worked, for the next prompt
         # screen state
         self._live_fn = None
         self._rows = 0
@@ -224,6 +236,54 @@ class Terminal:
             if self._ticker is None or not self._ticker.is_alive():
                 self._ticker = threading.Thread(target=self._tick, daemon=True)
                 self._ticker.start()
+            if self.on_esc and self.keys_factory is None and K.raw_available() and \
+                    (getattr(self, "_watcher", None) is None or not self._watcher.is_alive()):
+                self._watcher = threading.Thread(target=self._watch_esc, daemon=True)
+                self._watcher.start()
+
+    def _watch_esc(self):
+        """While the agent works, Esc stops the turn (Ctrl+C still does too). The keyboard is let go whenever a
+        question or approval needs it (idle cleared), and taken back after."""
+        while self._turn:
+            if not self.idle.is_set():
+                time.sleep(0.05)
+                continue
+            self.keys_free.clear()
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    while self._turn and self.idle.is_set():
+                        if msvcrt.kbhit():
+                            ch = msvcrt.getwch()
+                            if ch == "\x1b":
+                                self._esc_pressed()
+                                return
+                            self.typeahead.extend(K.parse_keys(ch))
+                        else:
+                            time.sleep(0.05)
+                else:
+                    with K.RawKeys() as keys:
+                        while self._turn and self.idle.is_set():
+                            k = keys.read(timeout=0.05)
+                            if k == "esc":
+                                self._esc_pressed()
+                                return
+                            if k is not None:             # typed ahead: kept for the next prompt
+                                self.typeahead.append(k)
+                        self.typeahead.extend(keys.pending)    # keys read together with the last one
+                        keys.pending = []
+            except Exception:  # noqa: BLE001 - no usable terminal: Ctrl+C still stops
+                return
+            finally:
+                self.keys_free.set()
+
+    def _esc_pressed(self):
+        self.stopping = True
+        self._label = "Stopping"
+        try:
+            self.on_esc()
+        except Exception:  # noqa: BLE001
+            pass
 
     def _tick(self):
         while self._turn:
@@ -296,10 +356,15 @@ class Terminal:
             if self.interactive and not self._turn:
                 self.turn_begin()
             self._label = "Thinking"
+            self._thought = ""
         elif t == "text_delta":
             if not self._text_open and self.interactive:
                 self.scroll([""])
             self._text(ev["text"])
+        elif t == "thought":                             # the model's reasoning: one dim line while it thinks
+            self._thought = (getattr(self, "_thought", "") + str(ev.get("text") or ""))[-4000:]
+            last = [x for x in self._thought.splitlines() if x.strip()]
+            self._label = "Thinking: " + R.clip(last[-1].strip(), max(20, self.width - 30)) if last else "Thinking"
         elif t == "stream_reset":
             if self._text_open:
                 self._partial = ""
@@ -573,6 +638,7 @@ class Terminal:
 
     def read_input(self) -> str | None:
         """One message or /command from the input box. None: the user is leaving (Ctrl+D, or Ctrl+C twice)."""
+        self.keys_free.wait(0.5)                # the Esc watcher of the last turn lets go first
         if not self.raw_ok():
             return self._read_plain()
         s = {"buf": "", "cur": 0, "sel": 0, "note": "", "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)]}
@@ -583,6 +649,9 @@ class Terminal:
         result: str | None = None
         try:
             with self._keys() as keys:
+                ahead, self.typeahead = getattr(self, "typeahead", []), []
+                if ahead and isinstance(getattr(keys, "pending", None), list):
+                    keys.pending[:0] = ahead              # what was typed while the agent worked
                 while True:
                     try:
                         k = keys.read()
@@ -639,7 +708,8 @@ class Terminal:
                         j = buf.rfind(" ", 0, j) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
                     elif k in ("up", "ctrl_p"):
-                        if menu:
+                        recalled = h < len(self.history) and buf == self.history[h]   # walking history, not the menu
+                        if menu and not recalled:
                             s["sel"] = (s["sel"] - 1) % len(menu)
                         elif "\n" in buf[:cur]:
                             s["cur"] = self._vmove(buf, cur, -1)
@@ -650,7 +720,8 @@ class Terminal:
                             s["buf"] = self.history[h]
                             s["cur"] = len(s["buf"])
                     elif k in ("down", "ctrl_n"):
-                        if menu:
+                        recalled = h < len(self.history) and buf == self.history[h]
+                        if menu and not recalled:
                             s["sel"] = (s["sel"] + 1) % len(menu)
                         elif "\n" in buf[cur:]:
                             s["cur"] = self._vmove(buf, cur, 1)
@@ -689,6 +760,9 @@ class Terminal:
             self.set_live(None)
         if result is not None:
             self.history.append(result)
+            if self.keys_factory is None and self.interactive:   # a real terminal, not a scripted test
+                from meshpool_harness.agent import tui_more as TM
+                TM.add_history(self.cwd, result)
             self.started = True
             self.echo_user(result)
         return result
@@ -782,6 +856,7 @@ class Terminal:
         if self.stopping:
             return "no", ""
         self.idle.clear()
+        self.keys_free.wait(1.0)                # the Esc watcher lets go of the keyboard first
         try:
             choice, note = self._approve_raw(kind, title, detail) if self.raw_ok() else self._approve(kind, title, detail)
         finally:
@@ -859,6 +934,15 @@ class Terminal:
         st = self.st
         if not (sys.stdin.isatty() or self.keys_factory):
             return None
+        self.idle.clear()
+        self.keys_free.wait(1.0)
+        try:
+            return self._ask_questions(questions)
+        finally:
+            self.idle.set()
+
+    def _ask_questions(self, questions: list):
+        st = self.st
         answers = []
         for q in questions:
             opts = q["options"]
@@ -983,6 +1067,7 @@ class Session:
         self.ctx = True                                    # your instructions and memory go with the first message
         term.agent = agent
         term.on_mode = self.set_mode
+        term.on_esc = agent.stop if hasattr(agent, "stop") else None
         term.refresh_facts(agent)
 
     # -- sending
@@ -1098,6 +1183,139 @@ class Session:
                     f"{u['out']:,} output tokens" + (f", ${cost:.4f}." if cost is not None else
                                                      ". Cost not measured: the endpoint sends no price; set "
                                                      "MH_PRICE_IN and MH_PRICE_OUT (USD per million tokens) to see one."))
+
+    def cmd_context(self, arg):
+        from meshpool_harness.agent import tui_more as TM
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "messages"):
+            return t.p(st.dim("  /context is not available for this agent."))
+        rows = TM.context_breakdown(self.agent)
+        total = sum(n for _, n in rows)
+        window = R.context_window(t.model, t.windows)
+        w = max(len(k) for k, _ in rows) + 2
+        bar = lambda n: "█" * max(0, round(30 * n / window)) if window else ""
+        lines = [""] + [f"  {R.pad(k, w)}{n:>9,}  {st.dim(bar(n))}" for k, n in rows if n]
+        lines += ["", f"  {R.pad('About', w)}{total:>9,} of {window:,} tokens ({round(100 * total / window) if window else 0}%)",
+                  st.dim("  Estimates, at four characters a token. /compact makes room.")]
+        t.scroll(lines)
+
+    def cmd_resume(self, arg):
+        from meshpool_harness.agent import tui_more as TM
+        from meshpool_harness.agent.core import Agent
+        t, st = self.term, self.term.st
+        if self.sub or not isinstance(self.agent, Agent):
+            return t.p(st.dim("  /resume is not available for this agent."))
+        rows = [r for r in TM.sessions(None, 40) if r["id"] != self.agent.id]
+        if arg:
+            rows = [r for r in rows if r["id"].startswith(arg) or arg.lower() in r["title"].lower()]
+        if not rows:
+            return t.p(st.dim("  No earlier sessions."))
+        here = os.path.realpath(str(self.agent.root))
+        rows.sort(key=lambda r: (os.path.realpath(r["workdir"]) != here, -r["updated"]))    # this folder first
+        if len(rows) == 1 and arg:
+            pick = 0
+        else:
+            labels = [f"{R.clip(r['title'] or '(untitled)', 44)}  {st.dim(TM.ago(r['updated']) + ' · ' + _tilde(r['workdir']))}"
+                      for r in rows]
+            pick = t.choose("Resume which session?", [], labels)
+        if pick is None:
+            return
+        r = rows[pick]
+        a = self.agent
+        new = Agent.resume(r["workdir"], r["id"], mcp=self.mcp, emit=a.emit, approve=a.approve, mode=a.mode,
+                           profile=getattr(a, "profile", "code"))
+        if new is None:
+            return t.p(st.red("  That session could not be opened."))
+        new.ask = getattr(a, "ask", None)
+        self.agent = t.agent = new
+        t.on_esc = new.stop
+        self.ctx = False
+        t.refresh_facts(new)
+        t.p(st.dim(f"  Resumed \"{r['title'] or r['id']}\" ({r['messages']} messages) in {_tilde(r['workdir'])}."))
+
+    def cmd_export(self, arg):
+        from meshpool_harness.agent import tui_more as TM
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "messages"):
+            return t.p(st.dim("  /export is not available for this agent."))
+        name = arg or f"meshpool-session-{time.strftime('%Y%m%d-%H%M')}.md"
+        path = Path(name).expanduser()
+        if not path.is_absolute():
+            path = Path(str(getattr(self.agent, "root", os.getcwd()))) / path
+        if path.exists() and not arg:
+            return t.p(st.amber(f"  {path} exists. Give a file name: /export notes.md"))
+        path.write_text(TM.transcript(self.agent), encoding="utf-8")
+        t.p(st.dim(f"  Saved the conversation to {_tilde(str(path))}"))
+
+    def cmd_copy(self, arg):
+        from meshpool_harness.agent import tui_more as TM
+        t, st = self.term, self.term.st
+        reps = TM.replies(self.agent)
+        n = int(arg) if arg.isdigit() and int(arg) > 0 else 1
+        if len(reps) < n:
+            return t.p(st.dim("  No reply to copy yet." if not reps else f"  There are only {len(reps)} replies."))
+        how = TM.copy_to_clipboard(reps[-n], out=t.out)
+        t.p(st.dim("  Copied." if how else "  Could not reach the clipboard."))
+
+    def cmd_effort(self, arg):
+        from meshpool_harness.agent.core import EFFORTS, effort_choice
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "effort"):
+            return t.p(st.dim("  This agent chooses its own effort."))
+        if not arg:
+            return t.p(f"  Effort: {self.agent.effort}. Choose one of: {', '.join(EFFORTS)}.")
+        if arg.lower() not in EFFORTS:
+            return t.p(st.amber(f"  Effort is one of: {', '.join(EFFORTS)}."))
+        self.agent.effort = t.effort = effort_choice(arg)
+        t.p(st.dim("  " + ({"auto": "Meshpool sizes the effort to each request."}.get(self.agent.effort)
+                           or f"The model is asked for {self.agent.effort} reasoning effort. Models without effort levels ignore it.")))
+
+    def cmd_plan(self, arg):
+        t, st = self.term, self.term.st
+        if not hasattr(self.agent, "plan"):
+            return t.p(st.dim("  /plan is not available for this agent."))
+        on = {"on": True, "off": False}.get(arg.lower(), not self.agent.plan) if arg else not self.agent.plan
+        self.agent.plan = on
+        t.p(st.dim("  Plan mode is on: Meshpool reads and plans, and changes nothing until you say go." if on
+                   else "  Plan mode is off."))
+
+    def cmd_permissions(self, arg):
+        from meshpool_harness import trust as TR
+        from meshpool_harness.agent import core as A
+        t, st = self.term, self.term.st
+        root = str(getattr(self.agent, "root", os.getcwd()))
+        rules = A._rules(root)
+        rows = [""]
+        for k in ("allow", "deny"):
+            rows.append(f"  {st.bold(k.capitalize())}: " + (", ".join(rules[k]) if rules[k] else st.dim("none")))
+        rows.append(f"  {st.bold('This session')}: " + (", ".join(sorted(getattr(self.agent, 'always', set()) or []))
+                                                        or st.dim("nothing allowed for the rest of the session")))
+        risky = TR.risky_files(root)
+        if risky:
+            rows.append(f"  {st.bold('Folder')}: " + ("trusted, so its " + " and ".join(risky) + " apply" if TR.is_trusted(root)
+                                                     else "not trusted: its " + " and ".join(risky) + " are ignored (meshpool trust)"))
+        rows += ["", st.dim(f"  Rules live in {_tilde(str(C.home() / 'permissions.json'))} and .meshpool/permissions.json "
+                            "in the project.")]
+        t.scroll(rows)
+
+    def cmd_diff(self, arg):
+        t, st = self.term, self.term.st
+        root = str(getattr(self.agent, "root", os.getcwd()))
+        try:
+            stat = subprocess.run(["git", "-C", root, "diff", "--stat", "HEAD"], capture_output=True, text=True, timeout=20)
+            body = subprocess.run(["git", "-C", root, "diff", "HEAD"], capture_output=True, text=True, timeout=20)
+        except (OSError, subprocess.SubprocessError) as e:
+            return t.p(st.red(f"  git diff failed: {e}"))
+        if stat.returncode:
+            return t.p(st.dim("  Not a git repository, or it has no commits yet."))
+        if not stat.stdout.strip():
+            return t.p(st.dim("  No uncommitted changes."))
+        lines = body.stdout.splitlines()
+        paint = lambda ln: st.green(ln) if ln.startswith("+") and not ln.startswith("+++") else \
+            st.red(ln) if ln.startswith("-") and not ln.startswith("---") else st.dim(ln) if ln.startswith("@@") else ln
+        shown = [paint(R.clip(ln, t.width - 2)) for ln in lines[:400]]
+        t.scroll([""] + ["  " + x for x in stat.stdout.rstrip().splitlines()] + [""] + shown +
+                 ([st.dim(f"  ... {len(lines) - 400} more lines (git diff HEAD)")] if len(lines) > 400 else []))
 
     def cmd_mcp(self, arg):
         _mcp_status(self.term, self.mcp)
@@ -1387,6 +1605,9 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         agent.plan = True                        # read only: investigate, then reply with a plan
     agent.ask = term.ask_questions               # ask_user questions are answered in the terminal
     sess = Session(term, agent, mcp, sub)
+    if prompt is None:
+        from meshpool_harness.agent import tui_more as TM
+        term.history = TM.load_history(wd)       # Up arrow reaches prompts from earlier sessions in this folder
     try:
         if prompt is not None:
             if json_out:                          # headless: progress goes to stderr, one JSON object to stdout
