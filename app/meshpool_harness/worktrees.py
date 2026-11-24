@@ -114,7 +114,8 @@ def _next_name(root: Path) -> str:
 
 
 def _state(path: Path, branch: str) -> dict:
-    dirty = bool(_git(["-c", "core.fsmonitor=false", "status", "--porcelain"], path, check=False).stdout.strip())
+    dirty = bool(_git(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status", "--porcelain"], path,
+                      check=False).stdout.strip())
     # commits on this branch that no other branch or remote has: what removing it would lose
     r = _git(["rev-list", "--count", branch, "--not", "--exclude=" + branch, "--branches", "--remotes"],
              path, check=False)                       # --exclude for --branches takes the name without refs/heads/

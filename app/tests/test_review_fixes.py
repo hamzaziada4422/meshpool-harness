@@ -212,3 +212,29 @@ def test_rule_for_keeps_the_runner_target():                                   #
 @pytest.mark.parametrize("cmd", ["git log -- --output=x", "git diff -- ..", "git log .."])
 def test_words_after_double_dash_and_bare_dotdot(cmd):                         # R5
     assert not T.git_read_only(cmd)
+
+
+# ---------------------------------------------------------------- recheck of e140480
+def test_workdir_and_cd_together_cannot_reach_a_power_file(env):              # N1
+    (env / "sub").mkdir()
+    a, asked = _edits_agent(env)
+    cmd = ["bash", "-lc", "cd .meshpool && apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hooks.json\n+{}\n*** End Patch\nEOF\n"]
+    assert not a._permit("shell", {"command": cmd, "workdir": "sub"})[0] and asked
+
+
+def test_a_repo_with_its_own_git_hooks_gets_no_shortcut(env):                 # N2
+    r = env / "repo"
+    r.mkdir()
+    subprocess.run(["git", "init", "-q", str(r)], check=True)
+    assert T.git_config_safe(r)
+    h = r / ".git" / "hooks" / "post-index-change"
+    h.write_text("#!/bin/sh\ntouch pwned\n")
+    h.chmod(0o755)
+    assert not T.git_config_safe(r)
+
+
+@pytest.mark.parametrize("cmd", ["uv run python x.py", "poetry run python x", "npm exec node x", "docker exec ctr sh",
+                                 "kubectl exec pod ls", "pkexec ls", "systemd-run ls", "git config core.hooksPath x",
+                                 "make test", "conda run python x"])
+def test_rule_for_has_no_known_widening(cmd):                                   # N3
+    assert core.rule_for("bash", {"command": cmd}) == [], cmd

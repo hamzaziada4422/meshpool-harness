@@ -1304,7 +1304,11 @@ class Session:
         t, st = self.term, self.term.st
         root = str(getattr(self.agent, "root", os.getcwd()))
         try:
-            safe = ["-c", "core.fsmonitor=false", "-c", "diff.external=", "--no-pager"]   # never a program the repo names
+            from meshpool_harness.core import tools as TT
+            if not TT.git_config_safe(root):
+                return t.p(st.amber("  This repository's own git settings or hooks run programs, so /diff does not run "
+                                    "git here. Run git diff yourself if you trust it."))
+            safe = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "--no-pager"]
             stat = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "--stat", "HEAD"],
                                   capture_output=True, text=True, timeout=20)
             body = subprocess.run(["git", "-C", root, *safe, "diff", "--no-ext-diff", "--no-textconv", "HEAD"],

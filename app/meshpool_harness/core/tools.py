@@ -169,6 +169,14 @@ def git_config_safe(root) -> bool:
         scope, _, key = line.partition("\t")
         if scope in ("local", "worktree", "command") and _GIT_RISKY_CONFIG.search(key):
             return False
+    try:                                                  # hooks in the repo's own .git/hooks run on some reads
+        h = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
+                           timeout=10).stdout.strip()
+        hooks = Path(h) if os.path.isabs(h) else Path(root) / h
+        if hooks.is_dir() and any(f.is_file() and not f.name.endswith(".sample") for f in hooks.iterdir()):
+            return False
+    except (OSError, subprocess.SubprocessError):
+        return False
     return True
 
 

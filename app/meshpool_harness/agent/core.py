@@ -810,8 +810,11 @@ _CHAINED = re.compile(r"[;&|`<>\n(){}$]")       # chaining, redirects, substitut
 _WRAPPERS = {"env", "sudo", "doas", "time", "nohup", "xargs", "nice", "timeout", "watch", "exec", "eval", "command",
              "builtin", "su", "ssh", "sh", "bash", "zsh", "fish", "dash", "pwsh", "powershell", "cmd", "npx", "uvx",
              "pipx", "bunx", "dlx", "setsid", "busybox", "ionice", "stdbuf", "strace", "valgrind", "gdb", "chroot",
-             "unshare", "nsenter", "flock", "script", "expect", "start", "invoke-expression", "iex"}
-_INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "java", "uv", "poetry", "pipenv"}
+             "unshare", "nsenter", "flock", "script", "expect", "start", "invoke-expression", "iex", "pkexec",
+             "runuser", "systemd-run", "firejail", "proxychains", "proxychains4", "torsocks", "ltrace", "hyperfine",
+             "parallel", "xvfb-run", "watchexec", "entr", "dbus-run-session", "caffeinate", "chronic", "with-contenv",
+             "bundle", "conda", "mamba", "pixi", "hatch", "tox", "nox", "just", "task", "make"}
+_INTERPRETERS = {"python", "py", "node", "deno", "bun", "ruby", "perl", "php", "java"}   # uv, poetry: run verbs below
 _RUN_VERBS = {"run", "exec", "x", "dlx", "start", "run-script"}
 
 
@@ -839,11 +842,16 @@ def rule_for(name: str, args: dict) -> list[str]:
                 return []
             return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
         if len(w) > 1 and w[1] in _RUN_VERBS:          # npm run build, cargo run, docker run: keep what it runs
-            if len(w) < 3 or not plain(w[2]):
-                return []
+            target = re.sub(r"[\d.]+$", "", w[2].casefold()) if len(w) > 2 else ""
+            if len(w) < 3 or not plain(w[2]) or target in _WRAPPERS or target in _INTERPRETERS \
+                    or prog in ("docker", "podman", "kubectl", "nerdctl", "conda", "mamba"):
+                return []                              # uv run python, docker exec ctr: what runs is anything
             return ["bash:" + " ".join(w[:3]), "bash:" + " ".join(w[:3]) + " *"]
         if len(w) > 1 and not re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]):
             return []                                  # an option or a path after the program: too wide to guess
+        if prog == "git" and len(w) > 1 and w[1] in ("config", "submodule", "filter-branch", "bisect", "rebase", "am",
+                                                     "apply", "hook", "difftool", "mergetool", "daemon", "archive"):
+            return []                                  # git config can name programs git will run later
         keep = w[:2] if len(w) > 1 else w[:1]
         return ["bash:" + " ".join(keep), "bash:" + " ".join(keep) + " *"]
     if name in ("edit", "write_file", "apply_patch", "notebook_edit"):
@@ -2601,8 +2609,9 @@ class Agent:
         if name == "shell":
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
-                base = os.path.join(str(args.get("workdir") or ""), hit[1] or "")
-                name, args = "apply_patch", {"input": hit[0], "_base": base}
+                wd, cd = str(args.get("workdir") or ""), hit[1] or ""
+                bases = [cd or wd, cd, wd, os.path.join(wd, cd)]        # what Workspace.shell uses comes first
+                name, args = "apply_patch", {"input": hit[0], "_bases": [b for b in dict.fromkeys(bases)]}
         from meshpool_harness.agent import extras as EX
         hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
         if hk["blocked"]:
@@ -2711,7 +2720,7 @@ class Agent:
                          if f in low and not T.read_only(text)), "")
         if name not in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return ""
-        base = self.root / str(args.get("_base") or "")
+        bases = [self.root / str(b) for b in (args.get("_bases") or [""])]
         paths = _patch_files(args.get("input")) if name == "apply_patch" else \
             [str(args.get("path") or "")] + [str(c.get("path") or "") for c in (args.get("changes") or [])
                                              if isinstance(c, dict)]
@@ -2719,13 +2728,14 @@ class Agent:
         guarded = {norm((self.root / rel).resolve()): rel for rel in self._POWER_FILES}
         guarded.update({norm(home / n): n for n in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json")})
         for p in filter(None, paths):
-            try:
-                q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
-            except (OSError, RuntimeError):
-                continue
-            hit = guarded.get(norm(q))
-            if hit:
-                return hit
+            for base in bases:
+                try:
+                    q = (base / p).resolve() if not os.path.isabs(os.path.expanduser(p)) else Path(p).expanduser().resolve()
+                except (OSError, RuntimeError):
+                    continue
+                hit = guarded.get(norm(q))
+                if hit:
+                    return hit
         return ""
 
     def _same_bytes(self, name: str, args: dict) -> bool:
