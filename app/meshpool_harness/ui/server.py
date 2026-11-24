@@ -999,7 +999,7 @@ class Handler(BaseHTTPRequestHandler):
                 elif act == "effort":
                     s_.set_effort(b.get("effort", ""))
                 else:
-                    s_.revert(int(b.get("turn", 0)))
+                    s_.revert(int(b.get("turn", 0)), str(b.get("what") or "both"))
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:

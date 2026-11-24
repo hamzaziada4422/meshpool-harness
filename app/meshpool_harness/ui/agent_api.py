@@ -315,8 +315,8 @@ class Session:
                 if tr.get("running"):
                     last = next((e.get("text") for e in reversed(tr["events"]) if e.get("type") == "user"), "")
                     self.emit({"type": "interrupted", "restarted": True, "resend": last,
-                               "text": "Meshpool closed while this was running, so it stopped. Your message is kept: "
-                                       "send it again to continue."})
+                               "text": "Meshpool closed while this was running, so it stopped. Everything done so far "
+                                       "is kept: press Continue to pick it up, or send your message again."})
                     self._persist(running=False)
         else:
             write_meta(self.id, kind=self.kind, mode=self.mode)   # Cowork or Code, and its permission mode
@@ -1148,9 +1148,15 @@ class Session:
             self.agent.apply_mode()                  # an agent with its own modes (Codex) switches to read-only
         write_meta(self.id, plan=self.plan)
 
-    def revert(self, turn: int) -> dict:
+    def revert(self, turn: int, what: str = "both") -> dict:
+        """Undo turn `turn` and every later one. what: both (files and conversation), code (only the files; the
+        conversation stays and the agent is told) or chat (only the conversation; files stay as they are)."""
+        if what not in ("both", "code", "chat"):
+            raise ValueError("Undo what: both, code or chat.")
         if self.state in ("working", "waiting"):
             raise ValueError("Stop the agent before undoing a turn.")
+        if what == "chat":
+            return self._revert_chat(int(turn))
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
         shared = [n for n in read_meta(self.id).get("shared_turns") or [] if n >= int(turn)]
@@ -1160,6 +1166,18 @@ class Session:
                              "or with Git (the Git panel shows what changed).")
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
+        if what == "code":                           # files only: the conversation stays, and the agent is told
+            changed = len(r.get("restored") or []) + len(r.get("deleted") or [])
+            if hasattr(self.agent, "messages") and changed:
+                self.agent.messages.append({"role": "user", "content": (
+                    f"[Meshpool] The user undid the file changes from reply {int(turn)} onward. Files are back to how "
+                    "they were before it; the conversation is unchanged. Read files again before editing them.")})
+                self.agent.save()
+            self._persist(running=False)
+            self.emit({"type": "status", "text": "Undid the file changes only. " + (
+                f"{changed} file{'' if changed == 1 else 's'} back to how they were; the conversation is unchanged."
+                if changed else "No files had changed.")})
+            return r
         if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
             self.agent.messages = self.agent.messages[:idx]
             self.agent.save()
@@ -1190,6 +1208,31 @@ class Session:
             msg += f". Kept as they are, because you changed them afterwards: {names}"
         self.emit({"type": "status", "text": msg + "."})
         return r
+
+    def _revert_chat(self, turn: int) -> dict:
+        """The conversation goes back to before `turn`; files on disk are not touched."""
+        idx = None
+        if self.cp:
+            t = next((x for x in self.cp.turns() if x.get("n") == turn), None)
+            idx = (t or {}).get("message_index")
+        if self.harness["type"] not in ("acp", "pi") and isinstance(idx, int) and 0 < idx <= len(self.agent.messages):
+            self.agent.messages = self.agent.messages[:idx]
+            self.agent.save()
+            with self.lock:
+                self.events = events_from_messages(self.agent.messages[1:])
+        else:
+            with self.lock:
+                users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
+                if not 0 < turn <= len(users):
+                    raise ValueError("No such turn.")
+                self.events = [dict(e, i=i) for i, e in enumerate(self.events[:users[turn - 1]])]
+                if hasattr(self.agent, "events"):
+                    self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
+                    self.agent.save()
+        self.epoch += 1
+        self._persist(running=False)
+        self.emit({"type": "status", "text": "The conversation went back. Files were not changed."})
+        return {"restored": [], "deleted": [], "kept": [], "message_index": idx}
 
     def stop(self):
         self._stop_req = True                        # checked before the agent starts: its own flag resets then

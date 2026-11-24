@@ -1285,12 +1285,13 @@ function applyEv(ev) {
     case "error": { closeGroup(); const n = add(esc(ev.text) + (/settings/i.test(ev.text || "") ? ` <button class="linkbtn" data-os="1">Open Settings</button>` : "") + ` <button class="linkbtn" data-rp="1" title="Opens a GitHub issue with this error, your version and system. Your chat is not included.">Report this</button>`, "note bad"); $("[data-os]", n)?.addEventListener("click", () => openSettings("general")); $("[data-rp]", n)?.addEventListener("click", () => reportProblem(ev.text)); break; }
     case "interrupted": {
       settleSteps("stopped"); closeGroup();
-      const n = add(esc(ev.text) + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
+      const n = add(esc(ev.text) + (ev.restarted ? ` <button class="linkbtn" data-cont="1">Continue</button>` : "") + (ev.resend ? ` <button class="linkbtn" data-resend="1">Put it back in the message box</button>` : ""), "note warn");
+      $("[data-cont]", n)?.addEventListener("click", () => { if (cfg().busy) return; const inp = $("#input"); inp.value = RESUME_NEXT; inp.dispatchEvent(new Event("input")); sendNow(false); });
       $("[data-resend]", n)?.addEventListener("click", () => { const inp = $("#input"); inp.value = ev.resend; inp.dispatchEvent(new Event("input")); inp.focus(); });
       break; }
     case "checkpoint": {
       const t = (ev.turns || [])[0];
-      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(cur.lastFoot); }
+      if (t && cur.lastFoot && t.changed && t.changed.length && !$("[data-diff]", cur.lastFoot)) { cur.lastFoot.dataset.turn = t.n; pvTurnCards(cur, cur.lastFoot, t.n); cur.lastFoot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button><button data-undomore="${t.n}" aria-label="More undo choices" title="Undo only the files, or only the conversation">${ICON.chev || "▾"}</button>`); bindFoot(cur.lastFoot); }
       break; }
     case "turn_end": {
       settleSteps("");
@@ -1300,7 +1301,7 @@ function applyEv(ev) {
       cur.lastFoot = foot;
       const t = (cur.view?.turns || []).find(x => x.n === cur.turn);
       pvTurnCards(cur, foot, cur.turn);
-      if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button>`); bindFoot(foot); }
+      if (t && t.changed && t.changed.length && !$("[data-diff]", foot)) { foot.insertAdjacentHTML("beforeend", `<button data-diff="${t.n}">${ICON.diff} ${t.changed.length} file${t.changed.length === 1 ? "" : "s"} changed</button><button data-undo="${t.n}">${ICON.undo} Undo</button><button data-undomore="${t.n}" aria-label="More undo choices" title="Undo only the files, or only the conversation">${ICON.chev || "▾"}</button>`); bindFoot(foot); }
       if (cur.view?.plan && cur.lastText) {
         const b = add(`<button class="btn primary">Build this plan</button><button class="btn">Keep planning</button>`, "buildplan");
         $$("button", b)[0].onclick = async () => { b.remove(); await setPlan(false); $("#input").value = "Go ahead and implement the plan above."; sendNow(); };
@@ -1412,6 +1413,18 @@ function settleSteps(label) {
 function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
+  $$("[data-undomore]", foot).forEach(b => b.onclick = e => ctxMenu(e, [{head: "Undo this reply and the ones after it"},
+    {label: "Only the files", desc: "Files go back; the chat stays and Meshpool is told", fn: () => undoPart(+b.dataset.undomore, "code")},
+    {label: "Only the conversation", desc: "The chat goes back; files stay as they are", fn: () => undoPart(+b.dataset.undomore, "chat")}]));
+}
+async function undoPart(n, what) {                 // files only, or the conversation only
+  if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
+  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+  try {
+    await post(`/api/agent/${S.cur.id}/revert`, {turn: n, what, since: 1e9});
+    const inp = $("#input"); if (what === "chat" && asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); }
+    renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel();
+  } catch (e) { toast(e.message); }
 }
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;

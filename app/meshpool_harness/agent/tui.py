@@ -1639,6 +1639,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             sess.send(prompt)
             return 1 if term.failed else 0
         term.notices = _notices(agent, mcp)
+        if (resume or session) and getattr(agent, "unfinished", False):
+            term.notices.append("The last task stopped before it finished. Type continue to pick it up.")
         term.startup()
         sess.loop(first)
     finally:
