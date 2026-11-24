@@ -563,6 +563,8 @@ class SimpleLedger:
             attempt += 1
             time.sleep(1.5 * attempt)
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
+        if status == 0 and isinstance(payload, dict) and payload.get("raw"):             # no reply at all: the cause (a TLS certificate, a timeout) is the text
+            raise RuntimeError(f"meshpool HTTP 0: {payload['raw']}")
         if status != 200:
             err = RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
                 status, payload, kind=self.kind or EP.resolve(base_url)[0], host=PV.host(base_url),

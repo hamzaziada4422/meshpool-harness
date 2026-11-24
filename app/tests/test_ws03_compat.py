@@ -83,7 +83,7 @@ def call(name, args, cid="c1"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
-    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "sk-test-key-0123456789")
     monkeypatch.setenv("MH_AGENT_V3", "1")
     monkeypatch.setenv("MH_STREAM", "0")
     monkeypatch.setenv("MH_PROBE_CONTEXT", "0")
@@ -186,6 +186,7 @@ def _cap_server(env, limit=4096):
 
 def test_w03_output_cap_is_learned_without_compacting(env, tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_CONTEXT_WINDOW", "128000")
+    monkeypatch.setenv("MH_STEP_MAX_TOKENS", "0")                   # the coding-step cap (4096) would hide the 8192 first try
     srv = _cap_server(env)
     a = make_agent(tmp_path)
     events = []
