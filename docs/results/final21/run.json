@@ -1,0 +1,43 @@
+{
+ "run": "final21",
+ "meshpool_commit": "9d011d0e",
+ "codex": "codex-cli 0.171.0",
+ "model": "deepseek-v4.1-flash",
+ "gateway": "llm.meshpool.ai (one metering proxy for both arms)",
+ "price_table_usd_per_1M": {
+  "in": 0.15,
+  "cached": 0.003,
+  "out": 0.6
+ },
+ "suite": [
+  "v2_eval"
+ ],
+ "plan": "every task x (core, codex) x reps 0,1; one attempt per (task, arm, rep), no reruns",
+ "parallel": 3,
+ "timeout_s": 600,
+ "budget_cap_usd": 1.3,
+ "runs_per_arm": {
+  "core": 104,
+  "codex": 104
+ },
+ "requests": 1836,
+ "request_status_by_arm": {
+  "codex:200": 748,
+  "core:200": 877,
+  "core:400": 3,
+  "core:404": 208
+ },
+ "results_written_at_utc": "2026-11-24T16:39:25Z",
+ "isolation": [
+  "private tmpfs /tmp and /root/work per run (mount namespace)",
+  "other worktrees, the task suites, hidden tests, the main checkout and session transcripts hidden by tmpfs",
+  "task JSON passed through a file deleted at start, never on a command line"
+ ],
+ "cost_formula": "usd = (prompt - cached) * in + cached * cached_price + completion * out, per request, summed per run",
+ "counting": {
+  "failed_requests": "a gateway error (e.g. 503) is a request with status != 200 and no tokens: it costs $0 but its seconds count in the run's time; the proxy retries upstream errors and records retries",
+  "budget_cap": "the driver stops scheduling new runs once the summed usd reaches the cap; runs already started finish; unstarted runs are missing for both arms of that task and the task is excluded from paired stats",
+  "timeouts": "a run past the timeout is killed and counted as failed (pass=false, why=timeout) with secs = the timeout",
+  "non_model_requests": "status 404 rows from core are the model-metadata lookups (GET /show, /v0/models/...) Meshpool makes once per run; they carry no tokens and no cost"
+ }
+}
