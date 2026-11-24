@@ -158,7 +158,7 @@ def test_ask_mode_permission_prompt():
     assert "Run this command?" in text and "git push origin main" in text
     assert "1. Yes" in text and "2. Yes, and don't ask again for commands in this session" in text and "3. Yes, and always allow this in this folder" in text and "4. No" in text
     assert "❯ 2." in text
-    for keys, want in (("y", "yes"), ("1", "yes"), ("n", "no"), ("\x1b", "no"), ("3", "no")):
+    for keys, want in (("y", "yes"), ("1", "yes"), ("n", "no"), ("\x1b", "no"), ("3", "save"), ("4", "no"), ("f", "save")):
         t.keys_factory = lambda keys=keys: FakeKeys(keys)
         assert t.approve("edit", "Edit?", "+x\n-y")[0] == want
     opts = [{"id": "ok-all", "kind": "allow_always"}]
