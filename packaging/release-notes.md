@@ -1,5 +1,13 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.15**
+- **Hundreds of bugs fixed.** A full audit of the app, the agent, the terminal and every engine found and fixed several hundred problems, each with a test. Among them: undo of a rename that only changes letter case, Stop on a helper agent no longer throws away a report it already finished, the Look question is asked again, Anthropic keys work when the saved address differs, and slides, intro pages, merger heatmaps and DCF sheets no longer overflow or point at the wrong cell.
+- **Small and local models work.** Meshpool learns a model's real context window from the server or from the first cut-off reply, and no longer shrinks to a tiny window by mistake. An unknown model gets 200k tokens instead of 128k; only a real Ollama or LM Studio server starts small. A model that keeps compacting is stopped instead of looping.
+- **Less CPU.** The PDF reader and other built-in tools start once and are shared, not started again for every chat, and they only start when a file needs them.
+- **More keys connect.** Custom auth headers (`api-key`, `x-token`, raw, basic) work again, Microsoft Entra tokens on Azure are sent the right way, and Test connection rejects a 200 reply that is not a model answer. A request that carries a key never follows a redirect; the error names the address it was sent to and what to set instead.
+- **Fewer wasted calls.** When a model keeps sending a call Meshpool already refused, or keeps sending calls that fail without changing any file, it is told to change course and then stopped with a best-effort answer, instead of running until the time limit. A patch with a missing first or last marker is repaired instead of failing, and a code step's reply is capped so one runaway answer cannot cost much.
+- **Cost, measured.** COSTLINE
+
 **New in 0.0.14**
 - **Azure keys connect the way Microsoft's current docs say.** A plain Azure OpenAI or Azure AI Foundry address now uses Azure's newer `/openai/v1` route, which needs no API version and serves every deployment, including DeepSeek, Llama and Grok. Before, Meshpool pinned an old version on the older route, and newer models were refused with "unsupported api version". If your resource only has the older deployment route, Test connection finds that out by itself, and Save keeps the route that worked. Paste a full portal address with `/deployments/...` or type an API version to use the older route on purpose. The API version box now says what to do with it.
 - **A key can no longer follow a redirect.** The agent's own model calls refuse to follow a redirect to another host, as the settings page and Test button already did.
