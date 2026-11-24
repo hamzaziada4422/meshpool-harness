@@ -431,13 +431,20 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
             doc = Document(str(out))
             for o in operations:
                 op = o.get("op")
+                if op == "replace_text" and o.get("tracked") in (True, "true", "yes", 1):
+                    op = "tracked_replace"                  # replace_text{tracked: true} asks for a tracked change
                 if op == "replace_text":
                     n = _replace_in_paragraphs(_docx_paragraphs(doc), o.get("find", ""), o.get("replace", ""))
                     (done if n else errors).append(f"replace_text {o.get('find', '')[:30]!r}: {n} place(s)" if n else f"text not found: {o.get('find', '')[:40]!r}")
                 elif op in ("tracked_replace", "tracked_delete", "tracked_insert_after"):
-                    ok = _tracked(_docx_paragraphs(doc), op, o.get("find", ""), o.get("replace", o.get("text", "")), o.get("author") or "Meshpool")
-                    (done if ok else errors).append(f"{op}: tracked change made" if ok else
-                                                    f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use replace_text, or a shorter phrase)")
+                    n = 0                                   # every place, like replace_text (insert_after: the first)
+                    while n < 1000 and _tracked(_docx_paragraphs(doc), op, o.get("find", ""),
+                                                o.get("replace", o.get("text", "")), o.get("author") or "Meshpool"):
+                        n += 1
+                        if op == "tracked_insert_after":
+                            break
+                    (done if n else errors).append(f"{op} {o.get('find', '')[:30]!r}: tracked change in {n} place(s)" if n else
+                                                   f"{op}: {o.get('find', '')[:40]!r} not found inside one piece of formatted text (use a shorter phrase)")
                 elif op == "append_paragraph":
                     doc.add_paragraph(o.get("text", ""), style=o.get("style") or None)
                     done.append("appended a paragraph")
@@ -449,7 +456,8 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
                     doc.add_comment(hit.runs, text=o.get("text", ""), author=o.get("author") or "Meshpool")
                     done.append("added a comment")
                 else:
-                    errors.append(f"unknown op {op!r} (replace_text, append_paragraph, add_comment)")
+                    errors.append(f"unknown op {op!r} (replace_text, tracked_replace, tracked_delete, "
+                                  "tracked_insert_after, append_paragraph, add_comment)")
             doc.save(str(out))
         elif ext == ".xlsx":
             import openpyxl
@@ -499,6 +507,9 @@ def edit_office_file(path: str, operations: list, output: str | None = None, in_
     return msg + (("\nNot done: " + "; ".join(errors)) if errors else ""), bool(errors) and not done
 
 
+_REV_ID = [0]
+
+
 def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
     """A real Word revision (w:del and w:ins) inside one run, so Word shows it as a tracked change to accept or reject."""
     import copy
@@ -509,7 +520,8 @@ def _tracked(paragraphs, op: str, find: str, new: str, author: str) -> bool:
     if not find:
         return False
     stamp = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    rid = int(_dt.datetime.now().timestamp() * 1000) % 100000000
+    _REV_ID[0] += 10                                 # unique revision ids across calls in the same millisecond
+    rid = (int(_dt.datetime.now().timestamp() * 1000) % 100000000) + _REV_ID[0]
     for pp in paragraphs:
         for r in pp.runs:
             if find not in r.text:
@@ -871,7 +883,8 @@ TOOLS = {
                       {"path": S, "sheet": S, "pages": S, "language": S, "ocr": S}, ["path"]),
     "edit_office_file": (edit_office_file, "Change an existing .docx, .xlsx or .pptx without rebuilding it (formatting "
                          "and formulas stay). Saves '<name> (edited)' unless in_place=true. `operations`: list of "
-                         "{op, ...}; ops are listed if one is missing.",
+                         "{op, ...}; ops are listed if one is missing. Word tracked changes: tracked_replace{find,replace} "
+                         "(every place, formatting kept), tracked_delete{find}, tracked_insert_after{find,text}.",
                          {"path": S, "operations": {"type": "array", "items": {"type": "object"}}, "output": S,
                           "in_place": {"type": "boolean"}}, ["path", "operations"]),
     "make_pdf": (make_pdf, "Save Markdown as a PDF. Saved as `filename` in the project folder. Charts: a fenced "
