@@ -51,6 +51,9 @@ def _claim_working(sess) -> None:
         sess.state = "working"
 LOCK = threading.Lock()
 _SKIP = {"text_delta", "stream_reset", "model_start", "model_end", "usage", "context", "queued"}
+# A text_delta of a finished reply (Session._fold_deltas): one shared, never-mutated marker in place of each, so event
+# positions stay put. It has no "i"; outward views (Session.view, the event stream) leave it out.
+_DELTA_GONE = {"type": "text_delta", "text": "", "gone": True}
 # /goal: the agent keeps taking turns until it says the goal is met. The note is hidden in the chat (after \u200b).
 GOAL_NOTE = ("\n\n\u200b[Meshpool] The goal of this chat: {goal}\nKeep working until it is fully done and checked. End your "
              "reply with one last line: \"GOAL: DONE\" once the goal is met and verified, or \"GOAL: CONTINUE\" and "
@@ -352,6 +355,8 @@ class Session:
     _interrupting = None       # the token of the turn a "send now" message is stopping
     _after_stop = None         # messages sent once Stop was pressed: they run as their own turn (list, made lazily)
     _retry_open = False        # a retry notice is showing: the next good model event resolves it
+    _undo_token = None         # the turn an Undo / Rewind holds: a message sent meanwhile waits in the queue
+    _open_deltas = ()          # positions in self.events of the text_delta events of the reply still streaming
 
     def __init__(self, workdir: str | None = None, resume_id: str | None = None, mode: str | None = None,
                  harness: str | None = None, kind: str = "code", model: str | None = None, plan: bool = False,
@@ -608,6 +613,18 @@ class Session:
         with self.lock:
             return self._claim_turn_locked()
 
+    def _hold_turn(self, busy: str):
+        """Claim the turn for an Undo / Rewind, which changes the conversation and the files: no turn may start while
+        it runs, and a message sent meanwhile is queued (not added to a turn that is not running) and runs after it.
+        Returns the token to pass to _end_turn(token, notice=False) when done; raises ValueError(busy) when busy."""
+        with self.lock:
+            token = self._claim_turn_locked()
+            if token is None:
+                raise ValueError(busy)
+            self._undo_token = token
+            self._turn_open = False                  # no reply runs: _end_turn must not add a turn_end for one
+        return token
+
     def _set_state(self, to: str, token=None, expect=None) -> bool:
         """Move to `to` when allowed. Refused when `token` is not the current turn, when the state is not one of
         `expect`, or when the move is not one of the allowed ones. Returns whether it moved."""
@@ -638,6 +655,12 @@ class Session:
         with self.lock:
             ev = dict(ev, i=len(self.events), t=time.time())
             self.events.append(ev)
+            if t == "text_delta":
+                if not isinstance(self._open_deltas, list):
+                    self._open_deltas = []
+                self._open_deltas.append(ev["i"])
+            elif self._open_deltas and t in ("assistant", "stream_reset", "turn_end"):
+                self._fold_deltas(final=t != "turn_end")
             self.changed.notify_all()
         lease = getattr(self, "_lease", None)
         if lease and time.time() - getattr(self, "_lease_beat", 0) > 60:      # a working run keeps its task claimed
@@ -660,6 +683,33 @@ class Session:
                 fn(ev)
             except Exception:  # noqa: BLE001 - a front end's drawing never breaks the turn
                 pass
+
+    def _fold_deltas(self, final: bool):
+        """Under self.lock. A reply streams as many text_delta events (one per token or so); kept for the whole session
+        they cost memory and a reload replayed every one. Once the reply is complete they are folded IN PLACE (positions
+        never move: event_index, checkpoints' event_index, since= cursors and ev0 slices all stay right):
+        `final` (an assistant event carries the whole text, or stream_reset discarded it): each becomes _DELTA_GONE,
+        a shared marker the page is never sent. At turn_end without such an event (an outside agent stopped
+        mid-reply): each run of consecutive deltas becomes one delta with the run's text, so what the page shows is
+        unchanged."""
+        idx, self._open_deltas = self._open_deltas, []
+        evs = self.events
+        idx = [p for p in idx if 0 <= p < len(evs) and evs[p].get("type") == "text_delta" and not evs[p].get("gone")]
+        if final:
+            for p in idx:
+                evs[p] = _DELTA_GONE
+            return
+        k = 0
+        while k < len(idx):
+            j = k
+            while j + 1 < len(idx) and idx[j + 1] == idx[j] + 1:
+                j += 1
+            if j > k:
+                first = idx[k]
+                evs[first] = dict(evs[first], text="".join(str(evs[p].get("text") or "") for p in idx[k:j + 1]))
+                for p in idx[k + 1:j + 1]:
+                    evs[p] = _DELTA_GONE
+            k = j + 1
 
     def _persist_soon(self):
         """Steps arrive many per second: write the transcript at most once every two seconds instead of on every step."""
@@ -940,7 +990,7 @@ class Session:
                     self._after_stop = []
                 self._after_stop.append((text, images))
                 queued_as, n = "after", len(self._after_stop)
-            elif hasattr(self.agent, "steer") and not acp:
+            elif hasattr(self.agent, "steer") and not acp and self._undo_token != self._turn_id:
                 self.agent.steer(self._body(text, images), images=images)    # emits an event: the lock is re-entrant
                 from meshpool_harness import pace as PACE
                 if PACE.classify(text, bool(images)) != "quick":
@@ -1531,14 +1581,14 @@ class Session:
                     if self._after_stop:             # sent after Stop: always runs, as its own turn
                         items, self._after_stop = self._after_stop, []
                         item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
-                    elif self.queue:                 # Stop clears the queue: what is in it now was sent after Stop
+                    elif getattr(self, "queue", None):   # Stop clears the queue: what is in it now was sent after Stop
                         items, self.queue = self.queue, []
                         item = ("\n\n".join(t for t, _ in items), [im for _, ims in items for im in (ims or [])])
                         if stopped and self.harness.get("type") == "acp":
                             item = (item[0] + self._STOPPED_NOTE, item[1])
                     elif nxt and not stopped and not self._stop_req:
                         item = nxt
-                    for p in self.pendings.values():  # a card of this turn nobody can answer any more
+                    for p in getattr(self, "pendings", {}).values():  # a card of this turn nobody can answer any more
                         if p.get("in_turn") and p.get("token") == token and not p.get("answered"):
                             p["decision"], p["closed"] = "no", True
                             p["ev"].set()
@@ -1847,10 +1897,17 @@ class Session:
             return CR.turn_event_pos(self.events, t)
 
     def revert(self, turn: int) -> dict:
-        if self.state in ("working", "waiting"):
-            raise ValueError("Stop the agent before undoing a turn.")
+        """Undo checkpoint turn `turn` and everything after it: the files, the conversation and the transcript. Holds
+        the turn while it runs (see _hold_turn), so a message sent meanwhile waits and runs after it."""
         if not self.cp:
             raise ValueError("No checkpoints for this chat.")
+        token = self._hold_turn("Stop the agent before undoing a turn.")
+        try:
+            return self._revert(turn)
+        finally:
+            self._end_turn(token, notice=False)
+
+    def _revert(self, turn: int) -> dict:
         cut = self._turn_cut(turn)
         r = self.cp.revert_to_before(int(turn))
         idx = r.get("message_index")
@@ -1859,6 +1916,7 @@ class Session:
             self.agent.messages = self.agent.messages[:idx]
             self.agent.save()
             with self.lock:
+                self._open_deltas = []
                 if cut is not None:                  # keep the transcript up to there: earlier turns keep their Undo
                     self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 else:
@@ -1871,6 +1929,7 @@ class Session:
                 if cut is None:
                     users = [i for i, e in enumerate(self.events) if e.get("type") == "user" and not e.get("steer")]
                     cut = users[int(turn) - 1] if 0 < int(turn) <= len(users) else len(self.events)
+                self._open_deltas = []
                 self.events = [dict(e, i=i) for i, e in enumerate(self.events[:cut])]
                 if hasattr(self.agent, "events"):
                     self.agent.events = [{k: v for k, v in e.items() if k not in ("i", "t")} for e in self.events]
@@ -1906,18 +1965,21 @@ class Session:
         """Go back to just before one of the user's messages (the event at `event_index`): the conversation, the
         transcript and, with `files`, the file changes made from there on. Returns {text, undo[, forked]}."""
         from meshpool_harness import chat_rewind as CR
-        if self.state in ("working", "waiting"):
-            raise ValueError("Stop the agent before rewinding.")
-        r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self)
-        if r.get("undo"):
-            msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
-                                                                         r["undo"].get("deleted")) else "")
-            if r["undo"].get("notes"):
-                msg += " " + " ".join(r["undo"]["notes"][:5])
-            if r["undo"].get("backup"):
-                msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
-            self.emit({"type": "status", "text": msg.strip()})
-        return r
+        token = self._hold_turn("Stop the agent before rewinding.")      # as revert(): a message sent meanwhile waits
+        try:
+            r = CR.rewind(self.id, CR.message_for_event(self, int(event_index)), files=bool(files), session=self,
+                          held=True)
+            if r.get("undo"):
+                msg = "Rewound. " + ("Files are back to how they were." if (r["undo"].get("restored") or
+                                                                             r["undo"].get("deleted")) else "")
+                if r["undo"].get("notes"):
+                    msg += " " + " ".join(r["undo"]["notes"][:5])
+                if r["undo"].get("backup"):
+                    msg += f" Copies of the files Undo replaced are in {r['undo']['backup']}."
+                self.emit({"type": "status", "text": msg.strip()})
+            return r
+        finally:
+            self._end_turn(token, notice=False)
 
     def fork(self, event_index: int) -> str:
         """A new chat with the conversation up to the end of the exchange that starts at this message."""
@@ -1952,7 +2014,8 @@ class Session:
         self.touched = time.time()
         with self.lock:
             n = len(self.events)
-            evs = self.events[since:]
+            raw = self.events[since:]
+        evs = [e for e in raw if not e.get("gone")]  # a folded reply's deltas: its assistant event shows the text
         a = self.agent
         meta = read_meta(self.id)
         try:
@@ -1977,7 +2040,7 @@ class Session:
                 "worktree": meta.get("worktree") or None,
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
-                "events": evs, "total": since + len(evs) if since <= n else n,
+                "events": evs, "total": since + len(raw) if since <= n else n,
                 "mcp": self.mcp.status() if self.mcp else None}
 
     def close(self):

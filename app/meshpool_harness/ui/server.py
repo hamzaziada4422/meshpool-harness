@@ -224,6 +224,23 @@ class Handler(BaseHTTPRequestHandler):
         host = (self.headers.get("Host") or "").split(":")[0]
         return host in ("127.0.0.1", "localhost")
 
+    def _json_type(self) -> bool:
+        """The request's media type (the Content-Type without its parameters) is exactly application/json."""
+        return (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower() == "application/json"
+
+    def _origin_ok(self) -> bool:
+        """No Origin (not a browser, or a same-origin request that omits it), or this app's own origin."""
+        o = self.headers.get("Origin")
+        if o is None:
+            return True
+        try:
+            u = urlparse(o.strip())
+            port = u.port
+        except ValueError:
+            return False
+        return (u.scheme == "http" and u.hostname in ("127.0.0.1", "localhost")
+                and port == self.server.server_address[1])
+
     def _send(self, code: int, body, ctype="application/json; charset=utf-8", extra=None):
         data = body if isinstance(body, bytes) else json.dumps(body, default=str).encode("utf-8")
         self.send_response(code)
@@ -301,7 +318,8 @@ class Handler(BaseHTTPRequestHandler):
                     with s.lock:
                         fresh = s.events[cursor:]
                     if fresh and state == last_state and all(e.get("type") == "text_delta" for e in fresh):
-                        v = {"id": sid, "state": state, "epoch": s.epoch, "events": fresh, "total": cursor + len(fresh),
+                        v = {"id": sid, "state": state, "epoch": s.epoch, "total": cursor + len(fresh),
+                             "events": [e for e in fresh if not e.get("gone")],     # a folded reply's (see view)
                              "turn_started": getattr(s, "t_turn", None) if state in ("working", "waiting") else None}
                     else:
                         v = A.view(sid, cursor)
@@ -625,8 +643,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(403, {"error": "forbidden"})
         u = urlparse(self.path)
         if u.path == "/show":                  # a second launch of the app asks this one to come to the front
-            if "json" not in (self.headers.get("Content-Type") or "").lower():
-                return self._send(403, {"error": "forbidden"})     # a web page cannot send this without a preflight
+            # A web page cannot send application/json without a CORS preflight (which this server never answers), but
+            # "text/plain; x=json" is a simple request: the media type itself must be application/json. And a
+            # browser's cross-site request carries an Origin that is not this app (the second launch sends none).
+            if not self._json_type() or not self._origin_ok():
+                return self._send(403, {"error": "forbidden"})
             shown = any(fn() for fn in list(ON_SHOW))
             return self._send(200, {"ok": True, "native": shown})
         if self.headers.get("X-Meshpool-Token") != TOKEN:

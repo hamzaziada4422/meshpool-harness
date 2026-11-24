@@ -272,10 +272,24 @@ def message_for_event(session, event_index: int) -> int:
     return n
 
 
-def rewind(sid: str, message_index: int, files: bool = True, session=None) -> dict:
+def rewind(sid: str, message_index: int, files: bool = True, session=None, held: bool = False) -> dict:
+    """See the module notes. On a live session the rewind holds the session's turn while it runs (``held``: the caller
+    already holds it), so no turn starts meanwhile and a message sent meanwhile is queued and runs after it."""
     session = session or _live(sid)
-    if session is not None and session.state in ("working", "waiting"):
-        raise ValueError("Stop the agent before rewinding.")
+    if session is None or held:
+        return _rewind(sid, message_index, files, session)
+    if not hasattr(session, "_hold_turn"):              # a stand-in session (tests): the plain state check
+        if session.state in ("working", "waiting"):
+            raise ValueError("Stop the agent before rewinding.")
+        return _rewind(sid, message_index, files, session)
+    token = session._hold_turn("Stop the agent before rewinding.")
+    try:
+        return _rewind(sid, message_index, files, session)
+    finally:
+        session._end_turn(token, notice=False)
+
+
+def _rewind(sid: str, message_index: int, files: bool, session) -> dict:
     st = _State(sid, session)
     mi = int(message_index)
     found = next(((i, t, s) for i, t, s in st.user_messages() if i == mi), None)
@@ -318,6 +332,7 @@ def _cut(st: _State, mi: int, pos, session) -> None:
                 session.agent.unfinished = False
                 session.agent.save(full=True)
             session.events = _renumber(kept)
+            session._open_deltas = []
             session.epoch += 1
         if st.outside:
             session.agent.save()

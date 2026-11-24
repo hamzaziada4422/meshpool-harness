@@ -292,7 +292,7 @@ const THUMB = d => `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" 
 const UP = THUMB("M7 11v9H4v-9zM7 11l4-8a2 2 0 0 1 2 2v4h5.5a2 2 0 0 1 2 2.3l-1.2 6A2 2 0 0 1 17.3 20H7");
 const DOWN = THUMB("M7 13V4H4v9zM7 13l4 8a2 2 0 0 0 2-2v-4h5.5a2 2 0 0 0 2-2.3l-1.2-6A2 2 0 0 0 17.3 4H7");
 function feedback010(outcome, n) { if (S.cur) post("/api/receipt/feedback", {chat: S.cur.id, outcome, turn: n}).catch(() => {}); }
-function acts010(n, text) {
+function acts010(n, text, ei) {
   const f = foot010(); if (!f || f.dataset.acts010) return; f.dataset.acts010 = "1";
   const w = document.createElement("span"); w.className = "racts010";
   w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
@@ -300,35 +300,47 @@ function acts010(n, text) {
   w.onclick = async e => {
     const b = e.target.closest("[data-ra]"); if (!b) return;
     if (b.dataset.ra === "copy") return navigator.clipboard.writeText(text || "").then(() => toast("Copied"), () => toast("Could not copy."));
-    if (b.dataset.ra === "retry") return retry010(n);
+    if (b.dataset.ra === "retry") return retry010(ei, n);
     if (b.dataset.ra === "check") return checkThis010(b);
     const on = b.getAttribute("aria-pressed") !== "true";
     $$("[data-ra=up],[data-ra=down]", w).forEach(x => { x.setAttribute("aria-pressed", "false"); x.classList.remove("on"); });
     if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra, n); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
-async function rewind010(n) {
-  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9});
-  renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); await poll(); if (S.panel === "diff") renderPanel();
+// Edit and Try again go back to just before one of your messages, found by its event number (the server maps it to the
+// message and to its checkpoint). Never by a count of messages on the page: checkpoint numbers keep growing and are not
+// reused after an Undo, and steer messages get turns of their own, so a count names the wrong turn.
+async function rewind010(ei) {
+  const cur = S.cur;
+  const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: true, since: 1e9});
+  if (r.forked) { await loadThreads(); openThread(r.forked); return r; }
+  renderBranch(); clearTimeout(cur.pollT); resetChat(cur); await poll(); if (S.panel === "diff") renderPanel();
+  return r;
 }
-async function retry010(n) {
-  const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
+async function retry010(ei, n) {
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
-  if (!asked) return toast("Could not find the message to send again.");
-  try { await rewind010(n); feedback010("retry", n); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+  const ue = typeof ei === "number" && threadLog().find(e => e.type === "user" && !e.steer && e.i === ei);
+  if (!ue || !ue.text) return toast("Could not find the message to send again.");
+  try {
+    const r = await rewind010(ei); feedback010("retry", n);
+    const inp = $("#input"), draft = inp.value;     // a draft in the box is kept: the message is sent, then it comes back
+    inp.value = ue.text || r.text; sendNow(false);
+    if (draft.trim() && !inp.value.trim()) { inp.value = draft; inp.dispatchEvent(new Event("input")); }
+  } catch (e) { toast(e.message); }
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;
-  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1, n = +mine?.dataset.turn || idx;
+  const msgs = $$(".msg-user").filter(m => $(".macts", m)), mine = b.closest(".msg-user"), idx = msgs.indexOf(mine) + 1;
+  const ei = mine && mine.dataset.ei !== undefined && mine.dataset.ei !== "" ? +mine.dataset.ei : NaN;
   const text = $(".b", mine)?.innerText.replace(/^Plan mode\n?/, "").trim() || "";
   e.stopImmediatePropagation();
-  const fill = () => { const i = $("#input"); i.value = text; i.focus(); i.dispatchEvent(new Event("input")); };
-  if (S.cur.busy || idx < 1) { fill(); return toast("Edit it and send to ask again.", 3500); }
+  const fill = () => fillInput(text);             // a draft in the box is kept: the message goes after it
+  if (S.cur.busy || idx < 1 || isNaN(ei)) { fill(); return toast("Edit it and send to ask again.", 3500); }
   if (idx < msgs.length && !await ask({title: "Edit this message?", text: "The replies after it are removed, and files Meshpool changed after it go back.", ok: "Edit it", danger: true})) return;
-  try { await rewind010(n); fill(); toast("Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
+  try { const r = await rewind010(ei); fill(); toast(r.forked ? "This agent cannot go back in place, so the conversation up to there is a new chat. Edit it and send." : "Edit it and send. The old reply is gone.", 4000); } catch (err) { toast(err.message); }
 }, true);
 const _ev010b = ev010;
-ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText); };
+ev010 = function (ev) { _ev010b(ev); if (ev.type === "turn_end" && S.cur) acts010(S.cur.turn, S.cur.lastText, S.cur.turnEi); };
 
 
 /* ---------- diagrams and maths in chat: Mermaid and KaTeX are bundled and load only when a reply uses them ---------- */

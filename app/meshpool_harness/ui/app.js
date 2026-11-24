@@ -1040,7 +1040,12 @@ function drainQ(cur, all) {
     cur.log.push(ev); applyEv(ev);
   }
 }
-function flushLive(cur) { if (cur.live && cur.liveDirty) { mdRender(cur.live, cur.liveText); cur.liveDirty = false; } }
+function flushLive(cur) {
+  if (!(cur.live && cur.liveDirty)) return;
+  cur.liveDirty = false;                          // cleared first: a reply that cannot be drawn must not be retried every frame
+  try { mdRender(cur.live, cur.liveText); }
+  catch (e) { console.warn("meshpool: could not draw the reply", e); try { cur.live.textContent = cur.liveText; } catch (_) {} }
+}
 function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
 // The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
 // Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
@@ -1049,8 +1054,9 @@ function wakeFrame() { if (frameT) { clearTimeout(frameT); frameT = 0; } if (!fr
 function frame() {
   frameR = 0; frameT = 0;
   const cur = S.cur;
-  if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); }
-  easeAll(); workTick(cur);
+  // Never let one bad event or reply stop the loop: the live reply, the easing and the timer all run from here.
+  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); } } catch (e) { console.warn("meshpool: frame", e); }
+  try { easeAll(); workTick(cur); } catch (e) { console.warn("meshpool: frame", e); }
   const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
   if (active && !document.hidden) frameR = requestAnimationFrame(frame);
   else frameT = setTimeout(frame, document.hidden ? 2000 : cur?.working || S.sendHold > Date.now() ? 250 : 1000);
@@ -1132,6 +1138,16 @@ function inline(s) {
     .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, "$1<em>$2</em>")
     .replace(/\[([^\]]+)\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
 }
+// Base64 of a string's UTF-8 bytes (decoded by unb64 in chat010.js). A lone surrogate (half of an emoji cut by the model,
+// or typed in maths) is not valid UTF-16: encodeURIComponent threw URIError on it and the live reply stopped drawing.
+// It becomes U+FFFD instead.
+function b64utf8(t) {
+  let s = String(t || "").trim();
+  s = typeof s.toWellFormed === "function" ? s.toWellFormed() : s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  const u = new TextEncoder().encode(s); let bin = "";
+  for (let i = 0; i < u.length; i += 0x8000) bin += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
 function md(src) {
   const parts = String(src || "").split(/```/);
   return parts.map((p, i) => {
@@ -1140,7 +1156,7 @@ function md(src) {
       if (lang === "mermaid" && i < parts.length - 1) { const src = p.replace(/^[\w+.#-]*\n/, ""); return `<div class="mermaid-box" data-mermaid="${esc(src)}"><pre><code>${esc(src)}</code></pre></div>`; }
       return (lang === "html" || lang === "svg") && i < parts.length - 1 ? `<div class="codewrap"><div class="codehd"><span>${lang}</span><button class="pvbtn" type="button" data-pvcode="${lang}" title="Preview this ${lang.toUpperCase()}">Preview</button></div>${pre}</div>` : pre;   // a closed fence only: not while it streams
     }
-    const b64 = t => btoa(unescape(encodeURIComponent(t.trim())));
+    const b64 = b64utf8;
     p = p.replace(/(^|\n)([ \t]*)\$\$([\s\S]+?)\$\$/g, (_, pre, sp, t) => `${pre}${sp}\u0001M${b64(t)}\u0002`).replace(/\\\[([\s\S]+?)\\\]/g, (_, t) => `\u0001M${b64(t)}\u0002`)
       .replace(/\\\(([^\n]+?)\\\)/g, (_, t) => `\u0001m${b64(t)}\u0002`);
     const lines = esc(p).split("\n"); let out = "", list = null, para = [], table = [];
@@ -1217,7 +1233,7 @@ function applyEvRaw(ev) {
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
       closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
-      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.turn = cur.turn; mu.dataset.ei = ev.i; cur.lastFoot = null; }
+      { const mu = add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button><button class="iconbtn" data-ma="rewind" data-tip="Rewind to here" data-tip-pos="below" aria-label="Rewind to here">${ICON.undo}</button><button class="iconbtn" data-ma="fork" data-tip="Fork from here" data-tip-pos="below" aria-label="Fork from here">${ICON.branch}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user"); mu.dataset.ei = ev.i; cur.turnEi = ev.i; cur.lastFoot = null; }
       break; }
     case "text_delta":
       if (!cur.live) { closeGroup(); cur.live = add("", "msg-ai"); cur.liveText = ""; mdRoot(cur.live); if (!cur.stage) easeStart(cur.live); }
@@ -1452,13 +1468,22 @@ function bindFoot(foot) {
   $$("[data-diff]", foot).forEach(b => b.onclick = () => { S.diffTurn = +b.dataset.diff; togglePanel(curMode() === "cowork" ? "outputs" : "diff", true); });
   $$("[data-undo]", foot).forEach(b => b.onclick = () => undoTurn(+b.dataset.undo));
 }
+// Put a message back into the box (Undo, Rewind, Edit) without losing what is typed there: a draft stays first, the
+// message goes after it, unless the draft already is that message.
+function fillInput(text) {
+  const inp = $("#input"); if (!inp || !text) return;
+  const draft = inp.value;
+  if (!draft.trim()) inp.value = text;
+  else if (draft.trim() !== String(text).trim()) inp.value = draft.replace(/\s+$/, "") + "\n\n" + text;
+  inp.dispatchEvent(new Event("input")); inp.focus();
+}
 async function undoTurn(n) {
   if (!await ask({title: "Undo this reply?", text: "Files Meshpool changed go back to how they were before it, and the conversation goes back to that point. Replies after it are undone too.", ok: "Undo changes", danger: true})) return;
   const t = (S.cur.view?.turns || []).find(x => x.n === n) || {};
   const ue = threadLog().find(e => e.type === "user" && (t.message_index != null && e.mi === t.message_index)) ||
     threadLog().find(e => e.type === "user" && t.event_index != null && e.i === t.event_index);
   const asked = ue?.text || "";
-  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); const inp = $("#input"); if (asked && !inp.value.trim()) { inp.value = asked; inp.dispatchEvent(new Event("input")); } renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
+  try { await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9}); if (asked) fillInput(asked); renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); poll(); if (S.panel === "diff") renderPanel(); }
   catch (e) { toast(e.message); }
 }
 
@@ -1477,7 +1502,7 @@ async function rewindFork(kind, el) {
     if (!a) return;
     const r = await post(`/api/agent/${cur.id}/rewind`, {event_index: ei, files: a.checked, since: 1e9});
     if (r.forked) { await loadThreads(); openThread(r.forked); toast("This agent cannot go back in place, so the conversation up to there is a new chat.", 5000); return; }
-    const inp = $("#input"); if (r.text && !inp.value.trim()) { inp.value = r.text; inp.dispatchEvent(new Event("input")); inp.focus(); }
+    if (r.text) fillInput(r.text);
     renderBranch(); clearTimeout(cur.pollT); resetChat(cur); poll(); if (S.panel === "diff") renderPanel();
   } catch (e) { toast(e.message); }
 }

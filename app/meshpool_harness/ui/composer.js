@@ -214,9 +214,9 @@ function repoSelector(anchor) {
 
 /* ================================== home ================================== */
 const CARDS = () => [
-  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + (S.settings.key_name || "Meshpool") + " key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
+  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + (S.settings?.key_name || "Meshpool") + " key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
   {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let Meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
-  {id: "project", show: !!S.settings?.ready && !S.pj.length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
+  {id: "project", show: !!S.settings?.ready && !(S.pj || []).length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];
 function waitingList() { return chatList().filter(t => isCodeThread(t) && t.state === "waiting").slice(0, 3); }
 function renderHero() {
