@@ -426,9 +426,8 @@ def _http_prices(base: str) -> dict | None:
         except Exception:
             pass
         req = urllib.request.Request(base + "/models", headers=headers)
-        loop = u.hostname in ("localhost", "127.0.0.1", "::1")
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({})) if loop else urllib.request.build_opener()
-        with opener.open(req, timeout=3) as r:
+        from meshpool_harness.core import http as H    # redirects refused: a 302 elsewhere never gets the key
+        with H.open(req, timeout=3) as r:
             body = r.read(8 * 1024 * 1024)
         return _parse_models(json.loads(body.decode("utf-8", "replace")))
     except Exception:

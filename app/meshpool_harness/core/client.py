@@ -291,11 +291,11 @@ class LiveClient:
                 return r
             except RuntimeError as e:
                 last = e
-                msg = str(e)
+                from meshpool_harness.core import endpoint as EP
+                k = getattr(self.ledger, "api_key", "") or getattr(self, "api_key", "") or ""   # (on the ledger)
+                msg = EP.redact_key(str(e), k)
                 if isinstance(getattr(e, "body", None), dict):     # the service's structured error (param, code)
-                    raw = json.dumps(e.body)[:2000]
-                    k = getattr(self, "api_key", "") or ""
-                    msg += " " + (raw.replace(k, "***") if len(k) >= 8 else raw)
+                    msg += " " + EP.redact_key(json.dumps(e.body)[:2000], k)
                 kind = classify_error(msg)
                 cur = attempt
                 if kind != "rate_limit":

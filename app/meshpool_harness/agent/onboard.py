@@ -217,6 +217,9 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
             save.update(MESHPOOL_BASE_URL=os.environ["MESHPOOL_BASE_URL"], MH_MODEL=os.environ["MH_MODEL"],
                         MH_API_KIND=os.environ.get("MH_API_KIND", ""), MH_API_VERSION=os.environ.get("MH_API_VERSION", ""))
             save["MH_API_WIRE"] = EP.wire_of(os.environ.get("MH_API_KIND") or EP.detect(os.environ["MESHPOOL_BASE_URL"]))
+        meshpool = "https://llm.meshpool.ai/v1"
+        if ((save.get("MESHPOOL_BASE_URL", saved_base) or meshpool).rstrip("/") != (saved_base or meshpool)):
+            save.update(MH_AUTH_HEADER="", MH_AUTH_SCHEME="")   # the old endpoint's key header is not this one's
         if r["ok"]:
             C.write(save)
             _use("custom" if custom else "meshpool")

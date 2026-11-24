@@ -174,17 +174,24 @@ def test_route_turns_an_unexpected_exception_into_a_200(home, monkeypatch):
 def test_zero_host_and_lan_get_http():                                                    # W-16
     n = PS.normalise_base
     assert n("0.0.0.0:1234") == "http://0.0.0.0:1234"
-    assert n("192.168.1.20:8080/v1") == "http://192.168.1.20:8080/v1"
-    assert n("10.0.0.5:11434") == "http://10.0.0.5:11434"
-    assert n("mybox.local:8000") == "http://mybox.local:8000"
+    assert n("localhost:1234") == "http://localhost:1234"
+    # release review: only this computer defaults to http; a LAN address is https unless http:// is typed
+    assert n("192.168.1.20:8080/v1") == "https://192.168.1.20:8080/v1"
+    assert n("10.0.0.5:11434") == "https://10.0.0.5:11434"
+    assert n("mybox.local:8000") == "https://mybox.local:8000"
+    assert n("http://192.168.1.20:8080/v1") == "http://192.168.1.20:8080/v1"
     assert n("api.example.com/v1") == "https://api.example.com/v1"
     assert n("8.8.8.8:80") == "https://8.8.8.8:80"
 
 
 def test_https_to_plain_http_local_server_falls_back_or_says_http(home, srv, monkeypatch):
     s = srv(lambda p, h: (200, {"data": [{"id": "m1"}]}), lambda p, b, h: (404, {}))
-    r = PS.test(f"https://127.0.0.1:{s.port}/v1", KEY)
+    r = PS.test(f"https://127.0.0.1:{s.port}/v1", None)                             # no key: falls back to http
     assert r["ok"] and r["base_url"].startswith("http://127.0.0.1") and r["models"][0]["id"] == "m1"
+    r = PS.test(f"https://127.0.0.1:{s.port}/v1", KEY)          # a key is never moved to http on its own: says it
+    assert not r["ok"] and f"http://127.0.0.1:{s.port}/v1" in r["error"]
+    r = PS.test(f"http://127.0.0.1:{s.port}/v1", KEY)                                # typed http://: used as typed
+    assert r["ok"] and r["models"][0]["id"] == "m1"
     monkeypatch.setattr(PS.PV, "keyless_ok", lambda *a, **k: False)                    # not a local host: say it
     r = PS.test(f"https://127.0.0.1:{s.port}/v1", KEY)
     assert not r["ok"] and "does not speak HTTPS" in r["error"]

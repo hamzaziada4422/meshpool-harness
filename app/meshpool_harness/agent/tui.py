@@ -1436,14 +1436,16 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             return 1
     os.environ["MESHPOOL_FRONTEND"] = "terminal"        # the app's desktop notifications stay quiet: this is the prompt
     from meshpool_harness import chats
-    pm = C.normalize_mode(os.environ.get("MH_PERMISSION_MODE"), "")   # old names accepted (F-19)
+    raw_pm = str(os.environ.get("MH_PERMISSION_MODE") or "").strip().lower()
+    plan_mode = raw_pm == "plan"                 # plan is not an access level: normalize_mode drops it, so read it first
+    pm = C.normalize_mode(raw_pm, "")            # old names accepted (F-19)
     mode_kind = mode or ("work" if os.environ.get("MH_AGENT_PROFILE") == "work" else "code")
     if mode_kind not in _KINDS:
         term.p(st.red(f"Unknown mode {mode_kind}. Use code, work or auto."))
         return 1
     body = {"workdir": wd, "kind": _KINDS[mode_kind] or "",
             "mode": "auto" if auto else (pm if pm in ("ask", "edits") else None),
-            "plan": True if pm == "plan" else None, "incognito": incognito, "project_id": project or "",
+            "plan": True if plan_mode else None, "incognito": incognito, "project_id": project or "",
             "no_mcp": no_mcp, "model": model or os.environ.get("MH_MODEL") or None, "task": prompt or first or "", "effort": effort or ""}
     if mode_kind == "auto":
         body["harness"] = "meshpool-auto"
@@ -1468,6 +1470,8 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
     if not s.harness.get("ready", True):
         term.p(st.red(f"{s.harness['name']} cannot run yet. {s.harness.get('setup') or ''} Run: meshpool setup"))
         return 1
+    if plan_mode and not getattr(s, "plan", False):
+        s.set_plan(True)                          # a resumed chat: --permission-mode plan applies to it too
     headless = prompt is not None
     front = TermFrontend(s, term, headless=headless, stream=json_out == "stream-json")
     front.body = body

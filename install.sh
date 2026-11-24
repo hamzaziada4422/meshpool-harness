@@ -193,8 +193,18 @@ add_to_path() {
   fi
 }
 
+settings_file() {   # where the meshpool command keeps its settings: the same rule as config_path() in config.py
+  if [ -n "${MESHPOOL_CONFIG:-}" ]; then echo "$MESHPOOL_CONFIG"; return; fi
+  if [ -n "${MESHPOOL_HOME:-}" ]; then echo "$MESHPOOL_HOME/meshpool.config"; return; fi
+  if [ "$(uname -s)" = Darwin ]; then echo "$HOME/Library/Application Support/Meshpool/meshpool.config"; return; fi
+  echo "${XDG_DATA_HOME:-$HOME/.local/share}/meshpool/meshpool.config"
+}
+
 ready() {   # a key, or a signed-in subscription chosen at setup
-  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$DIR/meshpool.config" 2>/dev/null
+  f="$(settings_file)"
+  # An older install kept its settings in $DIR; the first run copies them to the data folder, so they count until then.
+  if [ ! -f "$f" ] && [ -z "${MESHPOOL_CONFIG:-}${MESHPOOL_HOME:-}" ]; then f="$DIR/meshpool.config"; fi
+  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$f" 2>/dev/null
 }
 
 # ---------- install ----------------------------------------------------------------------------------------------

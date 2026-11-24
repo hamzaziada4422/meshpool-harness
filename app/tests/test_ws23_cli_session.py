@@ -473,3 +473,27 @@ def test_receipt_counts_this_turns_lines_not_uncommitted_work(monkeypatch, proj,
     assert rc == 0 and "def sub" in (proj / "ops.py").read_text()
     assert "ops.py (+1 -1)" in err, err[-600:]
     assert "Checked:** `" in err and "Checked:** `cd " not in err
+
+
+# ---------- release review: --permission-mode plan holds in -p ------------------------------------------------------
+def test_p_permission_mode_plan_is_honoured(monkeypatch, proj, capfd):
+    """plan is not an access level, so normalize_mode drops it: read before normalizing, or -p edits files."""
+    monkeypatch.setenv("MH_AGENT_PERMISSIONS", "edits")         # a default that would let the write through
+    monkeypatch.setenv("MH_PERMISSION_MODE", "plan")
+    script(monkeypatch, _call("write_file", {"path": "out.txt", "content": "x"}), "Plan: write out.txt")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    rc, out, err = run_main(proj, capfd, prompt="write out.txt", json_out="json")
+    res = json.loads(out.strip().splitlines()[-1])
+    assert chats.read_meta(res["chat_id"]).get("plan") is True
+    assert not (proj / "out.txt").exists()
+
+
+def test_resumed_chat_takes_permission_mode_plan(monkeypatch, proj, capfd):
+    script(monkeypatch, "first", "second")
+    sid = chats.create({"workdir": str(proj), "no_mcp": True})["id"]
+    assert not chats.get(sid).plan
+    A.LIVE.clear()
+    monkeypatch.setenv("MH_PERMISSION_MODE", "plan")
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    run_main(proj, capfd, prompt="go on", json_out="json", session=sid)
+    assert chats.read_meta(sid).get("plan") is True

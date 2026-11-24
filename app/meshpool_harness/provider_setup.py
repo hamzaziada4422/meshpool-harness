@@ -336,8 +336,10 @@ def test(base_url: str, api_key=None, wire: str = "auto", env: str = "", model: 
     for b in _candidates(base):
         for w in order:
             status, data, err = _get(b.rstrip("/") + "/models", _headers(w, key, b, auth_header.strip(), auth_scheme.strip().lower()))
-            if err == "tls" and urlparse(b).scheme == "https" and PV.keyless_ok(b):
-                plain = "http://" + base.split("://", 1)[1]           # a local server speaking plain http
+            if err == "tls" and urlparse(b).scheme == "https" and PV.keyless_ok(b) and not key:
+                # a local server speaking plain http, tried over http only with no key: a keyed request is never
+                # downgraded unless the user typed http:// (the error below tells them how)
+                plain = "http://" + base.split("://", 1)[1]
                 return test(plain, api_key, wire, env, model, api_version, kind, auth_header, auth_scheme)
             if err:
                 out["error"] = _net_error(err, b) or "No server at that address. Check the address and your connection."
@@ -474,7 +476,8 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
     wire = (wire or "auto").lower()
     if wire not in ("openai", "anthropic"):
         wire = "anthropic" if PV.host(base).endswith("anthropic.com") else EP.wire_of(kind)
-    changed = (not _same_endpoint(base, PV.key_base())) or (key and key != PV.key())
+    moved = not _same_endpoint(base, PV.key_base())
+    changed = moved or (key and key != PV.key())
     # The kind and api-version belong to this address only: saved for an Azure endpoint, blanked for any other, so
     # an old api-version never follows the user to another host.
     vals = {"MESHPOOL_BASE_URL": base, "MH_API_WIRE": wire, "MH_MODEL": model,
@@ -488,14 +491,18 @@ def save(base_url: str, api_key=None, wire: str = "auto", default_model: str = "
     for k, v in (("MH_AUTH_HEADER", auth_header), ("MH_AUTH_SCHEME", auth_scheme)):
         if v is not None:
             vals[k] = v
+        elif moved:                                      # the old endpoint's header and scheme belong to it alone,
+            vals[k] = ""                                 # like its api-version: never sent with another key
     if changed and (C.read().get("MH_SUBAGENT_MODEL") or "").strip():
         vals["MH_SUBAGENT_MODEL"] = ""                  # named a model of the old endpoint
     C.write(vals)                                        # one atomic replace of the settings file
-    for k, v in vals.items():
-        if v:
-            os.environ[k] = v
+    for k, v in vals.items():                            # Meshpool's own copy from now on: a later
+        if v:                                            # load_into_env(override=True) must not take these
+            os.environ[k] = v                            # for values the user's shell set
+            C._INJECTED.add(k)
         else:
             os.environ.pop(k, None)
+            C._INJECTED.discard(k)
     try:                                                 # the picker's cached list belonged to the old endpoint
         from meshpool_harness.ui import workbench as W
         W._MODELS.update(t=0, key="", rows=[], error="")

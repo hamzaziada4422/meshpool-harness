@@ -347,11 +347,10 @@ def write(values: dict, path: Path | None = None) -> Path:
     """Update keys in place, keeping comments and unknown keys. One writer at a time, and the file is replaced in one
     step: two saves at once (two favourite stars clicked quickly) used to lose the API key."""
     path = path or config_path()
-    for k in values:
-        if k in ENDPOINT_NAMES:
-            SHELL.pop(k, None)           # an explicit save replaces what the shell once gave for this name
     with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
-        return _write(values, path)
+        out = _write(values, path)
+    _settle_endpoint(values, path)
+    return out
 
 
 def update(fn, path: Path | None = None) -> Path:
@@ -361,10 +360,49 @@ def update(fn, path: Path | None = None) -> Path:
     with _WRITE_LOCK, _file_lock(path.with_name(path.name + ".lock")):
         cur = _parse(decode_settings(path.read_bytes())[0].replace("\ufeff", "")) if path.exists() else {}
         changes = fn(cur) or {}
-        for k in changes:
-            if k in ENDPOINT_NAMES:
-                SHELL.pop(k, None)
-        return _write(changes, path) if changes else path
+        out = _write(changes, path) if changes else path
+    _settle_endpoint(changes, path)
+    return out
+
+
+# The key and its address are one endpoint: saving either one decides both, so a saved key is never sent to an
+# address the shell gave for another key, and a shell key never to an address saved for another.
+ENDPOINT_PAIR = ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL")
+
+
+def _is_live(path: Path) -> bool:
+    try:
+        return Path(path).resolve() == config_path().resolve()
+    except OSError:
+        return False
+
+
+def _settle_endpoint(values: dict, path: Path) -> None:
+    """After an explicit save, the endpoint names it wrote come from the settings file, not the shell: what the shell
+    once gave for them is forgotten (the key and the address together, never one alone), and the process environment
+    takes the saved values, marked as Meshpool's own copy, so the new key works on this first save and a later
+    load_into_env(override=True) never records them as the shell's."""
+    names = {k for k in values if k in ENDPOINT_NAMES}
+    if names & set(ENDPOINT_PAIR):
+        names |= set(ENDPOINT_PAIR)
+    if not names:
+        return
+    for k in names:
+        SHELL.pop(k, None)               # an explicit save replaces what the shell once gave for this name
+    if not _is_live(path):
+        return
+    try:
+        saved = read(path)
+    except OSError:
+        return
+    for k in names:
+        v = (saved.get(k) or "").strip()
+        if v:
+            os.environ[k] = v
+            _INJECTED.add(k)
+        else:                            # nothing saved: the shell's old value must not stand in for it
+            os.environ.pop(k, None)
+            _INJECTED.discard(k)
 
 
 @__import__("contextlib").contextmanager

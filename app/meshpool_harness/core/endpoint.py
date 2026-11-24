@@ -172,8 +172,15 @@ def _with_scheme(u: str) -> str:
     if not u:
         raise EndpointError("Enter the endpoint address, for example https://api.openai.com/v1.")
     if "://" not in u:
-        from meshpool_harness import providers as PV         # a local or LAN server (0.0.0.0, 192.168.x ...) is http
-        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) or PV.keyless_ok("http://" + u) else "https://") + u
+        # Only this computer (localhost, 127.x, ::1) defaults to plain http: anything else, a LAN address, a *.internal
+        # or *.lan name or a bare host name included, is https unless the user types http:// themselves, so a key is
+        # never sent in the clear across a network on a guess.
+        from meshpool_harness.core import http as H
+        try:
+            h = urlparse("http://" + u).hostname or ""
+        except ValueError:
+            h = ""
+        u = ("http://" if re.match(r"(localhost|127\.|\[?::1)", u) or H._is_loopback(h) else "https://") + u
     return u
 
 
@@ -419,6 +426,16 @@ def _msg(body) -> tuple[str, str]:
     return str(d.get("message") or d.get("detail") or "")[:200], str(d.get("code") or "")
 
 
+def redact_key(text: str, key: str) -> str:
+    """`text` with every whole occurrence of `key` replaced by ***. A key of 8+ characters only, and only where it is
+    not part of a longer word of letters and digits (a short key must not mangle ordinary words); punctuation next to
+    it (a full stop, a dash, an underscore, a quote) does not hide it."""
+    key = str(key or "")
+    if not isinstance(text, str) or len(key) < 8:
+        return text
+    return re.sub(r"(?<![A-Za-z0-9])" + re.escape(key) + r"(?![A-Za-z0-9])", "***", text)
+
+
 def explain(status: int, body=None, *, kind: str = "generic", host: str = "", model: str = "", key: str = "",
             api_version: str = "") -> str:
     """A failed call in words the user can act on: what to check, not the raw reply."""
@@ -427,8 +444,7 @@ def explain(status: int, body=None, *, kind: str = "generic", host: str = "", mo
     c = caps(kind)
     who = c["label"] if kind != "generic" else (host or "The endpoint")
     az = is_azure(kind)
-    if key and len(key) >= 8:            # whole-key matches only: a short key must not mangle ordinary words
-        msg = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(key) + r"(?![A-Za-z0-9_.-])", "***", msg)
+    msg = redact_key(msg, key)
     if status == 401 or (status == 403 and "invalid" in low and "key" in low):
         out = [f"The key was rejected ({status})."]
         owner = key_owner(key)

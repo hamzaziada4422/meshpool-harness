@@ -51,6 +51,16 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
         return _run_request(request, files, out, engine, workdir, client, output_format, model)
 
 
+def _endpoint_ready() -> bool:
+    """The check -p uses: a key paired with its endpoint (or a keyless local server), or a ChatGPT sign-in. An
+    OPENAI_API_KEY without its OPENAI_BASE_URL is not a key for any endpoint here."""
+    from meshpool_harness import providers as PV
+    try:
+        return bool(PV.ready("key") or PV.ready("chatgpt"))
+    except Exception:  # noqa: BLE001 - a broken sign-in file is not a key
+        return bool(PV.ready("key"))
+
+
 def _run_request(request: str, files: list[str], out: str, engine: str | None = None, workdir: str | None = None,
                  client=None, output_format: str | None = None, model: str | None = None) -> dict:
     from meshpool_harness.core.client import LiveClient
@@ -64,8 +74,7 @@ def _run_request(request: str, files: list[str], out: str, engine: str | None = 
         bad = [e for e in engine.split(",") if e not in ENGINES]
         if bad:
             raise SystemExit(f"error: unknown engine(s) {bad}; choose from {', '.join(ENGINES)}")
-    if not (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")
-            or os.environ.get("MH_PROVIDER") == "chatgpt") and client is None:
+    if client is None and not _endpoint_ready():
         raise SystemExit(f"error: no API key. Put MESHPOOL_API_KEY=... in {_config.config_path()}")
     client = client or LiveClient("phase_2_build")
     task_id = "req-" + uuid.uuid4().hex[:8]
