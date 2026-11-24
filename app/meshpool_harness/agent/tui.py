@@ -1110,7 +1110,12 @@ class Session(SharedCommands):
             term.echo_user(first)
             self.send(first)
         while True:
-            text = term.read_input()
+            try:
+                text = term.read_input()
+            except KeyboardInterrupt:
+                # Ctrl+C is read as a key while the prompt waits, but one that lands while the prompt redraws (a slow
+                # or paused terminal) raised out of here and ended the program with a traceback: clear the line instead
+                continue
             if text is None:
                 break
             if not text:

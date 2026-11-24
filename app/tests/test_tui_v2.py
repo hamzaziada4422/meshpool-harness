@@ -316,3 +316,26 @@ def test_slash_commands(monkeypatch, tmp_path):
     sess.command("/login")
     assert saved["args"][2:4] == ("openai", "beta") and "sk-test" not in S.screen(out).text()
     assert "Connected to" in S.screen(out).text()
+
+
+def test_ctrl_c_while_the_prompt_redraws_is_not_a_crash(tmp_path):
+    """Ctrl+C is SIGINT: it reached the prompt loop when it landed during a redraw (a slow or paused terminal) and
+    the program ended with a KeyboardInterrupt traceback. It clears the line instead; the session goes on."""
+    t, out, clk = S.make_terminal()
+
+    class FakeAgent:
+        mode, root, usage, model, title, messages = "ask", str(tmp_path), {}, None, "", []
+
+        def current_model(self):
+            return "m1"
+    sess = T.Session(t, FakeAgent())
+    answers = iter([KeyboardInterrupt(), "/status", None])
+
+    def read_input():
+        a = next(answers)
+        if isinstance(a, BaseException):
+            raise a
+        return a
+    t.read_input = read_input
+    sess.loop()                                  # returns at the end of input: no exception
+    assert "Model" in S.screen(out).text()       # the /status after the Ctrl+C still ran
