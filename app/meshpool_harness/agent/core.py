@@ -788,9 +788,11 @@ def _header_cost(r, resp: dict) -> None:
 def _rules(root) -> dict:
     """Saved allow and deny rules: ~/.meshpool/permissions.json and <project>/.meshpool/permissions.json, each
     {"allow": [...], "deny": [...]}. A rule is a tool name ("edit", "mcp__browser__ui_audit"), or "bash:" and a command
-    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's, and its allow rules count only once the user trusts the folder (trust.py)."""
+    pattern with * wildcards ("bash:npm test*"). Deny wins over allow; the project's rules add to the user's, and its allow rules count only once the user trusts the folder (trust.py). "ask" rules always ask first, even with
+    full access or an allow rule."""
     out = {"allow": [x.strip() for x in os.environ.get("MH_ALLOW", "").split(",") if x.strip()],
-           "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()]}
+           "deny": [x.strip() for x in os.environ.get("MH_DENY", "").split(",") if x.strip()],
+           "ask": [x.strip() for x in os.environ.get("MH_ASK", "").split(",") if x.strip()]}   # always ask, any mode
     from meshpool_harness import trust as TR
     trusted = TR.is_trusted(root)
     for f, own in ((C.home() / "permissions.json", True), (Path(root) / ".meshpool" / "permissions.json", trusted)):
@@ -2615,9 +2617,9 @@ class Agent:
         hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
         if hk["blocked"]:
             return False, f"Blocked by a hook: {hk['message']}"
-        if hk["allow"] and not _destructive(args):
-            return True, ""
         rules = _rules(self.root)
+        if hk["allow"] and not _destructive(args) and not _deny_hit(rules["ask"], name, args):
+            return True, ""
         main = self._main_checkout_touch(name, args)
         if main:
             if not self.approve:
@@ -2636,6 +2638,15 @@ class Agent:
         hit = _deny_hit(rules["deny"], name, args)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
+        hit = _deny_hit(rules["ask"], name, args)
+        if hit:                                    # the user's rule: ask first, whatever the mode or other rules say
+            if not self.approve:
+                return False, f"Your saved rule {hit!r} says to ask first, and there is nobody to ask here."
+            decision, note = self.approve("bash" if name.startswith("bash") or name == "shell" else "edit",
+                                          f"Your rule \u201c{hit}\u201d says to ask before this. Go ahead?",
+                                          str(args.get("command") or args.get("commands") or args.get("path") or
+                                              json.dumps(args, ensure_ascii=False)[:2000]))
+            return decision in ("yes", "always", "save"), note or ""
         if _allow_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""

@@ -60,6 +60,66 @@ def worktree_post(b: dict) -> tuple[int, dict]:
     raise ValueError("action is create or remove")
 
 
+RULE_LISTS = ("allow", "ask", "deny")
+
+
+def _rules_file() -> Path:
+    from meshpool_harness import config as C
+    return C.home() / "permissions.json"
+
+
+def _rules_read() -> dict:
+    f = _rules_file()
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError):
+        raise ValueError(f"{f} is not valid JSON, so it is left as it is. Fix or remove it, then try again.")
+    if not isinstance(d, dict):
+        raise ValueError(f"{f} is not a rules file.")
+    return d
+
+
+def rules_get() -> tuple[int, dict]:
+    """Every rule in the user's own permissions.json: allow, ask and deny, and what was allowed per folder."""
+    d = _rules_read()
+    folders = [{"folder": k, "allow": [str(x) for x in (v.get("allow") or []) if isinstance(x, str)]}
+               for k, v in sorted((d.get("projects") or {}).items()) if isinstance(v, dict)]
+    return 200, {"path": str(_rules_file()), **{k: [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
+                                                for k in RULE_LISTS}, "folders": [f for f in folders if f["allow"]]}
+
+
+def rules_post(b: dict) -> tuple[int, dict]:
+    """{"action": "add" | "remove", "list": "allow" | "ask" | "deny", "rule", "folder" (remove from a folder)}"""
+    act, lst, rule = b.get("action"), b.get("list"), str(b.get("rule") or "").strip()
+    if lst not in RULE_LISTS or act not in ("add", "remove") or not rule:
+        raise ValueError("Give an action (add or remove), a list (allow, ask or deny) and a rule.")
+    if act == "add" and (len(rule) > 300 or any(c in rule for c in "\n\r")):
+        raise ValueError("A rule is one short line, like bash:git push* or edit.")
+    d = _rules_read()
+    if b.get("folder"):
+        layer = ((d.get("projects") or {}).get(str(b["folder"])) or {})
+        if act != "remove" or lst != "allow":
+            raise ValueError("Folder rules can only be removed here.")
+    else:
+        layer = d
+    have = layer.setdefault(lst, []) if (act == "add" or lst in layer) else []
+    if act == "add" and rule not in have:
+        have.append(rule)
+    elif act == "remove":
+        if rule not in have:
+            raise ValueError("That rule is not there any more.")
+        have.remove(rule)
+    f = _rules_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    import os
+    os.replace(tmp, f)
+    return rules_get()
+
+
 def office_get() -> tuple[int, dict]:
     import sys
     from meshpool_harness import office as OF
@@ -92,7 +152,9 @@ def office_post(b: dict) -> tuple[int, dict]:
     return 200, dict(office_get()[1], lines=lines)
 
 
-ROUTES = {("GET", "/api/office"): lambda u, b: office_get(),
+ROUTES = {("GET", "/api/rules"): lambda u, b: rules_get(),
+          ("POST", "/api/rules"): lambda u, b: rules_post(json.loads(b.decode("utf-8")) if b else {}),
+          ("GET", "/api/office"): lambda u, b: office_get(),
           ("POST", "/api/office"): lambda u, b: office_post(json.loads(b.decode("utf-8")) if b else {}),
           ("GET", "/api/worktree"): lambda u, b: worktree_get(parse_qs(u.query)),
           ("POST", "/api/worktree"): lambda u, b: worktree_post(json.loads(b.decode("utf-8")) if b else {}),

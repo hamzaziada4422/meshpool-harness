@@ -9,7 +9,7 @@ AREAS = (("/api/worktree", "features_api"),          # before /api/work, which i
          ("/api/memory", "memory_api"), ("/api/xray", "memory_api"), ("/api/insights", "insights_api"),
          ("/api/work", "work_api"), ("/api/summaries", "work_api"), ("/api/receipt", "receipt_api"),
          ("/api/checks", "receipt_api"), ("/api/firstrun", "firstrun_api"), ("/api/away", "firstrun_api"), ("/api/scheduler", "scheduler_api"),
-         ("/api/fs", "files_api"), ("/api/browser/", "browser_api"), ("/api/trust", "features_api"), ("/api/office", "features_api"))
+         ("/api/fs", "files_api"), ("/api/browser/", "browser_api"), ("/api/trust", "features_api"), ("/api/office", "features_api"), ("/api/rules", "features_api"))
 
 
 def handle(method: str, u, body: bytes = b""):

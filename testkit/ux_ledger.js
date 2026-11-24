@@ -119,6 +119,14 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   check("Branch opens a new chat with the conversation so far", await p.evaluate(b4 => !!S.cur && S.cur.id !== b4 &&
         (S.cur.log || []).some(e => e.type === "user") && /\(branch\)/.test(S.cur.view?.title || ""), before),
         await p.evaluate(() => S.cur?.view?.title));
+  // Settings, Permissions: saved rules with Remove, and Add
+  await p.evaluate(() => openSettings("permissions")); await p.waitForSelector("#rulesBox #ruleAdd", {timeout: 15000});
+  await p.selectOption("#ruleList", "ask"); await p.fill("#ruleText", "bash:git push*"); await p.click("#ruleAdd");
+  await p.waitForSelector("#rulesBox [data-rule='bash:git push*']", {timeout: 10000}).catch(() => {});
+  check("a rule can be added from Settings", !!(await p.$("#rulesBox [data-rrm='ask'][data-rule='bash:git push*']")));
+  await p.click("#rulesBox [data-rule='bash:git push*']"); await p.waitForTimeout(600);
+  check("and removed again", !(await p.$("#rulesBox [data-rule='bash:git push*']")));
+  await p.keyboard.press("Escape");
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

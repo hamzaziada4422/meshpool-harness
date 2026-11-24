@@ -1433,6 +1433,19 @@ async function forkChat(n) {                       // a new chat from this one's
     toast("Branched into a new chat. The original is unchanged.");
   } catch (e) { toast(e.message, 5000); }
 }
+/* Settings, Permissions: every saved rule, with Remove, and a way to add one. */
+async function drawRules(box, r) {
+  try { r = r || await api("/api/rules"); } catch (e) { box.innerHTML = `<div class="res bad">${esc(e.message)}</div>`; return; }
+  const NAMES = {allow: ["Always allowed", "Runs without asking."], ask: ["Always asks", "Asks first, even with full access or an allow rule."], deny: ["Never allowed", "Refused, whatever the mode."]};
+  const row = (lst, rule, folder) => `<li><span class="tg"><code>${esc(rule)}</code></span><button class="iconbtn" data-rrm="${esc(lst)}" data-rule="${esc(rule)}" ${folder ? `data-folder="${esc(folder)}"` : ""} aria-label="Remove ${esc(rule)}">${ICON.x}</button></li>`;
+  box.innerHTML = `<h3 style="font-size:16px;margin:18px 0 4px">Saved rules</h3><p class="pnote">A rule is a tool name (<code>edit</code>), or <code>bash:</code> and a command with * for any text (<code>bash:git push*</code>). Saved in ${esc(r.path)}.</p>
+    ${Object.entries(NAMES).map(([k, [h, d]]) => `<h4 style="margin:12px 0 4px">${h}</h4><small class="pnote">${d}</small><ul class="rows2">${(r[k] || []).map(x => row(k, x)).join("") || `<li class="pnote">None.</li>`}</ul>`).join("")}
+    ${r.folders.length ? `<h4 style="margin:12px 0 4px">Allowed in one folder</h4>${r.folders.map(f => `<small class="pnote">${esc(f.folder)}</small><ul class="rows2">${f.allow.map(x => row("allow", x, f.folder)).join("")}</ul>`).join("")}` : ""}
+    <div class="srow" style="margin-top:10px"><select id="ruleList" aria-label="Kind of rule"><option value="ask">Always ask</option><option value="deny">Never allow</option><option value="allow">Always allow</option></select><input id="ruleText" placeholder="bash:git push*" spellcheck="false"><button class="btn" id="ruleAdd">Add rule</button></div><div class="res" id="ruleRes"></div>`;
+  const act = async body => { try { drawRules(box, await post("/api/rules", body)); } catch (e) { const x = $("#ruleRes", box); x.className = "res bad"; x.textContent = e.message; } };
+  $$("[data-rrm]", box).forEach(x => x.onclick = () => act({action: "remove", list: x.dataset.rrm, rule: x.dataset.rule, folder: x.dataset.folder || ""}));
+  $("#ruleAdd", box).onclick = () => act({action: "add", list: $("#ruleList", box).value, rule: $("#ruleText", box).value});
+}
 async function undoPart(n, what) {                 // files only, or the conversation only
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
   if (!await ask(what === "code" ? {title: "Undo only the files?", text: "Files Meshpool changed in this reply and the ones after it go back to how they were. The conversation stays.", ok: "Undo files"}
@@ -2225,6 +2238,7 @@ async function renderSection(sec) {
       $$("[data-perm]", b).forEach(x => x.onclick = () => draw({id: x.dataset.perm}));
       $("#permAll")?.addEventListener("click", () => draw({id: "all"}));
       $$("[data-rmp]", b).forEach(x => x.onclick = async () => { await post("/api/projects", {action: "remove", path: x.dataset.rmp}); await loadProjects(); renderSide(); draw(); });
+      const rb = document.createElement("div"); rb.id = "rulesBox"; b.appendChild(rb); drawRules(rb);
       $("#addP").onclick = async () => { await pickProject(); await loadProjects(); draw(); };
     };
     await draw(); return;
