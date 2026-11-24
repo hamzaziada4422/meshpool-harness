@@ -217,8 +217,9 @@ def test_error_messages_are_context_errors():
 
 
 def test_silent_truncation_needs_two_sane_observations_and_total_tokens():
-    base = "http://localhost:11434/v1"
-    win = CTX.DEFAULT_LOCAL if False else 32768
+    # an unknown local endpoint (it may be a metering proxy in front of a hosted model): twice, above the floor
+    base = "http://127.0.0.1:8899/v1"
+    win = 32768
     big = 80_000                                                       # tokens we sent
     use = {"prompt_tokens": 20_000}
     assert not CTX.observe_silent_cut("ollama-model", big, use, win, base)          # one observation is not enough
@@ -228,11 +229,15 @@ def test_silent_truncation_needs_two_sane_observations_and_total_tokens():
     for _ in range(3):                                                  # a model the table knows is never shrunk by it
         assert not CTX.observe_silent_cut("llama-3.1-8b", big, use, 131072, base)
     assert CTX.window_info("llama-3.1-8b", base, probe_endpoint=False) == (131072, "table")
+    assert not CTX.observe_silent_cut("deepseek-v4.1-flash", big, use, 1_000_000, base)   # the ws20 case: 1M model
     CTX.forget()
-    # a tiny implied window is never believed from usage numbers
-    for _ in range(3):
+    for _ in range(3):                                                  # a tiny implied window behind a proxy: never
         assert not CTX.observe_silent_cut("m2", 10_000, {"prompt_tokens": 2048}, win, base)
-    assert CTX.window_info("m2", base, probe_endpoint=False)[0] == CTX.DEFAULT_LOCAL
+    CTX.forget()
+    # a real Ollama server (its port, or it answered an Ollama route) cuts silently at num_ctx: one clear cut is enough
+    olla = "http://localhost:11434/v1"
+    assert CTX.observe_silent_cut("m3", 10_000, {"prompt_tokens": 2048}, win, olla)
+    CTX.forget()
     # a remote gateway is never shrunk by it, whatever it reports
     for _ in range(3):
         assert not CTX.observe_silent_cut("deepseek-v4.1-flash", 40_000, {"prompt_tokens": 6000}, 1_048_576,

@@ -175,7 +175,9 @@ class H(BaseHTTPRequestHandler):
                    "function": {"name": p[1], "arguments": json.dumps(p[2])}}]}
         else:
             msg = {"role": "assistant", "content": p[1]}
-        usage = {"prompt_tokens": 1000, "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
+        # an honest prompt size for a big request: a fixed 1000 reads as a server that cut the prompt (H-02, _prompt_cut)
+        sent = int(len(json.dumps([body.get("messages"), body.get("tools") or []])) / 3.5) + 1
+        usage = {"prompt_tokens": max(1000, sent), "completion_tokens": 50, "prompt_tokens_details": {"cached_tokens": 800}}
         if not body.get("stream"):
             out = json.dumps({"id": "x", "choices": [{"index": 0, "message": msg, "finish_reason": "stop"}], "usage": usage}).encode()
             self.send_response(200); self.send_header("Content-Type", "application/json")

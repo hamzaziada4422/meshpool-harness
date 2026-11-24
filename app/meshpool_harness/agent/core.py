@@ -399,11 +399,12 @@ def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | Non
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
         from meshpool_harness.core import modelcaps as _MCP
-        t = _MCP.probe_timeout(base, float(os.environ.get("MH_PROBE_S", "30")))   # a local server may be loading a model
+        body_s = float(os.environ.get("MH_PROBE_S", "30"))
+        t = _MCP.probe_timeout(base, body_s)            # a local server may be loading a model: a longer first-byte wait
         if timeout:
             t = min(t, float(timeout))                  # a caller with a shorter first-byte wait (core/wire.py)
         with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
-            ST.read_body(r, t)                          # a total deadline: a body that trickles keep-alives ends too
+            ST.read_body(r, min(t, body_s))             # a total deadline (not stretched for local loading): a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
         return "auth" if e.code in (401, 403) else "ok" if e.code < 502 else f"HTTP {e.code}"
@@ -2496,12 +2497,14 @@ class Agent:
             u = resp.get("usage") or {}
             n_in = u.get("prompt_tokens", 0) or 0
             sent = CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or [])
-            if not (n_in >= 512 and sent > 1500 and sent > n_in * 1.6):
+            # One judge for a silent cut (context.observe_silent_cut): local model servers only, never below a window
+            # the table or provider states, total (fresh + cached) prompt tokens, two matching observations. A gateway
+            # or metering proxy that reports usage differently must not shrink a 1M-token model to a few thousand.
+            if not CTX.observe_silent_cut(self.current_model(), sent, u, self._ctx_window(), base):
                 return False
-            win = int(n_in * 1.05)
+            win = CTX.learned(self.current_model()) or int(n_in * 1.05)    # not the user's setting: it may be what is wrong
             if win >= self._ctx_window():
                 return False
-            CTX.learn(self.current_model(), win)
             MC.learn(base, body.get("model", ""), window=win)
             for k, v in (("in", n_in), ("out", u.get("completion_tokens", 0) or 0), ("calls", 1)):
                 turn[k] += v                           # the discarded reply was paid for
@@ -2944,12 +2947,7 @@ class Agent:
             _MC.observe_usage(base, body["model"], u)      # does this endpoint report cached / reasoning tokens
         except Exception:  # noqa: BLE001
             pass
-        try:                                               # a local server that silently cuts a too-long prompt (Ollama)
-            from meshpool_harness.core import context as CTX
-            CTX.observe_silent_cut(self.current_model(), CTX.estimate(body.get("messages")) + CTX.estimate(body.get("tools") or []),
-                                   u, self._ctx_window(), base)
-        except Exception:  # noqa: BLE001
-            pass
+        # a silent prompt cut (Ollama) is judged once, in _prompt_cut, before this reply is used
         self._absorb_usage(turn)                           # this call's record, and any helper's since the last one
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
