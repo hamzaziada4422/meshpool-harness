@@ -2363,12 +2363,13 @@ class Agent:
             g["rseq"] = 0
             return ("Your last calls were refused because they repeat a call whose result you already have. Tools "
                     "are off now. Give your final answer: what you changed, what works, and what is left.")
-        if nudge > 0 and k in (nudge, 2 * nudge) and g.get("rnote_at") != k:
-            g["rnote_at"] = k
+        level = (2 * nudge if k >= 2 * nudge else nudge) if nudge > 0 else 0
+        if nudge > 0 and k >= nudge and g.get("rnote_at", 0) < level:   # crossing, not equality: a step can refuse several
+            g["rnote_at"] = level
             return ("Stop sending that call: it was refused " + str(k) + " times in a row and will be refused again. "
                     "You already have its result above. Your next call must be different: change a file with "
                     "apply_patch, run a different check, or give your final answer."
-                    + (" If you send it again, tools turn off." if k >= 2 * nudge and wrap > 0 else ""))
+                    + (" If you send it again, tools turn off." if level >= 2 * nudge and wrap > 0 else ""))
         if k == 0:
             g.pop("rnote_at", None)
         return ""

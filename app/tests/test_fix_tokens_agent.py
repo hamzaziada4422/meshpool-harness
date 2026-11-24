@@ -745,3 +745,12 @@ def test_a_call_that_runs_resets_the_refusal_count(tmp_path, monkeypatch):
     monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[Meshpool] Not run: you already ran this")
     a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
     assert g["rseq"] == 1
+
+
+def test_several_refusals_in_one_step_still_cross_each_nudge(tmp_path):
+    a = _agent(tmp_path)
+    g = {"rseq": 3}                                   # three parallel refused calls in one step: 0 -> 3
+    assert "refused 3 times" in a._refusal_escalation(g)
+    g["rseq"] = 5
+    assert "tools turn off" in a._refusal_escalation(g)
+    assert a._refusal_escalation(g) == ""             # each level is said once
