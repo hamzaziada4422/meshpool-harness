@@ -1,6 +1,6 @@
-"""MH_LEAN_WORK=1 (opt-in): Work chats run as lean core (Codex style, short prompt plus a Work section), keeping the
-office and web tools. Off by default: Work chats are unchanged. No network and no model calls (the transport is
-scripted)."""
+"""Lean Work (on by default; MH_LEAN_WORK=0 turns it off): Work chats run as lean core (Codex style, short prompt plus
+a Work section), keeping the office and web tools. With 0, Work chats run the full Cowork lane. No network and no model
+calls (the transport is scripted)."""
 import json
 import sys
 from pathlib import Path
@@ -48,7 +48,8 @@ class _Mcp:
         return name.startswith("mcp__")
 
 
-def test_flag_off_leaves_work_chats_unchanged(tmp_path):
+def test_flag_off_leaves_work_chats_unchanged(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
     a = _work(tmp_path)
     assert not a._style() and not a._lean() and not a._codex()
     assert a.messages[0]["content"].startswith("You are Meshpool Cowork")
@@ -58,10 +59,14 @@ def test_flag_off_leaves_work_chats_unchanged(tmp_path):
     assert "mcp__meshpool_office__make_deck" in _names(a)
 
 
-@pytest.mark.parametrize("off", ["0", ""])
-def test_only_the_value_1_turns_it_on(tmp_path, monkeypatch, off):
-    monkeypatch.setenv("MH_LEAN_WORK", off)
-    assert not _work(tmp_path)._style()
+def test_on_by_default_and_only_0_turns_it_off(tmp_path, monkeypatch):
+    for d in "abc":
+        (tmp_path / d).mkdir()
+    assert _work(tmp_path / "a")._lean()                 # unset: on (work1)
+    monkeypatch.setenv("MH_LEAN_WORK", "")
+    assert _work(tmp_path / "b")._lean()
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+    assert not _work(tmp_path / "c")._style()
 
 
 def test_flag_on_work_runs_lean_core_with_the_work_section(tmp_path, monkeypatch):

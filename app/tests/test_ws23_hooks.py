@@ -11,6 +11,13 @@ from meshpool_harness.agent import tui as T
 from ws23_kit import call, finish, home, new_chat, proj, script  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
 def make_plugin(tmp_path, marker_name="ran.txt") -> Path:
     d = tmp_path / "plug"
     (d / ".claude-plugin").mkdir(parents=True)

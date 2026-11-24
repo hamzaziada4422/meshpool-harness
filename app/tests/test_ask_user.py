@@ -15,6 +15,14 @@ from meshpool_harness.agent.core import Agent, WORK_SYSTEM  # noqa: E402
 from meshpool_harness.core.tools import ToolError  # noqa: E402
 from engines.forge import brief as BR  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
 Q = {"questions": [
     {"question": "Who is the deck for?", "header": "Audience", "options": [
         {"label": "The board", "description": "Decision deck", "recommended": True},

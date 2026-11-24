@@ -161,16 +161,37 @@ def hooks(root: Path) -> dict:
     return out
 
 
+# A hook names a tool the way Claude Code or Meshpool's classic tools do; the lean (Codex-style) lanes run "shell" and
+# "apply_patch". Each family matches every tool that does that job, in any letter case ("Bash", "Edit|Write" from a
+# Claude Code plugin; "bash", "edit" from a Meshpool hooks file).
+_TOOL_FAMILY = {
+    "bash": {"bash", "bash_many", "bash_start", "shell"},
+    "shell": {"bash", "bash_many", "bash_start", "shell"},
+    "edit": {"edit", "apply_patch", "notebook_edit"},
+    "multiedit": {"edit", "apply_patch"},
+    "write": {"write_file", "apply_patch"},
+    "write_file": {"write_file", "apply_patch"},
+    "apply_patch": {"apply_patch", "edit", "write_file"},
+    "read": {"read_file"},
+    "notebookedit": {"notebook_edit"},
+}
+
+
 def _tool_matches(matcher: str, name: str, args: dict) -> bool:
     if not matcher or matcher == "*":
         return True
-    cmd = str(args.get("command") or "")
+    cmd = args.get("command") or ""
+    if isinstance(cmd, list):                       # shell takes an argv list (["bash", "-lc", "rm -rf x"])
+        cmd = cmd[-1] if len(cmd) >= 3 and str(cmd[-2]) in ("-c", "-lc") else " ".join(map(str, cmd))
+    cmd = str(cmd)
     for m in matcher.split("|"):
         m = m.strip()
-        if m.startswith("bash:"):
-            if cmd and fnmatch.fnmatchcase(cmd, m[5:].strip()):
+        if m.lower().startswith("bash:") or m.lower().startswith("bash("):
+            pat = m[5:].strip().rstrip(")") if m[4] == ":" else m[5:].rstrip(")").strip()
+            if cmd and fnmatch.fnmatchcase(cmd, pat):
                 return True
-        elif fnmatch.fnmatchcase(name, m) or (m == "bash" and name in ("bash", "bash_many", "bash_start", "shell")):
+        elif fnmatch.fnmatchcase(name, m) or fnmatch.fnmatchcase(name.lower(), m.lower()) \
+                or name in _TOOL_FAMILY.get(m.lower(), ()):
             return True
     return False
 

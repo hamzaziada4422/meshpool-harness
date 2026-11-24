@@ -22,6 +22,13 @@ from meshpool_harness.agent.tui_input import FakeKeys  # noqa: E402
 from meshpool_harness.ui import agent_api as A  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
 def _call(name, args, cid="c1"):
     return {"role": "assistant", "content": "", "tool_calls": [{"id": cid, "type": "function", "function": {
         "name": name, "arguments": json.dumps(args)}}]}

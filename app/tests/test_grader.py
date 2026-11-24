@@ -9,6 +9,13 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from meshpool_harness.agent import core, grader as GR  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
 # Agent is looked up on the module at call time: test_agent_v3 reloads core, which leaves an imported class stale.
 
 

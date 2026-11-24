@@ -80,9 +80,10 @@ SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $
 
 
 def _lean_work_on() -> bool:
-    """MH_LEAN_WORK=1 (opt-in, off by default): Work chats run as lean core too (docs/design/lean-core.md), with the
+    """Work chats run as lean core too (on by default since work1: 45/54 at 0.61x Codex's cost per solved task, against
+    43/54 at 1.08x for the full Cowork lane; MH_LEAN_WORK=0 restores the full lane; docs/design/lean-core.md), with the
     Work section of prompt-work.md and the office and web tools in LEAN_WORK_TOOLS."""
-    return os.environ.get("MH_LEAN_WORK", "0") == "1"
+    return os.environ.get("MH_LEAN_WORK", "1") != "0"
 
 
 LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three

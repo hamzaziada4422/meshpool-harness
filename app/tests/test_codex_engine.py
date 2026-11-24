@@ -271,6 +271,7 @@ def test_without_the_profile_nothing_changes(tmp_path):
 
 
 def test_work_chats_and_plan_mode_keep_their_own_tools(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_LEAN_WORK", "0")                 # the full Cowork lane (lean Work: test_lean_work.py)
     monkeypatch.setenv("MH_ENGINE_STYLE", "codex")
     w = Agent(str(tmp_path), mode="auto", profile="work")
     assert not w._codex() and w.messages[0]["content"].startswith("You are Meshpool Cowork")

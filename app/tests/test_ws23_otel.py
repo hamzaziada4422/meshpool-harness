@@ -11,6 +11,13 @@ from meshpool_harness import telemetry
 from ws23_kit import call, finish, home, new_chat, proj, script  # noqa: F401
 
 
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
 class Collector:
     def __init__(self):
         self.posts = []
