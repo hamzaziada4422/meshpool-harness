@@ -220,6 +220,38 @@ def _whole_json(text: str, names):
     return _calls_from_value(v, names)
 
 
+# DeepSeek's native tool-call markup, which some gateways pass through as text instead of parsing:
+#   <｜DSML｜ calls> <｜DSML｜ invoke name="bash"> <｜DSML｜ parameter name="command" string="true">…</｜DSML｜ parameter>
+#   </｜DSML｜ invoke> </｜DSML｜ calls>
+# The bar may be the full-width ｜ (U+FF5C) or a plain |; spacing around it varies.
+_BAR = r"[\uff5c|]"
+_DSML_OPEN = re.compile(r"<\s*" + _BAR + r"\s*DSML\s*" + _BAR + r"\s*calls\s*>", re.I)
+_DSML_INVOKE = re.compile(r"<\s*" + _BAR + r"\s*DSML\s*" + _BAR + r"\s*invoke\s+name=\"([^\"]+)\"\s*>(.*?)<\s*/\s*" + _BAR
+                          + r"\s*DSML\s*" + _BAR + r"\s*invoke\s*>", re.S | re.I)
+_DSML_PARAM = re.compile(r"<\s*" + _BAR + r"\s*DSML\s*" + _BAR + r"\s*parameter\s+name=\"([^\"]+)\"(?:\s+string=\"(true|false)\")?\s*>"
+                         r"(.*?)<\s*/\s*" + _BAR + r"\s*DSML\s*" + _BAR + r"\s*parameter\s*>", re.S | re.I)
+_DSML_ANY = re.compile(r"<\s*/?\s*" + _BAR + r"\s*DSML\s*" + _BAR + r"[^>]*>", re.I)
+
+
+def _dsml(text: str, names):
+    """(calls, prose) for DSML markup, or None when there is none or it names an unknown tool."""
+    if not _DSML_OPEN.search(text) and not _DSML_INVOKE.search(text):
+        return None
+    calls = []
+    for name, body in _DSML_INVOKE.findall(text):
+        if name not in names:
+            return None
+        args = {}
+        for k, is_str, v in _DSML_PARAM.findall(body):
+            args[k] = v if is_str.lower() == "true" else _param_value(v)
+        calls.append((name, args))
+    if not calls:
+        return None
+    first = _DSML_OPEN.search(text) or _DSML_INVOKE.search(text)
+    prose = _DSML_ANY.sub("", _DSML_INVOKE.sub("", text[:first.start()] + text[first.start():])).strip()
+    return calls, prose
+
+
 def recover(msg: dict, tool_names) -> bool:
     """Convert tool calls written as text in msg["content"] into msg["tool_calls"]. True when it did."""
     try:
@@ -232,6 +264,11 @@ def recover(msg: dict, tool_names) -> bool:
         if not names:
             return False
         masked = _mask_think(content)
+        ds = _dsml(masked, names)
+        if ds:
+            msg["tool_calls"] = _make(ds[0])
+            msg["content"] = ds[1] or None
+            return True
         tagged = None
         if re.search(r"<tool_call>|<function=|<\|python_tag\|>|\[TOOL_CALLS\]", masked, re.I):
             tagged = _tagged_blocks(content, names)
