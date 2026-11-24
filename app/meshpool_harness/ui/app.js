@@ -1968,7 +1968,7 @@ async function renderSection(sec) {
     const draw = a => {
       const proj = S.projects.map(p => `<option value="${esc(p.path)}">${esc(p.name)}</option>`).join("");
       b.innerHTML = `${close}<h3>Scheduled tasks</h3><p class="lead">Work that runs by itself: a morning news brief, a weekly pipeline report, a reminder. Each run opens a new chat and notifies you when it is done. Tasks run while Meshpool is open on this computer. You can also ask any agent to schedule something.</p>
-        <ul class="rows2">${a.tasks.map(t => `<li><span class="tg"><b>${esc(t.name)}</b><small>${esc(t.describe)} · ${t.kind === "code" ? "Code" : "Work"}</small><small class="clip2">${esc(t.prompt)}</small></span>
+        <ul class="rows2">${a.tasks.map(t => `<li><span class="tg"><b>${esc(t.name)}</b><small>${esc(t.describe)} · ${t.kind === "code" ? "Code" : "Work"}${t.worktree ? " · new worktree each run" : ""}</small><small class="clip2">${esc(t.prompt)}</small></span>
           <label class="switch" title="On or off"><input type="checkbox" data-ton="${esc(t.id)}" ${t.enabled ? "checked" : ""} aria-label="Run ${esc(t.name)}"><span></span></label>
           <button class="btn" data-trun="${esc(t.id)}">Run now</button>${t.last_thread ? `<button class="btn" data-topen="${esc(t.last_thread)}">Last run</button>` : ""}<button class="iconbtn" data-tdel="${esc(t.id)}" aria-label="Delete">${ICON.x}</button></li>`).join("") || `<li class="pnote">No scheduled tasks yet.</li>`}</ul>
         <h3 style="font-size:16px;margin:18px 0 6px">New scheduled task</h3>
@@ -1980,12 +1980,13 @@ async function renderSection(sec) {
           <input id="tsTime" aria-label="Time" type="time" value="08:30"><input id="tsAt" aria-label="Date and time" type="datetime-local">
           <select id="tsKind" aria-label="Mode"><option value="cowork">Work</option><option value="code">Code</option></select>
           <select id="tsFolder" aria-label="Folder"><option value="">Default folder</option>${proj}</select></div>
+          <label class="chk" id="tsWtRow" hidden><input type="checkbox" id="tsWt"> Each run in a new worktree (its own checkout and branch, so runs never change your working copy)</label>
           <button class="btn primary" id="tsAdd">Add task</button></div><div class="res" id="tsRes"></div>`;
       done();
-      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; };
-      $("#tsWhen").onchange = sync; sync();
+      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsWtRow").hidden = !$("#tsFolder").value; if ($("#tsWtRow").hidden) $("#tsWt").checked = false; };
+      $("#tsWhen").onchange = sync; $("#tsFolder").onchange = sync; sync();
       const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
-      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value});
+      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, worktree: $("#tsWt").checked});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
       $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this scheduled task?", text: "It won't run again. Chats from earlier runs stay.", ok: "Delete task", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });

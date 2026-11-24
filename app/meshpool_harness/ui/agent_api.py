@@ -1732,13 +1732,32 @@ def run_scheduled(t: dict) -> str:
     folder = t.get("folder") or ""
     if not folder or not Path(folder).expanduser().is_dir():
         folder = ""
+    made = None
+    if t.get("worktree") and folder:                # each run in its own checkout: never the user's working copy
+        from meshpool_harness import worktrees as WT
+        try:
+            made = WT.create(folder, f"run-{t['id']}-{time.strftime('%Y%m%d-%H%M%S')}")
+            folder = made["path"]
+        except WT.WorktreeError as e:
+            v = create({"workdir": folder, "kind": t.get("kind") or "cowork", "plan": False})
+            s = get(v["id"])
+            write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})",
+                       scheduled=t["id"])
+            s.emit({"type": "error", "text": f"This run did not start: it needs a new worktree of {folder}, and "
+                                              f"that did not work ({e}). Nothing in the folder was changed."})
+            AS.set_thread(t["id"], s.id)
+            return s.id
     v = create({"workdir": folder, "harness": t.get("harness") or None, "kind": t.get("kind") or "cowork",
                 "task": t.get("prompt", ""), "plan": False})      # nobody is there to approve a plan
     s = get(v["id"])
     s.scheduled = t
     write_meta(s.id, title=f"{t.get('name') or 'Scheduled task'} ({time.strftime('%d %b %H:%M')})", scheduled=t["id"])
+    if made:
+        s.emit({"type": "status", "text": f"Working in a new worktree, {made['name']}, on branch {made['branch']}."})
     s.send(t["prompt"] + ("\n\n\u200b(This is a scheduled run. The user is not watching: make reasonable choices, say "
-                          "which ones you made, and finish with a short summary.)"))
+                          "which ones you made, and finish with a short summary.)") +
+           (f"\n\u200b(You work in a new git worktree on the branch {made['branch']}; commit your changes there when "
+            "they are done and tested, and name the branch in your summary.)" if made else ""))
     AS.set_thread(t["id"], s.id)
     return s.id
 

@@ -38,10 +38,11 @@ def memory_forget(text: str) -> str:
 
 
 def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", day: str = "mon", at: str = "",
-                  minutes: int = 60, folder: str = "", mode: str = "cowork", only_on_change: bool = False) -> str:
+                  minutes: int = 60, folder: str = "", mode: str = "cowork", only_on_change: bool = False,
+                  worktree: bool = False) -> str:
     import os
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
-                   "", mode, only_on_change)
+                   "", mode, only_on_change, bool(worktree))
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
             "can change or delete it in Settings, Scheduled tasks. To also run it while Meshpool is closed, they can turn on "
             "\"Also run tasks when Meshpool is closed\" on the Scheduled tasks page.")
@@ -94,7 +95,10 @@ TOOLS = {
                            "at": {"type": "string"}, "minutes": {"type": "integer"},
                            "mode": {"type": "string", "enum": ["cowork", "code"]},
                            "only_on_change": {"type": "boolean", "description": "Only tell the user when the result "
-                                              "changed from the last run."}}, ["prompt", "when"]),
+                                              "changed from the last run."},
+                           "worktree": {"type": "boolean", "description": "Each run works in a new git worktree of "
+                                        "the project (its own checkout and branch), so runs that change code never "
+                                        "touch the user's working copy. Git projects only."}}, ["prompt", "when"]),
     "list_scheduled_tasks": Tool(list_scheduled_tasks, "List the scheduled tasks."),
     "delete_scheduled_task": Tool(_wrap(delete_scheduled_task), "Delete a scheduled task by id or name.",
                                   {"id": {"type": "string"}}, ["id"]),

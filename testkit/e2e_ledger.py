@@ -93,6 +93,45 @@ with open(os.path.join(P, "notes.md"), "w") as f:
 r = call(f"/api/fs/search?root={q}&q=needle&content=1")
 check("search inside files finds the line", any(x["path"] == "notes.md" and x["line"] == 2 for x in r.get("lines", [])), r)
 
+# ---- scheduled tasks: each run in a new worktree of a git folder
+G = os.path.join(os.path.dirname(os.path.abspath(P)), os.path.basename(P.rstrip("/")) + "-sched-git")
+os.makedirs(G, exist_ok=True)
+with open(os.path.join(G, "app.py"), "w") as f:
+    f.write("x = 1\n")
+subprocess.run("git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init", shell=True, cwd=G,
+               check=True)
+r = call("/api/assistant", {"action": "task_add", "name": "Nightly tidy", "prompt": "Say hi", "when": "daily",
+                            "time": "03:00", "folder": G, "kind": "code", "worktree": True})
+t = next((x for x in r.get("tasks", []) if x.get("name") == "Nightly tidy"), {})
+check("a scheduled task can run each time in a new worktree", t.get("worktree") is True, r)
+check("a new worktree each run needs a folder",
+      call("/api/assistant", {"action": "task_add", "prompt": "x", "when": "daily", "worktree": True}).get("_http") == 400)
+r = call("/api/assistant", {"action": "task_run", "id": t.get("id")})
+v = call(f"/api/agent/{r.get('thread')}?since=0")
+wd = v.get("workdir") or ""
+check("the run works in its own worktree, not the folder",
+      re.search(r"[\\/]\.meshpool[\\/]worktrees[\\/]run-" + re.escape(t.get("id", "?")) + r"-\d{8}-\d{6}$", wd), wd)
+check("the run says where it works", any(e.get("type") == "status" and "new worktree" in (e.get("text") or "")
+                                         for e in v.get("events", [])), v.get("events", [])[:5])
+for _ in range(120):
+    if call(f"/api/agent/{r.get('thread')}?since=1000000").get("state") == "idle":
+        break
+    time.sleep(0.5)
+check("the folder itself is untouched", subprocess.run(["git", "status", "--porcelain"], cwd=G, capture_output=True,
+                                                         text=True).stdout.strip() == "")
+N = os.path.join(os.path.dirname(os.path.abspath(P)), os.path.basename(P.rstrip("/")) + "-sched-plain")
+os.makedirs(N, exist_ok=True)
+r = call("/api/assistant", {"action": "task_add", "name": "Plain", "prompt": "Say hi", "when": "daily", "folder": N,
+                            "worktree": True})
+t2 = next((x for x in r.get("tasks", []) if x.get("name") == "Plain"), {})
+r = call("/api/assistant", {"action": "task_run", "id": t2.get("id")})
+v = call(f"/api/agent/{r.get('thread')}?since=0")
+check("a run that cannot get a worktree does not start, and says why",
+      any(e.get("type") == "error" and "did not start" in (e.get("text") or "") for e in v.get("events", [])) and
+      not any(e.get("type") == "user" for e in v.get("events", [])), v.get("events", [])[:5])
+for x in (t, t2):
+    call("/api/assistant", {"action": "task_delete", "id": x.get("id")})
+
 ok = sum(1 for _, x in RESULTS if x)
 print(f"\n{ok}/{len(RESULTS)} passed")
 sys.exit(0 if ok == len(RESULTS) else 1)

@@ -526,15 +526,18 @@ def _check_task(t: dict) -> dict:
         t["kind"] = "cowork"
     t["name"] = str(t.get("name") or t["prompt"].splitlines()[0])[:80]
     t["only_on_change"] = bool(t.get("only_on_change", False))     # "Only tell me when something changed"
+    t["worktree"] = bool(t.get("worktree", False))                  # each run in a new git worktree of the folder
+    if t["worktree"] and not str(t.get("folder") or "").strip():
+        raise ValueError("A new worktree for each run needs a folder that is a git repository.")
     return t
 
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
              minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
-             only_on_change: bool = False) -> dict:
+             only_on_change: bool = False, worktree: bool = False) -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "only_on_change": bool(only_on_change), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "worktree": bool(worktree), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     with _tasks_lock():
         rows = tasks()
@@ -550,7 +553,7 @@ def update_task(tid: str, **kw) -> dict:
             if t["id"] == tid:
                 new = dict(t)
                 for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
-                          "only_on_change"):
+                          "only_on_change", "worktree"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
                 _check_task(new)                                     # same rules as add_task; nothing saved on error
