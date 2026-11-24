@@ -15,7 +15,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_PYTHON = "/root/.venvs/mp/bin/python"
+DEFAULT_PYTHON = next((p for p in (__import__("os").environ.get("BENCH_PYTHON"), "/root/.venvs/mp/bin/python")
+               if p and __import__("os").path.exists(p)), __import__("sys").executable)   # any machine, not one path
 BUILTIN = ("codex", "pi", "mp-cli", "mp-work", "mp-code", "mp-on-pi", "mp-on-codex")
 # which arms apply to which task kind (the runner's default)
 APPLIES = {"office": ["codex", "pi", "mp-work", "mp-on-pi", "mp-on-codex", "mp-cli"],

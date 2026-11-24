@@ -30,7 +30,8 @@ from testkit.gradekit import Checks, result, safe  # noqa: E402
 from testkit.bench3 import make_fixtures as mf  # noqa: E402
 
 FIX = Path(__file__).resolve().parent / "fixtures"
-PYTHON = "/root/.venvs/mp/bin/python"
+PYTHON = next((p for p in (__import__("os").environ.get("BENCH_PYTHON"), "/root/.venvs/mp/bin/python")
+               if p and __import__("os").path.exists(p)), __import__("sys").executable)   # any machine, not one path
 
 
 @dataclass
