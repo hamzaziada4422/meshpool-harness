@@ -1620,6 +1620,8 @@ class Agent:
             self._plan_start(route, g)
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
+            if self._lean():
+                self.ws.recheck = True                 # re-check on edit (core/tools.py _recheck)
             if self._lean() and os.environ.get("MH_PRELOAD", "1") != "0" and not getattr(self.ws, "container", None):
                 try:                                 # the files, git state and source up front (agent/preload.py)
                     from meshpool_harness.agent import preload as _PL

@@ -1721,7 +1721,39 @@ class Workspace:
                 self.edits += 1
         lines = ["Success. Updated the following files:"]
         lines += [f"A {x}" for x in added] + [f"M {x}" for x in modified] + [f"D {x}" for x in deleted]
-        return "\n".join(lines)
+        return "\n".join(lines) + self._recheck(added + modified)
+
+    # -- re-check on edit: after a successful patch to project code, the model's most recent check command is run again
+    # and its result rides on the patch result. The edit-then-run-the-same-check loop is the largest remaining gap to
+    # Codex (2.2-2.4 check turns between edits per task against 0-0.6); SWE-agent's lint-on-edit showed feedback
+    # attached to the edit removes those rounds. Only a short check that ran in this task (under 60 s), only on code.
+    _CHECKISH = re.compile(r"\b(pytest|python3?|node|npm (?:run )?test|go test|cargo test|ruby|bash \S+\.sh|sh \S+\.sh)\b")
+    _WRITES = re.compile(r"(cat\s*>|>\s*[\w./$\"'-]+\.(?:py|js|ts|json|txt|csv)\b|tee |sed -i|rm |mv |cp |git |pip |npm i)")
+
+    def _last_check(self):
+        for c in reversed(self.commands):
+            cmd = c.get("cmd", "")
+            if c.get("kind") != "bash" or not self._CHECKISH.search(cmd) or self._WRITES.search(cmd):
+                continue
+            if (c.get("secs") or 0) > 60 or len(cmd) > 2000:
+                return None
+            return c
+        return None
+
+    def _recheck(self, changed: list) -> str:
+        if not getattr(self, "recheck", False) or os.environ.get("MH_RECHECK", "1") == "0":
+            return ""
+        if not any(str(x).endswith((".py", ".js", ".mjs", ".cjs", ".ts", ".go", ".rs", ".rb", ".java")) for x in changed):
+            return ""
+        c = self._last_check()
+        if c is None:
+            return ""
+        out, code = self._run(c["cmd"], 90, "bash")
+        out = str(out)
+        if len(out) > 4000:
+            out = out[:1500] + "\n[...]\n" + out[-2000:]
+        return (f"\n\n[Meshpool re-ran your last check after this edit: `{c['cmd'][:200]}`]\n{out}\n"
+                "(Do not run that check again yourself unless you change it.)")
 
     def all_output(self) -> str:
         p = self.run_dir / "commands.log"

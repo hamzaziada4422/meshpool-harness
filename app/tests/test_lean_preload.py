@@ -88,7 +88,7 @@ def test_calls_after_a_failed_edit_in_the_same_turn_are_skipped(tmp_path):
 def _ws(tmp_path):
     from meshpool_harness.core.tools import Workspace
     proj = tmp_path / "proj"
-    proj.mkdir(exist_ok=True)
+    proj.mkdir(parents=True, exist_ok=True)
     (proj / "a.py").write_text("x = 1\n")
     return Workspace(str(proj), str(tmp_path / "run")), proj
 
@@ -110,3 +110,21 @@ def test_preloaded_file_is_not_printed_again(tmp_path):
     out = ws.shell(["bash", "-lc", "cat a.py"])
     assert "the <workspace> block" in out and "x = 1" not in out
     assert "x = 1" in ws.shell(["bash", "-lc", "cat a.py | head -5"])   # anything but a plain whole-file read runs
+
+
+def test_recheck_reruns_the_last_check_after_a_patch(tmp_path):
+    ws, proj = _ws(tmp_path)
+    ws.recheck = True
+    ws.shell(["bash", "-lc", "python3 -c 'import a; print(\"x is\", a.x)'"])
+    out = ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 5\n*** End Patch")
+    assert out.startswith("Success.") and "Meshpool re-ran your last check" in out and "x is 5" in out
+
+
+def test_recheck_skips_writes_and_off_by_default(tmp_path):
+    ws, proj = _ws(tmp_path)
+    ws.shell(["bash", "-lc", "python3 -c 'print(1)'"])
+    assert "re-ran" not in ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 2\n*** End Patch")
+    ws2, _ = _ws(tmp_path / "second")
+    ws2.recheck = True
+    ws2.shell(["bash", "-lc", "python3 -c 'print(1)' > out.txt"])
+    assert "re-ran" not in ws2.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch")
