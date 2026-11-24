@@ -60,8 +60,17 @@ def _edit_disabled(fn) -> None:
 
 
 def slug(name: str) -> str:
-    s = NAME_RE.sub("-", name.strip().lower()).strip("-")
-    return s[:64] or "skill"
+    """A folder-safe id: lowercase ASCII letters, digits and dashes. A name with none of those (all Japanese, Arabic,
+    emoji ...) gets ``skill-<8 hex of the name>``: one fixed "skill" made a second such skill or plugin replace the
+    first."""
+    raw = name.strip()
+    s = NAME_RE.sub("-", raw.lower()).strip("-")[:64]
+    if s:
+        return s
+    if not raw:
+        return "skill"
+    import hashlib
+    return "skill-" + hashlib.sha1(raw.encode("utf-8", "surrogatepass")).hexdigest()[:8]
 
 
 def parse(text: str) -> tuple[dict, str]:

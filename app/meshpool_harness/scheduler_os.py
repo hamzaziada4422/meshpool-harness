@@ -64,11 +64,14 @@ def _install(run, platform, home) -> str:
         d.mkdir(parents=True, exist_ok=True)
         vb = d / "meshpool-scheduler.vbs"
         q = lambda x: str(x).replace('"', '""')  # noqa: E731
-        vb.write_text(
-            'Set sh = CreateObject("WScript.Shell")\r\nSet e = sh.Environment("Process")\r\n'
-            + "".join(f'e("{k}") = "{q(v)}"\r\n' for k, v in env.items())
-            + f'sh.CurrentDirectory = "{q(d)}"\r\n'
-            + 'sh.Run """' + q(_windowless(cmd[0])) + '"" -m meshpool_harness run-due", 0, True\r\n', encoding="utf-8")
+        text = ('Set sh = CreateObject("WScript.Shell")\r\nSet e = sh.Environment("Process")\r\n'
+                + "".join(f'e("{k}") = "{q(v)}"\r\n' for k, v in env.items())
+                + f'sh.CurrentDirectory = "{q(d)}"\r\n'
+                + 'sh.Run """' + q(_windowless(cmd[0])) + '"" -m meshpool_harness run-due", 0, True\r\n')
+        # Windows Script Host reads a script as the ANSI code page unless it starts with a UTF-16 BOM: UTF-8 turned a
+        # non-ASCII profile path (C:\Users\José) into mojibake and every scheduled run failed. UTF-16LE with its BOM,
+        # written as bytes so no newline translation doubles the \r.
+        vb.write_bytes(b"\xff\xfe" + text.encode("utf-16-le"))
         tr = f'wscript.exe //B //Nologo "{vb}"'
         r = run(["schtasks", "/Create", "/F", "/SC", "MINUTE", "/MO", "10", "/TN", "Meshpool scheduler", "/TR", tr])
         if r.returncode:

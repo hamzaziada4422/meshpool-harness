@@ -97,7 +97,10 @@ def list_plugins() -> list[dict]:
         servers = [{"name": n, "enabled": isinstance(mcp.get(n), dict) and not mcp[n].get("disabled"),
                     "target": _target(mcp.get(n) or {}), "present": n in mcp} for n in rec.get("servers", [])]
         on = not any(s in off for s in rec["skills"]) if rec.get("skills") else any(x["enabled"] for x in servers)
-        out.append(dict(rec, enabled=on, server_status=servers))
+        hooks_on = bool(rec.get("hooks")) and _hooks_file(rec["name"]).is_file()
+        if rec.get("hooks") and not hooks_on:       # its hooks wait for the plugin to be switched on
+            on = False
+        out.append(dict(rec, enabled=on, hooks_enabled=hooks_on, server_status=servers))
     return sorted(out, key=lambda r: r["name"])
 
 
@@ -563,8 +566,9 @@ def _plugin_hooks(pdir: Path, m: dict, name: str, notes: list) -> str:
     ${CLAUDE_PLUGIN_ROOT} and ${MESHPOOL_PLUGIN_ROOT} become the plugin's folder. Returns the file written or ""."""
     from meshpool_harness.agent import extras as EX
     spec = m.get("hooks")
-    if isinstance(spec, str):
-        spec = _read_json(pdir / spec.lstrip("./")) if (pdir / spec.lstrip("./")).is_file() else {}
+    if isinstance(spec, str):                       # "./hooks.json"; lstrip("./") also ate a leading dot (".hooks")
+        rel = spec.removeprefix("./")
+        spec = _read_json(pdir / rel) if (pdir / rel).is_file() and _inside(pdir / rel, pdir) else {}
     if not isinstance(spec, dict) or not spec:
         spec = _read_json(pdir / "hooks" / "hooks.json")
     events = spec.get("hooks") if isinstance(spec.get("hooks"), dict) else spec
@@ -592,12 +596,15 @@ def _plugin_hooks(pdir: Path, m: dict, name: str, notes: list) -> str:
         notes.append("Skipped hook events Meshpool does not have: " + ", ".join(sorted(unknown)) + ".")
     if not out:
         return ""
-    path = _hooks_file(name)
+    # Written switched off (<plugin>.json.off): like its MCP servers, nothing of a plugin runs until the user switches
+    # it on; enable_plugin renames it to <plugin>.json, which agent/extras.hooks reads.
+    path = _hooks_file(name, off=True)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _hooks_file(name).unlink(missing_ok=True)       # a reinstall starts switched off as well
     path.write_text(json.dumps(out, indent=1), encoding="utf-8")
-    notes.append("Added %d hook(s): %s." % (sum(len(v) for v in out.values()), ", ".join(
-        f"{ev}({r.get('matcher') or '*'})" for ev, rows in out.items() for r in rows)))
-    return str(path)
+    notes.append("Added %d hook(s), off until you switch the plugin on: %s." % (sum(len(v) for v in out.values()),
+                 ", ".join(f"{ev}({r.get('matcher') or '*'})" for ev, rows in out.items() for r in rows)))
+    return str(_hooks_file(name))
 
 
 def _install_parts(pdir: Path, m: dict, name: str, source: str, skills: list, servers: list) -> dict:

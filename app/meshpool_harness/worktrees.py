@@ -17,6 +17,7 @@ as ``creating`` before anything is made, so a crash mid-create is cleaned up by 
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import os
@@ -198,13 +199,105 @@ def _commit_pending(wt, message: str) -> bool:
 
 
 # ---------- registry -------------------------------------------------------------------------------------------------
+_READ_TRIES = 6
+SIDECAR = "copy.json"                             # a plain copy's own description, next to its work/ and base/ folders
+
+
+class RegistryUnreadable(WorktreeError):
+    """The registry exists but cannot be read right now (a sharing violation, a permission). Nothing may be decided
+    from it: it is never treated as empty, moved aside or rewritten."""
+
+
+def _check_doc(d, path) -> dict:
+    if d is None:
+        return {}
+    if not isinstance(d, dict) or not isinstance(d.get("items", {}), dict):
+        raise fsio.CorruptFile(path, ValueError("not a registry of isolated copies"))
+    return d
+
+
+def _load() -> tuple[dict, bool]:
+    """(registry document, read cleanly). A file that cannot be read right now is retried, then RegistryUnreadable:
+    an OSError is never mistaken for damage (moving the registry aside made every copy look like an orphan, and
+    recover() deleted them all with their unmerged work). A file that is really damaged (not JSON, not a registry) is
+    moved aside and the records are rebuilt from the copies' folders under wt/; the second value is then False."""
+    p, last = _registry(), None
+    for i in range(_READ_TRIES):
+        try:
+            return _check_doc(fsio.read_json(p, default={}), p), True
+        except fsio.CorruptFile as e:
+            if not isinstance(e.cause, OSError):
+                return _rebuild(), False
+            last = e
+            time.sleep(0.05 * (i + 1))
+    raise RegistryUnreadable(f"Could not read the list of isolated copies ({last.cause if last else p}). Nothing was "
+                             "changed; try again in a moment.")
+
+
 def _items() -> dict:
+    return _load()[0].get("items", {})
+
+
+def _record_from_folder(d: Path) -> dict | None:
+    """What can be known about copy folder ``d`` without its registry record: a git worktree describes itself (its
+    repository, branch and where it started); a plain copy has its sidecar. Rebuilt records belong to nobody, so no
+    clean-up removes them; the user merges or discards them."""
+    note = "Recovered after the list of isolated copies was damaged."
+    rec = {"id": d.name, "path": str(d), "base_dirty": False, "owner": {"kind": "cli", "id": "", "pid": None},
+           "title": "", "state": "ready", "created": d.stat().st_mtime, "merged": None, "note": note}
+    if (d / "work").is_dir() and (d / "base").is_dir():
+        side = {}
+        try:
+            side = fsio.read_json(d / SIDECAR, default={}) or {}
+        except fsio.CorruptFile:
+            pass
+        side = side if isinstance(side, dict) else {}
+        rec.update({"kind": "copy", "mode": str(side.get("mode") or "apply"), "source": str(side.get("source") or ""),
+                    "top": None, "branch": "", "base": "", "workdir": str(d / "work"), "base_dir": str(d / "base"),
+                    "title": str(side.get("title") or "")[:120]})
+        if side.get("created"):
+            rec["created"] = side["created"]
+        return rec
+    if not (d / ".git").is_file():
+        return None
     try:
-        d = fsio.read_json(_registry(), default={}) or {}
-    except fsio.CorruptFile:
-        fsio.quarantine(_registry())
-        d = {}
-    return d.get("items", {}) if isinstance(d, dict) else {}
+        common = _out(_git(d, "rev-parse", "--git-common-dir"))
+        branch = _out(_git(d, "symbolic-ref", "-q", "--short", "HEAD"))
+        tip = _head(d)
+    except (WorktreeError, OSError):
+        return None
+    common_p = Path(common if os.path.isabs(common) else os.path.join(d, common)).resolve() if common else None
+    if not common_p or not tip or common_p.name != ".git" or not common_p.parent.is_dir():
+        return None
+    top = str(common_p.parent)
+    base = _out(_git(top, "merge-base", _head(top), tip)) or tip
+    rec.update({"kind": "git", "mode": "commit", "source": top, "top": top, "branch": branch, "base": base,
+                "head": base, "sub": "", "workdir": str(d)})
+    return rec
+
+
+def _rebuild() -> dict:
+    """Move the damaged registry aside and write one rebuilt from the folders under wt/ (under the registry's lock;
+    a second process that already repaired it wins)."""
+    p = _registry()
+    with fsio.file_lock(p):
+        try:
+            return _check_doc(fsio.read_json(p, default={}), p)
+        except fsio.CorruptFile as e:
+            if isinstance(e.cause, OSError):
+                raise RegistryUnreadable(f"Could not read the list of isolated copies ({e.cause}).") from e
+        moved = fsio.quarantine(p)
+        if moved is None and p.exists():
+            raise RegistryUnreadable("The list of isolated copies is damaged and could not be moved aside.")
+        items = {}
+        for d in sorted(root().iterdir()) if root().is_dir() else []:
+            if d.is_dir() and d.name not in ("locks",):
+                rec = _record_from_folder(d)
+                if rec:
+                    items[rec["id"]] = rec
+        doc = {"version": 1, "items": items, "rebuilt": time.time(), "damaged_copy": str(moved or "")}
+        fsio.atomic_write_json(p, doc)
+        return doc
 
 
 def _put(rec: dict) -> None:
@@ -225,11 +318,25 @@ def _drop(wid: str) -> None:
 
 
 def _update(fn) -> None:
-    try:
-        fsio.update_json(_registry(), fn, default={"version": 1, "items": {}})
-    except fsio.CorruptFile:
-        fsio.quarantine(_registry())
-        fsio.update_json(_registry(), fn, default={"version": 1, "items": {}})
+    """Locked read-modify-write of the registry. A registry that cannot be read is retried, then RegistryUnreadable;
+    nothing built from an unreadable registry is ever written. A damaged one is rebuilt first, then changed."""
+    p = _registry()
+
+    def guarded(d):
+        return fn(_check_doc(d, p))
+    last = None
+    for i in range(_READ_TRIES):
+        try:
+            fsio.update_json(p, guarded, default={"version": 1, "items": {}})
+            return
+        except fsio.CorruptFile as e:
+            if not isinstance(e.cause, OSError):
+                _rebuild()                          # then apply fn to the rebuilt registry
+                continue
+            last = e
+            time.sleep(0.05 * (i + 1))
+    raise RegistryUnreadable(f"Could not update the list of isolated copies ({last.cause if last else p}). Nothing "
+                             "was changed; try again in a moment.")
 
 
 def _lock(key: str):
@@ -408,6 +515,9 @@ def _create_copy(rec: dict, src: Path, max_bytes: int = MAX_COPY_BYTES) -> None:
     _copy_files(files, p / "base")
     rec["workdir"] = str(p / "work")
     rec["base_dir"] = str(p / "base")
+    # Where it came from, beside it: if the registry is ever damaged, the record can be rebuilt from the folder.
+    fsio.atomic_write_json(p / SIDECAR, {k: rec.get(k) for k in ("id", "source", "title", "mode", "created")},
+                           fsync=False)
 
 
 def _cleanup(rec: dict) -> None:
@@ -585,9 +695,73 @@ def _apply_git(rec: dict) -> dict:
     idx = _git(top, "write-tree")
     if idx.returncode:
         return {"ok": False, "reason": "The folder's index has unresolved conflicts.", "conflicts": [], "blocked": []}
-    if not E.restore(top, (result, _out(idx))):
+    res = _move_paths(top, ours, result, changed)
+    if res["changed_since"]:
+        return {"ok": False, "reason": "Files these changes touch were changed in the folder while they were being "
+                "merged; nothing was changed. Try again.", "conflicts": [], "blocked": res["changed_since"],
+                "branch": rec["branch"]}
+    if not res["ok"]:
         raise WorktreeError("Applying the changes to the folder failed part-way; check the folder.")
     return {"ok": True, "files": changed}
+
+
+def _tree_entries(top, tree: str) -> dict | None:
+    """path -> (mode, object id) of every file in ``tree``."""
+    r = _git(top, "ls-tree", "-r", "-z", "--full-tree", tree)
+    if r.returncode:
+        return None
+    out = {}
+    for row in r.stdout.split(b"\0"):
+        meta, sep, path = row.partition(b"\t")
+        if sep:
+            mode, _typ, oid = meta.split(b" ", 2)
+            out[path.decode("utf-8", "surrogateescape")] = (mode.decode(), oid.decode())
+    return out
+
+
+def _move_paths(top: str, expect: str, target: str, paths: list[str]) -> dict:
+    """Move only ``paths`` of the folder's working tree from tree ``expect`` to tree ``target``: nothing else is read
+    back, reset or removed, and the index is left alone. (engine.restore forces the whole folder to a tree, which also
+    reverted or deleted files the user wrote while the merge was being computed.) Every path is first checked against
+    ``expect``; when one no longer matches, nothing is touched and it is listed in ``changed_since``. Paths are relative
+    to the repository top ``top``. Returns {ok, moved, changed_since}."""
+    E = _engine()
+    paths = list(dict.fromkeys(paths))
+    if not paths:
+        return {"ok": True, "moved": [], "changed_since": []}
+    want, was = _tree_entries(top, target), _tree_entries(top, expect)
+    cur = E._worktree_tree(top)
+    now = _tree_entries(top, cur) if cur else None
+    if want is None or was is None or now is None:
+        return {"ok": False, "moved": [], "changed_since": []}
+    stale = sorted(p for p in paths if now.get(p) != was.get(p))
+    if stale:
+        return {"ok": False, "moved": [], "changed_since": stale}
+    write = [p for p in paths if p in want]
+    if write:
+        import tempfile
+        fd, tmp = tempfile.mkstemp(prefix="mh-index-")
+        os.close(fd)
+        os.remove(tmp)
+        try:
+            env = {"GIT_INDEX_FILE": tmp}
+            if _git(top, "read-tree", target, env=env).returncode:
+                return {"ok": False, "moved": [], "changed_since": []}
+            stdin = b"\0".join(p.encode("utf-8", "surrogateescape") for p in write) + b"\0"
+            if _git(top, "checkout-index", "-f", "-z", "--stdin", env=env, stdin=stdin).returncode:
+                return {"ok": False, "moved": [], "changed_since": []}
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+    for p in paths:
+        if p not in want:
+            fp = Path(_long(Path(top, p)))
+            if fp.is_symlink() or fp.is_file():
+                fp.unlink()
+    after_tree = E._worktree_tree(top)
+    after = _tree_entries(top, after_tree) if after_tree else None
+    ok = after is not None and all(after.get(p) == want.get(p) for p in paths)
+    return {"ok": ok, "moved": paths, "changed_since": []}
 
 
 def _merge_copy(rec: dict) -> dict:
@@ -606,27 +780,60 @@ def _merge_copy(rec: dict) -> dict:
     if conflicts:
         return {"ok": False, "reason": "The folder's copies of these files changed since the isolated copy was made.",
                 "conflicts": sorted(conflicts), "blocked": []}
-    for rel, new in plan:
-        t = src / rel
-        if new is None:
-            Path(_long(t)).unlink(missing_ok=True)
+    staged = _stage_all(src, [(rel, new) for rel, new in plan if new is not None])
+    # Every new file is on disk next to its target (a full disk failed above, with the folder untouched): now only
+    # renames and deletions, which do not need space.
+    for t, tmp, data in staged:
+        try:
+            linked = os.stat(t).st_nlink > 1
+        except OSError:
+            linked = False
+        if linked:                                  # a hard-linked file stays one file: rewritten where it is
+            fsio.atomic_write_bytes(t, data, fsync=False, keep_links=True)
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
         else:
-            Path(_long(t)).parent.mkdir(parents=True, exist_ok=True)
-            try:                                     # keep the file's own bits (an executable stays executable)
-                mode = os.stat(_long(t)).st_mode & 0o7777
-            except OSError:                          # a new file: open()'s default, not mkstemp's 0600
-                um = os.umask(0o022)
-                os.umask(um)
-                mode = 0o666 & ~um
-            fsio.atomic_write_bytes(_long(t), new, fsync=False, mode=None if os.name == "nt" else mode)
+            fsio._replace(tmp, str(t))
+    for rel, new in plan:
+        if new is None:
+            Path(_long(src / rel)).unlink(missing_ok=True)
     for rel, new in plan:                           # the copy's base is now the folder's state
         b = Path(rec["base_dir"]) / rel
         if new is None:
             Path(_long(b)).unlink(missing_ok=True)
         else:
-            Path(_long(b)).parent.mkdir(parents=True, exist_ok=True)
-            Path(_long(b)).write_bytes(new)
+            fsio.atomic_write_bytes(_long(b), new, fsync=False)
     return {"ok": True, "files": sorted(r for r, _ in plan)}
+
+
+def _stage_all(src: Path, items: list) -> list:
+    """Write each (rel, data) to a temporary file next to its target in ``src``, with the target's permission bits (a
+    new file: open()'s default). Returns [(target, temp, data)]. On any failure every temporary file is removed and the
+    error raised: nothing in the folder has changed."""
+    import tempfile
+    staged = []
+    try:
+        for rel, data in items:
+            t = Path(_long(src / rel))
+            if t.is_symlink():
+                t = Path(os.path.realpath(t))       # the link stays a link; its target gets the new content
+            t.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                mode = os.stat(t).st_mode & 0o7777  # an executable stays executable
+            except OSError:
+                mode = fsio.default_mode()
+            fd, tmp = tempfile.mkstemp(prefix=f".{t.name}.", suffix=".mh-merge", dir=str(t.parent))
+            staged.append((t, tmp, data))
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+            if os.name != "nt":
+                os.chmod(tmp, mode)
+    except BaseException:
+        for _t, tmp, _d in staged:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp)
+        raise
+    return staged
 
 
 # ---------- reset, discard, prune, recover ---------------------------------------------------------------------------
@@ -659,7 +866,7 @@ def discard(wid: str, keep_work: bool = False) -> dict:
     have (``kept_branch``, with a ``note`` saying so), so finished work is never lost silently. Uncommitted changes
     are deleted; ``keep_work=True`` (sub-agents, deleted chats) commits them first so they are kept as well."""
     rec = get(wid)
-    kept = None
+    kept = kept_dir = None
     with _lock(rec.get("top") or rec["source"]):
         top = rec.get("top")
         if rec["kind"] == "git" and top and Path(top).is_dir():
@@ -679,12 +886,49 @@ def discard(wid: str, keep_work: bool = False) -> dict:
             if not kept and rec.get("branch"):
                 _git(top, "branch", "-D", rec["branch"])
         else:
-            _rmtree(rec["path"])
+            if keep_work and rec["kind"] != "git" and rec.get("state") == "ready":
+                try:
+                    kept_dir = _keep_copy(rec)
+                except OSError as e:                # could not move it: it stays where it is, record and all
+                    work = rec.get("workdir") or rec["path"]
+                    return {"ok": True, "kept_branch": None, "kept_dir": work,
+                            "note": f"Its changes were kept in {work} (moving them aside failed: {e})."}
+            if not kept_dir:
+                _rmtree(rec["path"])
         _drop(rec["id"])
-    note = (f"Discarded. Its branch {kept} was kept because it has commits that are not in the folder; delete it "
-            f"with `git branch -D {kept}` when you do not need them." if kept
-            else "Discarded: the copy and its changes are gone.")
-    return {"ok": True, "kept_branch": kept, "note": note}
+    if kept_dir:
+        note = (f"Its changed files were kept in {kept_dir} (the base folder beside it holds the files as they were "
+                "when the copy was made). Delete that folder when you do not need them.")
+    elif kept:
+        note = (f"Discarded. Its branch {kept} was kept because it has commits that are not in the folder; delete it "
+                f"with `git branch -D {kept}` when you do not need them.")
+    else:
+        note = "Discarded: the copy and its changes are gone."
+    return {"ok": True, "kept_branch": kept, "kept_dir": kept_dir, "note": note}
+
+
+def kept_root() -> Path:
+    """Where the work of plain copies that could not be merged is kept (outside wt/, so no clean-up touches it)."""
+    from meshpool_harness import config as C
+    return C.home() / "kept-copies"
+
+
+def _keep_copy(rec: dict) -> str | None:
+    """A plain copy whose work was not merged (a conflict, a stopped sub-agent): move the whole copy (work/ and base/)
+    to kept-copies/<id> instead of deleting it. Returns the kept work folder, or None when the copy changed nothing."""
+    try:
+        changed = any(True for _ in _copy_changes(rec))
+    except OSError:
+        changed = True                              # cannot tell: keep it
+    if not changed or not Path(rec["path"]).is_dir():
+        return None
+    kr = kept_root()
+    kr.mkdir(parents=True, exist_ok=True)
+    dst, n = kr / rec["id"], 1
+    while dst.exists():
+        dst, n = kr / f"{rec['id']}-{n}", n + 1
+    shutil.move(_long(rec["path"]), _long(dst))
+    return str(dst / "work")
 
 
 # ---------- sub-agents: one copy each, applied in order (agent/delegate.py, assistant.run_subtasks) ---------------------
@@ -701,17 +945,18 @@ def subagent_copy(source, owner_id: str, title: str = "") -> dict | None:
 def apply_subagent_copy(wt: dict) -> dict:
     """Bring one sub-agent's copy into its folder and remove the copy. Call in task order. Conflicting changes are
     never applied: the result is ``{"ok": False, "reason", "bad": [paths]}`` and the work stays on its branch
-    (``kept_branch``)."""
+    (``kept_branch``) or, for a plain copy, in a folder of its own (``kept_dir``)."""
     try:
         res = merge(wt["id"])
     except Exception as e:  # noqa: BLE001
         res = {"ok": False, "reason": str(e), "conflicts": []}
     try:
-        kept = discard(wt["id"], keep_work=not res.get("ok")).get("kept_branch")
+        d = discard(wt["id"], keep_work=not res.get("ok"))
+        kept, kept_dir = d.get("kept_branch"), d.get("kept_dir")
     except Exception:  # noqa: BLE001
-        kept = None
+        kept, kept_dir = None, (None if res.get("ok") else wt.get("workdir"))   # not removed: it is still there
     return {"ok": bool(res.get("ok")), "reason": str(res.get("reason") or ""),
-            "bad": list(res.get("conflicts") or res.get("blocked") or []), "kept_branch": kept}
+            "bad": list(res.get("conflicts") or res.get("blocked") or []), "kept_branch": kept, "kept_dir": kept_dir}
 
 
 def prune_owner(kind: str, oid: str, keep_work: bool = True) -> list[dict]:
@@ -752,7 +997,12 @@ def recover(alive=None) -> dict:
     done = {"creating": [], "missing": [], "dead_owner": [], "orphan_dirs": [], "kept_branches": []}
     if not root().is_dir():
         return done
-    for rec in list(_items().values()):
+    try:
+        doc, clean = _load()
+    except RegistryUnreadable as e:                 # decide nothing from a registry that could not be read
+        done["error"] = str(e)
+        return done
+    for rec in list(doc.get("items", {}).values()):
         wid, owner = rec["id"], rec.get("owner") or {}
         try:
             if rec.get("state") != "ready":
@@ -785,12 +1035,23 @@ def recover(alive=None) -> dict:
                     done["kept_branches"].append(r["kept_branch"])
         except (WorktreeError, OSError, KeyError, TimeoutError):
             continue
-    known = set(_items())
+    # Orphan folders are deleted only on the word of a registry read cleanly in this run, now and just before each
+    # deletion: an unreadable or rebuilt registry knows too little, and the folders may hold unmerged work.
+    try:
+        known, clean_now = set(_load()[0].get("items", {})), True
+    except RegistryUnreadable:
+        known, clean_now = set(), False
+    if not (clean and clean_now):
+        return done
     for d in root().iterdir():
         if d.name in ("locks",) or not d.is_dir() or d.name in known:
             continue
-        if time.time() - d.stat().st_mtime < 120 or d.name in set(_items()):   # maybe being made right now
-            continue
+        try:
+            doc_now, ok_now = _load()
+        except RegistryUnreadable:
+            break
+        if not ok_now or time.time() - d.stat().st_mtime < 120 or d.name in doc_now.get("items", {}):
+            continue                                # maybe being made right now
         gitfile = d / ".git"
         common = None
         if gitfile.is_file():

@@ -238,11 +238,19 @@ def _write(p: Path, d: dict):
 @contextlib.contextmanager
 def _locked(*paths: Path):
     """Exclusive access to these store files for a read-modify-write: this process's lock, then a lock file per path
-    (so the CLI in another process cannot lose an update). Always taken in this order, and held only for the edit."""
+    (so the CLI in another process cannot lose an update). The file locks are always taken in one order, the state
+    file before the auth file, whatever order the caller names them in: two processes taking them in opposite orders
+    each waited for the other until the lock timed out. A lock that stays busy is a ValueError, as callers expect."""
+    rank = {str(_state_file()): 0, str(_auth_file()): 1}
+    ordered = sorted(dict.fromkeys(paths), key=lambda q: rank.get(str(q), 2))
     with _LOCK:
         with contextlib.ExitStack() as stack:
-            for p in paths:
-                stack.enter_context(fsio.file_lock(p))
+            for p in ordered:
+                try:
+                    stack.enter_context(fsio.file_lock(p))
+                except TimeoutError as e:
+                    raise ValueError("Meshpool's connector files are busy (another Meshpool window or the terminal "
+                                     "is changing them). Try again in a moment.") from e
             yield
 
 
@@ -629,7 +637,7 @@ def finish(state: str, code: str | None, error: str | None = None) -> str:
     s, _, tok = _http(f["meta"]["token_endpoint"], form=form, headers=hdr)
     if s != 200 or not tok.get("access_token"):
         raise ValueError(f"{name} refused the sign-in: {tok.get('error_description') or tok.get('error') or s}")
-    with _locked(_auth_file(), _state_file()):
+    with _locked(_state_file(), _auth_file()):
         if _was_disconnected(f["cid"], f["t"]):
             raise refused
         store = _read_rw(_auth_file())

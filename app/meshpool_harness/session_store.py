@@ -130,7 +130,7 @@ def _store_blob(d: Path, url: str):
         with contextlib.suppress(OSError):
             os.utime(p, None)                                    # still in use: keeps it out of the GC window
     else:
-        fsio.atomic_write_bytes(p, raw, fsync=False)
+        fsio.atomic_write_bytes(p, raw, fsync=False, private=True)
     return BLOB_PREFIX + name
 
 
@@ -241,10 +241,10 @@ def write_snapshot(d, data: dict) -> None:
         slim = dict(data, messages=externalize(d, msgs)) if isinstance(msgs, list) else data
         if sj.exists():
             _backup(sj, d / "session.json.bak")
-        fsio.atomic_write_json(sj, dict(slim, _jgen=gen), indent=None, default=str)
+        fsio.atomic_write_json(sj, dict(slim, _jgen=gen), indent=None, default=str, private=True)
         with contextlib.suppress(OSError):
             fsio.atomic_write_json(d / HEAD, _head_of(data, len(msgs) if isinstance(msgs, list) else 0),
-                                   indent=None, fsync=False, default=str)
+                                   indent=None, fsync=False, default=str, private=True)
         with _GENS_GUARD:
             _GENS[str(d)] = (_sj_stat(d), gen)
         with contextlib.suppress(OSError):
@@ -287,7 +287,7 @@ def append_journal(d, start: int, messages: list, meta: dict) -> None:
             h.update({k: meta[k] for k in ("title", "updated", "model", "unfinished", "usage") if k in meta})
             h["count"] = start + len(messages)
             with contextlib.suppress(OSError):
-                fsio.atomic_write_json(d / HEAD, h, indent=None, fsync=False, default=str)
+                fsio.atomic_write_json(d / HEAD, h, indent=None, fsync=False, default=str, private=True)
 
 
 def _read_snapshot(d: Path):
@@ -405,7 +405,7 @@ class TranscriptLog:
             if not self.path.exists():                 # first append after the old format: carry the old events over
                 old = self._read_legacy()
                 if old and old.get("events"):
-                    fsio.atomic_write_bytes(self.path, self._enc(old["events"]))
+                    fsio.atomic_write_bytes(self.path, self._enc(old["events"]), private=True)
                     self._lines = None
             if self._lines is None:
                 self._lines = self._count()
@@ -413,12 +413,12 @@ class TranscriptLog:
             self._lines += len(events)
             if self._lines > TRANSCRIPT_MAX_LINES:
                 evs = self._read_events()[-TRANSCRIPT_KEEP_LINES:]
-                fsio.atomic_write_bytes(self.path, self._enc(evs))
+                fsio.atomic_write_bytes(self.path, self._enc(evs), private=True)
                 self._lines = len(evs)
 
     def rewrite(self, events: list, running: bool) -> None:
         with self._guard, fsio.file_lock(self.path):
-            fsio.atomic_write_bytes(self.path, self._enc(events))
+            fsio.atomic_write_bytes(self.path, self._enc(events), private=True)
             self._lines = len(events)
             self._write_state(running)
 
@@ -435,7 +435,7 @@ class TranscriptLog:
 
     def _write_state(self, running: bool) -> None:
         running = bool(running)
-        fsio.atomic_write_json(self.state, {"running": running}, indent=None)
+        fsio.atomic_write_json(self.state, {"running": running}, indent=None, private=True)
         self._running = running
 
     # -- reading

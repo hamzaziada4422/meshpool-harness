@@ -461,14 +461,8 @@ def _write(values: dict, path: Path) -> Path:
 
 
 def _store(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.{__import__('threading').get_ident()}.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    try:
-        os.chmod(tmp, 0o600)                     # it holds API keys: readable by this user only
-    except OSError:
-        pass
-    replace_file(tmp, path)
+    from meshpool_harness import fsio
+    fsio.atomic_write_text(path, text, private=True)    # it holds API keys: owner-only from its first byte
 
 
 _SECRET_NAME = re.compile(r"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|PRIVATE_KEY|CONNECTION_STRING|DATABASE_URL)$", re.I)

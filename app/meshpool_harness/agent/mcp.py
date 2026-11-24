@@ -56,10 +56,23 @@ def _servers_key(data: dict) -> str:
     return "mcpServers" if "mcpServers" in data else "servers" if "servers" in data else "mcpServers"
 
 
+def _owner_only(path: Path) -> None:
+    """mcp.json can hold tokens and API keys. One written by an earlier version may be 0644: make it 0600."""
+    if os.name == "nt":
+        return
+    try:
+        st = path.stat()
+        if st.st_mode & 0o077 and st.st_uid == os.getuid():
+            os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 def load_config(path: Path | None = None) -> dict:
     path = path or config_file()
     if not path.exists():
         return {}
+    _owner_only(path)
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         return {}
@@ -83,10 +96,8 @@ def write_text_atomic(path: Path, text: str, mode: int | None = None) -> None:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        if mode is None and path.exists():
-            mode = path.stat().st_mode & 0o777
-        try:
-            os.chmod(tmp, 0o600 if mode is None else mode)     # may hold tokens and API keys
+        try:   # it may hold tokens and API keys: always owner-only, also when an older version left it 0644
+            os.chmod(tmp, 0o600 if mode is None else mode)
         except OSError:
             pass
         C.replace_file(tmp, path)
@@ -207,7 +218,7 @@ def record_health(rows: dict) -> None:
         for name, (spec, ok, err) in rows.items():
             d[name] = {"sig": _sig(spec), "ok": bool(ok), "error": redact(err)[:300], "t": now}
         try:
-            fsio.atomic_write_json(_health_file(), d, fsync=False)
+            fsio.atomic_write_json(_health_file(), d, fsync=False, private=True)
         except OSError:
             pass
 
@@ -564,6 +575,10 @@ class _Stdio:
                 self.p.wait(timeout=self.grace)
             except Exception:  # noqa: BLE001
                 pass
+        if os.name == "nt":
+            # taskkill /T finds the children (npx -> node, uvx -> python, a .cmd's child) through the leader, so it
+            # has to run while the leader is still alive: terminate() first left the whole tree running.
+            kill_tree(self.p)
         try:
             self.p.terminate()
             self.p.wait(timeout=3)
@@ -1256,10 +1271,14 @@ class Server:
         out, self.images = self.call_with_images(tool, args)
         return out
 
-    def call_with_images(self, tool: str, args: dict):
-        """((text, failed), images) for this call alone: sub-agents call one server from several threads."""
-        if self.spec.get("per_call_project") and self.roots:
-            args = {**args, "_project": str(Path(self.roots[0]).resolve())}
+    def call_with_images(self, tool: str, args: dict, project: str | None = None):
+        """((text, failed), images) for this call alone: sub-agents call one server from several threads. ``project``:
+        the folder this call works in when it is not the chat's own (a sub-agent in an isolated copy); a server that
+        takes the folder with each call (per_call_project, the office server) is given it, so its files go there."""
+        takes = self.spec.get("per_call_project") or (project and any(
+            "office_mcp_server" in str(a) for a in self.spec.get("args") or []))
+        if takes and (project or self.roots):
+            args = {**args, "_project": str(Path(project or self.roots[0]).resolve())}
             try:
                 model = self.get_model() if self.get_model else ""
             except Exception:  # noqa: BLE001
@@ -1442,14 +1461,15 @@ class Manager:
         out, self.last_images = self.call_with_images(name, args)
         return out
 
-    def call_with_images(self, name: str, args: dict):
-        """call() without the shared last_images: ((text, failed), images), safe from several threads."""
+    def call_with_images(self, name: str, args: dict, project: str | None = None):
+        """call() without the shared last_images: ((text, failed), images), safe from several threads. ``project``:
+        see Server.call_with_images."""
         sname, tool = self.map[name]
         s = self.servers[sname]
         if s.status != "connected":
             return (f"MCP server '{sname}' is not connected: {s.error}", True), []
         try:
-            return s.call_with_images(tool, args)
+            return s.call_with_images(tool, args, project=project) if project else s.call_with_images(tool, args)
         except Cancelled as e:
             return (f"Stopped: '{sname}' was told to cancel this call ({redact(e)}). It may have finished part of the "
                     "work: a file it was already writing can still appear, so check before running it again.", True), []

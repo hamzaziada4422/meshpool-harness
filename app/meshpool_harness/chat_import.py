@@ -334,7 +334,7 @@ def bury(tid: str) -> None:
         cur[tid] = time.time()
         return cur
     try:
-        fsio.update_json(_tomb_path(), add, default={})
+        fsio.update_json(_tomb_path(), add, default={}, private=True)
     except (fsio.CorruptFile, OSError, TimeoutError):
         pass
 
@@ -403,7 +403,7 @@ def set_context_status(state: str, error: str = "", result: dict | None = None) 
     if result:
         row.update({k: result[k] for k in ("memory", "instructions", "skills") if k in result})
     try:
-        fsio.atomic_write_json(_status_path(), row)
+        fsio.atomic_write_json(_status_path(), row, private=True)
     except OSError:
         pass
 

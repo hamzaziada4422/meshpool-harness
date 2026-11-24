@@ -529,7 +529,7 @@ def _rows() -> list:
         raw = p.read_bytes()
         keep = p.with_name(f"{p.name}.corrupt-{hashlib.sha1(raw).hexdigest()[:8]}")
         if not keep.exists():
-            fsio.atomic_write_bytes(keep, raw)
+            fsio.atomic_write_bytes(keep, raw, private=True)
     except OSError:
         pass
     raise TasksDamaged(f"Your scheduled tasks file ({p}) is damaged ({cause}). Nothing was changed. "
@@ -540,7 +540,7 @@ def _rows() -> list:
 def _save_tasks(rows: list) -> None:
     """Replace the stored list (a test or repair helper: normal changes go through _mutate)."""
     with _tasks_lock():
-        fsio.atomic_write_json(_sfile(), rows)
+        fsio.atomic_write_json(_sfile(), rows, private=True)
 
 
 def _mutate(fn):
@@ -548,7 +548,7 @@ def _mutate(fn):
     with _tasks_lock():
         rows = _rows()
         res = fn(rows)
-        fsio.atomic_write_json(_sfile(), rows)
+        fsio.atomic_write_json(_sfile(), rows, private=True)
         return res
 
 
@@ -865,7 +865,7 @@ def due() -> list[dict]:
                     t["next_run"] = None
                     changed = True
             if changed:
-                fsio.atomic_write_json(_sfile(), rows)
+                fsio.atomic_write_json(_sfile(), rows, private=True)
     except (TasksDamaged, OSError, TimeoutError):
         return []                                                       # unreadable right now: run nothing, lose nothing
     return out
@@ -1137,7 +1137,8 @@ def run_subtasks(items: list, folder: str = "", max_parallel: int = 0, max_steps
                 else:
                     res[i] += ("\n\nIts changes were NOT applied to the project: " + ap["reason"]
                                + (f" Files: {', '.join(ap['bad'][:10])}." if ap["bad"] else "")
-                               + (f" They are kept on git branch {ap['kept_branch']}." if ap["kept_branch"] else ""))
+                               + (f" They are kept on git branch {ap['kept_branch']}." if ap["kept_branch"] else "")
+                               + (f" Its files are kept in {ap['kept_dir']}." if ap.get("kept_dir") else ""))
     head = f"{len(rows)} parts finished." if not halted["why"] else \
         f"{len(rows)} parts; the sub-agents were stopped by {halted['why']}, so some parts are incomplete."
     return head + "\n\n" + "\n\n".join(res)

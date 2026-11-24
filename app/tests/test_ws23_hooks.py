@@ -42,6 +42,10 @@ def test_install_converts_hooks_and_remove_takes_them_away(tmp_path, proj):
     rec = PL.install_plugin(str(d))[0]
     notes = " ".join(rec["notes"])
     assert "Added 2 hook(s)" in notes and "PreToolUse(bash)" in notes and "Notify" in notes
+    assert EX.hooks(proj)["PreToolUse"] == []                       # off until the plugin is switched on
+    assert PL.list_plugins()[0]["enabled"] is False and PL.list_plugins()[0]["hooks_enabled"] is False
+    PL.enable_plugin("guard", True)
+    assert PL.list_plugins()[0]["enabled"] is True and PL.list_plugins()[0]["hooks_enabled"] is True
     h = EX.hooks(proj)
     pre = h["PreToolUse"][0]
     assert pre["matcher"] == "bash" and pre["timeout"] == 20
@@ -58,6 +62,7 @@ def test_install_converts_hooks_and_remove_takes_them_away(tmp_path, proj):
 
 def test_pretooluse_hook_blocks_in_app_chat(monkeypatch, tmp_path, proj):
     PL.install_plugin(str(make_plugin(tmp_path)))
+    PL.enable_plugin("guard", True)                                 # hooks run once the plugin is switched on
     marker = proj / "marker.txt"
     script(monkeypatch, call("bash", {"command": f'"{sys.executable}" -c "open(r\'{marker}\',\'w\')"'}), "done")
     s = new_chat(proj, mode="auto")
@@ -70,6 +75,7 @@ def test_pretooluse_hook_blocks_in_app_chat(monkeypatch, tmp_path, proj):
 
 def test_pretooluse_hook_blocks_in_terminal(monkeypatch, tmp_path, proj, capfd):
     PL.install_plugin(str(make_plugin(tmp_path)))
+    PL.enable_plugin("guard", True)                                 # hooks run once the plugin is switched on
     marker = proj / "marker.txt"
     script(monkeypatch, call("bash", {"command": f'"{sys.executable}" -c "open(r\'{marker}\',\'w\')"'}), "done")
     T.main(str(proj), prompt="run it", auto=True, no_mcp=True)
@@ -81,6 +87,7 @@ def test_pretooluse_hook_blocks_in_terminal(monkeypatch, tmp_path, proj, capfd):
 
 def test_posttooluse_output_reaches_the_tool_result(monkeypatch, tmp_path, proj):
     PL.install_plugin(str(make_plugin(tmp_path)))
+    PL.enable_plugin("guard", True)                                 # hooks run once the plugin is switched on
     (proj / "a.txt").write_text("hello")
     script(monkeypatch, call("read_file", {"path": "a.txt"}), "done")
     s = new_chat(proj, mode="auto")

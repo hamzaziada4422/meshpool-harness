@@ -44,7 +44,16 @@ _CALL = threading.local()                    # the folder of the chat whose call
 
 
 def _project() -> Path:
-    p = Path(getattr(_CALL, "project", None) or os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).expanduser()
+    """The folder this call works in: the one the call names (``_project``: the caller's chat, or a sub-agent's
+    isolated copy), else the server's own. A named folder that is gone is an error, never a silent switch to the
+    server's folder (that is the real project, and a sub-agent's files would land there)."""
+    named = getattr(_CALL, "project", None)
+    if named:
+        p = Path(named).expanduser()
+        if not p.is_dir():
+            raise ValueError(f"The folder this call works in is gone: {p}")
+        return p
+    p = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).expanduser()
     return p if p.is_dir() else Path.cwd()
 
 

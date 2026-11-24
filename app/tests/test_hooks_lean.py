@@ -32,6 +32,7 @@ def test_matchers_cover_lean_and_claude_code_names(matcher, tool, args, hit):
 def test_pretooluse_hook_blocks_shell_in_a_lean_work_chat(monkeypatch, tmp_path, proj):
     monkeypatch.setenv("MH_LEAN_WORK", "1")
     PL.install_plugin(str(make_plugin(tmp_path)))
+    PL.enable_plugin("guard", True)                                 # hooks run once the plugin is switched on
     marker = proj / "marker.txt"
     script(monkeypatch, call("shell", {"command": ["bash", "-lc", f'"{sys.executable}" -c "open(r\'{marker}\',\'w\')"']}),
            "done")

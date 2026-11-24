@@ -230,7 +230,7 @@ def _mark_revoked(refresh_token: str) -> None:
     """Remember that ChatGPT rejected this refresh token, by fingerprint only (the token itself is never written), so
     the app can say 'sign in again' instead of showing the sign-in as ready. A new sign-in has a new token."""
     try:
-        fsio.atomic_write_json(_revoked_path(), {"refresh_fp": _fingerprint(refresh_token)})
+        fsio.atomic_write_json(_revoked_path(), {"refresh_fp": _fingerprint(refresh_token)}, private=True)
     except OSError:
         pass
 
@@ -327,7 +327,7 @@ def _refresh(d: dict) -> dict:
         if new.get(k):
             tok[k] = new[k]
     cur = dict(cur, tokens=tok, last_refresh=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
-    fsio.atomic_write_json(auth_path(), cur, indent=2)  # temp file made 0600 by mkstemp, so Codex sees the new pair
+    fsio.atomic_write_json(auth_path(), cur, indent=2, private=True)   # owner-only from the first byte
     return cur
 
 

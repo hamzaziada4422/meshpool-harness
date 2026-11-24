@@ -104,7 +104,7 @@ def _read(p: Path) -> str:
 
 
 def _write(p: Path, text: str) -> None:
-    fsio.atomic_write_text(p, text)
+    fsio.atomic_write_text(p, text, private=True)
 
 
 def _meta(d: Path) -> dict:
@@ -398,7 +398,7 @@ def knowledge_add(pid: str, name: str, data: bytes) -> dict:
             raise ValueError(f"A project holds up to {PROJECT_FILES_MAX} files. Remove one first.")
         k.mkdir(parents=True, exist_ok=True)
         p = k / name
-        fsio.atomic_write_bytes(p, data)
+        fsio.atomic_write_bytes(p, data, private=True)
         text = _text_of(p)
         idx[name] = {"size": len(data), "hash": hashlib.sha1(data).hexdigest()[:16], "added": time.time(),
                      "chars": len(text), "chunks": _chunks(text)[:200], "head": " ".join(text[:240].split())}

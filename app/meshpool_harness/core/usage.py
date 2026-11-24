@@ -744,10 +744,10 @@ def start_task(chat: str = "", budget_usd: float | None = None, parent: "Task | 
     try:
         meta = {"id": tid, "chat": t.chat, "parent": t.parent, "budget": budget, "label": label,
                 "started": t.started}
-        fsio.atomic_write_json(home / "usage" / "tasks" / f"{tid}.json", meta, fsync=False)
+        fsio.atomic_write_json(home / "usage" / "tasks" / f"{tid}.json", meta, fsync=False, private=True)
         if chat and not parent:
             fsio.atomic_write_json(home / "usage" / "current" / f"{_safe(chat, 120)}.json", {"task": tid},
-                                   fsync=False)
+                                   fsync=False, private=True)
         _prune(home)
     except Exception as e:
         _warn("start_task", e)

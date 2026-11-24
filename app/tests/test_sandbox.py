@@ -45,3 +45,36 @@ def test_a_real_command_cannot_write_outside_the_project(monkeypatch, tmp_path):
     assert not outside.exists() or "/tmp" in str(outside)          # pytest's tmp is under /tmp, which stays writable
     out = ws.bash("echo no > /etc/sbx_probe.txt; echo rc=$?")
     assert "Read-only file system" in out and not __import__("os").path.exists("/etc/sbx_probe.txt")
+
+
+def _git(*a, cwd):
+    import os
+    import subprocess
+    subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True,
+                   env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                        "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"})
+
+
+def test_git_dirs_outside_the_project_are_writable(tmp_path):
+    """A project in a subfolder of a repository, and a worktree copy, keep their git data outside the project folder:
+    with the sandbox on, every commit there failed (read-only .git)."""
+    import shutil
+    import pytest
+    if not shutil.which("git"):
+        pytest.skip("git is not installed")
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    _git("init", "-q", cwd=repo)
+    (repo / "sub" / "a.txt").write_text("a")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-qm", "one", cwd=repo)
+    w = SB._writable((repo / "sub").resolve())
+    assert str((repo / ".git").resolve()) in w                     # subfolder project: the repository's .git
+    wt = tmp_path / "copy"
+    _git("worktree", "add", "-q", str(wt), cwd=repo)
+    w = SB._writable(wt.resolve())
+    assert str((repo / ".git").resolve()) in w                     # the shared git dir (objects, refs)
+    assert any(x.startswith(str((repo / ".git" / "worktrees").resolve())) for x in w)   # the copy's own git dir
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    assert not any(x.endswith(".git") for x in SB._writable(plain.resolve()))

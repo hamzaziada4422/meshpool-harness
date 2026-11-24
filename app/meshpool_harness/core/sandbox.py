@@ -70,10 +70,32 @@ def unavailable_notice(platform: str | None = None) -> str:
             "and can write anywhere you can.")
 
 
+def _git_dirs(root: Path) -> list[str]:
+    """The repository folders git writes to for a command run in ``root``: its own git dir and the shared one. They
+    lie outside ``root`` for a project in a subfolder of a repository (``<repo>/.git``) and for a worktree copy
+    (``<main>/.git`` and ``<main>/.git/worktrees/<name>``), so without them every commit, stash or add failed there."""
+    import subprocess
+    try:
+        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-common-dir", "--git-dir"],
+                           capture_output=True, text=True, timeout=10, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if r.returncode:
+        return []                                  # not inside a repository (or no git)
+    out = []
+    for line in r.stdout.splitlines():
+        line = line.strip()
+        if line:
+            p = Path(line)
+            out.append(str((p if p.is_absolute() else Path(root) / p).resolve()))
+    return out
+
+
 def _writable(root: Path) -> list[str]:
     home = Path.home()
     cands = [str(root), "/tmp", "/var/tmp", str(home / ".cache"), str(home / ".npm"), str(home / ".cargo"),
              str(home / ".local"), str(home / ".meshpool"), str(home / ".config" / "pip"), str(home / ".pnpm-store")]
+    cands += _git_dirs(root)
     extra = os.environ.get("MH_SANDBOX_WRITE", "")
     cands += [x for x in extra.split(os.pathsep) if x]
     return [c for c in dict.fromkeys(cands) if os.path.isdir(c)]

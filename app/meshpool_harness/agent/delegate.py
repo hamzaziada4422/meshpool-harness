@@ -273,9 +273,12 @@ def _json_of(text: str):
 
 # ---------- MCP tools a sub-agent may use -----------------------------------------------------------------------------
 class ChildMcp:
-    """The chat's MCP servers, minus the assistant server (memory, other chats, schedules, sub-agents)."""
-    def __init__(self, mcp):
+    """The chat's MCP servers, minus the assistant server (memory, other chats, schedules, sub-agents). ``project``:
+    the sub-agent's isolated copy. The servers are the chat's, started for the real project (MESHPOOL_PROJECT), so
+    each call names the copy: the office tools then read and write there, not in the project the copy came from."""
+    def __init__(self, mcp, project: str | None = None):
         self.m = mcp
+        self.project = project
         self.last_images: list = []
 
     def _ok(self, name: str) -> bool:
@@ -287,7 +290,20 @@ class ChildMcp:
     def schemas(self) -> list:
         return [s for s in self.m.schemas() if self._ok(s["function"]["name"])]
 
+    def call_with_images(self, name: str, args: dict, project: str | None = None):
+        """A nested sub-agent calls through its parent's ChildMcp: the nearest isolated copy still applies."""
+        project = project or self.project
+        if project:
+            return self.m.call_with_images(name, args, project=project)
+        if not hasattr(self.m, "call_with_images"):
+            out = self.m.call(name, args)
+            return out, list(getattr(self.m, "last_images", []) or [])
+        return self.m.call_with_images(name, args)
+
     def call(self, name: str, args: dict):
+        if self.project:                                 # an isolated copy: the call works in the copy
+            out, self.last_images = self.call_with_images(name, args)
+            return out
         if hasattr(self.m, "call_with_images"):          # this call's own images, not a sibling's
             out, self.last_images = self.m.call_with_images(name, args)
             return out
@@ -392,7 +408,8 @@ class Delegation:
         a = Child(root, mode=parent.mode, profile=parent.profile, approve=approve,
                   emit=self._relay(sid, index, rec), session_id="sub-" + sid, max_steps=cfg["steps"],
                   sessions_dir=str(_sub_sessions()),     # the user's own data folder, not the chat list
-                  mcp=ChildMcp(parent.mcp) if parent.mcp and cfg["access"] == "inherit" else None)
+                  mcp=ChildMcp(parent.mcp, project=root if rec.get("wt") else None)
+                  if parent.mcp and cfg["access"] == "inherit" else None)
         a._delegate_rec = rec                            # its own sub-agents' files count as its files
         a.usage_source = "subagent"                      # its calls are recorded under a task of its own, below
         a.usage_task = usage.start_task(chat=parent.id, parent=parent._ensure_task(), label="subagent")
@@ -601,18 +618,26 @@ class Delegation:
                 e["summary"] = (e["summary"] + "\n\nIts changes were NOT applied to the project: "
                                 + res["reason"]
                                 + (f" Files: {', '.join(bad[:10])}." if bad else "")
-                                + (f" They are kept on git branch {kept}." if kept else ""))
+                                + (f" They are kept on git branch {kept}." if kept else "")
+                                + (f" Its files are kept in {res['kept_dir']}." if res.get("kept_dir") else ""))
 
     def _drop_copies(self) -> None:
         from meshpool_harness import worktrees as WT
         with self.lock:
             wts = [r.pop("wt", None) for r in self.children.values()]
+        kept = []
         for wt in wts:
             if wt:
                 try:
-                    WT.discard(wt["id"], keep_work=True)
+                    d = WT.discard(wt["id"], keep_work=True)     # unmerged work is kept, never deleted
                 except Exception:  # noqa: BLE001
-                    pass
+                    d = {"kept_dir": wt.get("workdir")}         # not removed: it is still where it was
+                if d.get("kept_branch") or d.get("kept_dir"):
+                    kept.append(f"git branch {d['kept_branch']}" if d.get("kept_branch") else str(d["kept_dir"]))
+        partial = getattr(self, "partial", None)
+        if kept and isinstance(partial, dict):
+            partial["note"] = ((partial.get("note") or "") + " Unapplied sub-agent work is kept in: "
+                               + ", ".join(kept) + ".").strip()
 
     def run(self, cancelled=lambda: False) -> dict:
         """Run every task (at most cfg['parallel'] at once) until done, the time limit, or Stop."""

@@ -19,6 +19,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 import tempfile
 import threading
 import time
@@ -66,17 +67,88 @@ def _fsync_dir(d: Path) -> None:
         os.close(fd)
 
 
-def atomic_write_bytes(path, data: bytes, *, fsync: bool = True, mode: int | None = None) -> None:
+_UMASK: int | None = None
+_UMASK_LOCK = threading.Lock()
+
+
+def _read_umask() -> int:
+    """The process umask, read without changing it where the OS allows (Linux: /proc). Elsewhere it can only be read
+    by setting it and putting it back; that happens once, under a lock."""
+    try:
+        with open("/proc/self/status", encoding="ascii", errors="replace") as f:
+            for line in f:
+                if line.startswith("Umask:"):
+                    return int(line.split()[1], 8)
+    except (OSError, ValueError, IndexError):
+        pass
+    m = os.umask(0o022)
+    os.umask(m)
+    return m
+
+
+def default_mode() -> int:
+    """Permission bits a plain ``open(..., "w")`` gives a new file: 0o666 minus the umask (read once per process)."""
+    global _UMASK
+    if _UMASK is None:
+        with _UMASK_LOCK:
+            if _UMASK is None:
+                _UMASK = _read_umask()
+    return 0o666 & ~_UMASK
+
+
+def _write_in_place(p: Path, data: bytes, *, fsync: bool, mode: int | None, private: bool) -> None:
+    """A file with more than one hard link (CLAUDE.md and AGENTS.md as one file): a rename would give this name a new
+    file and leave the other names on the old text, so the shared file is rewritten where it is."""
+    if private:
+        with contextlib.suppress(OSError):
+            os.chmod(p, 0o600)
+    with open(p, "r+b") as f:
+        f.write(data)
+        f.truncate()
+        f.flush()
+        if fsync:
+            os.fsync(f.fileno())
+    if mode is not None and not private:
+        with contextlib.suppress(OSError):
+            os.chmod(p, mode)
+
+
+def atomic_write_bytes(path, data: bytes, *, fsync: bool = True, mode: int | None = None,
+                       private: bool = False, keep_links: bool = False) -> None:
+    """Write ``data`` to ``path``; a reader sees the old file or the new one, never half of one.
+
+    Permission bits: ``mode`` when given. ``private=True`` keeps the file owner-only (0600) from its first byte (keys,
+    tokens, chats). Otherwise an existing file keeps its bits and a new file gets what ``open()`` would give it (0o666
+    minus the umask), not the temporary file's 0600.
+
+    A symlink is followed and its target rewritten (the link stays a link). ``keep_links=True`` (the user's own files:
+    the agent's write_file and edit, Undo) rewrites a file with several hard links in place, so every name keeps
+    naming the same file (CLAUDE.md and AGENTS.md as one). It is off by default: the stores keep their backup as a
+    hard link to the previous file, which a write in place would overwrite too."""
     p = Path(path)
+    if p.is_symlink():
+        p = Path(os.path.realpath(p))
     p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))
+    try:
+        st = os.stat(p)
+    except OSError:
+        st = None
+    if keep_links and st is not None and st.st_nlink > 1 and stat.S_ISREG(st.st_mode):
+        _write_in_place(p, data, fsync=fsync, mode=mode, private=private)
+        return
+    if mode is None and not private:
+        mode = (st.st_mode & 0o7777) if st is not None else default_mode()
+    fd, tmp = tempfile.mkstemp(prefix=f".{p.name}.", suffix=".tmp", dir=str(p.parent))   # created 0600
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
             f.flush()
             if fsync:
                 os.fsync(f.fileno())
-        if mode is not None:
+        if private:
+            with contextlib.suppress(OSError):
+                os.chmod(tmp, 0o600)
+        elif mode is not None:
             with contextlib.suppress(OSError):
                 os.chmod(tmp, mode)                 # OSS-15: keep the permission bits (an executable stays executable)
         _replace(tmp, str(p))
@@ -88,14 +160,16 @@ def atomic_write_bytes(path, data: bytes, *, fsync: bool = True, mode: int | Non
         raise
 
 
-def atomic_write_text(path, text: str, *, encoding: str = "utf-8", fsync: bool = True) -> None:
+def atomic_write_text(path, text: str, *, encoding: str = "utf-8", fsync: bool = True, mode: int | None = None,
+                      private: bool = False) -> None:
     atomic_write_bytes(path, text.encode(encoding, "surrogatepass" if encoding.startswith("utf") else "strict"),
-                       fsync=fsync)
+                       fsync=fsync, mode=mode, private=private)
 
 
-def atomic_write_json(path, obj: Any, *, indent: int | None = 1, fsync: bool = True, **dump_kw) -> None:
+def atomic_write_json(path, obj: Any, *, indent: int | None = 1, fsync: bool = True, private: bool = False,
+                      **dump_kw) -> None:
     dump_kw.setdefault("ensure_ascii", False)
-    atomic_write_text(path, json.dumps(obj, indent=indent, **dump_kw), fsync=fsync)
+    atomic_write_text(path, json.dumps(obj, indent=indent, **dump_kw), fsync=fsync, private=private)
 
 
 def read_json(path, default: Any = None) -> Any:
@@ -187,7 +261,8 @@ def file_lock(path, *, timeout: float = 30.0, poll: float = 0.02) -> Iterator[No
         tl.release()
 
 
-def update_json(path, fn: Callable[[Any], Any], default: Any = None, *, timeout: float = 30.0) -> Any:
+def update_json(path, fn: Callable[[Any], Any], default: Any = None, *, timeout: float = 30.0,
+                private: bool = False) -> Any:
     """Locked read-modify-write. ``fn`` gets the current value (or a copy of ``default``) and returns the new value
     (or mutates in place and returns None). A damaged file raises ``CorruptFile`` and is left untouched."""
     with file_lock(path, timeout=timeout):
@@ -195,5 +270,5 @@ def update_json(path, fn: Callable[[Any], Any], default: Any = None, *, timeout:
         new = fn(cur)
         if new is None:
             new = cur
-        atomic_write_json(path, new)
+        atomic_write_json(path, new, private=private)
         return new

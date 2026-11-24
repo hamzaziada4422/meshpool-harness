@@ -551,7 +551,9 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
             mode = p.stat().st_mode & 0o7777
         except OSError:
             mode = None
-        fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode)   # OSS-15: never a half-written file
+        # OSS-15: never a half-written file. A symlink (CLAUDE.md -> AGENTS.md) stays a link and a hard-linked file
+        # stays one file: both are written through, not replaced by a new regular file.
+        fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode, keep_links=True)
     _drop_pyc(p)
 
 

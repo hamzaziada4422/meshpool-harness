@@ -2612,7 +2612,7 @@ def _grace() -> float:
 
 def _write_meta_raw(sid: str, m: dict) -> None:
     from meshpool_harness import fsio
-    fsio.atomic_write_json(_meta_path(sid), m, indent=None)
+    fsio.atomic_write_json(_meta_path(sid), m, indent=None, private=True)
     _METAS.pop(sid, None)
 
 

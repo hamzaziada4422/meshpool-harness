@@ -44,7 +44,7 @@ def test_windows_task_runs_a_hidden_wrapper_with_env(home):
     SO.install(run=_fake(calls), platform="win32")
     tr = calls[0][0][calls[0][0].index("/TR") + 1]
     assert "wscript" in tr and "meshpool-scheduler.vbs" in tr
-    vb = (home / "meshpool-scheduler.vbs").read_text()
+    vb = (home / "meshpool-scheduler.vbs").read_text(encoding="utf-16")    # Windows Script Host: UTF-16 with a BOM
     assert "PYTHONPATH" in vb and "MESHPOOL_HOME" in vb and "run-due" in vb and ", 0, True" in vb
     SO.uninstall(run=_fake([]), platform="win32")
     assert not (home / "meshpool-scheduler.vbs").exists()

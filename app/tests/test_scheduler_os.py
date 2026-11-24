@@ -33,6 +33,19 @@ def test_windows_and_mac_registration(tmp_path, monkeypatch):
     assert sys.executable in (tmp_path / "Library/LaunchAgents/ai.meshpool.scheduler.plist").read_text()
 
 
+def test_windows_wrapper_is_utf16_with_a_bom_so_non_ascii_paths_survive(tmp_path, monkeypatch):
+    """Windows Script Host reads ANSI unless the script starts with a UTF-16 BOM: a UTF-8 .vbs broke every scheduled
+    run for a non-ASCII profile path."""
+    home = tmp_path / "José データ"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    SO.install(run=_fake([]), platform="win32", home=home)
+    raw = (home / "meshpool-scheduler.vbs").read_bytes()
+    assert raw.startswith(b"\xff\xfe")                          # UTF-16LE byte order mark
+    text = raw[2:].decode("utf-16-le")
+    assert str(home) in text and "run-due" in text
+    assert "\r\n" in text and "\r\r\n" not in text and text.count("\n") == text.count("\r\n")
+
+
 def test_the_cli_knows_the_scheduler_commands():
     from meshpool_harness import cli
     assert {"run-due", "scheduler"} <= cli.COMMANDS

@@ -222,7 +222,7 @@ def note_foreign_write(root, path, actor: str = "", shared=None) -> None:
                 fh.write(json.dumps(e) + "\n")
             if f.stat().st_size > 600_000:
                 keep = [x for x in _read_foreign_file(f) if x["time"] >= time.time() - FOREIGN_AGE][-FOREIGN_KEEP:]
-                fsio.atomic_write_text(f, "".join(json.dumps(x) + "\n" for x in keep), fsync=False)
+                fsio.atomic_write_text(f, "".join(json.dumps(x) + "\n" for x in keep), fsync=False, private=True)
     except Exception:
         pass
 
@@ -335,7 +335,7 @@ def _win_file_update(shared, fn) -> None:
     path = Path(shared) / "windows.json"
     for _ in range(2):
         try:
-            fsio.update_json(path, fn, default={}, timeout=5)
+            fsio.update_json(path, fn, default={}, timeout=5, private=True)
             return
         except fsio.CorruptFile:
             fsio.quarantine(path)
@@ -512,9 +512,9 @@ class Checkpoints:
                         except OSError:
                             with contextlib.suppress(OSError):
                                 shutil.copy2(self.index_path, self.bak_path)
-                    fsio.atomic_write_json(self.index_path, self._idx, indent=None, separators=(",", ":"))
+                    fsio.atomic_write_json(self.index_path, self._idx, indent=None, separators=(",", ":"), private=True)
                     with contextlib.suppress(OSError):
-                        fsio.atomic_write_text(self.seq_path, str(self._idx["seq"]), fsync=False)
+                        fsio.atomic_write_text(self.seq_path, str(self._idx["seq"]), fsync=False, private=True)
             except (OSError, TimeoutError) as e:
                 self.warning = f"Couldn't save the Undo history ({getattr(e, 'strerror', None) or e})."
                 return False
@@ -528,7 +528,7 @@ class Checkpoints:
         try:
             def add(d):
                 d[str(self.store)] = {"time": time.time(), "root": str(self.root)}
-            fsio.update_json(self.shared / "chats.json", add, default={}, timeout=5)
+            fsio.update_json(self.shared / "chats.json", add, default={}, timeout=5, private=True)
             self._registered = True
         except Exception:
             pass
@@ -549,7 +549,7 @@ class Checkpoints:
                 return
         except OSError:
             pass
-        fsio.atomic_write_bytes(p, zlib.compress(data, 6), fsync=durable)
+        fsio.atomic_write_bytes(p, zlib.compress(data, 6), fsync=durable, private=True)
 
     def _get(self, sha: str) -> bytes:
         for base in (self.objects, self.legacy_objects):
@@ -592,7 +592,8 @@ class Checkpoints:
         if not force and time.time() - self._cache_saved < 5:
             return
         try:
-            fsio.atomic_write_json(self.stat_path, self._cache, indent=None, fsync=False, separators=(",", ":"))
+            fsio.atomic_write_json(self.stat_path, self._cache, indent=None, fsync=False, separators=(",", ":"),
+                                   private=True)
             self._cache_dirty = False
             self._cache_saved = time.time()
         except OSError:
@@ -814,7 +815,7 @@ class Checkpoints:
             if self.mode == "scan":
                 with contextlib.suppress(OSError):
                     fsio.atomic_write_json(self.store / "open.json", {"n": n, "time": t["time"], "files": self._begin},
-                                           indent=None, fsync=False, separators=(",", ":"))
+                                           indent=None, fsync=False, separators=(",", ":"), private=True)
             self._save_cache(True)
             return dict(t)
 
@@ -1175,9 +1176,9 @@ class Checkpoints:
                         keep(path, "couldn't save a copy of it first, so it was left as is")
                         continue
                     p.parent.mkdir(parents=True, exist_ok=True)
-                    p.write_bytes(data)
-                    if _mode(target[path]) is not None:
-                        os.chmod(p, _mode(target[path]))
+                    # atomic: a full disk or a crash mid-Undo leaves the file as it was, never cut short (a link was
+                    # removed above, so this writes a file of its own, never through the link)
+                    fsio.atomic_write_bytes(p, data, fsync=False, mode=_mode(target[path]), keep_links=True)
                     restored.append(path)
                 except OSError as e:
                     keep(path, f"couldn't put it back ({getattr(e, 'strerror', None) or e})")
@@ -1317,7 +1318,7 @@ class Checkpoints:
                         for s in dead:
                             d.pop(s, None)
                     with contextlib.suppress(Exception):
-                        fsio.update_json(self.shared / "chats.json", drop, default={}, timeout=5)
+                        fsio.update_json(self.shared / "chats.json", drop, default={}, timeout=5, private=True)
                 return {"deleted": deleted, "kept": kept}
         except (OSError, TimeoutError):
             return {}

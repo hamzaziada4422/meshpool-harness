@@ -195,7 +195,7 @@ def write_private(p: Path, text: str) -> None:
     """Write a file only the user can read (it holds a key or tokens): written to a 0600 temp file and moved into
     place, so it is never readable by others and a reader never sees it half written."""
     from meshpool_harness import fsio
-    fsio.atomic_write_text(p, text, fsync=False)       # mkstemp: created 0600
+    fsio.atomic_write_text(p, text, fsync=False, private=True)       # 0600 from the first byte
     try:
         os.chmod(p, 0o600)
     except OSError:
