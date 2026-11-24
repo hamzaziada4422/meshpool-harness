@@ -2014,6 +2014,8 @@ class Agent:
         if self.profile != "code":
             return False
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        if os.environ.get("MH_GRADER_ANY_GREEN") == "1":   # A/B: a check that passed at any point after the last edit
+            return any(c.get("code") == 0 for c in after)     # (a later probe may fail on purpose), as Codex does
         return bool(after) and after[-1].get("code") == 0
 
     def _grade_commands(self, g: dict) -> list:

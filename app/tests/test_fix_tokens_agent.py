@@ -949,3 +949,13 @@ def test_the_same_run_with_only_numbers_changed_is_nudged_then_wrapped(tmp_path,
         run(10 + i)
     a.ws.edits += 1                                    # an edit in between: a fresh count
     assert not any("Meshpool" in run(20 + i) for i in range(3))
+
+
+def test_grader_any_green_switch_counts_a_passing_check_before_a_failing_probe(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    a.ws.edits = 2
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 0, "after_edit": 2, "kind": "run"},
+                     {"cmd": "python3 probe.py", "code": 1, "after_edit": 2, "kind": "run"}]
+    assert not a._small_code_verified()                        # default: the last run decides
+    monkeypatch.setenv("MH_GRADER_ANY_GREEN", "1")
+    assert a._small_code_verified()
