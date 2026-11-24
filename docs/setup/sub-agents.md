@@ -2,11 +2,11 @@
 
 meshpool's agent can hand parts of a job to sub-agents that work at the same time. A saved sub-agent is a named helper with its own instructions, which you write once and use by name ("use the reviewer agent on calc.py").
 
-Put a Markdown file in one of these folders (a later one wins for the same name):
+Put a Markdown file in one of these folders:
 
-- your meshpool data folder, `agents/`: yours, for every project
-- `<project>/.claude/agents/`: a project's Claude Code agents, read as they are
-- `<project>/.meshpool/agents/`: the project's own
+- your meshpool data folder, `agents/`: yours, for every project (yours win for the same name)
+- `<project>/.claude/agents/`: a project's Claude Code agents, read as they are, once you trust the folder
+- `<project>/.meshpool/agents/`: the project's own, once you trust the folder
 
 ```markdown
 ---

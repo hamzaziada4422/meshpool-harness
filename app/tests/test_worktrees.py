@@ -146,14 +146,17 @@ def test_carry_moves_uncommitted_changes_to_another_checkout(repo):
     assert WT.carry(repo, w["path"]) == ""                                              # nothing to move: fine
 
 
-def test_carry_that_conflicts_keeps_the_changes_in_the_stash(repo):
-    w = WT.create(repo, "clash")
-    Path(w["path"], "a.txt").write_text("theirs")                     # uncommitted there, so the pop cannot apply
-    (repo / "a.txt").write_text("mine")
+def test_carry_that_does_not_apply_puts_everything_back(repo):
+    (repo / "b.txt").write_text("base b")
+    subprocess.run("git add -A && git -c user.email=t@t -c user.name=t commit -qm b", shell=True, cwd=repo, check=True)
+    w = WT.create(repo, "clash", base="HEAD~1")                       # b.txt does not exist there
+    (repo / "b.txt").write_text("mine")
     why = WT.carry(repo, w["path"])
-    assert "stash" in why
-    assert "meshpool handoff" in subprocess.run(["git", "stash", "list"], cwd=repo, capture_output=True,
-                                                text=True).stdout                      # nothing lost
+    assert "do not apply cleanly" in why
+    assert (repo / "b.txt").read_text() == "mine"                     # back home
+    assert subprocess.run(["git", "status", "--porcelain"], cwd=w["path"], capture_output=True, text=True).stdout == ""
+    assert "meshpool handoff" not in subprocess.run(["git", "stash", "list"], cwd=repo, capture_output=True,
+                                                    text=True).stdout
 
 
 def test_worktree_hooks_run_after_create_and_remove(repo, tmp_path, monkeypatch):
@@ -170,3 +173,21 @@ def test_worktree_hooks_run_after_create_and_remove(repo, tmp_path, monkeypatch)
     assert [e["event"] for e in events] == ["WorktreeCreate", "WorktreeRemove"]
     assert events[0]["worktree_path"] == w["path"] and events[0]["branch"] == "meshpool/hooked"
     assert events[1]["branch_deleted"] is True
+
+
+def test_carry_never_pops_someone_elses_stash(repo):
+    w = WT.create(repo, "other")
+    (repo / "a.txt").write_text("old work")
+    subprocess.run(["git", "stash", "push", "-m", "my old stash"], cwd=repo, check=True, capture_output=True)
+    assert WT.carry(repo, w["path"]) == ""                                        # nothing to move: fine
+    assert "my old stash" in subprocess.run(["git", "stash", "list"], cwd=repo, capture_output=True, text=True).stdout
+    assert Path(w["path"], "a.txt").read_text() == "a"
+
+
+def test_carry_refuses_a_destination_with_changes_and_keeps_everything(repo):
+    w = WT.create(repo, "busy")
+    Path(w["path"], "a.txt").write_text("theirs")
+    (repo / "a.txt").write_text("mine")
+    why = WT.carry(repo, w["path"])
+    assert "destination has uncommitted changes" in why
+    assert (repo / "a.txt").read_text() == "mine" and Path(w["path"], "a.txt").read_text() == "theirs"

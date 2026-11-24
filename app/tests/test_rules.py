@@ -74,3 +74,28 @@ def test_a_broken_rules_file_is_never_overwritten(env):
     with pytest.raises(ValueError, match="left as it is"):
         FA.rules_post({"action": "add", "list": "ask", "rule": "edit"})
     assert (env / "home" / "permissions.json").read_text() == "{not json"
+
+
+@pytest.mark.parametrize("cmd", ["cd . && git push origin main", " git  push", "FOO=1 sudo git push -f",
+                                 "echo hi; git push", "ls | git push"])
+def test_ask_rules_see_every_command_in_a_line(env, cmd):
+    _rules(env, ask=["bash:git push*"])
+    asked = []
+    a = core.Agent(str(env / "proj"), approve=lambda *x: (asked.append(x), ("no", ""))[1], mode="auto")
+    assert not a._permit("bash", {"command": cmd})[0] and asked
+
+
+def test_ask_rules_cover_the_shell_tool_and_never_let_a_sub_agent_answer(env):
+    _rules(env, ask=["bash:git push*"])
+    asked = []
+    a = core.Agent(str(env / "proj"), approve=lambda *x: (asked.append(x), ("yes", ""))[1], mode="auto")
+    assert a._permit("shell", {"command": ["bash", "-lc", "git push"]})[0] and asked     # asked, user said yes
+    a._delegate_depth = 1                                    # a sub-agent: its approve would answer by itself
+    ok, why = a._permit("bash", {"command": "git push"})
+    assert not ok and "Leave this to the user" in why
+
+
+def test_deny_rules_see_every_command_too(env):
+    _rules(env, deny=["bash:rm -rf*"])
+    a = core.Agent(str(env / "proj"), approve=lambda *x: ("yes", ""), mode="auto")
+    assert not a._permit("bash", {"command": "cd /tmp && rm  -rf x"})[0]

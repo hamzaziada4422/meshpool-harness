@@ -93,7 +93,8 @@ def _unknown(path: str, manifest: dict) -> bool:
 
 
 class Checkpoints:
-    def __init__(self, root: str, store: Path):
+    def __init__(self, root: str, store: Path, base: int = 0):
+        self.base = int(base or 0)                  # turns before this store (a chat that moved folders): numbers go on
         self.root = Path(root).resolve()
         self.store = Path(store)
         self.objects = self.store / "objects"
@@ -209,7 +210,7 @@ class Checkpoints:
         if not mid:
             return None
         turns = self._turns()
-        t = {"n": len(turns) + 1, "title": title[:120], "before": mid, "after": None, "time": time.time(),
+        t = {"n": max([int(x.get("n") or 0) for x in turns] + [self.base]) + 1, "title": title[:120], "before": mid, "after": None, "time": time.time(),
              "message_index": message_index}
         turns.append(t)
         self._save_turns(turns)

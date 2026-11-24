@@ -1,5 +1,7 @@
-"""Hides keys, tokens and passwords in tool output shown on screen and saved in chat transcripts. What the model
-reads is not changed: an agent that has to fix a broken .env still sees it. MH_REDACT=0 turns this off."""
+"""Hides keys, tokens and passwords in what the chat shows: tool output, tool cards (command, diff) and approval
+details, on screen and in the saved transcript the app shows. What the model reads (and the agent's own session
+file, which holds it) is not changed: an agent that has to fix a broken .env still sees it. The model's own words
+are not filtered. MH_REDACT=0 turns this off."""
 from __future__ import annotations
 
 import os

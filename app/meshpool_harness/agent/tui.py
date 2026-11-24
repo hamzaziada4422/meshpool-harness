@@ -1182,7 +1182,7 @@ class Session:
         from meshpool_harness.agent import subagents as SA
         defs = SA.definitions(self.agent.root)
         if not defs:
-            dirs = ", ".join(str(d) for d in SA.folders(self.agent.root)[::2])
+            dirs = ", ".join(str(d) for d in SA.folders(self.agent.root))
             self.term.p(f"  No saved sub-agents. Add a Markdown file to {dirs}: front matter with name, description "
                         "and optionally tools and model, then the instructions.")
             return

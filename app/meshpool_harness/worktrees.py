@@ -206,17 +206,31 @@ def carry(src, dest) -> str:
     """Moves the uncommitted changes (new files too) of one checkout to another checkout of the same repository,
     through git stash, which all worktrees share. Returns "" when done or nothing to move; otherwise why it stopped.
     When the changes do not apply cleanly they stay safe in the stash (git stash list)."""
+    import uuid
     src, dest = Path(src), Path(dest)
-    if not _git(["status", "--porcelain"], src).stdout.strip():
+    if not _git(["status", "--porcelain", "--", "."], src).stdout.strip():
         return ""
+    if _git(["status", "--porcelain"], dest).stdout.strip():
+        return "the destination has uncommitted changes of its own; commit or stash them first"
     nohooks = ["-c", "core.hooksPath=/dev/null"]
-    r = _git(nohooks + ["stash", "push", "--include-untracked", "-m", "meshpool handoff"], src, check=False)
-    if r.returncode:
-        return "could not set the changes aside: " + (r.stderr or r.stdout).strip()[:200]
-    r = _git(nohooks + ["stash", "pop"], dest, check=False)
-    if r.returncode:
-        return ("the changes did not apply cleanly there, so they are kept in git's stash (git stash list, then git "
-                "stash pop where you want them): " + (r.stderr or r.stdout).strip()[:200])
+    tag = "meshpool handoff " + uuid.uuid4().hex[:12]
+    before = _git(["rev-parse", "-q", "--verify", "refs/stash"], src, check=False).stdout.strip()
+    r = _git(nohooks + ["stash", "push", "--include-untracked", "-m", tag, "--", "."], src, check=False)
+    after = _git(["rev-parse", "-q", "--verify", "refs/stash"], src, check=False).stdout.strip()
+    if r.returncode or not after or after == before:  # nothing was set aside (a submodule change, say)
+        return "git could not set these changes aside " + ((r.stderr or r.stdout).strip()[:200] or "(nothing to stash)")
+    ref = next((ln.split(" ", 1)[0] for ln in _git(["stash", "list", "--format=%gd %s"], src).stdout.splitlines()
+                if ln.endswith(tag)), "")
+    if not ref:
+        return "git set the changes aside but they cannot be found; they are in git stash list as " + tag
+    r = _git(nohooks + ["stash", "apply", ref], dest, check=False)
+    if r.returncode:                                  # back as they were: the clean destination reset, the changes home
+        _git(nohooks + ["reset", "-q", "--hard"], dest, check=False)
+        _git(["clean", "-q", "-fd"], dest, check=False)
+        back = _git(nohooks + ["stash", "pop", ref], src, check=False)
+        return ("they do not apply cleanly there" + ("" if back.returncode == 0 else
+                f"; they are kept in git's stash as {tag} (git stash list)"))
+    _git(["stash", "drop", ref], src, check=False)
     return ""
 
 

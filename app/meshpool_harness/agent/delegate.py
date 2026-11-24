@@ -428,7 +428,8 @@ class Delegation:
                  "other parts at the same time. You know nothing about the conversation that started you: your task "
                  "and context below are all you have.\n\nYOUR TASK:\n" + row["goal"])
         if defn:
-            block += f"\n\nYOUR ROLE ({defn['name']}), saved by the user:\n" + defn["prompt"][:20000]
+            block += (f"\n\nYOUR ROLE ({defn['name']}), " + ("saved by the user" if defn.get("own") else
+                      "from this project's agents folder") + ":\n" + defn["prompt"][:20000])
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
         block += f"\n\nWORKSPACE: {a.root if wt else parent.root} (the project's instructions above apply to you too)"

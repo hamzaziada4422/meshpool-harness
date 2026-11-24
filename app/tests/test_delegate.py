@@ -880,7 +880,11 @@ def test_worktree_isolation_outside_git_says_why(monkeypatch, _env):
 
 
 # ---------------------------------------------------------------- saved sub-agents (agents/*.md)
-def _saved_agent(proj, name="reviewer", tools="Read, Grep", model=""):
+def _saved_agent(proj, name="reviewer", tools="Read, Grep", model="", trust=True):
+    import os as _os
+    from meshpool_harness import trust as TR
+    if trust and _os.environ.get("MESHPOOL_HOME"):
+        TR.trust(proj)
     d = proj / ".meshpool" / "agents"
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{name}.md").write_text(f"---\nname: {name}\ndescription: Reviews code for bugs\ntools: {tools}\n"
@@ -888,6 +892,7 @@ def _saved_agent(proj, name="reviewer", tools="Read, Grep", model=""):
 
 
 def test_a_saved_sub_agent_brings_its_role_tools_and_model(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
     _saved_agent(_env, model="acme/review-model")
     seen = []
     fake(monkeypatch, lambda b: _msg("no bugs"), seen=seen)
@@ -902,6 +907,7 @@ def test_a_saved_sub_agent_brings_its_role_tools_and_model(monkeypatch, _env):
 
 
 def test_an_unknown_saved_sub_agent_is_named(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
     _saved_agent(_env)
     fake(monkeypatch, lambda b: _msg("x"))
     out, ok = D.run_tool(_agent(_env), {"tasks": [{"goal": "Review calc.py for bugs", "agent": "tester"}]})
@@ -909,6 +915,7 @@ def test_an_unknown_saved_sub_agent_is_named(monkeypatch, _env):
 
 
 def test_a_saved_sub_agent_cannot_widen_its_tools(monkeypatch, _env):
+    monkeypatch.setenv("MESHPOOL_HOME", str(_env.parent / "mphome"))
     _saved_agent(_env, name="runner", tools="Bash, Write")
     monkeypatch.setenv("MH_SUBAGENT_ACCESS", "read")                     # the chat lets sub-agents read only
     seen = []
@@ -916,3 +923,18 @@ def test_a_saved_sub_agent_cannot_widen_its_tools(monkeypatch, _env):
     D.run_tool(_agent(_env), {"tasks": [{"goal": "Run the build and report", "agent": "runner"}]})
     tools = [s for s in seen if s["child"]][0]["tools"]
     assert not {"bash", "write_file"} & set(tools)
+
+
+
+def test_an_untrusted_projects_agents_are_ignored_and_yours_win(monkeypatch, _env):
+    from meshpool_harness.agent import subagents as SA
+    home = _env.parent / "mphome"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    _saved_agent(_env, name="reviewer", tools="", trust=False)              # the repo's: all tools, untrusted
+    assert SA.definitions(_env) == {}
+    (home / "agents").mkdir(parents=True)
+    (home / "agents" / "reviewer.md").write_text("---\nname: reviewer\ntools: Read\nmodel: inherit\n---\nMine.\n")
+    from meshpool_harness import trust as TR
+    TR.trust(_env)
+    d = SA.definitions(_env)["reviewer"]
+    assert d["prompt"] == "Mine." and d["own"] and d["tools"] == ["Read"] and d["model"] is None   # yours win

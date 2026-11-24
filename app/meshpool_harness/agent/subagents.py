@@ -1,9 +1,9 @@
 """Saved sub-agents: named helpers defined in Markdown files, which delegate_task can start by name.
 
-Where they live (a later folder wins for the same name):
+Where they live (yours win for the same name):
+  <project>/.claude/agents/*.md    a project's Claude Code agents, read as they are, once you trust the folder
+  <project>/.meshpool/agents/*.md  the project's own, once you trust the folder
   <meshpool home>/agents/*.md      yours, for every project
-  <project>/.claude/agents/*.md    a project's Claude Code agents, read as they are
-  <project>/.meshpool/agents/*.md  the project's own
 
 Each file:
   ---
@@ -44,7 +44,14 @@ def _list(v) -> list[str]:
 
 
 def folders(root) -> list[Path]:
-    return [C.home() / "agents", Path(root) / ".claude" / "agents", Path(root) / ".meshpool" / "agents"]
+    """The project's folders first, the user's last, so the user's own definition wins for a name. A project's
+    folders count only once the user trusts it (trust.py): its definitions steer what sub-agents do."""
+    from meshpool_harness import trust as TR
+    project = [Path(root) / ".claude" / "agents", Path(root) / ".meshpool" / "agents"] if TR.is_trusted(root) else []
+    return project + [C.home() / "agents"]
+
+
+_NO_MODEL = {"inherit", "default", "sonnet", "opus", "haiku", "fast", "best", "auto"}   # Claude Code words: the chat's model
 
 
 def definitions(root) -> dict[str, dict]:
@@ -69,7 +76,10 @@ def definitions(root) -> dict[str, dict]:
                 continue
             tools = _list(meta.get("tools")) if meta.get("tools") else None
             out[name] = {"name": name, "description": str(meta.get("description") or "").strip()[:300],
-                         "tools": tools, "model": str(meta.get("model") or "").strip() or None,
+                         "tools": tools, "model": (str(meta.get("model") or "").strip()
+                                                   if str(meta.get("model") or "").strip().lower() not in _NO_MODEL
+                                                   else "") or None,
+                         "own": f.parent.resolve() == (C.home() / "agents").resolve(),
                          "prompt": body.strip(), "path": str(f)}
     return out
 

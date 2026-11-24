@@ -163,6 +163,10 @@ check("and back to the main checkout, changes included",
       os.path.realpath(r.get("workdir") or "") == os.path.realpath(G) and
       open(os.path.join(G, "app.py")).read() == "x = 2  # work in progress\n", r)
 
+r = call(f"/api/agent/{hid}/revert", {"turn": 1, "what": "both"})
+check("undo of a reply from before the move is refused, not applied to the wrong reply",
+      r.get("_http") == 400 and "before this chat moved" in r.get("error", ""), r)
+
 # ---- branch: a new chat from an earlier reply; the original stays as it was
 v = call("/api/agent", {"workdir": G, "kind": "cowork", "mode": "auto"})
 fid = v.get("id")

@@ -55,3 +55,26 @@ def test_unstage_before_the_first_commit(tmp_path, monkeypatch):
     W.git_action(str(tmp_path), {"action": "stage", "paths": ["x.txt"]})
     st = W.git_action(str(tmp_path), {"action": "unstage", "paths": ["x.txt"]})
     assert st["staged"] == 0 and (tmp_path / "x.txt").exists() and st["log"] == []
+
+
+def test_paths_in_a_subfolder_project_renames_and_spaces(tmp_path, monkeypatch):
+    monkeypatch.setattr(W, "check_root", lambda r: Path(r))
+    git(tmp_path, "init", "-q", "-b", "main")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "x.txt").write_text("x")
+    (tmp_path / "sub" / "old.txt").write_text("o")
+    (tmp_path / "top.txt").write_text("t")
+    git(tmp_path, "add", "-A")
+    git(tmp_path, "commit", "-qm", "i")
+    proj = tmp_path / "sub"
+    (proj / "x.txt").write_text("changed")
+    (proj / "a b.txt").write_text("spaces")
+    git(tmp_path, "mv", "sub/old.txt", "sub/new.txt")
+    (tmp_path / "top.txt").write_text("outside the project")
+    st = W.git_status(str(proj))
+    paths = sorted(f["path"] for f in st["files"])
+    assert paths == ["a b.txt", "new.txt", "x.txt"]                          # project-relative, only this folder
+    st = W.git_action(str(proj), {"action": "stage", "paths": ["x.txt", "a b.txt"]})
+    assert {f["path"] for f in st["files"] if f["staged"]} == {"x.txt", "a b.txt", "new.txt"}
+    with pytest.raises(ValueError):
+        W.git_action(str(proj), {"action": "stage", "paths": [":/"]})        # no pathspec magic

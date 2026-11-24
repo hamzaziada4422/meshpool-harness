@@ -849,10 +849,35 @@ def rule_for(name: str, args: dict) -> list[str]:
     return [name]
 
 
+RULES_LOCK = __import__("threading").Lock()          # permissions.json: one writer at a time
+
+
+def write_rules_file(f: Path, d: dict) -> None:
+    """Writes permissions.json through a unique temporary file, so two writers never share one."""
+    import tempfile
+    f.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f.name + ".", suffix=".tmp", dir=str(f.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as h:
+            h.write(json.dumps(d, indent=1))
+        os.replace(tmp, f)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def save_folder_rules(root, rules: list[str]) -> list[str]:
     """Adds allow rules for this folder to the user's own permissions.json (never to the project's file)."""
     if not rules:
         return []
+    with RULES_LOCK:
+        return _save_folder_rules(root, rules)
+
+
+def _save_folder_rules(root, rules: list[str]) -> list[str]:
     f = C.home() / "permissions.json"
     try:
         d = json.loads(f.read_text(encoding="utf-8"))
@@ -867,10 +892,7 @@ def save_folder_rules(root, rules: list[str]) -> list[str]:
     added = [r for r in rules if r not in have]
     have += added
     try:
-        f.parent.mkdir(parents=True, exist_ok=True)
-        tmp = f.with_name(f.name + ".tmp")
-        tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
-        os.replace(tmp, f)
+        write_rules_file(f, d)
     except OSError:
         return []
     return added
@@ -906,10 +928,43 @@ def _allow_hit(rules: list, name: str, args: dict) -> str:
     return hit
 
 
+_SEGMENT = re.compile(r"&&|\|\||[;|&\n\r`]|\$\(|\)|\{|\}")
+_WRAPPERS = ("sudo", "env", "command", "builtin", "exec", "time", "nohup", "nice", "doas", "xargs")
+
+
+def _command_parts(cmd: str) -> list[str]:
+    """The commands in a shell line, each with its spacing normalised and leading VAR=value, sudo, env, nohup and
+    similar wrappers taken off, so a rule about "git push" also sees "cd x && sudo  git push"."""
+    out = []
+    for part in _SEGMENT.split(str(cmd or "")):
+        w = part.replace("\\\n", " ").split()
+        while w and (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", w[0]) or w[0] in _WRAPPERS or w[0].startswith("-")
+                     and out is not None and len(w) > 1 and w[0] in ("-n", "-u", "-E")):
+            w = w[1:]
+        if w:
+            out.append(" ".join(w))
+    return out
+
+
 def _deny_hit(rules: list, name: str, args: dict) -> str:
-    """A deny rule that matches the call, or any one command of a bash_many."""
-    return _rule_hit(rules, name, args) or next(
-        (h for h in (_rule_hit(rules, "bash", {"command": str(c)}) for c in (args.get("commands") or [])) if h), "")
+    """A deny or ask rule that matches the call: the whole command, any one command of a chain or of a bash_many,
+    and the script of the shell tool."""
+    hit = _rule_hit(rules, name, args)
+    if hit:
+        return hit
+    if not any(r.startswith("bash:") for r in rules):
+        return ""
+    cmds = [str(c) for c in (args.get("commands") or [])]
+    if name == "shell":
+        cmds.append(T.shell_script(args.get("command")))
+    elif args.get("command") or args.get("cmd"):
+        cmds.append(str(args.get("command") or args.get("cmd")))
+    for c in cmds:
+        for part in [" ".join(c.split())] + _command_parts(c):
+            h = _rule_hit([r for r in rules if r.startswith("bash:")], "bash", {"command": part})
+            if h:
+                return h
+    return ""
 
 
 def _destructive(args: dict) -> bool:
@@ -2647,8 +2702,9 @@ class Agent:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
         hit = _deny_hit(rules["ask"], name, args)
         if hit:                                    # the user's rule: ask first, whatever the mode or other rules say
-            if not self.approve:
-                return False, f"Your saved rule {hit!r} says to ask first, and there is nobody to ask here."
+            if not self.approve or getattr(self, "_delegate_depth", 0) > 0:   # a sub-agent never answers it itself
+                return False, (f"Your saved rule {hit!r} says to ask first, and there is nobody to ask here. "
+                               "Leave this to the user.")
             decision, note = self.approve("bash" if name.startswith("bash") or name == "shell" else "edit",
                                           f"Your rule \u201c{hit}\u201d says to ask before this. Go ahead?",
                                           str(args.get("command") or args.get("commands") or args.get("path") or
@@ -2907,11 +2963,12 @@ class Agent:
         elif self.plan and name.replace("-", "_") not in PLAN_MCP:
             bad = ToolError(f"{name} is not available in plan mode: it can change things. Investigate with "
                             "read-only tools and write the plan; the user switches to building to run it.")
-        self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _summary(name, args), "mcp": is_mcp,
+        from meshpool_harness.redact import redact as _rd
+        self.emit({"type": "tool_start", "id": cid, "name": name, "summary": _rd(_summary(name, args)), "mcp": is_mcp,
                    "timeout_s": (args.get("timeout_s") if name in ("bash", "bash_many") else
                                  args["timeout_ms"] / 1000 if name == "shell" and isinstance(
                                      args.get("timeout_ms"), (int, float)) else None) if isinstance(args, dict) else None,
-                   "diff": self._diff(name, args) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
+                   "diff": _rd(self._diff(name, args)) if name in ("edit", "write_file", "apply_patch") and not bad else ""})
         ok, denied = True, False
         try:
             if bad:

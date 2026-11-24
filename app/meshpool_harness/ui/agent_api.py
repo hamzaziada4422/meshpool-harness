@@ -336,7 +336,8 @@ class Session:
         if hasattr(self.agent, "plan"):
             self.agent.plan = self.plan
         from meshpool_harness.checkpoints import Checkpoints
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / (read_meta(self.id).get("cp_dir") or "checkpoints"))
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / (read_meta(self.id).get("cp_dir") or "checkpoints"),
+                              base=int(read_meta(self.id).get("cp_base") or 0))
         if self.harness["type"] in ("acp", "pi"):
             self.state = "idle"
             name = self.harness["name"]
@@ -442,7 +443,8 @@ class Session:
                  "decision": "no", "note": "", "options": options}
             self.pendings[p["id"]] = p
         self.state = "waiting"
-        self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": detail,
+        from meshpool_harness.redact import redact
+        self.emit({"type": "approval", "id": p["id"], "kind": kind, "title": title, "detail": redact(detail),
                    "options": options})
         if self.scheduled or time.time() - getattr(self, "t_turn", time.time()) > 60:
             _notify(f"{self.agent.title or 'A task'} needs your approval", title)
@@ -530,6 +532,8 @@ class Session:
         interrupt=True stops the current work first and sends the message as a new turn."""
         if not text.strip() and not images:
             raise ValueError("Type a message first.")
+        if getattr(self, "_moving", False):
+            raise ValueError("This chat is moving to another folder. Send it again in a moment.")
         self.touched = time.time()
         if self.state in ("working", "waiting") and interrupt:
             self._interrupting = True
@@ -687,9 +691,17 @@ class Session:
         """Hand this chat over to a new worktree of its repository (to="worktree") or back to the main checkout
         (to="main"). The conversation goes with it; carry=True moves the uncommitted changes too. Undo history
         starts again in the new folder."""
+        with self.lock:
+            if self.state in ("working", "waiting") or getattr(self, "_moving", False):
+                raise ValueError("Wait for the current reply to finish (or stop it) before moving this chat.")
+            self._moving = True                       # send() waits for this
+        try:
+            return self._move_checkout(to, carry)
+        finally:
+            self._moving = False
+
+    def _move_checkout(self, to: str, carry: bool) -> dict:
         from meshpool_harness import worktrees as WT
-        if self.state in ("working", "waiting"):
-            raise ValueError("Wait for the current reply to finish (or stop it) before moving this chat.")
         own = WT.owner(self.workdir)
         if to == "worktree":
             if own:
@@ -711,15 +723,24 @@ class Session:
                 why = WT.carry(self.workdir, dest)
             except WT.WorktreeError as e:
                 why = str(e)
-            note = f" The uncommitted changes did not move: {why}." if why else " The uncommitted changes moved with it."
+            if why:                                   # nothing moved: the chat stays, and so does a new worktree's mess
+                if to == "worktree":
+                    try:
+                        WT.remove(dest, force=True)
+                    except WT.WorktreeError:
+                        pass
+                raise ValueError(f"The chat did not move: {why}. Your changes are where they were.")
+            note = " The uncommitted changes moved with it."
         old = self.workdir
         self.workdir = str(Path(dest).resolve())
         self.handoff(self.harness["id"], f"Moved to {what}")
         from meshpool_harness.checkpoints import Checkpoints
         import hashlib
-        cp_dir = "checkpoints-" + hashlib.sha1(self.workdir.encode()).hexdigest()[:10]
-        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / cp_dir)
-        write_meta(self.id, cp_dir=cp_dir)
+        with self.lock:                              # replies so far, counted the way the page counts them
+            done = sum(1 for e in self.events if e.get("type") == "user" and not e.get("steer"))
+        cp_dir = f"checkpoints-{hashlib.sha1(self.workdir.encode()).hexdigest()[:10]}-{done}"
+        self.cp = Checkpoints(self.workdir, SESSIONS / self.id / cp_dir, base=done)
+        write_meta(self.id, cp_dir=cp_dir, cp_base=done)
         self.emit({"type": "status", "text": f"This chat now works in {what} ({self.workdir}).{note}"})
         if hasattr(self.agent, "messages"):           # the agent knows where it is now
             self.agent.messages.append({"role": "user", "content": f"\u200b[Meshpool] The user moved this chat from "
@@ -1208,6 +1229,12 @@ class Session:
         write_meta(self.id, plan=self.plan)
 
     def revert(self, turn: int, what: str = "both") -> dict:
+        if self.cp is not None and 0 < int(turn) <= getattr(self.cp, "base", 0):
+            raise ValueError("That reply came before this chat moved to another folder, so it cannot be undone "
+                             "here. Undo works for the replies since the move.")
+        return self._revert(turn, what)
+
+    def _revert(self, turn: int, what: str = "both") -> dict:
         """Undo turn `turn` and every later one. what: both (files and conversation), code (only the files; the
         conversation stays and the agent is told) or chat (only the conversation; files stay as they are)."""
         if what not in ("both", "code", "chat"):
@@ -1488,7 +1515,8 @@ def _real_user(m: dict) -> bool:
     c = m.get("content")
     if isinstance(c, list):
         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
-    return m.get("role") == "user" and not str(c or "").startswith("\u200b")
+    c = str(c or "")
+    return m.get("role") == "user" and not c.startswith(("\u200b", "[Meshpool]", "Image returned by"))
 
 
 def fork(sid: str, upto: int = 0) -> dict:
@@ -1497,7 +1525,7 @@ def fork(sid: str, upto: int = 0) -> dict:
     src = get(sid)
     with src.lock:
         evs = [{k: v for k, v in e.items() if k != "i"} for e in src.events]
-    users = [i for i, e in enumerate(evs) if e.get("type") == "user"]
+    users = [i for i, e in enumerate(evs) if e.get("type") == "user" and not e.get("steer")]   # as the page counts
     if not users:
         raise ValueError("There is nothing to branch from yet.")
     upto = int(upto or 0)
@@ -1516,18 +1544,25 @@ def fork(sid: str, upto: int = 0) -> dict:
     if scratch:                                              # a private folder: the branch gets a copy of its files
         import shutil
         try:
-            shutil.copytree(src.workdir, s.workdir, dirs_exist_ok=True)
+            shutil.copytree(src.workdir, s.workdir, dirs_exist_ok=True, symlinks=True)   # links stay links
         except OSError:
             pass
     a, old = s.agent, src.agent
     if hasattr(a, "messages") and hasattr(old, "messages"):  # Meshpool's agent: the exact conversation, tool calls too
-        keep, n = [], 0
-        for m in old.messages[1:]:
-            if _real_user(m):
-                n += 1
-                if upto and n > upto:
-                    break
-            keep.append(m)
+        idx = None
+        if 0 < upto < len(users) and src.cp is not None:   # where the next reply began, as Undo knows it
+            t = next((x for x in src.cp._turns() if x.get("n") == upto + 1), None)
+            idx = (t or {}).get("message_index")
+        if isinstance(idx, int) and 0 < idx <= len(old.messages):
+            keep = old.messages[1:idx]
+        else:
+            keep, n = [], 0
+            for m in old.messages[1:]:
+                if _real_user(m):
+                    n += 1
+                    if 0 < upto < len(users) and n > upto:
+                        break
+                keep.append(m)
         a.messages = [a.messages[0]] + [dict(m) for m in keep]
     elif hasattr(a, "events"):                               # an outside agent: the conversation as context
         a.events = [e for e in shown if e.get("type") in ("user", "assistant", "tool_start")]

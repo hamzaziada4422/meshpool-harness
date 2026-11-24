@@ -385,10 +385,19 @@ def git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", "--untracked-files=all", check=False)
-    files = [{"status": line[:2].strip(), "path": line[3:], "xy": line[:2],
-              "staged": line[0] not in (" ", "?"), "unstaged": line[1] != " " or line[0] == "?"}
-             for line in porcelain.splitlines() if line.strip()]
+    raw = _git(r, "status", "--porcelain", "-z", "--untracked-files=all", "--", ".", check=False).split("\0")
+    files, i = [], 0
+    while i < len(raw):                               # "XY path", and for a rename or copy the old path next
+        line = raw[i]
+        i += 1
+        if len(line) < 4:
+            continue
+        xy, path = line[:2], line[3:]
+        if xy[0] in "RC":
+            i += 1
+        rel = os.path.relpath(Path(top) / path, r).replace(os.sep, "/")   # git gives repository paths
+        files.append({"status": xy.strip(), "path": rel, "xy": xy, "staged": xy[0] not in (" ", "?"),
+                      "unstaged": xy[1] != " " or xy[0] == "?"})
     log = []
     for line in _git(r, "log", "-15", "--pretty=format:%h%x1f%an%x1f%ar%x1f%s", check=False).splitlines():
         p = line.split("\x1f")
@@ -443,7 +452,7 @@ def git_action(root: str, body: dict) -> dict:
             raise ValueError("Choose a file.")
         for p in paths:                                   # files of this repository only, never an option
             q = (r / p).resolve()
-            if p.startswith("-") or not (q == r.resolve() or r.resolve() in q.parents):
+            if p.startswith(("-", ":")) or not (q == r.resolve() or r.resolve() in q.parents):
                 raise ValueError(f"{p} is not a file in this project.")
         if act == "stage":
             _git(r, "add", "-A", "--", *paths)
