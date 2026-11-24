@@ -83,9 +83,16 @@ def _codex_prompt(lean: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
     for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md)."""
     if lean:
+        alt = os.environ.get("MH_CORE_PROMPT_FILE", "")      # A/B switch: a whole replacement lean prompt
+        if alt:
+            try:
+                return re.sub(r"\A\s*<!--.*?-->\s*", "", Path(alt).read_text(encoding="utf-8"), count=1, flags=re.S).rstrip()
+            except OSError:
+                pass
         try:
             text = (C.APP / "defaults" / "engines" / "codex" / "prompt-core.md").read_text(encoding="utf-8")
-            return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S).rstrip() + SCRATCH_RULE
+            text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S).rstrip()
+            return text if "$TMPDIR" in text else text + SCRATCH_RULE
         except OSError:
             pass
     try:
@@ -1613,6 +1620,15 @@ class Agent:
             self._plan_start(route, g)
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
+            if self._lean() and os.environ.get("MH_PRELOAD", "1") != "0" and not getattr(self.ws, "container", None):
+                try:                                 # the files, git state and source up front (agent/preload.py)
+                    from meshpool_harness.agent import preload as _PL
+                    first = self.messages[-1].get("content")
+                    pre = _PL.build(self.root, first if isinstance(first, str) else "")
+                except Exception:  # noqa: BLE001 - a preload problem never blocks the task
+                    pre = ""
+                if pre:
+                    extra += "\n\n" + pre
             if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0" and not self._lean():
                 # MH_ROUTE_CARD=0 (A/B): no method card. Eval final13: with the card, 66% more model calls than Codex
                 # (4.5 test runs and 5.1 writes per run vs 2.0 and 2.0) at an equal solve rate

@@ -592,6 +592,9 @@ class Workspace:
         if write and (bad := reserved_name(p)):
             raise ToolError(f"'{bad}' is a reserved device name on Windows and cannot be used as a file name")
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
+        scratch = self.__dict__.get("_scratch_dir")
+        if write and scratch and Path(scratch).resolve() in q.parents:
+            return q                          # the task's own private scratch folder ($TMPDIR): edits there are fine
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
         if write and ".git" in q.relative_to(self.root).parts:
