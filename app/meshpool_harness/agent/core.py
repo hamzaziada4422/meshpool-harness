@@ -1791,6 +1791,9 @@ class Agent:
                 if shots:
                     self._attach_images(shots)
                 self._track_progress(calls, step_out, g)
+                note = self._refusal_escalation(g)
+                if note:
+                    self.messages.append({"role": "user", "content": "[Meshpool] " + note})
                 if V3 and not cx:
                     note = self._v3_notes(step, calls, g)
                     if note:
@@ -2125,8 +2128,12 @@ class Agent:
     _LOOP_EXACT = 3      # the same call, with no file changed since, is refused from its 3rd run
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
+    _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
+
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
         out = self._guarded_tool_inner(c, g, cut)
+        # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
+        g["rseq"] = g.get("rseq", 0) + 1 if str(out).startswith(self._REFUSED) else 0
         try:
             from meshpool_harness.agent import extras as EX
             f = c.get("function", {})
@@ -2340,6 +2347,31 @@ class Agent:
             cmds = [x for x in (cmds or []) if isinstance(x, str) and x.strip()]
             return bool(cmds) and all(T.read_only(x) for x in cmds)
         return False
+
+    def _refusal_escalation(self, g: dict) -> str:
+        """A model that keeps re-sending a call the guards refuse burns a request per refusal (eval traces: 18 and 26
+        refusals in a row, up to the timeout). After MH_REFUSED_NUDGE refusals in a row it is told plainly to change
+        course; at twice that, again; at MH_REFUSED_WRAP the next reply has tools off and must answer."""
+        try:
+            nudge = int(os.environ.get("MH_REFUSED_NUDGE", "2") or 0)
+            wrap = int(os.environ.get("MH_REFUSED_WRAP", "6") or 0)
+        except ValueError:
+            nudge, wrap = 2, 6
+        k = g.get("rseq", 0)
+        if wrap > 0 and k >= wrap and not g.get("rwrap_done"):
+            g["rwrap_done"] = g["hard_wrap"] = True        # once per turn: the next call has no tools
+            g["rseq"] = 0
+            return ("Your last calls were refused because they repeat a call whose result you already have. Tools "
+                    "are off now. Give your final answer: what you changed, what works, and what is left.")
+        if nudge > 0 and k in (nudge, 2 * nudge) and g.get("rnote_at") != k:
+            g["rnote_at"] = k
+            return ("Stop sending that call: it was refused " + str(k) + " times in a row and will be refused again. "
+                    "You already have its result above. Your next call must be different: change a file with "
+                    "apply_patch, run a different check, or give your final answer."
+                    + (" If you send it again, tools turn off." if k >= 2 * nudge and wrap > 0 else ""))
+        if k == 0:
+            g.pop("rnote_at", None)
+        return ""
 
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
         """Harness v3 guards for one step: repeated identical calls, no progress for 12 or 24 steps, and the

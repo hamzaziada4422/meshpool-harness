@@ -78,7 +78,8 @@ def test_repeating_mock_model_is_stopped(tmp_path, profile):
     _valid(a)
 
 
-def test_breaker_never_fires_before_stuck_cap(tmp_path):
+def test_breaker_never_fires_before_stuck_cap(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REFUSED_WRAP", "0")         # the outer breaker alone, not the refusal wrap
     a = _agent(tmp_path, _repeat, "work")          # work profile: only the outer breaker acts
     a.send("fix it")
     assert a.events_at[-1] >= 0 and len(a.bodies) >= 36 + 8           # 44 repeated steps, then the closing request
@@ -124,7 +125,8 @@ def test_cap_setting_applies_next_turn(tmp_path, monkeypatch):
     assert out == "done" and len(a.bodies) - n0 == 251 and len(_errors(a)) == 1      # no second cap error
 
 
-def test_breaker_resets_on_progress(tmp_path):
+def test_breaker_resets_on_progress(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_REFUSED_WRAP", "0")         # the outer breaker alone, not the refusal wrap
     def script(n, body):
         if n == 40:
             return _bash(n, "touch progress.txt")

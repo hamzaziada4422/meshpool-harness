@@ -720,3 +720,28 @@ def test_a_command_killed_twice_for_memory_or_time_is_not_run_a_third_time(tmp_p
     g = {}
     outs = [a._repeat_guard(_shell("python3 big.py"), g) for _ in range(5)]
     assert len(runs) == 2 and all("killed twice" in o and "out of memory" in o for o in outs[2:])
+
+
+def test_refused_calls_in_a_row_get_nudged_then_tools_turn_off(tmp_path):
+    a = _agent(tmp_path)
+    g = {}
+    notes = []
+    for _ in range(6):                                # the model keeps re-sending a call the guards refuse
+        g["rseq"] = g.get("rseq", 0) + 1
+        notes.append(a._refusal_escalation(g))
+    assert notes[0] == "" and "refused 2 times" in notes[1] and notes[2] == ""
+    assert "refused 4 times" in notes[3] and "tools turn off" in notes[3]
+    assert "Tools are off now" in notes[5] and g.get("hard_wrap") and g["rseq"] == 0
+    g["rseq"] = 6
+    assert a._refusal_escalation(g) == "" or "Tools are off" not in a._refusal_escalation(g)   # once per turn
+
+
+def test_a_call_that_runs_resets_the_refusal_count(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    g = {"rseq": 3}
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 0]\nok")
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["rseq"] == 0
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[Meshpool] Not run: you already ran this")
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["rseq"] == 1
