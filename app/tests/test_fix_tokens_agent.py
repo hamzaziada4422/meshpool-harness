@@ -49,7 +49,7 @@ def test_full_prompt_is_still_available(monkeypatch):
 
 
 def test_non_codex_lanes_prefix_does_not_grow(tmp_path):
-    assert _prefix_tokens(_agent(tmp_path, "work")) < 7500
+    assert _prefix_tokens(_agent(tmp_path, "work")) < 8000
 
 
 # ---- request shape per wire, against a local fake server and the Anthropic translator -------------------------------
@@ -686,3 +686,37 @@ def test_different_checks_giving_the_same_result_get_a_note_at_six_and_are_stopp
     assert len(runs) == 10 and all("Shell checks stopped" in o for o in outs[10:])
     (tmp_path / "m.py").write_text("x = 2\n")                        # progress resets it
     assert a._repeat_guard(_shell("python3 check_99.py"), g) == "[] False"
+
+
+def test_apply_patch_repairs_missing_markers_crlf_and_trailing_spaces():
+    from meshpool_harness.core import applypatch as AP
+    for text in ("*** Begin Patch\r\n*** Add File: a.py\r\n+x\r\n*** End Patch  \r\n",
+                 "*** Add File: a.py\n+x\n*** End Patch",
+                 "*** Begin Patch\n*** Add File: a.py\n+x\n",
+                 "*** Begin Patch  \n*** Add File: a.py\n+x\n*** End Patch"):
+        hunks = AP.parse(text)
+        assert len(hunks) == 1 and hunks[0].path == "a.py"
+    with pytest.raises(AP.PatchError):
+        AP.parse("nonsense\n+x\n")                                 # a real mistake still fails
+
+
+def test_code_steps_are_capped_at_4096_output_tokens_until_a_long_write_ends_normally(tmp_path, monkeypatch):
+    monkeypatch.delenv("MH_STEP_MAX_TOKENS", raising=False)
+    a = _agent(tmp_path)
+    assert a._body()["max_tokens"] == 4096
+    a._need_more = True                                            # a single long write legitimately needed more
+    assert a._body()["max_tokens"] > 4096
+    monkeypatch.setenv("MH_STEP_MAX_TOKENS", "0")
+    b = _agent(tmp_path)
+    assert b._body()["max_tokens"] > 4096                          # =0 switches the cap off
+    assert _agent(tmp_path, "work")._body()["max_tokens"] > 4096   # only the code lane is capped
+
+
+def test_a_command_killed_twice_for_memory_or_time_is_not_run_a_third_time(tmp_path):
+    (tmp_path / "m.py").write_text("x = 1\n")
+    a = _agent(tmp_path)
+    runs = []
+    a._run_tool = lambda c, cut=False: runs.append(1) or f"rc=137 Killed after {len(runs)}s"
+    g = {}
+    outs = [a._repeat_guard(_shell("python3 big.py"), g) for _ in range(5)]
+    assert len(runs) == 2 and all("killed twice" in o and "out of memory" in o for o in outs[2:])

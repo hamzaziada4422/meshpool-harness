@@ -2272,6 +2272,11 @@ class Agent:
         sig = self._tree_sig() if sh else None
         if sh and sig is not None:
             bg = self.ws.__dict__.get("_bg") or {}
+            killed = [r for r in runs if r[0] == key and len(r) > 6 and r[6]]
+            if len(killed) >= 2 and not any(e["p"].poll() is None for e in list((self.ws.__dict__.get("_bg") or {}).values())):
+                return ("[Meshpool] Not run: this command was killed twice already (exit 137 or 124: it ran out of memory "
+                        "or time). Running it again will not change that. Use a smaller input, a shorter timeout, or "
+                        "another approach.")
             same = [r for r in runs if r[0] == key and len(r) > 5 and r[5] == sig]
             sq = g.get("sseq") or {}
             if not any(e["p"].poll() is None for e in list(bg.values())):
@@ -2313,7 +2318,8 @@ class Agent:
                 wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
             sig = sig2
         out = str(out) + wnote if wnote else out
-        runs.append((key, h, edits, failed, str(out)[:240], sig))   # a failed call counts for the failure breaker; a read for the read breaker
+        oom = bool(re.search(r"\[exit (137|124)\]|\brc=(137|124)\b|exit code (137|124)\b|\bKilled\b|timed out", str(out)))
+        runs.append((key, h, edits, failed, str(out)[:240], sig, oom))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
 
@@ -2560,6 +2566,12 @@ class Agent:
         model = self.current_model()
         prof = for_model(model, os.environ.get("MH_PROFILE"))
         lim = int((prof.get("limits") or {}).get("max_output_tokens", 8192))
+        if (self.profile == "code" and os.environ.get("MH_STEP_MAX_TOKENS", "4096") != "0"
+                and not getattr(self, "_need_more", False)):
+            # a coding step is a patch or a command, not a book: a step that runs to the limit again and again (8,192
+            # tokens three times in a row, $0.11 for one task) is cut short and told to split the edit. A step that
+            # legitimately needed more (a long single write that ended normally) lifts the cap for the chat.
+            lim = min(lim, int(os.environ.get("MH_STEP_MAX_TOKENS", "4096")))
         body = {"model": model, "max_tokens": lim, "tools": self.tool_schemas(),
                 "tool_choice": "none" if getattr(self, "_no_tools", False) else "auto"}
         msgs, body = apply(prof, repair_tool_pairs(list(self.messages))[0], body, "worker")   # outgoing copy only
@@ -3083,6 +3095,11 @@ class Agent:
         self._absorb_usage(turn)                           # this call's record, and any helper's since the last one
         choice = (resp.get("choices") or [{}])[0]
         self._finish = choice.get("finish_reason")
+        try:
+            if self._finish != "length" and int((resp.get("usage") or {}).get("completion_tokens") or 0) > 3800:
+                self._need_more = True                     # a long single write ended normally: do not cap this chat
+        except (TypeError, ValueError):
+            pass
         return choice.get("message") or {}, streamed
 
     def _aux_complete(self, system: str, user: str, turn: dict, max_tokens: int = 700) -> str:

@@ -72,6 +72,18 @@ def split_patch(text: str) -> list[str]:
     except PatchError as first_err:
         if (len(lines) >= 4 and lines[0] in ("<<EOF", "<<'EOF'", '<<"EOF"') and lines[-1].endswith("EOF")):
             return strict(lines[1:-1])
+        # the usual slips: no "*** Begin Patch" line, or no closing "*** End Patch" (a reply that was cut off at the
+        # output limit never reaches here: the agent refuses such calls before running them)
+        rep = [ln.rstrip() if ln.strip() in (BEGIN, END) else ln for ln in lines]
+        if rep and rep[0].strip() != BEGIN and re.match(r"\*\*\* (Add|Update|Delete) File: ", rep[0].strip()):
+            rep.insert(0, BEGIN)
+        if rep and rep[-1].strip() != END:
+            rep.append(END)
+        if rep != lines:
+            try:
+                return strict(rep)
+            except PatchError:
+                pass
         raise first_err
 
 

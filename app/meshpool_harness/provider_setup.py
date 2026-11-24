@@ -81,7 +81,6 @@ def _candidates(base: str) -> list[str]:
     return [base] if p.path else [base, base + "/v1"]
 
 
-_OPENER = EP.OPENER                           # never follows a redirect: it would carry the key to another host
 
 
 def _tls_kind(exc) -> str:
