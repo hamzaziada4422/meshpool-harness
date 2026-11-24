@@ -238,3 +238,17 @@ def test_a_repo_with_its_own_git_hooks_gets_no_shortcut(env):                 # 
                                  "make test", "conda run python x"])
 def test_rule_for_has_no_known_widening(cmd):                                   # N3
     assert core.rule_for("bash", {"command": cmd}) == [], cmd
+
+
+def test_power_file_guard_maps_container_paths(env):                           # N4
+    a, asked = _edits_agent(env)
+    a.ws.container, a.ws.cdir = "ctr", "/workspace"
+    assert not a._permit("write_file", {"path": "/workspace/.meshpool/hooks.json", "content": "{}"})[0] and asked
+
+
+@pytest.mark.parametrize("cmd", ["cp x .meshpool/hook?.json", "sort -o .meshpool/hooks.json x",
+                                 "find . -fprint .meshpool/hooks.json", "cp x .mcp.jso*"])
+def test_power_file_commands_skip_saved_rules(env, cmd):                        # N5
+    core.save_folder_rules(env, ["bash:cp", "bash:cp *", "bash:sort", "bash:sort *", "bash:find", "bash:find *"])
+    a, asked = _edits_agent(env)
+    assert not a._permit("bash", {"command": cmd})[0] and asked

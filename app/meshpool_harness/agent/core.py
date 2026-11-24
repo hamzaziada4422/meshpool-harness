@@ -2715,9 +2715,9 @@ class Agent:
         if name in ("bash", "shell", "bash_start", "bash_many"):
             text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
                                              else args.get("command")) + list(args.get("commands") or []))
-            low = text.casefold()
-            return next((f for f in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json")
-                         if f in low and not T.read_only(text)), "")
+            low = text.casefold().replace("\\", "/")
+            return next((f for f in (".meshpool", ".mcp", "hooks.json", "permissions.json", "mcp.json",
+                                     "trusted-folders.json") if f in low), "")   # globs and writers included
         if name not in ("edit", "write_file", "apply_patch", "notebook_edit"):
             return ""
         bases = [self.root / str(b) for b in (args.get("_bases") or [""])]
@@ -2727,6 +2727,11 @@ class Agent:
         home = Path(C.home()).resolve()
         guarded = {norm((self.root / rel).resolve()): rel for rel in self._POWER_FILES}
         guarded.update({norm(home / n): n for n in ("hooks.json", "permissions.json", "mcp.json", "trusted-folders.json")})
+        cdir = str(getattr(self.ws, "cdir", "") or "").rstrip("/") if getattr(self.ws, "container", None) else ""
+        if cdir:                                   # container mode: /workspace/x is the project's x
+            paths = [p[len(cdir) + 1:] if p.startswith(cdir + "/") else p for p in paths]
+            bases = [self.root / str(b)[len(cdir) + 1:] if str(b).startswith(cdir + "/") else b
+                     for b in (args.get("_bases") or [""])] if args.get("_bases") else bases
         for p in filter(None, paths):
             for base in bases:
                 try:
