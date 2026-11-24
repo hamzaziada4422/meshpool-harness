@@ -531,6 +531,20 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
             continue
     return False
 
+
+def _prune_scratch(tmp: str, max_age_s: float = 86400) -> None:
+    """Scratch folders a crashed or killed process left behind: this user's, older than a day. Never raises."""
+    try:
+        now, uid = time.time(), getattr(os, "getuid", lambda: None)()
+        for e in os.scandir(tmp):
+            if not e.name.startswith("meshpool-scratch-") or not e.is_dir(follow_symlinks=False):
+                continue
+            st = e.stat(follow_symlinks=False)
+            if (uid is None or st.st_uid == uid) and now - st.st_mtime > max_age_s:
+                shutil.rmtree(e.path, ignore_errors=True)
+    except OSError:
+        pass
+
 class Workspace:
     """Executes tools inside workdir, tracks reads/writes/commands for guards."""
 
@@ -1247,10 +1261,13 @@ class Workspace:
         d = self.__dict__.get("_scratch_dir")
         if not d or not os.path.isdir(d):
             import tempfile
+            _prune_scratch(tempfile.gettempdir())
             try:
                 d = self.__dict__["_scratch_dir"] = tempfile.mkdtemp(prefix="meshpool-scratch-")
             except OSError:
                 return env
+            import weakref                              # removed with the workspace, or at exit at the latest
+            weakref.finalize(self, shutil.rmtree, d, True)
         env["TMPDIR"] = env["TMP"] = env["TEMP"] = d
         return env
 

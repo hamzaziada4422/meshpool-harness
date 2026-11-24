@@ -859,3 +859,21 @@ def test_rewriting_one_scratch_check_three_times_without_a_project_change_gets_a
     monkeypatch.setenv("MH_SCRATCH_NOTE", "0")
     g = {}
     assert not any("written /tmp" in write(str(i)) for i in range(4))
+
+
+def test_scratch_folders_are_removed_with_the_workspace_and_stale_ones_pruned(tmp_path):
+    import gc, os, time
+    from meshpool_harness.core import tools as T
+    (tmp_path / "w").mkdir()
+    a = _agent(tmp_path / "w")
+    d = a.ws._scratch({})["TMPDIR"]
+    assert os.path.isdir(d)
+    del a
+    gc.collect()
+    assert not os.path.exists(d)
+    old = tmp_path / "meshpool-scratch-old"
+    new = tmp_path / "meshpool-scratch-new"
+    old.mkdir(); new.mkdir()
+    os.utime(old, (time.time() - 3 * 86400,) * 2)
+    T._prune_scratch(str(tmp_path))
+    assert not old.exists() and new.exists()
