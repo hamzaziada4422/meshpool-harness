@@ -1828,7 +1828,7 @@ class Agent:
                 if shots:
                     self._attach_images(shots)
                 self._track_progress(calls, step_out, g)
-                note = self._refusal_escalation(g)
+                note = self._refusal_escalation(g) or self._budget_escalation(g, turn)
                 if note:
                     self.messages.append({"role": "user", "content": "[Meshpool] " + note})
                 if V3 and not cx:
@@ -2451,6 +2451,37 @@ class Agent:
         if k == 0:
             g.pop("rnote_at", None)
         return self._failure_escalation(g)
+
+    def _budget_escalation(self, g: dict, turn: dict) -> str:
+        """A turn that has run long AND stopped making progress (no file changed, no new command succeeded for
+        several steps) is told to converge, then, much later, has tools turned off. Eval (283eced2): the default
+        profile cost 1.25x Codex and took 1.59x its time, almost all from a few runs that went to the 600 s limit
+        with 17k-42k output tokens; the median task cost the same as Codex. A turn that keeps progressing is never
+        cut: long builds are fine. MH_TURN_SOFT_S / MH_TURN_HARD_S (seconds), MH_TURN_OUT_SOFT / MH_TURN_OUT_HARD
+        (output tokens) and MH_TURN_STALL (steps without progress) tune it; 0 turns a limit off."""
+        def num(k, d):
+            try:
+                return int(os.environ.get(k, d) or 0)
+            except ValueError:
+                return d
+        stall = num("MH_TURN_STALL", 3)
+        np_ = g.get("np", 0)
+        if stall <= 0 or np_ < stall or g.get("hard_wrap"):
+            return ""
+        secs = time.time() - g.get("t0", time.time())
+        out = int((turn or {}).get("out", 0) or 0) if isinstance(turn, dict) else 0
+        over = lambda v, k, d: (lambda lim: lim > 0 and v >= lim)(num(k, d))
+        if np_ >= 2 * stall and not g.get("bwrap_done") and (
+                over(secs, "MH_TURN_HARD_S", 360) or over(out, "MH_TURN_OUT_HARD", 30000)):
+            g["bwrap_done"] = g["hard_wrap"] = True
+            return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Tools are off now. "
+                    "Give your final answer: what you changed, what works, what does not and why.")
+        if not g.get("bnote_done") and (over(secs, "MH_TURN_SOFT_S", 180) or over(out, "MH_TURN_OUT_SOFT", 15000)):
+            g["bnote_done"] = True
+            return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Converge now: pick the "
+                    "one check that decides whether the task is done, fix what it shows with a small patch, run it "
+                    "once more, and answer. Do not write new probe scripts.")
+        return ""
 
     def _failure_escalation(self, g: dict) -> str:
         """Distinct calls that all fail, with no file changed in between, are a loop the repeat guards cannot see. After

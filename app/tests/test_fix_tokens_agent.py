@@ -905,3 +905,24 @@ def test_sigterm_ends_commands_still_running_in_their_own_process_group(tmp_path
     except OSError:
         alive = False
     assert not alive                                      # the command's process group went with the agent
+
+
+def test_a_long_stalled_turn_is_told_to_converge_then_wrapped_but_progress_is_never_cut(tmp_path, monkeypatch):
+    import time as _t
+    a = _agent(tmp_path)
+    now = _t.time()
+    g = {"t0": now - 200, "np": 3}
+    turn = {"out": 1000}
+    n1 = a._budget_escalation(g, turn)
+    assert "Converge now" in n1 and a._budget_escalation(g, turn) == ""        # said once
+    g["np"] = 6
+    g["t0"] = now - 400
+    assert "Tools are off now" in a._budget_escalation(g, turn) and g["hard_wrap"]
+    # a turn that keeps making progress is never touched, however long or wordy it is
+    g2 = {"t0": now - 3000, "np": 1}
+    assert a._budget_escalation(g2, {"out": 99999}) == ""
+    # output alone can trigger it too
+    g3 = {"t0": now, "np": 3}
+    assert "Converge now" in a._budget_escalation(g3, {"out": 16000})
+    monkeypatch.setenv("MH_TURN_STALL", "0")
+    assert a._budget_escalation({"t0": now - 9999, "np": 99}, {"out": 99999}) == ""
