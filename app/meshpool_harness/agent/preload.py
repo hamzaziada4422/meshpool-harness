@@ -77,7 +77,8 @@ def _python() -> str:
         return ""
 
 
-def build(root, request: str = "", budget: int | None = None) -> str:
+def build(root, request: str = "", budget: int | None = None, seen=None) -> str:
+    """seen(path, text): called for every file whose full text goes into the block."""
     root = Path(root)
     budget = budget or int(os.environ.get("MH_PRELOAD_CHARS", "14000"))
     files = _files(root)
@@ -119,6 +120,8 @@ def build(root, request: str = "", budget: int | None = None) -> str:
         if len(text) > MAX_FILE or used + len(text) > budget:
             continue
         shown.append(f'<file path="{rel[i]}">\n{text.rstrip()}\n</file>')
+        if seen is not None:
+            seen(p, text)
         used += len(text) + 30
     env = [x for x in (_python(), _git(root)) if x]
     out = ["<workspace>",

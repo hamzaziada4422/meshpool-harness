@@ -83,3 +83,30 @@ def test_calls_after_a_failed_edit_in_the_same_turn_are_skipped(tmp_path):
     assert str(tool["a"]).startswith("ERROR") or "Failed" in str(tool["a"])
     assert tool["b"].startswith("Not run: an edit earlier in this turn failed")
     assert not (a.root / "ran.txt").exists()
+
+
+def _ws(tmp_path):
+    from meshpool_harness.core.tools import Workspace
+    proj = tmp_path / "proj"
+    proj.mkdir(exist_ok=True)
+    (proj / "a.py").write_text("x = 1\n")
+    return Workspace(str(proj), str(tmp_path / "run")), proj
+
+
+def test_rereading_an_unchanged_file_is_answered_from_memory(tmp_path):
+    ws, proj = _ws(tmp_path)
+    first = ws.shell(["bash", "-lc", "cat a.py"])
+    assert "x = 1" in first
+    again = ws.shell(["bash", "-lc", "cat a.py"])
+    assert "unchanged since you printed it" in again and "x = 1" not in again
+    (proj / "a.py").write_text("x = 2\n")
+    assert "x = 2" in ws.shell(["bash", "-lc", "cat a.py"])     # changed: a real read
+
+
+def test_preloaded_file_is_not_printed_again(tmp_path):
+    from meshpool_harness.agent import preload
+    ws, proj = _ws(tmp_path)
+    preload.build(proj, "fix a.py", seen=lambda p, t: ws.remember_text(p, t, "the <workspace> block at the start"))
+    out = ws.shell(["bash", "-lc", "cat a.py"])
+    assert "the <workspace> block" in out and "x = 1" not in out
+    assert "x = 1" in ws.shell(["bash", "-lc", "cat a.py | head -5"])   # anything but a plain whole-file read runs

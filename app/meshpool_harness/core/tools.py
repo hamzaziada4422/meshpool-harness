@@ -548,6 +548,25 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
     return False
 
 
+def _squeeze(text: str, keep: int = 2) -> str:
+    """Runs of identical lines (progress bars, repeated warnings, polling output) shown once with a count: tool
+    output is information-sparse (agents use about a quarter of it, arXiv 2611.12122) and every line is billed."""
+    if os.environ.get("MH_SQUEEZE", "1") == "0" or "\n" not in text:
+        return text
+    lines, out, i = text.split("\n"), [], 0
+    while i < len(lines):
+        j = i
+        while j + 1 < len(lines) and lines[j + 1] == lines[i]:
+            j += 1
+        n = j - i + 1
+        if n > keep + 1 and lines[i].strip():
+            out += lines[i:i + keep] + [f"[... the line above repeated {n - keep} more times]"]
+        else:
+            out += lines[i:j + 1]
+        i = j + 1
+    return "\n".join(out)
+
+
 def _prune_scratch(tmp: str, max_age_s: float = 86400) -> None:
     """Scratch folders a crashed or killed process left behind: this user's, older than a day. Never raises."""
     try:
@@ -610,7 +629,7 @@ class Workspace:
     max_tool_chars = MAX_TOOL_CHARS          # lowered for a small context window (core/context.py)
 
     def _cap(self, text: str, label: str) -> str:
-        text = clean(text)
+        text = _squeeze(clean(text))
         cap = self.max_tool_chars
         if len(text) <= cap:
             return text
@@ -1524,10 +1543,64 @@ class Workspace:
             if not d.is_dir() and not (self.container and not self.mounted):
                 raise ToolError(f"workdir not found: {workdir}")
             cwd = d
+        again = self._reread(script, cwd)
+        if again:
+            return again
         secs = None
         if timeout_ms is not None:
             secs = max(1, -(-int(timeout_ms) // 1000))
-        return self._run(script, secs, "bash", cwd=cwd)[0]
+        out = self._run(script, secs, "bash", cwd=cwd)[0]
+        self._remember_cat(script, cwd, out)
+        return out
+
+    # -- subsumed retrieval: a whole-file read of text the model already has, unchanged, is answered from memory.
+    # Measured on coding agents, re-reading code already in context occurs 2-6 times per task (arXiv 2609.30725);
+    # each such read sends the file again as new, uncached input and costs a round trip of its own.
+    _CAT = re.compile(r"^\s*(?:cat|cat -n|nl -ba)\s+(['\"]?)([^\s'\";|&<>*?]+)\1\s*$")
+
+    def _known(self) -> dict:
+        return self.__dict__.setdefault("_known_text", {})
+
+    def remember_text(self, path, text: str, where: str) -> None:
+        """Note that the model has the full current text of this file (where: how it got it)."""
+        self._known()[str(Path(path).resolve())] = (self._hash(text), where)
+
+    def _cat_target(self, script: str, cwd):
+        if os.environ.get("MH_REREAD_NOTE", "1") == "0" or (self.container and not self.mounted):
+            return None
+        m = self._CAT.match(script.strip())
+        if not m:
+            return None
+        p = Path(m.group(2))
+        p = (Path(cwd or self.root) / p) if not p.is_absolute() else p
+        return p.resolve()
+
+    def _reread(self, script: str, cwd) -> str:
+        p = self._cat_target(script, cwd)
+        if p is None or str(p) not in self._known():
+            return ""
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        h, where = self._known()[str(p)]
+        if h != self._hash(text):
+            return ""                             # changed since: a real read
+        rel = os.path.relpath(p, self.root)
+        return (f"[exit 0]\n[Meshpool] {rel} is unchanged since {where}; its full text is already in this "
+                "conversation above, so it was not printed again. Use it from there (or read a line range if you "
+                "need exact text for an edit).")
+
+    def _remember_cat(self, script: str, cwd, out: str) -> None:
+        p = self._cat_target(script, cwd)
+        if p is None or not str(out).startswith("[exit 0]") or "[Meshpool]" in str(out)[:200]:
+            return
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if len(text) <= self.max_tool_chars and len(str(out)) >= len(text):     # printed whole, not cut
+            self.remember_text(p, text, "you printed it")
 
     def apply_patch(self, input, base=None):
         """Codex's apply_patch: every hunk is checked and every new file built in memory first; only then are the files

@@ -1624,7 +1624,8 @@ class Agent:
                 try:                                 # the files, git state and source up front (agent/preload.py)
                     from meshpool_harness.agent import preload as _PL
                     first = self.messages[-1].get("content")
-                    pre = _PL.build(self.root, first if isinstance(first, str) else "")
+                    pre = _PL.build(self.root, first if isinstance(first, str) else "",
+                                    seen=lambda fp, t: self.ws.remember_text(fp, t, "the <workspace> block at the start"))
                 except Exception:  # noqa: BLE001 - a preload problem never blocks the task
                     pre = ""
                 if pre:
