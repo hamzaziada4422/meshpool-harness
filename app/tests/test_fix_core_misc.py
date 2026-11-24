@@ -67,7 +67,7 @@ def test_grep_glob_read_edge_cases(tmp_path):
 
 def test_cap_writes_utf8(tmp_path):
     ws = T.Workspace(tmp_path, tmp_path / ".run")
-    out = ws._cap("✓ ok\n" * 5000, "bash")
+    out = ws._cap("".join(f"✓ ok {i}\n" for i in range(5000)), "bash")   # distinct lines: squeezing does not shrink them
     assert "full output in" in out
 
 
