@@ -126,6 +126,7 @@ print(json.dumps({"ok": True, "steps": []}))
 
 
 def test_nested_office_engine_calls_reach_the_session_usage(serve, monkeypatch, tmp_path):
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "0")              # usage accounting of an engine job, not routing
     srv = serve(reply=lambda n, body: _call("office_task", {"engine": "sheets", "request": "Build a spreadsheet "
                                                             "with a monthly budget and totals"})
                 if n == 1 else {"role": "assistant", "content": "Done."})
