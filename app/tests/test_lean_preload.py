@@ -144,6 +144,32 @@ def test_recheck_skips_writes_and_off_by_default(tmp_path):
     assert "re-ran" not in ws2.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch")
 
 
+def test_recheck_skips_a_slow_check(tmp_path, monkeypatch):
+    """broad2 (swe_sympy): a slow test run re-run after every patch cost 2.3x Codex's time."""
+    ws, proj = _ws(tmp_path)
+    ws.recheck = True
+    ws.get_mode = lambda: "auto"
+    ws.shell(["bash", "-lc", "python3 -c 'import a; print(\"x is\", a.x)'"])
+    ws._last_check()["secs"] = 25.0                 # as if that check took 25 s
+    assert "re-ran" not in ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 5\n*** End Patch")
+    monkeypatch.setenv("MH_RECHECK_MAX_S", "0")     # 0: re-run whatever the check's time
+    assert "x is 6" in ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 5\n+x = 6\n*** End Patch")
+
+
+def test_large_codebase_gets_the_read_first_line(tmp_path, monkeypatch):
+    (tmp_path / "s").mkdir()
+    small = preload.build(_repo(tmp_path / "s"), "Fix parse() in roman.py")
+    assert "large codebase" not in small
+    big = tmp_path / "b"
+    big.mkdir()
+    for i in range(preload.MAX_LIST + 5):
+        (big / f"m{i}.py").write_text("x = 1\n")
+    out = preload.build(big, "Fix m3")
+    assert "This is a large codebase" in out and out.endswith("</workspace>")
+    monkeypatch.setenv("MH_LARGE_REPO_NOTE", "0")
+    assert "large codebase" not in preload.build(big, "Fix m3")
+
+
 def test_step_budget_counts_every_step_and_notes_on_crossing(tmp_path, monkeypatch):
     from meshpool_harness.agent.core import Agent
     a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)

@@ -7,7 +7,7 @@ rounds without hurting solves. Here: the file list, the git state, the interpret
 most likely to matter, inside a fixed character budget. Everything is computed locally (no model call) and the block
 rides on the first user message, so it is part of the cached prefix for every later call.
 
-Off: MH_PRELOAD=0. Budget: MH_PRELOAD_CHARS (default 14000).
+Off: MH_PRELOAD=0. Budget: MH_PRELOAD_CHARS (default 14000). The large-codebase line: MH_LARGE_REPO_NOTE=0 turns it off.
 """
 from __future__ import annotations
 
@@ -37,6 +37,13 @@ def _files(root: Path) -> list[Path]:
             if len(out) >= 2000:
                 return out
     return out
+
+
+def _size(p: Path) -> int:
+    try:
+        return p.stat().st_size
+    except OSError:
+        return 0
 
 
 def _is_text(p: Path) -> bool:
@@ -123,6 +130,10 @@ def build(root, request: str = "", budget: int | None = None, seen=None) -> str:
         if seen is not None:
             seen(p, text)
         used += len(text) + 30
+    # A large codebase: the block can only list it, and the economy prompt ("read what you need in one turn") then
+    # pushed the model to patch before it understood the code. broad2 (swe_sympy): core edited after ~6 turns and
+    # looped patch -> check (4.8 edits, 9.3 checks), where Codex read for ~19 turns, edited once and checked once.
+    large = len(files) > MAX_LIST or sum(_size(p) for p in files) > 4 * budget
     env = [x for x in (_python(), _git(root)) if x]
     out = ["<workspace>",
            "Meshpool read the project for you before your first turn: its files, the git state and the full text of "
@@ -131,5 +142,9 @@ def build(root, request: str = "", budget: int | None = None, seen=None) -> str:
     if env:
         out.append("Environment: " + "\n".join(env))
     out += shown
+    if large and os.environ.get("MH_LARGE_REPO_NOTE", "1") != "0":
+        out.append("This is a large codebase and most of it is not shown above. Before your first edit, find the code "
+                   "involved and the tests that cover it (rg), read them, and understand the cause; then make one "
+                   "complete fix and run the most relevant tests once.")
     out.append("</workspace>")
     return "\n\n".join(out)

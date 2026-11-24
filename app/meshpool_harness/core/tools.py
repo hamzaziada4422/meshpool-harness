@@ -1754,6 +1754,12 @@ class Workspace:
         c = self._last_check()
         if c is None:
             return ""
+        try:          # a slow check (a big repo's test run) is not re-run after every patch: broad2 swe_sympy, 2.3x time
+            slow = float(os.environ.get("MH_RECHECK_MAX_S", "10") or 0)
+        except ValueError:
+            slow = 10.0
+        if slow > 0 and float(c.get("secs") or 0) > slow:
+            return ""
         limit = int(min(60, max(10, 3 * float(c.get("secs") or 0))))   # a check that got slow is cut short, not waited on
         out, code = self._run(c["cmd"], limit, "bash")
         out = str(out)
