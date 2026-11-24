@@ -1,0 +1,58 @@
+From 09c1fe77632d518e4e481a4441e01ae6d413f15e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 24 Nov 2026 23:36:18 +0000
+Subject: [PATCH] Sheets derive gate: a data row wider than the header is not
+ taken for the header
+
+_header took the first row as wide as the widest, so an edit that filled cells past the header in a data row (a Total,
+a note) made the gate report 'the header is in row 2; remove the title rows' on a workbook with no title row, and the
+agent spent turns on a non-problem. The header is now the first wide row of text labels.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+---
+ app/engines/sheets/engine.py    |  8 +++++++-
+ app/tests/test_sheets_derive.py | 11 +++++++++++
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/app/engines/sheets/engine.py b/app/engines/sheets/engine.py
+index b44504fe..dadc92f6 100644
+--- a/app/engines/sheets/engine.py
++++ b/app/engines/sheets/engine.py
+@@ -233,7 +233,13 @@ def _header(ws) -> tuple[int, tuple]:
+     rows = [(r[0].row, tuple(c.value for c in r if c.value not in (None, "")))
+             for r in ws.iter_rows(max_row=min(ws.max_row, 50)) if r]
+     width = max((len(v) for _, v in rows), default=0)
+-    return next(((n, v) for n, v in rows if width and len(v) == width), (1, ()))
++    if not width:
++        return 1, ()
++    # a header is a row of labels: the first wide row whose cells are all text (no numbers, no formulas). A data row
++    # with an extra filled cell (an added Total) is wider than the header and must not be taken for it.
++    wide = [(n, v) for n, v in rows if len(v) >= max(2, width // 2) or len(v) == width]
++    labels = next(((n, v) for n, v in wide if all(isinstance(x, str) and not x.startswith("=") for x in v)), None)
++    return labels or next(((n, v) for n, v in rows if len(v) == width), (1, ()))
+ 
+ 
+ def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:
+diff --git a/app/tests/test_sheets_derive.py b/app/tests/test_sheets_derive.py
+index 786224ba..8d97bac6 100644
+--- a/app/tests/test_sheets_derive.py
++++ b/app/tests/test_sheets_derive.py
+@@ -272,3 +272,14 @@ def test_sheets_sources_are_absolute(tmp_path, monkeypatch):
+     E.solve(TASK, workdir=str(tmp_path / "w"), task_id="t", client=MockClient([]), model="mock",
+             files=["score.xlsx"])
+     assert seen["src"] == str(tmp_path / "score.xlsx")
++
++
++def test_a_data_row_wider_than_the_header_is_not_taken_for_it(tmp_path):
++    wb = Workbook(); ws = wb.active
++    for r in [("name", "a", "b"), ("Ann", 1, 2), ("Bo", 3, 4)]:
++        ws.append(r)
++    wb.save(tmp_path / "src.xlsx")
++    wb = load_workbook(tmp_path / "src.xlsx")
++    wb.active["D2"], wb.active["E2"] = "=B2+C2", "note"                  # the edit fills cells past the header
++    wb.save(tmp_path / "src (edited).xlsx")
++    assert E.derive_issues(str(tmp_path / "src (edited).xlsx"), [str(tmp_path / "src.xlsx")], set()) == []
+-- 
+2.43.0
+
