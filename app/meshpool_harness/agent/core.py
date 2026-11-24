@@ -1174,9 +1174,22 @@ class Agent:
         """Lean core (profile "core"): Codex style without the extra verification layers. A Work chat in Codex style
         (MH_LEAN_WORK=1) is always lean."""
         try:
-            return self._style() and (self.profile == "work" or bool(self.hsettings().get("lean_core")))
+            if not (self._style() and (self.profile == "work" or bool(self.hsettings().get("lean_core")))):
+                return False
+            if self.profile == "code" and os.environ.get("MH_LARGE_REPO_STYLE", "") == "codex" and self._large_repo():
+                return False        # opt-in (unmeasured): a large repo runs the Codex design (swe3: lean core 2.6x Codex)
+            return True
         except Exception:  # noqa: BLE001
             return False
+
+    def _large_repo(self) -> bool:
+        if not hasattr(self, "_is_large"):
+            try:
+                from meshpool_harness.agent import preload as _PL
+                self._is_large = _PL.is_large(self.root)
+            except Exception:  # noqa: BLE001
+                self._is_large = False
+        return self._is_large
 
     def _codex(self) -> bool:
         return self._style() and not self.plan           # plan mode keeps its read-only tools

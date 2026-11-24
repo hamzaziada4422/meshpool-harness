@@ -84,6 +84,16 @@ def _python() -> str:
         return ""
 
 
+def is_large(root, budget: int | None = None) -> bool:
+    """Too large to show in the workspace block: over MAX_LIST files, or over 4x the preload budget in bytes."""
+    budget = budget or int(os.environ.get("MH_PRELOAD_CHARS", "14000"))
+    try:
+        files = _files(Path(root))
+    except OSError:
+        return False
+    return len(files) > MAX_LIST or sum(_size(p) for p in files) > 4 * budget
+
+
 def build(root, request: str = "", budget: int | None = None, seen=None) -> str:
     """seen(path, text): called for every file whose full text goes into the block."""
     root = Path(root)

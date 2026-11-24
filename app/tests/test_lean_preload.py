@@ -203,3 +203,27 @@ def test_cycle_note_after_repeated_failing_patch_rounds(tmp_path, monkeypatch):
     a.ws.commands = [{"cmd": "python -m pytest t.py", "code": 1, "after_edit": 3}]
     assert "Stop patching" in a._cycle_note(call, g)
     assert a._cycle_note(call, g) == ""                           # once per turn
+
+
+def test_large_repo_style_codex_switch(tmp_path, monkeypatch):
+    """MH_LARGE_REPO_STYLE=codex: a code chat in a large repo runs the Codex design (no lean prompt, preload or re-check)."""
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.hrouter import profiles as PR
+    from meshpool_harness.hrouter.route import Route
+    small, big = tmp_path / "s", tmp_path / "b"
+    small.mkdir()
+    big.mkdir()
+    (small / "a.py").write_text("x = 1\n")
+    for i in range(preload.MAX_LIST + 5):
+        (big / f"m{i}.py").write_text("x = 1\n")
+    assert preload.is_large(big) and not preload.is_large(small)
+
+    def chat(root):
+        a = Agent(str(root), mode="auto", profile="code", emit=lambda e: None)
+        a.set_route(Route(spec="code.debug", family="code", sub="debug", base="code", profile="core",
+                          settings=PR.settings("core")), "fix it")
+        return a
+    assert chat(big)._lean() and chat(small)._lean()           # off by default: both lean
+    monkeypatch.setenv("MH_LARGE_REPO_STYLE", "codex")
+    b = chat(big)
+    assert chat(small)._lean() and not b._lean() and b._codex()
