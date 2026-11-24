@@ -964,7 +964,8 @@ def ask_key(force: bool = False) -> bool:
     """Ask for the API key in the terminal, check it, and save it to meshpool.config (meshpool login)."""
     C.ensure_home() if os.environ.get("MESHPOOL_HOME") else None
     C.load_into_env()
-    if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+    from meshpool_harness import providers as _PV
+    if not force and (os.environ.get("MESHPOOL_API_KEY") or os.environ.get("OPENAI_API_KEY") or _PV.key()):
         return True
     if not sys.stdin.isatty():
         if force:                                    # `meshpool login` itself, run without a terminal
@@ -1331,12 +1332,24 @@ class Session(SharedCommands):
             ok = onboard.sub_step(st, "chatgpt")
             t.refresh_facts(self.agent)
             return t.p(st.green("  Signed in.") if ok else st.dim("  Not signed in."))
-        base = "https://llm.meshpool.ai/v1"
+        base, kind, ver, dep = "https://llm.meshpool.ai/v1", "", "", ""
         if i == 1:
             base = input(f"  Endpoint URL [{PV.key_base()}] > ").strip() or PV.key_base()
+            try:
+                pp = PS.parse(base)
+            except PS.SetupError as e:
+                return t.p(st.red(f"  {e}"))
+            base, kind, ver, dep = pp.base, pp.kind, pp.api_version, pp.deployment
+            t.p(st.dim(f"  Recognised: {PS.EP.caps(kind)['label']} at {base}"))
+            if PS.EP.is_azure(kind) or not PS.EP.caps(kind)["lists"]:
+                what = "Deployment name (as named in Azure)" if PS.EP.is_azure(kind) else "Model name"
+                dep = input(f"  {what}{' [' + dep + ']' if dep else ''} > ").strip() or dep
+                if kind in ("azure-classic", "azure-foundry"):
+                    d = ver or PS.EP.caps(kind)["version"]
+                    ver = input(f"  API version [{d}] > ").strip() or d
         key = getpass.getpass("  API key (hidden) > ")
         t.p(st.dim("  Testing the endpoint..."))
-        res = PS.test(base, key)
+        res = PS.test(base, key, model=dep, api_version=ver, kind=kind) if kind else PS.test(base, key)
         if not res["ok"]:
             return t.p(st.red("  " + (res["error"] or "The endpoint did not answer.")))
         t.p(st.green(f"  Connected to {PV.host(res['base_url'])}") +
@@ -1353,7 +1366,7 @@ class Session(SharedCommands):
         else:
             model = input("  Model name > ").strip()
         try:
-            PS.save(res["base_url"], key, res["wire"], model, allow_custom=not ids)
+            PS.save(res["base_url"], key, res["wire"], model, allow_custom=not ids, api_version=ver, kind=kind)
         except PS.SetupError as e:
             return t.p(st.red(f"  {e}"))
         if not self.sub:

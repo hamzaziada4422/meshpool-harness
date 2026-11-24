@@ -262,13 +262,20 @@ Environment
 
 How to work
 0. Match the effort to the request. A question, a rewrite or a quick lookup gets a direct answer, with a tool only \
-when the answer needs a file, a current fact or an action. Only a real deliverable gets the full process below.
+when the answer needs a file, a current fact or an action. Only a real deliverable gets the full process below. \
+Do the asked thing first, at the size asked: ONE deliverable unless the user asked for more. Do not add a plan \
+document, a tracker or workbook, a summary file, a PDF copy or extra versions on the side. What fits on a screen \
+goes in your reply (a table, a short plan, post copy, a reply email); make a file only when the user wants one or the \
+result is long, and then one file in one format. A vague request gets a sensible first version with your assumptions \
+listed, not questions and not a research project. Research only as deep as the request needs: a few sources, then \
+write; stop once each fact you will state has a source. A skill is a guide, not a checklist: skip any step the \
+request does not need, and never let it add deliverables the user did not ask for. Ask only when truly blocked.
 1. Understand the job. Ask only when a choice that changes the result is open (see "Asking the user" below).
 2. For a multi-step job, keep a short plan with todo_write and update it as you go.
 3. Gather material: read the user's files (read_file, glob, grep), research the web with web_research and \
 web_search, read pages and PDFs with fetch_url, and use connected apps (mcp__ tools) when they fit. For a big \
 research job, split it into parts, research each, then write up.
-4. Produce real deliverables as files in the working folder. For decks, spreadsheets, models and data analysis use \
+4. When a file is the right deliverable (see 0), make it in the working folder. For decks, spreadsheets, models and data analysis use \
 office_task: it returns a finished, checked file. For memos, reports, letters and proposals make a Word document \
 (.docx) with the make_document tool (or python-docx through bash for edits to an existing .docx); write Markdown only \
 when the user asks for it. Use Python through bash for quick calculations.
@@ -375,7 +382,10 @@ class _EndpointDown(RuntimeError):
 
 def _urlopen(req, timeout: float, sink):
     """urllib.request.urlopen with the connection handed to sink (proxies from the environment as usual)."""
-    return _mhttp.open(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
+    from meshpool_harness.core import endpoint as _EP
+    # one keyed-request implementation (core/http.py via endpoint.urlopen): same-host redirects only, loopback never
+    # through a proxy, the shared TLS context; a redirect to another host surfaces as an HTTP error, key unsent
+    return _EP.urlopen(req, timeout, (_TrackHTTP(sink), _TrackHTTPS(sink, context=_mhttp.tls_context())))
 
 
 def _is_local_base(base: str) -> bool:
@@ -388,13 +398,14 @@ def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | Non
     A 500 is an answer (the gateway is serving, this model or request failed); 502/503/504 mean it is not serving."""
     body = {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "ping"}]}
     from meshpool_harness import providers as _PV
+    from meshpool_harness.core import endpoint as _EP            # URL, key header and body fields: core/endpoint.py
     if _PV.wire_for(base) == "anthropic":          # the Messages API (see Agent._post)
         from meshpool_harness.core import anthropic_wire as AW
         body = AW.to_request(body)
         url, hdrs = _PV.chat_target(base, key, model, "messages")
     else:
-        body = _PV.adapt_body(base, body)
-        url, hdrs = _PV.chat_target(base, key, model)         # Azure: deployment path, api-version, api-key header
+        url, body, hdrs = _EP.chat_request(base, key, body)
+        hdrs = _PV.custom_auth(hdrs, base, key)
     hdrs = {**hdrs, "Content-Type": "application/json"}
     req = urllib.request.Request(url, data=ST.encode_body(body), method="POST", headers=hdrs)
     try:
@@ -403,7 +414,7 @@ def _probe_once(base: str, key: str, model: str, sink=None, timeout: float | Non
         t = _MCP.probe_timeout(base, body_s)            # a local server may be loading a model: a longer first-byte wait
         if timeout:
             t = min(t, float(timeout))                  # a caller with a shorter first-byte wait (core/wire.py)
-        with (_urlopen(req, t, sink) if sink else _mhttp.open(req, t)) as r:
+        with (_urlopen(req, t, sink) if sink else _EP.urlopen(req, t)) as r:
             ST.read_body(r, min(t, body_s))             # a total deadline (not stretched for local loading): a body that trickles keep-alives ends too
         return "ok"
     except urllib.error.HTTPError as e:
@@ -1886,6 +1897,29 @@ class Agent:
         done[key] = True
         return ""
 
+    def _lookup_note(self, name: str, args: dict) -> str:
+        """0.0.13: a research budget. Lookups (web_search, web_research, fetch_url) are counted per turn; past 8 the
+        model is told to write from what it has, past 16 to stop. A fetch of a search engine's own results page is
+        told to use web_search. One run made 170 fetches of search pages for a one-page agenda."""
+        if not E2E or name not in ("web_search", "web_research", "fetch_url"):
+            return ""
+        c = self.__dict__.setdefault("_lookups", {})
+        if c.get("turn") != self._turn_no:
+            c.clear()
+            c["turn"] = self._turn_no
+        c["n"] = c.get("n", 0) + 1
+        url = str(args.get("url", "")) if isinstance(args, dict) else ""
+        if name == "fetch_url" and re.search(r"(?:google|bing|duckduckgo|yahoo|baidu|yandex)\.[a-z.]+/(?:search|html|\?q=)|[?&]q=", url, re.I):
+            return ("\n[Meshpool] That was a search engine page. Do not fetch search result pages (and do not page through "
+                    "them): use web_search for searching and fetch_url only for a page you want to read.")
+        if c["n"] == 8:
+            return ("\n[Meshpool] That is 8 lookups this turn. Unless a specific fact you need is still missing, stop "
+                    "researching now and write the deliverable from what you have, sized to what was asked.")
+        if c["n"] >= 16 and c["n"] % 4 == 0:
+            return (f"\n[Meshpool] {c['n']} lookups this turn is far more than this request needs. Stop researching. "
+                    "Write the answer or file now with what you already have, and say what you could not confirm.")
+        return ""
+
     def _tool_msgs_since(self, start: int) -> int:
         return sum(1 for m in self.messages[start:] if m.get("role") == "tool")
 
@@ -1899,7 +1933,14 @@ class Agent:
                 "research": research, "final": final, "request": " ".join(reqs[-3:]), "requests": reqs,
                 "files": GR.files_changed(self.root, g.get("t0", self.created), getattr(self.ws, "turn_files", ())),
                 "after_plan": bool(g.get("after_plan")), "deep": getattr(route, "lane", "") == "deep",
-                "root": str(self.root)}
+                "root": str(self.root), "actions": self._accepted_actions()}
+
+    def _accepted_actions(self) -> list[str]:
+        """Connected-app writes the tools accepted this turn (for the reviewer's evidence)."""
+        done = self.__dict__.get("_done_calls") or {}
+        if done.get("_turn") != getattr(self, "_turn_no", None):
+            return []
+        return [k[:200] for k in done if k != "_turn"]
 
     def _local_check_passed(self) -> bool:
         """The engine's own validator (check_deck, check_workbook, check_document) passed and nothing was written after
@@ -3169,7 +3210,9 @@ class Agent:
             if not _MC.resolve(base, b.get("model", "")).cache_hints:    # a strict server refuses fields it does not know
                 b.pop("prompt_cache_key", None)
                 b.pop("user", None)
-            url, hdrs = _PV.chat_target(base, key, b.get("model", ""))    # Azure: deployment path, api-version, api-key
+            from meshpool_harness.core import endpoint as _EP    # URL, key header and body fields: core/endpoint.py
+            url, b, hdrs = _EP.chat_request(base, key, b)
+            hdrs = _PV.custom_auth(hdrs, base, key)
         hdrs = {**hdrs, "Content-Type": "application/json", **({"Accept": "text/event-stream"} if stream else {})}
         req = urllib.request.Request(url, data=ST.encode_body(b), method="POST",
                                      headers={**hdrs, "X-Harness-Task-Id": self.route_id(), "session_id": self.route_id()})
@@ -3502,7 +3545,18 @@ class Agent:
         except ValueError:
             args = {}
         is_mcp = bool(self.mcp and self.mcp.has(name))
-        bad = None                                   # validate first: the card shows the arguments that will run
+        if E2E and name not in ("bash", "bash_many", "bash_start", "bash_output", "bash_stop", "todo_write", "update_plan",
+                                "edit", "write_file", "apply_patch", "shell", "probe", "trace"):
+            rep = self.__dict__.setdefault("_hard_rep", {})
+            if rep.get("turn") != self._turn_no:
+                rep.clear()
+                rep["turn"] = self._turn_no
+            k = name + ":" + str(raw)[:500]
+            rep[k] = rep.get(k, 0) + 1
+            if rep[k] > 10:                         # 0.0.13: a loop one call at a time (379 memory_view calls once)
+                return ("[Meshpool] This exact call was already made more than 10 times this turn and was not run. "
+                        "Stop calling it. Write the deliverable now from what you have, with your assumptions listed.")
+        bad = None                                 # validate first: the card shows the arguments that will run
         if cut:
             bad = ToolError(f"this {name} call was cut off at the model's output limit, so its arguments are "
                             "incomplete and it was not run. Split the content into smaller pieces: write_file the "
@@ -3596,7 +3650,8 @@ class Agent:
                 if E2E and not str(out).startswith("ERROR"):    # a skill's "ask the user" is not a reason to stop
                     out += ("\n\n[Meshpool] Where this skill says to ask the user: ask (ask_user) only if you cannot "
                             "go on without the answer. Otherwise assume a sensible default, do the work, and list the "
-                            "assumption in your reply.")
+                            "assumption in your reply. Size the work to the request: one deliverable unless more were "
+                            "asked for, no extra plan or tracker files, research only as deep as the request needs.")
             elif name == "find_skill":
                 from meshpool_harness import skills as SK
                 out = SK.search_text(str(args.get("query", "")))
@@ -3651,6 +3706,7 @@ class Agent:
                 if name == "bash_start" and ok and not denied:
                     cp.window_open()                    # the background process may still change files
         out = clean(str(out))
+        out += self._lookup_note(name, args)
         m = re.match(r"\[exit (\d+)\]", out)
         step = {"tool": name, "s": round(time.time() - t0, 2), "ok": ok and not (m and m.group(1) != "0"),
                 "arg": _summary(name, args)[:100] if isinstance(args, dict) else ""}

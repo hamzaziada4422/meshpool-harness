@@ -424,6 +424,7 @@ class SimpleLedger:
     def __init__(self, phase: str = "run"):
         from meshpool_harness import providers as PV    # an OpenAI key only ever goes with OPENAI_BASE_URL
         self.base_url, self.api_key = PV.key_base(), PV.key()
+        self.kind, self.api_version = "", ""            # "": read from the base address (or the saved setting)
 
     def chat(self, *, max_tokens=8192, extra=None, **kw):
         """One call; a reasoning model that spends the whole output limit thinking and answers nothing (empty
@@ -483,23 +484,25 @@ class SimpleLedger:
                 body["stream_options"] = {"include_usage": True}
             idle = int(os.environ.get("MH_STREAM_IDLE_S", "60"))
             timeout = int(os.environ.get("MH_STREAM_FIRST_S", "120"))   # longer wait for the first token
+        from meshpool_harness.core import endpoint as EP
+        extra_h = {"X-Harness-Task-Id": task_id,
+                   **({"session_id": task_id.split("-esc")[0]}
+                      if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})}
         if anthropic:
             from meshpool_harness.core import anthropic_wire as AW
+            url, hdrs = f"{base_url}/messages", AW.headers(api_key)
             body = AW.to_request(body)
             if stream:
                 body["stream"] = True
-        elif wire == "responses":
-            body = to_responses(body)
-        path = "messages" if anthropic else "responses" if wire == "responses" else "chat/completions"
-        url, auth = PV.chat_target(base_url, api_key, body.get("model", ""), path)   # Azure path, api-version, key header
-        if not anthropic and wire != "responses":
-            body = PV.adapt_body(base_url, body)
+        else:                                              # every other provider: core/endpoint.py decides URL and key header
+            if wire == "responses":
+                body = to_responses(body)
+            url, body, hdrs = EP.chat_request(base_url, api_key, body, kind=self.kind, api_version=self.api_version,
+                                              path="responses" if wire == "responses" else "chat")
+            hdrs = PV.custom_auth(hdrs, base_url, api_key)  # a header and scheme the user set for this endpoint
         req = urllib.request.Request(url, data=ST.encode_body(body), method="POST",
-                                     headers={**auth, "Content-Type": "application/json",
-                                              **({"Accept": "text/event-stream"} if stream else {}),
-                                              "X-Harness-Task-Id": task_id,
-                                              **({"session_id": task_id.split("-esc")[0]}
-                                                 if os.environ.get("MH_SESSION_HEADERS") == "1" and task_id else {})})
+                                     headers={**hdrs, "Content-Type": "application/json",
+                                              **({"Accept": "text/event-stream"} if stream else {}), **extra_h})
         status, raw, retry_after, sse_reply = 0, b"", "", False
         gw_tries = 0
         attempt = 0
@@ -516,7 +519,7 @@ class SimpleLedger:
             nonlocal sse_reply
             st, rw, ra = 0, b"", ""
             try:
-                with _mhttp.open(req, timeout) as r:
+                with EP.urlopen(req, timeout) as r:
                     st = r.status
                     sse_reply = stream and st == 200 and (
                         not anthropic or "event-stream" in (r.headers.get("Content-Type") or "").lower())
@@ -559,7 +562,10 @@ class SimpleLedger:
             time.sleep(1.5 * attempt)
         payload = json.loads(raw.decode("utf-8", "replace")) if raw[:1] in (b"{", b"[") else {"raw": raw[:300].decode("utf-8", "replace")}
         if status != 200:
-            raise RuntimeError(f"meshpool HTTP {status}: {payload}{retry_after}")
+            raise RuntimeError(f"meshpool HTTP {status}: " + EP.explain(
+                status, payload, kind=self.kind or EP.resolve(base_url)[0], host=PV.host(base_url),
+                model=body.get("model", ""), key=api_key, api_version=self.api_version or EP.resolve(base_url)[1])
+                + retry_after)
         from meshpool_harness import provider_setup as _PS
         shape = ("openai" if anthropic and sse_reply                  # a streamed Anthropic reply is assembled as chat
                  else "anthropic" if anthropic else "responses" if wire == "responses" else "openai")

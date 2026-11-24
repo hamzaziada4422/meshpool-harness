@@ -197,12 +197,11 @@ def key_spend(force: bool = False) -> dict:
         key, base = PV.key(), PV.key_base()
         if key:
             model = C.read().get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
-            mdl = PV.split(model)[1]
-            body = json.dumps(PV.adapt_body(base, {"model": mdl, "max_tokens": 16 if PV.is_azure(base) else 1,
-                                                   "messages": [{"role": "user", "content": "1"}]})).encode()
-            url, auth = PV.chat_target(base, key, mdl)
-            r = urllib.request.Request(url, data=body, headers={**auth, "Content-Type": "application/json"})
-            with _mhttp.open(r, 20) as resp:
+            from meshpool_harness.core import endpoint as EP
+            url, out, hdrs = EP.chat_request(base, key, {"model": PV.split(model)[1], "max_tokens": 1,
+                                                         "messages": [{"role": "user", "content": "1"}]})
+            r = urllib.request.Request(url, data=json.dumps(out).encode(), headers=hdrs)
+            with EP.urlopen(r, timeout=20) as resp:
                 sp, mx = resp.headers.get("x-litellm-key-spend"), resp.headers.get("x-litellm-key-max-budget")
                 if sp not in (None, ""):
                     res.update(available=True, spent=round(float(sp), 4))

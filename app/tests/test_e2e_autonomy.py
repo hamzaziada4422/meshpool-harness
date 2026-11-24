@@ -60,7 +60,7 @@ def _agent(tmp_path, replies, mcp=None, mode="auto"):
     ('{"success": false}', True),
     ('{"status": "error", "message": "x"}', True),
     ('{"error": "bad cursor"}', True),
-    ("Traceback (most recent call last):\n  File x", True),
+    ("Traceback (most recent call last):\n  File x", False),   # 0.0.13: multi-line text is content, not a verdict
     ('{"ok": true, "ticket_id": "T-1"}', False),
     ('{"tickets": [], "error": null}', False),
     ('{"error": "partial", "results": [1, 2]}', False),

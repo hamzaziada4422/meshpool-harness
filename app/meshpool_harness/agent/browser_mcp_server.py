@@ -570,8 +570,32 @@ def browser_close() -> str:
     return B.run(go)
 
 
+_SHOTS_KEEP_SECONDS = 24 * 3600
+_pruned = False
+
+
 def _outputs_dir(sub: str) -> Path:
-    return Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / sub
+    """Where the audit and view pictures go: a temp folder outside the user's project (one per project and server
+    process), never "Meshpool outputs", so no ui-audit or views folder is left behind in their work. Folders older than
+    a day are removed. MH_SHOTS_DIR overrides the base folder. The tools print the path they used."""
+    global _pruned
+    import hashlib
+    import shutil
+    import tempfile
+    import time
+    project = str(Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()).resolve())
+    base = Path(os.environ.get("MH_SHOTS_DIR") or Path(tempfile.gettempdir()) / "meshpool-shots")
+    if not _pruned:
+        _pruned = True
+        try:
+            for d in base.glob("*/*"):
+                if d.is_dir() and time.time() - d.stat().st_mtime > _SHOTS_KEEP_SECONDS:
+                    shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+    out = base / hashlib.sha1(project.encode()).hexdigest()[:10] / str(os.getpid()) / sub
+    out.mkdir(parents=True, exist_ok=True)
+    return out
 
 
 def _launcher():
@@ -597,7 +621,9 @@ def ui_audit(url: str, views: str = "") -> list:
         B.ensure()
         v = tuple(x.strip() for x in views.split(",") if x.strip() in UA.VIEWS) or tuple(UA.VIEWS)
         res = UA.audit(B.pw, url, views=v, shots_dir=_outputs_dir("ui-audit"), launch=_launcher())
-        return [text(res["text"])] + _images(res["shots"])
+        where = ("\nPictures saved (temporary, outside your project): " + ", ".join(str(x) for x in list(res["shots"])[:6])
+                 if res["shots"] else "")
+        return [text(res["text"] + where)] + _images(res["shots"])
     return B.run(go, timeout=300)
 
 

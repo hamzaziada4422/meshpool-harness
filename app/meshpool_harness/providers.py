@@ -67,9 +67,9 @@ def endpoint_pair() -> tuple[str, str, str]:
     fk = _file("MESHPOOL_API_KEY")
     if fk:
         return (_file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), fk, "settings"
-    ok, ob = os.environ.get("OPENAI_API_KEY", "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
-    if ok and ob:                                  # an OpenAI key alone is never sent to the Meshpool endpoint
-        return ob.rstrip("/"), ok, "environment"
+    ek, eb, _esrc = _env_pair()                    # OPENAI_API_KEY+OPENAI_BASE_URL, or the AZURE_OPENAI_* pair: each
+    if ek:                                         # key only with the address set next to it, never with another
+        return eb.rstrip("/"), ek, "environment"
     return (_shell("MESHPOOL_BASE_URL") or _file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), "", "none"
 
 
@@ -83,6 +83,41 @@ def _ecfg(k: str) -> str:
     return _cfg(k)
 
 
+def _openai_pair() -> tuple[str, str]:
+    """(key, base URL) from OPENAI_API_KEY and OPENAI_BASE_URL, only when there is no Meshpool key and both are set:
+    an OpenAI key alone must never be sent to the Meshpool endpoint."""
+    if _cfg("MESHPOOL_API_KEY"):
+        return "", ""
+    k, b = os.environ.get("OPENAI_API_KEY", "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
+    return (k, b) if k and b else ("", "")
+
+
+def _azure_pair() -> tuple[str, str]:
+    """(key, base address) from AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT, with the same rule: no Meshpool key,
+    and both set. The endpoint is split the way a pasted address is (a full call address works too)."""
+    if _cfg("MESHPOOL_API_KEY"):
+        return "", ""
+    k, e = os.environ.get("AZURE_OPENAI_API_KEY", "").strip(), os.environ.get("AZURE_OPENAI_ENDPOINT", "").strip()
+    if not (k and e):
+        return "", ""
+    from meshpool_harness.core import endpoint as EP
+    try:
+        return k, EP.parse_pasted(e, "azure-classic",
+                                  os.environ.get("AZURE_OPENAI_API_VERSION", "")).base
+    except EP.EndpointError:
+        return "", ""
+
+
+def _env_pair() -> tuple[str, str, str]:
+    """(key, base, source) from the environment when no Meshpool key is saved. Order: the OpenAI pair, then the Azure
+    pair; each key goes only with the address set next to it, never with another."""
+    k, b = _openai_pair()
+    if k:
+        return k, b, "openai"
+    k, b = _azure_pair()
+    return (k, b, "azure") if k else ("", "", "")
+
+
 def key_base() -> str:
     return endpoint_pair()[0]
 
@@ -91,13 +126,42 @@ def key() -> str:
     return endpoint_pair()[1]
 
 
+def key_kind() -> str:
+    """The kind of provider the key endpoint is (core/endpoint.py CAPS): what the user saved, else read from the
+    address. A kind saved for one address is ignored when the address comes from the environment."""
+    from meshpool_harness.core import endpoint as EP
+    src = _env_pair()[2]
+    saved = "" if src else _ecfg("MH_API_KIND")
+    if src == "azure":
+        try:
+            return EP.parse_pasted(os.environ.get("AZURE_OPENAI_ENDPOINT", ""), "azure-classic",
+                                   os.environ.get("AZURE_OPENAI_API_VERSION", "")).kind
+        except EP.EndpointError:
+            pass
+    return saved if saved in EP.CAPS else EP.detect(key_base())
+
+
+def key_api_version() -> str:
+    """The api-version the user chose for an Azure endpoint ("" = the kind's default)."""
+    if _env_pair()[2] == "azure":
+        return os.environ.get("AZURE_OPENAI_API_VERSION", "").strip()
+    return "" if _env_pair()[2] else _ecfg("MH_API_VERSION")
+
+
+def env_deployment() -> str:
+    """AZURE_OPENAI_DEPLOYMENT when the Azure environment pair is what is in use: the model to run."""
+    return os.environ.get("AZURE_OPENAI_DEPLOYMENT", "").strip() if _env_pair()[2] == "azure" else ""
+
+
 def key_wire() -> str:
     """The wire the key endpoint speaks: "openai" (chat completions) or "anthropic" (Messages). MH_API_WIRE when set
-    (provider_setup saves it); otherwise guessed from the host, so settings saved by older versions keep working."""
+    (provider_setup saves it); otherwise guessed from the kind, so settings saved by older versions keep working."""
+    from meshpool_harness.core import endpoint as EP
     w = _ecfg("MH_API_WIRE").lower()
     if w in ("openai", "anthropic"):
         return w
-    return "anthropic" if host(key_base()).endswith("anthropic.com") else "openai"
+    return "anthropic" if host(key_base()).endswith("anthropic.com") or EP.wire_of(key_kind()) == "anthropic" \
+        else "openai"
 
 
 # ---------- how a request to the key endpoint is addressed and authorised ---------------------------------------------
@@ -274,6 +338,31 @@ def key_name() -> str:
     return "Meshpool" if "meshpool" in h else (h or "Your endpoint")
 
 
+def agent_endpoint(prov: str = "key") -> tuple[str, str]:
+    """(base URL, key) for an agent process Meshpool starts (Pi, Hermes, OpenCode). They all send a plain Bearer key
+    to {base}/chat/completions. Where the key endpoint is not that (Azure wants an api-key header and a deployment
+    path), they get this process's local relay instead, which rebuilds the call (core/key_relay.py) and is the only
+    thing that ever holds the real key."""
+    base, k = endpoint(prov)
+    if prov != "key":
+        return base, k
+    from meshpool_harness.core import endpoint as EP
+    if k and EP.caps(key_kind())["relay"] and EP.wire_of(key_kind()) == "openai":
+        from meshpool_harness.core import key_relay
+        return key_relay.ensure()
+    return base, k
+
+
+def direct_agent_ok(hid: str) -> str:
+    """"" when the agent can run on the key endpoint as set up; otherwise why not, in words for the settings page."""
+    from meshpool_harness.core import endpoint as EP
+    kind = key_kind()
+    if hid == "codex" and kind in ("azure-foundry", "azure-anthropic"):
+        return ("Codex needs the OpenAI Responses API, which this Azure address does not serve. Use an "
+                "https://NAME.openai.azure.com address or the /openai/v1 address for Codex, or another agent here.")
+    return ""
+
+
 def name(prov: str) -> str:
     return {"key": key_name(), "chatgpt": "ChatGPT subscription"}[prov]
 
@@ -305,6 +394,8 @@ def split(model: str | None) -> tuple[str, str]:
         m = DEFAULT_MODEL
     if (os.environ.get("MH_PROVIDER") or C.read().get("MH_PROVIDER")) == "chatgpt" and not key():
         return "chatgpt", m                      # set up with only a ChatGPT sign-in
+    if m in ("", DEFAULT_MODEL) and env_deployment():
+        m = env_deployment()                     # Azure from the environment: the deployment is the model
     return "key", m
 
 
@@ -382,4 +473,14 @@ def groups(key_rows: list[dict], key_error: str, refresh: bool = False) -> list[
             g["models"] = [{"id": join(prov, i), "name": i, "provider": "OpenAI", "caps": ["vision"]} for i in ids]
             g["error"] = err
         out.append(g)
+    return out
+
+
+def custom_auth(hdrs: dict, base: str, key_: str) -> dict:
+    """`hdrs` (the standard headers for the endpoint's kind) with the saved custom key header and scheme applied, when
+    the user set one for this endpoint (MH_AUTH_HEADER, MH_AUTH_SCHEME). Otherwise `hdrs` unchanged."""
+    if not key_ or not is_key_endpoint(base) or not (_ecfg("MH_AUTH_HEADER") or _ecfg("MH_AUTH_SCHEME")):
+        return hdrs
+    out = {k: v for k, v in hdrs.items() if k.lower() not in ("authorization", "api-key", "x-api-key")}
+    out.update(auth_headers(key_, base, "openai"))
     return out

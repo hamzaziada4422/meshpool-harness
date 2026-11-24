@@ -158,22 +158,28 @@ def _provider_of(mid: str, owned: str) -> str:
 
 def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
-    base, key, _src = __import__("meshpool_harness.providers", fromlist=["x"]).endpoint_pair()
+    from meshpool_harness import providers as _PV
+    from meshpool_harness.core import endpoint as _EP
+    base, key, _src = _PV.endpoint_pair()           # the saved endpoint, or the environment pair when none is saved
+    kind = _PV.key_kind()
     cache_key = base + "|" + key[-6:]
     vals = C.read()
     fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key and not __import__("meshpool_harness.providers", fromlist=["x"]).keyless_ok(base):
+    elif not key and not (_EP.caps(kind)["keyless"] or _PV.keyless_ok(base)):
         rows, err = [], "Add your API key to see your models."
+    elif not _EP.caps(kind)["lists"]:               # Azure and Perplexity have no list to read: the chosen model shows
+        rows, err = [], ""
     else:
         rows, err = [], ""
         try:
-            from meshpool_harness import providers as _PV
-            url, auth = _PV.chat_target(base, key, "", "models")     # Azure: /openai/models?api-version=, api-key
-            req = urllib.request.Request(url, headers={**auth, "User-Agent": "Meshpool"})
-            with _mhttp.open(req, 20) as r:
+            auth = {k: v for k, v in _EP.auth_headers("anthropic" if _PV.key_wire() == "anthropic" else kind,
+                                                      key).items() if k != "Content-Type"}
+            auth = _PV.custom_auth(auth, base, key)
+            req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
+            with _EP.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
             items = data.get("data") if isinstance(data, dict) else data
             for it in items or []:
@@ -196,8 +202,7 @@ def models(refresh: bool = False) -> dict:
                 rows = []
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
-            err = f"The endpoint answered HTTP {e.code} when listing models." + (
-                " Check your API key." if e.code in (401, 403) else (" " + str(e.msg)) if 300 <= e.code < 400 else "")
+            err = "Could not list models. " + _EP.explain(e.code, e.read(200_000), kind=kind, host=_PV.host(base), key=key)
         except Exception as e:  # noqa: BLE001
             err = f"Could not list models: {_mhttp.explain(e, base)}"
     from meshpool_harness import providers as PV

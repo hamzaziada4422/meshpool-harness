@@ -108,6 +108,19 @@ REFRESHED_DEFAULTS = {
     "notebooks": {"a15b7391182d52e2b2bf66363a2962d84f02da8bbd7c6f47df556e16c9299d29"},
     "query-database": {"49bfb409b2c1c6f05042e2a8af283781b9b9ddf942ef8cfa0669783f10054f94"},
     "make-chart": {"34720b574aa2bcaf369328f618f7988701719ece76f1b12962ebb07394a2ca71"},
+    # 0.0.13: skills that asked for more than the user did (plan files, trackers, a second document, deep research)
+    "email-newsletter": {"3e006a413bbce93ac5d7fb6327fd959405c1511355dc8d99cc7cc3312ef45bc0"},
+    "blog-post": {"64329c4a7a5640120049b494a874b18fedee62b836edc8357a9e54d34b02507c"},
+    "daily-plan": {"39a7889361211ccdc75b3ae0ee7b02311f1dc45038e2d93d0d0b21f087dce450"},
+    "briefing-interview": {"244a32c6ff198ba8c57adf769e1edf0bb1e21def30f3633c3796e390482390c7"},
+    "project-plan": {"792a70ee3c312b61ec7344934e71af4e25701bc0b9b78c4ad42fdda5d46ed4fc"},
+    "competitor-analysis": {"b507ab50e61130618751871ef028a21e6f5285d1ec1fad234ba7ebdfba5eebb4"},
+    "research-brief": {"cea677509224462597685db1614e8df91209ba092f5867d7210acfbae3edb5dd"},
+    "meeting-prep": {"240458f6c4f23466eebd1626f2e23180bdb3659d5fcf171cec284e36794724da"},
+    "seo-content-brief": {"9a87b2e21973afde065dad87733e2885e92e495f130c175a41fb3ee79f266f36"},
+    "feedback-synthesis": {"15c2c58b9d1487f8da1ccd0853e1d6288012098ad8c81cb4dccc8b571b61aa53"},
+    "survey-analysis": {"406d25eb7f07630f9093481c9eae463b48c76e53788e31fd639f090c020b78d9"},
+    "interview-plan": {"5842c313a72830ea3c96f3d8624b10fb8b1671eef090e152c9c624b76475815e"},
 }
 
 
