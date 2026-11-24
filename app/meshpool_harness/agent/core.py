@@ -964,6 +964,8 @@ def _check_line(cmd: str, shown: str, code: int) -> str:
         return f"`{shown}` FAILED (exit {code})"
     if _piped_check_hides_status(cmd):
         return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)")
+    if _TEST_RUN.search(cmd or "") and re.search(r"\|\|\s*(?:true\b|:(?=\s|;|$)|exit\s+0\b)", cmd or ""):
+        return f"`{shown}` ran (its exit status is ignored by `|| true`, so a failure would not show)"
     return f"`{shown}` passed"
 
 

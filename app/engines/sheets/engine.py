@@ -86,7 +86,7 @@ Helper library (import from engines.sheets.builder as B; it is importable from t
 find it, start the script with: import sys; sys.path.insert(0, r"{ROOT}")):
   wb = B.new_workbook(("Inputs","Calc","Outputs"))   B.title(ws, text)   B.header(ws, row, labels, col=1)
   B.input_cell(ws, "B3", 0.1, "pct", name="Growth")  B.formula(ws, "C5", "=B5*(1+Growth)", "usd", total=False)
-  B.section(ws, row, text, ncols)   B.add_check(wb, label, "=diff formula")
+  B.section(ws, row, text, ncols)   B.add_check(wb, label, "=Calc!D5-Inputs!B4")  (sheet-qualified refs, or sheet="Calc")
   B.widths(ws)   B.chart(ws, "bar"|"line"|"pie", (min_col,min_row,max_col,max_row), cats_ref, "E3", "Title", "usd")
   formats: usd, usd2, usd0, pct, pct2, int, x, num, num0, num2, text, date, or any Excel format string. wb.save(path).
 Finance kit (all live formulas; raw numbers are blue inputs; results are workbook names you can link to):

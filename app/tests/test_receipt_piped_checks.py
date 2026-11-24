@@ -68,3 +68,10 @@ def test_pipe_stages_respect_quotes_and_escapes():
     assert core._pipe_stages('echo "a|b" | wc') == ['echo "a|b" ', " wc"]
     assert core._pipe_stages(r"echo a\|b") == [r"echo a\|b"]
     assert core._pipe_stages("a || b | c") == ["a || b ", " c"]
+
+
+def test_or_true_never_reads_as_passed():
+    from meshpool_harness.agent.core import _check_line
+    assert "passed" not in _check_line("pytest -q || true", "pytest -q || true", 0)
+    assert "passed" not in _check_line("python -m pytest tests || :", "python -m pytest tests || :", 0)
+    assert _check_line("pytest -q", "pytest -q", 0).endswith("passed")
