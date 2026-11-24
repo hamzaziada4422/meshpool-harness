@@ -103,6 +103,36 @@ def instruction_text(root: Path) -> str:
     return ("\n\n" + "\n\n".join(parts)) if parts else ""
 
 
+def nested_instructions(root: Path, path: str, seen: set) -> str:
+    """Instruction files (AGENTS.md, CLAUDE.md...) in the folders between the project and path, below the project
+    itself, the first time the agent works there: a subfolder's own rules apply when work reaches it."""
+    if not path or os.environ.get("MH_NESTED_INSTRUCTIONS") == "0":
+        return ""
+    root = Path(root).resolve()
+    try:
+        p = Path(path).expanduser()
+        p = (p if p.is_absolute() else root / p).resolve()
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    d = p if p.is_dir() else p.parent
+    chain = [x for x in (d, *d.parents) if root in x.parents]          # strictly inside the project
+    out = []
+    for folder in reversed(chain):
+        for name in FILES:
+            f = folder / name
+            try:
+                if f.is_symlink() or not f.is_file() or f.resolve() in seen:
+                    continue
+            except OSError:
+                continue
+            seen.add(f.resolve())
+            body = _imports(_read(f), f.parent, {f.resolve()}).strip()
+            if body:
+                out.append(f"[Instructions from {f.relative_to(root).as_posix()} for work in "
+                           f"{folder.relative_to(root).as_posix()}/ (follow them there):]\n{body[:MAX_FILE]}")
+    return "\n\n".join(out)
+
+
 # ---------------------------------------------------------------- hooks
 def hooks(root: Path) -> dict:
     """The user's own hooks, plus the project's when the user trusts the folder (see trust.py)."""

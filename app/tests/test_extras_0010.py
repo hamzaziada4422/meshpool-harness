@@ -83,3 +83,26 @@ def test_hooks_can_decide_in_json_and_add_context(tmp_path, monkeypatch):
     assert a._permit("bash", {"command": "rm -rf build"})[0] is False             # but never for a destructive command
     EX.run_hooks(tmp_path, "PreCompact", {})
     assert (tmp_path / "compact.flag").exists()
+
+
+def test_a_subfolders_instructions_join_the_first_time_work_reaches_it(tmp_path, monkeypatch):
+    import json as _json
+    from meshpool_harness.agent import core as K
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(K, "SESSIONS", tmp_path / "sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    proj = tmp_path / "proj"
+    (proj / "pkg" / "sub").mkdir(parents=True)
+    (proj / "AGENTS.md").write_text("Top rules.")
+    (proj / "pkg" / "AGENTS.md").write_text("Pkg uses tabs.")
+    (proj / "pkg" / "sub" / "CLAUDE.md").write_text("Sub is legacy code.")
+    (proj / "pkg" / "sub" / "x.py").write_text("x = 1\n")
+    (proj / "y.py").write_text("y = 1\n")
+    a = Agent(str(proj), mode="auto")
+    a._turn_no = 1
+    run = lambda name, args: a._run_tool({"id": "c", "type": "function", "function": {"name": name, "arguments": _json.dumps(args)}})
+    assert "Top rules" in a.messages[0]["content"] and "Pkg uses tabs" not in a.messages[0]["content"]
+    assert "Instructions from" not in run("read_file", {"path": "y.py"})            # the project's own: already loaded
+    out = run("read_file", {"path": "pkg/sub/x.py"})
+    assert "Pkg uses tabs" in out and "Sub is legacy" in out and out.index("Pkg uses tabs") < out.index("Sub is legacy")
+    assert "Instructions from" not in run("read_file", {"path": "pkg/sub/x.py"})    # once only

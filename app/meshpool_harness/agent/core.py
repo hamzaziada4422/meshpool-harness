@@ -3031,6 +3031,15 @@ class Agent:
             step["err"] = out[:160]
         with self._trace_lock:                         # one line per tool call: the benchmark's trace
             self.trace.append(step)
+        if ok and name in ("read_file", "edit", "write_file", "list_dir", "glob", "grep", "notebook_edit") and \
+                isinstance(args, dict) and isinstance(args.get("path"), str):
+            try:                                           # a subfolder's own AGENTS.md / CLAUDE.md, the first time
+                from meshpool_harness.agent import extras as EXN
+                more = EXN.nested_instructions(self.root, args["path"], self.__dict__.setdefault("_nested_seen", set()))
+                if more:
+                    out = out + "\n\n" + more
+            except Exception:  # noqa: BLE001
+                pass
         from meshpool_harness.redact import redact
         self.emit({"type": "tool_end", "id": cid, "name": name, "ok": ok, "denied": denied,   # shown: secrets hidden
                    "output": redact(out[:6000]) + ("\n..." if len(out) > 6000 else "")})
