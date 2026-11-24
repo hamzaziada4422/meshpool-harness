@@ -754,3 +754,43 @@ def test_several_refusals_in_one_step_still_cross_each_nudge(tmp_path):
     g["rseq"] = 5
     assert "tools turn off" in a._refusal_escalation(g)
     assert a._refusal_escalation(g) == ""             # each level is said once
+
+
+def test_distinct_failing_calls_with_no_file_change_escalate_then_wrap(tmp_path, monkeypatch):
+    # eval trace: 10 different broken python -c probes, then 6 apply_patch calls the syntax gate rejected; no call
+    # repeated, so no repeat guard fired, and the run timed out
+    a = _agent(tmp_path)
+    g, notes, n = {}, [], [0]
+
+    def inner(c, g, cut=False):
+        n[0] += 1
+        return "[exit 1]\nSyntaxError: keyword argument repeated" if n[0] <= 10 else \
+            "ERROR: apply_patch rejected: it would make probe.py stop parsing. Nothing was written"
+    monkeypatch.setattr(a, "_guarded_tool_inner", inner)
+    for i in range(16):
+        a._guarded_tool({"function": {"name": "shell", "arguments": '{"i": %d}' % i}}, g)
+        notes.append(a._refusal_escalation(g))
+    assert all(x == "" for x in notes[:3]) and "4 calls all failed" in notes[3]
+    assert "8 calls all failed" in notes[7] and "tools turn off" in notes[7]
+    assert "Tools are off now" in notes[11] and g.get("hard_wrap") and g.get("fwrap_done")
+    assert sum(bool(x) for x in notes) == 3                 # each level once, the wrap once per turn
+
+
+def test_a_success_or_a_changed_file_resets_the_failure_count(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    g = {}
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 2]\nnope")
+    for _ in range(3):
+        a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["fseq"] == 3
+    a.ws.edits = (a.ws.edits or 0) + 1                      # a file changed: the next failure starts a new count
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["fseq"] == 0
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 0]\nok")
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["fseq"] == 0 and a._failure_escalation(g) == ""
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[Meshpool] Not run: repeat")
+    g["fseq"] = 2
+    a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
+    assert g["fseq"] == 2                                   # a refusal is counted by the refusal guard, not here
