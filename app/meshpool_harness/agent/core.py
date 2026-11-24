@@ -1721,8 +1721,10 @@ class Agent:
                             f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
                             "failure is expected or unrelated, say exactly why in one line.")})
                         continue
-                    if (route is not None and route.family == "code" and not self.plan and not cx
+                    if (route is not None and route.family == "code" and not self.plan
                             and self.ws.edits > g["edits0"]):
+                        # Codex style too: the profile decides (codex: review and mutation off; codex+review: review on).
+                        # Eval: every Meshpool-only wrong answer was a short run whose own check passed, unreviewed.
                         if not g.get("review_done"):
                             g["review_done"] = True    # once per request: a second reader checks it against the ask
                             found = self._review_change(g, turn)
@@ -1739,7 +1741,7 @@ class Agent:
                             if bad:
                                 self.messages.append({"role": "user", "content": bad})
                                 continue
-                        if not g.get("mutation_done"):
+                        if not g.get("mutation_done") and self.hsettings()["mutation"]:
                             g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
                             fb = self._mutation_feedback()
                             if fb:

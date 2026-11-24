@@ -42,6 +42,8 @@ BUILTIN = {
     # Codex's design under Meshpool's routing: no plan/review/mutation rounds, the method text of "lean-stop"
     "codex": {"plan": "off", "review": False, "mutation": False, "step_methods": False, "methods": "v2-stop",
               "engine_style": "codex"},
+    # the same, plus one review of the diff against the request before the turn ends (one extra model call)
+    "codex+review": {"extends": "codex", "review": True},
 }
 
 

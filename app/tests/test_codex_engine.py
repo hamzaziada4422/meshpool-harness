@@ -422,3 +422,20 @@ def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path, monke
     a.messages.append({"role": "user", "content": "x" * 200000})
     a._maybe_compact()
     assert core._context_size(a.messages) < 200000 + 100000
+
+
+def test_codex_review_profile_runs_one_review_of_the_diff(tmp_path, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    (tmp_path / "t.py").write_text("x = 1\n")
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "add", "-A"], cwd=tmp_path)
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "i"], cwd=tmp_path)
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="codex+review"), "fix the failing test")
+    assert a._codex() and a.hsettings()["review"] is True
+    reviews = []
+    monkeypatch.setattr(a, "_aux_complete", lambda *x, **k: reviews.append(1) or "LGTM")
+    monkeypatch.setattr(a, "_mutation_feedback", lambda: pytest.fail("a mutation round ran"))
+    _script(a, [_call("apply_patch", {"input": patch("*** Update File: t.py", "@@", "-x = 1", "+x = 2")}),
+                {"role": "assistant", "content": "Done."}])
+    assert a.send("set x to 2") == "Done." and reviews == [1]
