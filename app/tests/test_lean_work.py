@@ -24,6 +24,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("MH_PROFILES_DEFAULTS", "none")
     for var in ("MH_LEAN_WORK", "MH_ENGINE_STYLE", "MH_HARNESS_PROFILE", "MH_CORE_PROMPT_FILE", "MH_APPEND_PROMPT"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "0")      # the engine path; direct-office tests turn it on themselves
 
 
 def _work(tmp_path, profile="core", spec="data", **kw):
@@ -215,13 +216,14 @@ def test_office_direct_offers_the_engines_only_for_a_new_deck_report_or_model(tm
     edit = _send(a, "Sort score.xlsx descending by midterm1 into sorted_score.xlsx")
     assert a.office_on and not a.office_engines
     assert edit == CODEX3 + ["web_research", "fetch_url", "mcp__demo__calculate",
-                             "mcp__meshpool_office__read_document", "mcp__meshpool_office__edit_office_file"]
+                             "mcp__meshpool_office__read_document"]       # office3: the editor duplicated openpyxl
     assert a._engine_only("shell", {"command": "python3 -c 'from openpyxl import Workbook; Workbook()'"}) == ""
     deck = _send(a, "Now make a 6-slide deck for the board from the sorted scores")
     assert a.office_engines
     assert deck[:len(edit)] == edit                                    # appended, never reordered
     assert deck[len(edit):] == ["office_task", "mcp__meshpool_office__make_deck",
-                                "mcp__meshpool_office__make_spreadsheet", "mcp__meshpool_office__add_slides"]
+                                "mcp__meshpool_office__make_spreadsheet", "mcp__meshpool_office__add_slides",
+                                "mcp__meshpool_office__edit_office_file"]
     assert _send(a, "Rename Sheet1 in sorted_score.xlsx to Scores") == deck   # stays for the chat
 
 

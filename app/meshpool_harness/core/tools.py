@@ -507,6 +507,35 @@ def read_src(p: Path) -> tuple[str, str, bool]:
     return text, "\n", bom
 
 
+def _user_python_env(env: dict) -> dict:
+    """The user's project runs its own Python: Meshpool's app folder is never on its PYTHONPATH. That folder holds
+    sitecustomize.py (run at every interpreter start: update recovery against the app folder) and a `tests` package
+    that shadowed the project's own; swe4 saw 8 import errors in Meshpool's runs against 1 in Codex's. Bytecode is
+    allowed (a big repo recompiled on every test run without it); a stale .pyc after a same-size, same-second edit
+    is prevented by write_src dropping the edited module's cached bytecode."""
+    app = os.path.normcase(os.path.abspath(str(Path(__file__).resolve().parents[2])))
+    parts = [p for p in (env.get("PYTHONPATH") or "").split(os.pathsep)
+             if p and os.path.normcase(os.path.abspath(p)) != app]
+    if parts:
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+    else:
+        env.pop("PYTHONPATH", None)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    return env
+
+
+def _drop_pyc(p: Path) -> None:
+    """Remove the cached bytecode of an edited .py file: Python validates a .pyc by the source's whole-second mtime
+    and size, so a same-size edit within the same second would otherwise run the old code."""
+    if p.suffix != ".py":
+        return
+    try:
+        for c in (p.parent / "__pycache__").glob(p.stem + ".*.pyc"):
+            c.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bool = False) -> None:
     """Write text with the file's own line ending and BOM, byte for byte (Python's text mode would turn every \\n
     into CRLF on Windows and drop a CRLF file's endings elsewhere)."""
@@ -523,6 +552,7 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
         except OSError:
             mode = None
         fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode)   # OSS-15: never a half-written file
+    _drop_pyc(p)
 
 
 def shown(text: str) -> str:
@@ -1352,9 +1382,7 @@ class Workspace:
             if _C.packaged():                                       # the user's own tools, not Meshpool's Python
                 env = _C.user_env()
             else:
-                env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))  # stale .pyc after same-size edits hides fixes
-                proj = str(Path(__file__).resolve().parents[2])      # engine helper libraries importable anywhere
-                env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+                env = _user_python_env(_C.scrub_env(dict(os.environ)))
             if self.container and not command.lstrip().startswith("docker "):
                 cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
                 r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
@@ -1422,9 +1450,7 @@ class Workspace:
         if _C.packaged():
             env = _C.user_env()
         else:
-            env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-            proj = str(Path(__file__).resolve().parents[2])
-            env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env = _user_python_env(_C.scrub_env(dict(os.environ)))
         env.setdefault("PYTHONUTF8", "1")
         env["PYTHONUNBUFFERED"] = "1"
         self._scratch(env)
@@ -1719,9 +1745,11 @@ class Workspace:
                         self._cwrite(key, after)
                 elif after is None:
                     p.unlink()
+                    _drop_pyc(p)
                 else:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_bytes(after.encode("utf-8", "surrogateescape"))
+                    _drop_pyc(p)
         except Exception as e:  # noqa: BLE001
             for key in done:
                 p, before, after = files[key]

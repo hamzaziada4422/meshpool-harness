@@ -87,18 +87,20 @@ def _lean_work_on() -> bool:
 
 
 def _office_direct_on() -> bool:
-    """MH_OFFICE_DIRECT=1 (off until measured): a lean Work chat does small office-file jobs itself with python-docx,
-    openpyxl or python-pptx, as Codex does, instead of the office engines. office1 (bench3 office, 7 tasks x2): lean
-    Work cost 1.70x Codex, all of it in the nested sheets/slides engines (15-31 calls each where Codex took 5-14)."""
-    return os.environ.get("MH_OFFICE_DIRECT", "0") == "1"
+    """On by default (MH_OFFICE_DIRECT=0 turns it off): a lean Work chat does office-file edits and small files itself
+    with python-docx, openpyxl or python-pptx, as Codex does, and gets the office engines only for a new deck, report
+    or model. office3 (bench3 office 7, SpreadsheetBench 6, OfficeBench 4, x2 vs Codex): 13/14, 10/12, 8/8 at 1.5-1.7x
+    Codex's cost per solved task, against 10/14, 8/12, 7/8 at 2.2-2.4x through the engines."""
+    return os.environ.get("MH_OFFICE_DIRECT", "1") != "0"
 
 
 OFFICE_DIRECT_RULE = ("- For an office-file job (edit or derive from an existing .docx, .xlsx or .pptx: sort, filter, "
                       "fill, add a column, a chart or a slide, convert, extract; or a small new file), write it "
                       "yourself in one Python script with python-docx, openpyxl or python-pptx, keeping the source's "
                       "sheets, layout and styles unless asked otherwise; save it, then reopen the file to check what "
-                      "the request asks for. office_task is listed only when a request asks for a new deck, report or "
-                      "financial model; use it then for that deliverable.")
+                      "the request asks for (re-read formulas as written; recalculate through LibreOffice only when the "
+                      "request asks for computed values). office_task is listed only when a request asks for a new deck, "
+                      "report or financial model; use it then for that deliverable.")
 
 LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three
 # MH_OFFICE_DIRECT=1: the tools that run an office engine's own model loop (office_task, and the office server's
@@ -1372,10 +1374,14 @@ class Agent:
                 return T.schemas(self._tool_names()) + mcp
             # MH_OFFICE_DIRECT=1: the engine tools come last and only once a message asked for a deck, report or
             # model, so the list a turn starts with only ever grows at its end (the cached prefix stays)
+            # office3 trace (SpreadsheetBench): the office server's inspector and editor duplicated an openpyxl dump
+            # and failed on formulas, 3 of 7 extra calls; with the libraries at hand they stay out until an engine job
+            dup = ("measure_office_file", "edit_office_file")
+            is_dup = lambda x: x["function"]["name"].rsplit("__", 1)[-1] in dup   # noqa: E731
             head = T.schemas([n for n in self._tool_names() if not _engine_tool(n)]) + \
-                [x for x in mcp if not _engine_tool(x["function"]["name"])]
-            return head + ((T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])])
-                           if self.office_engines else [])
+                [x for x in mcp if not _engine_tool(x["function"]["name"]) and not is_dup(x)]
+            return head + ((T.schemas(["office_task"]) + [x for x in mcp if _engine_tool(x["function"]["name"])]
+                            + [x for x in mcp if is_dup(x)]) if self.office_engines else [])   # appended, never reordered
         names = self._tool_names()
         if getattr(self, "lane", "task") == "chat" and not getattr(self, "_tools_full", False) \
                 and os.environ.get("MH_LITE_CHAT_TOOLS", "1") != "0":
