@@ -271,8 +271,9 @@ def _terms(text: str) -> list[str]:
     return out
 
 
-def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
-    """Skills ranked by word overlap with the query; a hit in the name counts three times one in the description."""
+def search(query: str, k: int = 8, rows: list | None = None, min_score: int = 1, min_terms: int = 1) -> list[dict]:
+    """Skills ranked by word overlap with the query; a hit in the name counts three times one in the description.
+    min_score and min_terms drop weak matches (one shared word such as "create" or "run")."""
     q = set(_terms(query))
     if not q:
         return []
@@ -281,7 +282,7 @@ def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
     for s in rows:
         name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(s["description"]))
         score = 3 * len(q & name) + len(q & desc)
-        if score:
+        if score and score >= min_score and len(q & (name | desc)) >= min_terms:
             scored.append((score, s))
     scored.sort(key=lambda x: (-x[0], x[1]["name"]))
     return [s for _, s in scored[:k]]

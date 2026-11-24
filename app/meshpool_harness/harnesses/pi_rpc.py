@@ -109,17 +109,29 @@ def _models() -> list[dict]:
 
 # One line per Meshpool server for Pi's system prompt (Pi lists a deferred server by this line and loads its tools
 # through tool_search), so a chat pays for the lines, not for the 50 tool schemas.
+SKIP_FOR_PI = frozenset({"meshpool-tools"})     # time, arithmetic and project stats: bash already does these, and a
+#                                                 line in Pi's system prompt costs more than it saves (MH_PI_MCP=direct keeps it)
+SKILL_MIN = 4          # a skill is loaded for a chat only on a real match (a name hit and a word, not just "create" or "run")
 SERVER_NOTE = {
-    "meshpool-office": "Office files: read, edit and convert Word, Excel, PowerPoint and PDF; make decks, workbooks, "
-                       "documents and PDFs.",
-    "meshpool-assistant": "Meshpool memory, scheduled tasks, past chats and sub-agents.",
-    "meshpool-web": "Web search, page fetch and multi-step research.",
-    "meshpool-tools": "Time, exact arithmetic and project statistics.",
-    "browser": "A browser to open, read and drive web pages.",
+    "meshpool-office": "Word, Excel, PowerPoint, PDF files: read, edit, make.",
+    "meshpool-assistant": "memory_save (lasting user facts, never tasks), project_note, schedule_task, delegate_task.",
+    "meshpool-web": "Web search, fetch, research; cite links.",
+    "meshpool-tools": "Time, exact arithmetic.",   # not declared to Pi (see SKIP_FOR_PI)
+    "browser": "Open and drive web pages; view_output and ui_audit check one.",
 }
 # What stays declared in a chat that asks for an office file: the tools that change or read the user's own file.
-OFFICE_DIRECT = {"edit_office_file": "direct", "read_document": "direct", "convert_document": "direct",
-                 "check_*": "direct"}
+OFFICE_DIRECT = {"edit_office_file": "direct", "read_document": "direct"}
+OFFICE_CHECK = {"xlsx": "check_workbook", "xlsm": "check_workbook", "csv": "check_workbook", "pptx": "check_deck",
+                "docx": "check_document"}
+
+
+def office_direct(task: str = "") -> dict:
+    """The office tools declared up front for a chat that asks for an office file: read_document and edit_office_file,
+    plus the check tool of the file types the message names (all three when it names none). The rest of the office
+    server (convert_document, make_deck, ...) is one tool_search away."""
+    kinds = {OFFICE_CHECK[e] for e in re.findall(r"\.(xlsx|xlsm|csv|pptx|docx)\b",
+                                                                      str(task or "").split("\n\n\u200b")[0].lower())}
+    return {**OFFICE_DIRECT, **{k: "direct" for k in (kinds or set(OFFICE_CHECK.values()))}}
 
 
 def pi_skills_all() -> bool:
@@ -132,7 +144,7 @@ def pi_mcp_direct() -> bool:
     return os.environ.get("MH_PI_MCP", "").lower() == "direct"
 
 
-def _mcp_for_pi(root: Path, chat: str = "", office: bool = False) -> dict:
+def _mcp_for_pi(root: Path, chat: str = "", office: bool = False, task: str = "") -> dict:
     """Pi's mcp.json. Every server is deferred: Pi lists it by one line and loads its tools through tool_search when
     the model asks. A chat that asks for an office file also declares edit_office_file, read_document,
     convert_document and the check_* tools of the office server."""
@@ -142,6 +154,8 @@ def _mcp_for_pi(root: Path, chat: str = "", office: bool = False) -> dict:
     every = pi_mcp_direct()
     for s in rows:
         name = s["name"]
+        if name in SKIP_FOR_PI and not every:
+            continue
         if s.get("url"):
             spec = {"url": s["url"], "headers": {h["name"]: h["value"] for h in s.get("headers") or []},
                     "exposure": "deferred"}
@@ -155,7 +169,7 @@ def _mcp_for_pi(root: Path, chat: str = "", office: bool = False) -> dict:
             if name in SERVER_NOTE:
                 spec["description"] = SERVER_NOTE[name]
             if name == "meshpool-office" and office and not every:
-                spec["toolExposure"] = dict(OFFICE_DIRECT)
+                spec["toolExposure"] = office_direct(task)
         servers[name] = spec
     return {"mcpServers": servers, "autoEnableCodemode": False}
 
@@ -200,7 +214,7 @@ def prepare(root: Path, chat: str = "", office: bool = False, task: str = "") ->
                             "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}} for i in ids]}
     fsio.atomic_write_text(h / "models.json", json.dumps(models, indent=1), fsync=False)
     try:
-        mcp = _mcp_for_pi(root, chat, office)
+        mcp = _mcp_for_pi(root, chat, office, task)
     except Exception:  # noqa: BLE001
         mcp = {"mcpServers": {}}
     from meshpool_harness.harnesses import write_private
@@ -245,7 +259,7 @@ def pi_skill_dirs(h: Path, task: str = "") -> list[str]:
         from meshpool_harness import capabilities as CAP
         text = str(task or "").split(CAP.SEP)[0]
         rows = SK.enabled()
-        pick = SK.search(text, k=3, rows=rows)
+        pick = SK.search(text, k=2, rows=rows, min_score=SKILL_MIN, min_terms=2)
         named = {m.lower() for m in re.findall(r"(?<![\w$])\$([a-z0-9][a-z0-9-]*)", text)}
         want = {s["id"]: s for s in pick}
         want.update({s["id"]: s for s in rows if s["id"].lower() in named or s["name"].lower() in named})
@@ -265,9 +279,10 @@ def skill_args(home: Path) -> list[str]:
     if pi_skills_all():
         return []
     args = ["--no-skills"]
-    for d in sorted((home / "skills" / "meshpool").glob("*/SKILL.md")):
+    staged = sorted((home / "skills" / "meshpool").glob("*/SKILL.md"))
+    for d in staged:
         args += ["--skill", str(d.parent)]
-    note = pi_skill_note(home)
+    note = pi_skill_note(home) if staged else ""        # no skill fits this chat: no pointer either (about 50 tokens)
     return args + (["--append-system-prompt", note] if note else [])
 
 
@@ -281,7 +296,7 @@ def _skill_read_dirs(home: Path) -> list[str]:
 
 def pi_skill_note(h: Path) -> str:
     idx = h / "skills" / "meshpool" / "INDEX.md"
-    return (f"Other Meshpool skills (task instructions) are listed in {idx}; read the one that fits the task."
+    return (f"More skills, read the one that fits: {idx}"
             if idx.is_file() and idx.stat().st_size > 200 else "")
 
 

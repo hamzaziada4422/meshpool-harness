@@ -72,8 +72,9 @@ def test_pi_mcp_is_deferred_and_office_tools_are_direct_only_for_office_chats(ho
     office = PI._mcp_for_pi(tmp_path / "proj", "c", office=True)["mcpServers"]
     assert office["meshpool-office"]["exposure"] == "deferred"
     te = office["meshpool-office"]["toolExposure"]
-    assert te["edit_office_file"] == "direct" and te["read_document"] == "direct" and te["check_*"] == "direct"
-    assert "make_deck" not in te and "convert_document" in te
+    assert te["edit_office_file"] == "direct" and te["read_document"] == "direct"
+    assert {"check_deck", "check_workbook", "check_document"} <= set(te)      # no file named: every check tool
+    assert "make_deck" not in te and "convert_document" not in te             # convert_document: via tool_search
     assert all("toolExposure" not in s for n, s in office.items() if n != "meshpool-office")
 
 

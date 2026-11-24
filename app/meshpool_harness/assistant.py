@@ -19,6 +19,14 @@ HONESTY = ("Honesty comes first. Never make something up to fill a gap. If you o
 
 # Every agent, whichever harness runs it: slides and workbooks come from the Meshpool engines, which carry the
 # consulting house style (takeaway titles, one message per slide, an exhibit on every page) and the checks.
+# What Pi (tools="deferred") gets instead of HONESTY and PLAIN: the same rules in about a fifth of the words. Every word
+# here is in Pi's first request.
+LEAN_RULES = ("Never invent facts, numbers or sources: say \"I don't know\". Never say something was done or tested "
+              "when it was not. Write plainly: answer first, no preamble or closing offers, no em dashes, no emoji.")
+# The office rules for Pi, only in a chat that asked for an office file.
+ENGINES_LEAN = ("Slides and workbooks: make_deck, add_slides, make_spreadsheet or office_task, never python-pptx, "
+                "openpyxl or xlsxwriter by hand. To change a file the user has (.docx, .xlsx, .pptx), use "
+                "edit_office_file: it keeps their formatting and formulas.")
 ENGINES = ("Slides and workbooks come from the Meshpool office tools: make_deck for a deck, add_slides to add to a deck "
            "the user has, make_spreadsheet (or office_task) for a workbook or model. Never write a .pptx or .xlsx by "
            "hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs; pass the user's facts and files in the request. "
@@ -395,10 +403,13 @@ def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
     """The "Notes from Meshpool" paragraph: only the tools the agent has are named."""
     if tools == "none":
         return "Notes from Meshpool: cite sources with links." + ((" " + ENGINES) if office else "")
-    deferred = tools == "deferred"
-    t = ("Notes from Meshpool: " + ("the web, memory, schedule, browser and office tools load through tool_search. "
-                                   if deferred else "")
-         + "look things up with the web search, research and fetch tools, not the browser, and cite sources with "
+    if tools == "deferred":
+        # Pi: what each Meshpool server is for is in its one-line entry (pi_rpc.SERVER_NOTE), so only what depends on
+        # this chat goes here: the office rules in a chat that asked for an office file, and incognito.
+        return " ".join(x for x in (ENGINES_LEAN if office else "",
+                                    "This chat is incognito: do not call memory_save or project_note." if incognito
+                                    else "") if x)
+    t = ("Notes from Meshpool: look things up with the web search, research and fetch tools, not the browser, and cite sources with "
          "links. Check anything visual (a web page, app screen or slide) with view_output or ui_audit, and fix what "
          "they show before you say it is done; for a page or screen use the build-ui skill. ")
     if mem_on:
@@ -431,8 +442,11 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
             project_id = ""
     now = datetime.now().astimezone()
     sections = []
-    parts = [f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
-             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).", *([HONESTY, PLAIN] if rules else [])]
+    lean = tools == "deferred"         # Pi: the date only (no clock, which also keeps the text stable) and the short rules
+    parts = [f"Today is {now.strftime('%A %d %B %Y')}." if lean else
+             f"Today is {now.strftime('%A %d %B %Y')}, {now.strftime('%H:%M')} local time "
+             f"(UTC{now.strftime('%z')[:3]}:{now.strftime('%z')[3:]}).",
+             *(([LEAN_RULES] if lean else [HONESTY, PLAIN]) if rules else [])]
     sections.append({"title": "Meshpool's own rules", "text": "\n".join(parts), "ids": []})
     try:                                       # who the user is and the language to answer in (Settings, General)
         from meshpool_harness.ui import settings_v2 as SV
@@ -472,7 +486,9 @@ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id:
         pf = MS.project_facts(project_id, exclude) if (project_id and mem_on) else []
         sections.append({"title": "This project (instructions, notes, files)", "text": pb, "ids": [f["id"] for f in pf]})
         ids += [f["id"] for f in pf]
-    parts.append(_notes(tools, office, mem_on, incognito))
+    note = _notes(tools, office, mem_on, incognito)
+    if note:
+        parts.append(note)
     text = "\n\n".join(parts)
     if record and chat_id and ids and not incognito:
         MS.record_given(chat_id, 0, ids, text)

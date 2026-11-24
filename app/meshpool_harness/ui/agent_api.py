@@ -1382,7 +1382,10 @@ class Session:
                         body += "\n\n\u200b" + AS.context_block(
                             text, self.workdir, pid, chat_id=self.id, incognito=self.incognito, exclude=ex,
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
-                            office=tools != "none" or bool(getattr(self.agent, "office_on", False)))
+                            # Pi: the office rules ride on the message that asks for a file (capabilities.note),
+                            # not on every chat's first message
+                            office=(tools != "none" and tools != "deferred") or (
+                                bool(getattr(self.agent, "office_on", False)) and not caps))
 
                         def spend_ctx(pid=pid, ex=ex):
                             self.ctx_pending = False
