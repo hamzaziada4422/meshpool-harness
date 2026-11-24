@@ -2814,7 +2814,9 @@ def a_cover(ctx, s, sl, n):
     clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
     secs = (getattr(ctx, "sections", None) or []) if s.get("archetype") == "cover" else []
     secs = secs if 2 <= len(secs) <= 6 else []
-    x, w = LEFT, (colx24(14) if secs else colx24(17)) - LEFT   # with the sections listed, the title keeps the left
+    mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
+    mets = [] if secs else mets                            # the sections list owns the right half when it is there
+    x, w = LEFT, (colx24(14) if secs else colx24(15 if mets else 17)) - LEFT   # the title keeps the left
     from .common import font_file, wrap_lines
     f = _font("head", True)
     size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
@@ -2892,6 +2894,20 @@ def a_cover(ctx, s, sl, n):
                    [{"text": clean(sec["title"]), "size": 15, "numbers": False, "color": ink}])
             if k < len(secs) - 1:
                 _rule(sl, sx, yy + rh, sw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"ov_CoverSecRule{k + 1}")
+    if mets:                                               # the cover's empty right half carries the decision's size
+        mx = colx24(16) + 0.2
+        mw, top, bot = RIGHT - mx, 1.55, 6.25
+        mh = (bot - top) / len(mets)
+        for i, m in enumerate(mets):
+            my = top + i * mh
+            if i:
+                _rule(sl, mx, my, mw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"CoverMetricRule{i}")
+            _write(_box(sl, mx, my + 0.1, mw, 0.7, f"role_numeral_CoverMetric{i + 1}"),
+                   [{"text": clean(str(m["value"])), "size": 34, "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_2 if dark else TC.ACCENT_1}])
+            ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
+            _write(_box(sl, mx, my + 0.82, mw, max(0.3, mh - 0.95), f"CoverMetricLabel{i + 1}"),
+                   [{"text": clean(str(m.get("label") or "")), "size": 13, "numbers": False, "color": soft}])
     _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, "CoverRule")
     if s.get("date"):
         _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
