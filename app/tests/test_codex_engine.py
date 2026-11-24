@@ -439,3 +439,13 @@ def test_codex_review_profile_runs_one_review_of_the_diff(tmp_path, monkeypatch)
     _script(a, [_call("apply_patch", {"input": patch("*** Update File: t.py", "@@", "-x = 1", "+x = 2")}),
                 {"role": "assistant", "content": "Done."}])
     assert a.send("set x to 2") == "Done." and reviews == [1]
+
+
+def test_route_card_switch_leaves_the_method_card_out(tmp_path, monkeypatch):
+    for on in ("1", "0"):
+        monkeypatch.setenv("MH_ROUTE_CARD", on)
+        a = _agent(tmp_path)
+        _script(a, [{"role": "assistant", "content": "Done."}])
+        a.send("fix the failing test")
+        first = a.bodies[0]["messages"][1]["content"]
+        assert ("[Harness:" in first) == (on == "1") and "<environment_context>" in first

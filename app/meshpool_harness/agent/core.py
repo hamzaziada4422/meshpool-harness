@@ -1598,7 +1598,9 @@ class Agent:
             self._plan_start(route, g)
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
-            if route is not None:
+            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0":
+                # MH_ROUTE_CARD=0 (A/B): no method card. Eval final13: with the card, 66% more model calls than Codex
+                # (4.5 test runs and 5.1 writes per run vs 2.0 and 2.0) at an equal solve rate
                 from meshpool_harness.hrouter.route import addon
                 ad = addon(route).strip()
                 extra += ("\n\n" + ad) if ad else ""
