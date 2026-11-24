@@ -146,8 +146,8 @@ def test_unknown_model_is_not_greedy(tmp_path):
     a = _agent(tmp_path, lambda n, b: {"content": "x"})
     a.model = "acme-xyz"
     assert "temperature" not in a._body()
-    a.model = "deepseek-v4.1-flash"
-    assert a._body()["temperature"] == 0.0
+    a.model = "deepseek-v4.1-flash"          # greedy 0.0 looped to the output cap; deepseek uses the provider default too
+    assert "temperature" not in a._body()
 
 
 def test_cli_max_steps_flag():
