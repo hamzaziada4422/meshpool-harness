@@ -2283,6 +2283,8 @@ def _stale(s: Session) -> bool:
         return False
     if m <= s._saved_mtime + 0.001:
         return False
+    if not all(isinstance(x, dict) for x in s.agent.messages):
+        return False                                    # Pi / ACP agents keep no Meshpool message list ([None])
     if len(saved_messages(s.id)) != len([x for x in s.agent.messages if x.get("role") != "system"]):
         return True
     s._saved_mtime = m                                  # same content: our own write

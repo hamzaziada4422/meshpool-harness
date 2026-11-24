@@ -278,12 +278,32 @@ def pi_mp_src(mp_src, cache: Path | None = None) -> Path:
             subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--prefix", str(pi), PI_PKG], check=True,
                            capture_output=True, text=True, timeout=600)
         shadow = cache / "src" / hashlib.sha1(str(mp_src).encode()).hexdigest()[:10] / "app"
-        if not (shadow / "vendor" / "pi").exists():
+        stamp = _src_stamp(mp_src)                 # same path, changed code (a new commit checked out): copy again
+        if not (shadow / "vendor" / "pi").exists() or _read(shadow.parent / "stamp") != stamp:
             shutil.rmtree(shadow.parent, ignore_errors=True)
             shutil.copytree(mp_src, shadow, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             (shadow / "vendor").mkdir(exist_ok=True)
             (shadow / "vendor" / "pi").symlink_to(pi)
+            (shadow.parent / "stamp").write_text(stamp)
     return shadow
+
+
+def _read(p: Path) -> str:
+    try:
+        return p.read_text()
+    except OSError:
+        return ""
+
+
+def _src_stamp(mp_src: Path) -> str:
+    """A fingerprint of the app source: every file's path, size and modification time."""
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted(mp_src.rglob("*")):
+        if f.is_file() and "__pycache__" not in f.parts and f.suffix != ".pyc" and "vendor" not in f.parts:
+            st = f.stat()
+            h.update(f"{f.relative_to(mp_src)}:{st.st_size}:{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()
 
 
 def run_mp_on_pi(task_kind="code", mp_src="app", **kw) -> dict:
