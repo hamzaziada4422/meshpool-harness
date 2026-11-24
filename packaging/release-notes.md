@@ -1,5 +1,18 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.14**
+- **Azure keys connect the way Microsoft's current docs say.** A plain Azure OpenAI or Azure AI Foundry address now uses Azure's newer `/openai/v1` route, which needs no API version and serves every deployment, including DeepSeek, Llama and Grok. Before, Meshpool pinned an old version on the older route, and newer models were refused with "unsupported api version". If your resource only has the older deployment route, Test connection finds that out by itself, and Save keeps the route that worked. Paste a full portal address with `/deployments/...` or type an API version to use the older route on purpose. The API version box now says what to do with it.
+- **A key can no longer follow a redirect.** The agent's own model calls refuse to follow a redirect to another host, as the settings page and Test button already did.
+
+**New in 0.0.13**
+- **Azure keys work, and so do most others.** Paste an Azure OpenAI or Azure AI Foundry address (or the whole endpoint URL from the Azure portal), the deployment name and the key, and Meshpool uses the right address and header for it. The same goes for OpenAI, Anthropic, OpenRouter, Groq, Together, Fireworks, Mistral, xAI, DeepSeek, Gemini, Bedrock, GitHub Models, NVIDIA, Cerebras, SambaNova, Perplexity, Ollama, LM Studio, vLLM and LiteLLM. Test connection checks the key without calling it bad when a service has no model list, and a wrong key, deployment or API version now says what to check. A key found in your environment is only offered for its own provider. The terminal login asks for the deployment and version too. Tested against stand-in servers for each service; real Azure and the other services have not been tried yet, so tell us if one does not connect. See docs/setup/connecting-a-model.md.
+- **Plain asks get a plain answer.** A vague request for a newsletter, a plan, an email or a short report is answered in the reply, with one file only when you ask for one or the job needs it. Fewer steps, no extra tracker files, and no invented facts or [placeholders]. Skills that asked for a plan plus a tracker plus research were trimmed.
+- **The reviewer no longer asks for the impossible.** If a change to a live system cannot be read back, it is marked as unchecked, and the agent is never sent back to write again.
+- **Fewer false alarms from connected tools.** A tool result counts as a failure only when it says so in a structured way, or is one short error line.
+- **Your project folder stays clean.** Screenshots of what Meshpool checks go to a temporary folder, not into your project.
+- **The click-through test also tries touch drags and notification buttons.**
+- **Connected tools at scale.** Tools served over HTTP streams, schemas with references and choices, and lists of hundreds of tools were tested and work.
+
 **New in 0.0.12**
 - **It finishes the job.** Give Meshpool a task that needs several tools and it carries on to the end: it fixes and retries when a tool fails, reads every page of a long list before it writes, and no longer stops to ask a question it can answer itself. It never tests with a real write on your live systems, and it does not repeat a write that already worked. The reviewer no longer demands extra writes to prove one.
 - **Connected tools that fail are called failures.** An error from a connector, or a result that says it did not work, is marked as a failure so the agent changes its approach. If the same result comes back again and again, it stops and says so.

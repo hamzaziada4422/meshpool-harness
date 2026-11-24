@@ -92,6 +92,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
     except ValueError as e:
         return {"ok": False, "detail": str(e), "endpoint": v.get("MESHPOOL_BASE_URL", "")}
     from meshpool_harness import provider_setup as PS
+    from meshpool_harness.core import endpoint as EP
     base_in = v.get("MESHPOOL_BASE_URL") or PV.key_base()
     try:
         base = PS.normalise_base(base_in)
@@ -104,17 +105,21 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
                 "endpoint": base}
     if PV.key_problem(key):
         return {"ok": False, "detail": PV.key_problem(key)}
-    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1] or PV.azure_deployment(base)
-    hdr = v.get("MH_AUTH_HEADER", PV._cfg("MH_AUTH_HEADER") if same else "")
-    sch = v.get("MH_AUTH_SCHEME", PV._cfg("MH_AUTH_SCHEME") if same else "").lower()
-    ver = v.get("MESHPOOL_AZURE_API_VERSION", PV._cfg("MESHPOOL_AZURE_API_VERSION") if same else "")
-    if "api-version=" in base_in and not ver:
-        ver = PV.azure_version(base_in)
+    model = PV.split(v.get("MH_MODEL") or os.environ.get("MH_MODEL") or PV.DEFAULT_MODEL)[1]
+    try:
+        pp = PS.parse(base_in, v.get("MH_API_KIND", ""), v.get("MH_API_VERSION", ""))
+    except PS.SetupError as e:
+        return {"ok": False, "detail": str(e), "endpoint": base_in}
+    model = model or pp.deployment
+    kind = pp.kind
+    hdr = v.get("MH_AUTH_HEADER", PV._ecfg("MH_AUTH_HEADER") if same else "")
+    sch = v.get("MH_AUTH_SCHEME", PV._ecfg("MH_AUTH_SCHEME") if same else "").lower()
+    ver = v.get("MH_API_VERSION") or pp.api_version
     wire = (v.get("MH_API_WIRE") or (PV.key_wire() if same else "")).lower()
     if wire not in ("openai", "anthropic"):
-        wire = "anthropic" if PV.host(base).endswith("anthropic.com") else "openai"
+        wire = "anthropic" if PV.host(base).endswith("anthropic.com") or EP.wire_of(kind) == "anthropic" else "openai"
     t0 = time.time()
-    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver)
+    st, data, err = PS.probe_chat(base, key, model, wire, hdr, sch, ver, kind)
     secs = round(time.time() - t0, 1)
     if err or st not in (200, 429) or (st == 200 and not PS._is_reply(wire, data)):
         why = (PS._net_error(err, base) if err else PS._not_reply_msg(data) if st == 200
@@ -129,7 +134,7 @@ def test_connection(values: dict | None = None, fresh: bool = False) -> dict:
             txt = ""
     return {"ok": True, "detail": ("model replied: " + repr(txt.strip()[:40])) if txt.strip() else
             ("connected" + (" (rate limited right now)" if st == 429 else "")), "model": model, "seconds": secs,
-            "endpoint": base, "wire": wire, "api_version": ver}
+            "endpoint": base, "wire": wire, "api_version": ver, "kind": kind}
 
 
 def onboard(body: dict) -> dict:
@@ -163,8 +168,10 @@ def onboard(body: dict) -> dict:
     if which == "custom":
         vals["MH_MODEL"] = model
     from meshpool_harness import providers as PV
+    kind = r.get("kind") or "generic"
     vals.update(MH_API_WIRE=r.get("wire") or "openai", MH_AUTH_HEADER="", MH_AUTH_SCHEME="",
-                MESHPOOL_AZURE_API_VERSION=r.get("api_version") or "")      # nothing of the previous endpoint stays
+                MH_API_KIND="" if kind == "generic" else kind,        # nothing of the previous endpoint stays
+                MH_API_VERSION=(r.get("api_version") or "") if kind in ("azure-classic", "azure-foundry") else "")
     if (C.read().get("MH_SUBAGENT_MODEL") or "").strip() and not PS._same_endpoint(used, PV.key_base()):
         vals["MH_SUBAGENT_MODEL"] = ""                   # named a model of the old endpoint
     C.write(vals)
@@ -436,7 +443,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, get_settings())
             if u.path in ("/api/provider", "/api/provider/logins"):      # key endpoint setup (provider_setup.py)
                 from meshpool_harness import provider_setup as PS
-                return self._send(200, PS.current() if u.path == "/api/provider" else {"logins": PS.logins()})
+                return self._send(200, dict(PS.current(), catalog=PS.catalog()) if u.path == "/api/provider"
+                                  else {"logins": PS.logins()})
             if u.path == "/api/rules":
                 from meshpool_harness.core import permrules as PR
                 return self._send(200, {**PR.list_rules(PR.user_path()), "path": str(PR.user_path())})
@@ -635,8 +643,9 @@ class Handler(BaseHTTPRequestHandler):
                 if u.path.endswith("/test"):
                     try:
                         return self._send(200, PS.test(j.get("base_url", ""), j.get("api_key"), j.get("wire", "auto"),
-                                                       j.get("env", ""), j.get("model", ""), j.get("auth_header", ""),
-                                                       j.get("auth_scheme", ""), j.get("api_version", "")))
+                                                       j.get("env", ""), j.get("model", ""), j.get("api_version", ""),
+                                                       j.get("kind", ""), j.get("auth_header", ""),
+                                                       j.get("auth_scheme", "")))
                     except PS.SetupError as e:
                         return self._send(200, {"ok": False, "wire": "", "models": [], "latency_ms": 0,
                                                 "base_url": "", "error": str(e)})
@@ -648,7 +657,7 @@ class Handler(BaseHTTPRequestHandler):
                                                         j.get("default_model", ""), bool(j.get("allow_custom")),
                                                         j.get("env", ""), bool(j.get("confirm_env")),
                                                         j.get("auth_header"), j.get("auth_scheme"),
-                                                        j.get("api_version")), ok=True))
+                                                        j.get("api_version", ""), j.get("kind", "")), ok=True))
                 return self._send(200, PS.use(j.get("kind", "")))
             if u.path == "/api/provider":            # the provider picked at sign-up or in Settings
                 HR.use_provider((self._json() or {}).get("provider", ""))

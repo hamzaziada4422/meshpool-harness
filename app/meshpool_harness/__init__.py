@@ -1,4 +1,4 @@
-__version__ = "0.0.12"
+__version__ = "0.0.14"
 __author__ = "Meshpool"
 
 from . import winproc as _winproc

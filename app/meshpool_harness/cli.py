@@ -580,7 +580,7 @@ def _main(argv=None):
     return 0 if res["ok"] else 1
 
 
-def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
+def ping(model: str | None = None, base: str = "", key: str = "", kind: str = "", api_version: str = "") -> dict:
     """One tiny model call with the current settings (or `model`, and a `base` URL and `key` not saved yet), always
     to the key endpoint (never the ChatGPT sign-in). Returns {ok, detail, model, seconds, endpoint}."""
     from meshpool_harness.core.wire import SimpleLedger
@@ -604,6 +604,7 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
                 return {"ok": False, "detail": "Choose a model this endpoint serves first.", "model": "",
                         "seconds": 0.0, "endpoint": led.base_url}
         model = m
+        led.kind, led.api_version = kind, api_version    # an Azure kind or api-version typed but not saved yet
         r = led.chat(model=model, messages=[{"role": "user", "content": "Reply with the single word: ok"}],
                      max_tokens=16, retries=1, timeout=60, key_only=True)   # Responses endpoints need at least 16
         msg_ = ((r.get("choices") or [{}])[0].get("message"))
@@ -616,9 +617,8 @@ def ping(model: str | None = None, base: str = "", key: str = "") -> dict:
         return {"ok": True, "detail": f"model replied: {txt.strip()[:40]!r}" if txt.strip() else "connected",
                 "model": model, "seconds": round(time.time() - t0, 1), "endpoint": led.base_url}
     except Exception as e:
-        msg = str(e)
-        if "401" in msg or "403" in msg:
-            msg = "the endpoint rejected the API key (" + msg[:160] + ")"
+        import re
+        msg = re.sub(r"^meshpool HTTP \d+: ", "", str(e))     # wire.py already explains the status in plain words
         return {"ok": False, "detail": msg[:400], "model": model or "", "seconds": round(time.time() - t0, 1),
                 "endpoint": led.base_url if led else (base or __import__("meshpool_harness.providers", fromlist=["x"]).key_base())}
 
