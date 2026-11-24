@@ -414,7 +414,10 @@ class _Stdio:
                                       env=env, cwd=spec.get("cwd") or None, **kw)
         except BaseException as e:
             self.err.close()
-            if not isinstance(e, FileNotFoundError):
+            import shutil as _sh               # an unreadable folder on PATH turns "not found" into EACCES
+            missing = isinstance(e, FileNotFoundError) or (
+                isinstance(e, PermissionError) and os.sep not in str(spec["command"]) and not _sh.which(spec["command"]))
+            if not missing:
                 raise
             raise MCPError(f"command not found: {spec['command']}"
                            + (" (install Node.js from nodejs.org)" if spec["command"] in ("npx", "node") else "")

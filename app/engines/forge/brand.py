@@ -567,7 +567,8 @@ def master_template(prof: dict) -> str | None:
     from pptx import Presentation
     from .template import _set_theme
     key = hashlib.sha1(src.read_bytes() + json.dumps([prof["colors"], prof["fonts"]], sort_keys=True).encode())
-    out = Path(__import__("tempfile").gettempdir()) / f"forge_brand{MASTER_VERSION}_{key.hexdigest()[:12]}.pptx"
+    from engines.icons import _user_tag              # per user: see template.CACHE
+    out = Path(__import__("tempfile").gettempdir()) / f"forge_brand{MASTER_VERSION}_{_user_tag()}_{key.hexdigest()[:12]}.pptx"
     if out.exists():
         return str(out)
     with zipfile.ZipFile(src) as zf:

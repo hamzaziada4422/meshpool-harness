@@ -422,3 +422,51 @@ def test_the_loop_guard_and_compaction_still_work_in_codex_style(tmp_path, monke
     a.messages.append({"role": "user", "content": "x" * 200000})
     a._maybe_compact()
     assert core._context_size(a.messages) < 200000 + 100000
+
+
+def test_codex_review_profile_runs_one_review_of_the_diff(tmp_path, monkeypatch):
+    import subprocess
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path)
+    (tmp_path / "t.py").write_text("x = 1\n")
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "add", "-A"], cwd=tmp_path)
+    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a", "commit", "-qm", "i"], cwd=tmp_path)
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="codex+review"), "fix the failing test")
+    assert a._codex() and a.hsettings()["review"] is True
+    reviews = []
+    monkeypatch.setattr(a, "_aux_complete", lambda *x, **k: reviews.append(1) or "LGTM")
+    monkeypatch.setattr(a, "_mutation_feedback", lambda: pytest.fail("a mutation round ran"))
+    _script(a, [_call("apply_patch", {"input": patch("*** Update File: t.py", "@@", "-x = 1", "+x = 2")}),
+                {"role": "assistant", "content": "Done."}])
+    assert a.send("set x to 2") == "Done." and reviews == [1]
+
+
+def test_route_card_switch_leaves_the_method_card_out(tmp_path, monkeypatch):
+    for on in ("1", "0"):
+        monkeypatch.setenv("MH_ROUTE_CARD", on)
+        a = _agent(tmp_path)
+        _script(a, [{"role": "assistant", "content": "Done."}])
+        a.send("fix the failing test")
+        first = a.bodies[0]["messages"][1]["content"]
+        assert ("[Harness:" in first) == (on == "1") and "<environment_context>" in first
+
+
+def test_core_profile_is_codex_style_without_the_extra_verification_layers(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    s = PR.settings("core")
+    assert s["engine_style"] == "codex" and s["lean_core"] is True and s["review"] is False
+    assert PR.settings("codex")["lean_core"] is False                    # the codex profile is unchanged
+    lean, full = C._codex_prompt(lean=True), C._codex_prompt()
+    assert len(lean) < len(full) / 2 and "NOTICE" not in lean and "$TMPDIR" in lean
+    a = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    a.set_route(_route(profile="core"), "fix the failing test")
+    assert a._lean() and a.system_prompt().startswith("You are a coding agent running in Meshpool")
+    _script(a, [{"role": "assistant", "content": "Done."}])
+    a.send("Fix it. Keep the current output byte-for-byte identical. Ties must go first. Lines must match exactly.")
+    first = a.bodies[0]["messages"][1]["content"]
+    assert "[Harness:" not in first and C.KEEP_NOTE.strip() not in first and C.REQ_NOTE.strip() not in first
+    assert "<environment_context>" in first
+    assert a._grade_gate({}, {}, "Done.") == (False, "Done.")               # no independent grader
+    b = Agent(str(tmp_path), mode="auto", emit=lambda e: None)
+    b.set_route(_route(profile="codex"), "fix the failing test")
+    assert not b._lean() and len(b.system_prompt()) > len(a.system_prompt())

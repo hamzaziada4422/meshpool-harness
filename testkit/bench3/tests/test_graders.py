@@ -321,6 +321,43 @@ def test_budget_hardcoded_numbers_fail_live_check(tmp_path):
     assert r["ok"] is False and "live" in r["detail"]
 
 
+def _budget_with_names(w, target_sheet="Assumptions"):
+    """The reference budget, but every Assumptions!$B$n reference replaced by a defined name (=CoversPerDay*...)."""
+    import re as _re
+    import openpyxl
+    from openpyxl.workbook.defined_name import DefinedName
+    ref.solve_xlsx_budget(w)
+    wb = openpyxl.load_workbook(w / "budget.xlsx")
+    for n in range(2, 9):
+        dn = DefinedName(f"Input{n}", attr_text=f"'{target_sheet}'!$B${n}")
+        wb.defined_names[dn.name] = dn
+    if target_sheet not in wb.sheetnames:
+        src, dst = wb["Assumptions"], wb.create_sheet(target_sheet)
+        for row in src.iter_rows():
+            for c in row:
+                dst[c.coordinate] = c.value
+    for r in wb["Budget"].iter_rows():
+        for c in r:
+            if isinstance(c.value, str) and c.value.startswith("="):
+                c.value = _re.sub(r"Assumptions!\$B\$(\d)", r"Input\1", c.value)
+    wb.save(w / "budget.xlsx")
+
+
+def test_budget_defined_names_on_assumptions_count_as_links(tmp_path):
+    """Meshpool Work and CLI link the Budget through named ranges on the Assumptions sheet; that is linked."""
+    w = make("xlsx_budget", tmp_path)
+    _budget_with_names(w)
+    r = grade("xlsx_budget", w)
+    assert r["ok"] is True, r["detail"]
+
+
+def test_budget_names_pointing_elsewhere_do_not_count(tmp_path):
+    w = make("xlsx_budget", tmp_path)
+    _budget_with_names(w, target_sheet="Inputs")
+    r = grade("xlsx_budget", w)
+    assert r["ok"] is False and "reference the Assumptions sheet" in r["detail"]
+
+
 def test_mailmerge_lost_formatting_fails(tmp_path):
     import docx
     w = make("docx_mailmerge", tmp_path)

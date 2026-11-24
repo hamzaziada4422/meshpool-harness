@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -15,7 +16,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_PYTHON = "/root/.venvs/mp/bin/python"
+DEFAULT_PYTHON = next((p for p in (__import__("os").environ.get("BENCH_PYTHON"), "/root/.venvs/mp/bin/python")
+               if p and __import__("os").path.exists(p)), __import__("sys").executable)   # any machine, not one path
 BUILTIN = ("codex", "pi", "mp-cli", "mp-work", "mp-code", "mp-on-pi", "mp-on-codex")
 # which arms apply to which task kind (the runner's default)
 APPLIES = {"office": ["codex", "pi", "mp-work", "mp-on-pi", "mp-on-codex", "mp-cli"],
@@ -41,6 +43,50 @@ def kill_group(p: subprocess.Popen) -> None:
             continue
 
 
+_PRIVATE_TMP: bool | None = None
+
+
+def _private_tmp_ok() -> bool:
+    """unshare can give a run its own /tmp (a user + mount namespace with a tmpfs on /tmp). Checked once."""
+    global _PRIVATE_TMP
+    if _PRIVATE_TMP is None:
+        _PRIVATE_TMP = False
+        if os.name != "nt" and os.environ.get("BENCH_PRIVATE_TMP", "1") != "0" and shutil.which("unshare"):
+            try:
+                r = subprocess.run(["unshare", "--mount", "--map-root-user", "sh", "-c", "mount -t tmpfs tmpfs /tmp"],
+                                   capture_output=True, timeout=10)
+                _PRIVATE_TMP = r.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _PRIVATE_TMP
+
+
+def private_tmp(cmd: list, *paths) -> list:
+    """Wrap cmd so it sees an empty /tmp of its own: agents write literal /tmp/check.py, and parallel runs read and
+    overwrite each other's (eval: 142 Meshpool bodies used /tmp/check.py). Not possible when the run's own folders
+    live under /tmp (the tmpfs would hide them) or the system has no user namespaces: then cmd is returned as is."""
+    if not _private_tmp_ok():
+        return cmd
+    for p in paths:
+        try:
+            if p and Path(p).resolve().is_relative_to("/tmp"):
+                return cmd
+        except (OSError, ValueError):
+            return cmd
+    # also hide the benchmark's own sources (task definitions with their hidden tests): an agent that runs `find /`
+    # found and read them (eval final14, csv-import: 8 calls in testkit/loop, then it ran the hidden test)
+    kit = str(Path(__file__).resolve().parents[1])
+    for p in paths:
+        try:
+            if p and Path(p).resolve().is_relative_to(kit):
+                kit = ""                                    # a run folder inside the kit: leave it visible
+        except (OSError, ValueError):
+            pass
+    hide = f" && mount -t tmpfs tmpfs {shlex.quote(kit)}" if kit else ""
+    return ["unshare", "--mount", "--map-root-user", "sh", "-c", f'mount -t tmpfs tmpfs /tmp{hide} && exec "$@"', "sh",
+            *cmd]
+
+
 def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
     """Run cmd in its own process group with stdin=/dev/null, stdout+stderr to log; kill the group on timeout."""
     Path(log).parent.mkdir(parents=True, exist_ok=True)
@@ -50,6 +96,7 @@ def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
     env = {**env, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)}
+    cmd = private_tmp(cmd, cwd, log, tmp, env.get("HOME"), env.get("CODEX_HOME"), env.get("PI_CODING_AGENT_DIR"))
     t0 = time.time()
     timed_out = False
     with open(log, "wb") as lf:
@@ -278,12 +325,32 @@ def pi_mp_src(mp_src, cache: Path | None = None) -> Path:
             subprocess.run(["npm", "install", "--no-audit", "--no-fund", "--prefix", str(pi), PI_PKG], check=True,
                            capture_output=True, text=True, timeout=600)
         shadow = cache / "src" / hashlib.sha1(str(mp_src).encode()).hexdigest()[:10] / "app"
-        if not (shadow / "vendor" / "pi").exists():
+        stamp = _src_stamp(mp_src)                 # same path, changed code (a new commit checked out): copy again
+        if not (shadow / "vendor" / "pi").exists() or _read(shadow.parent / "stamp") != stamp:
             shutil.rmtree(shadow.parent, ignore_errors=True)
             shutil.copytree(mp_src, shadow, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             (shadow / "vendor").mkdir(exist_ok=True)
             (shadow / "vendor" / "pi").symlink_to(pi)
+            (shadow.parent / "stamp").write_text(stamp)
     return shadow
+
+
+def _read(p: Path) -> str:
+    try:
+        return p.read_text()
+    except OSError:
+        return ""
+
+
+def _src_stamp(mp_src: Path) -> str:
+    """A fingerprint of the app source: every file's path, size and modification time."""
+    import hashlib
+    h = hashlib.sha1()
+    for f in sorted(mp_src.rglob("*")):
+        if f.is_file() and "__pycache__" not in f.parts and f.suffix != ".pyc" and "vendor" not in f.parts:
+            st = f.stat()
+            h.update(f"{f.relative_to(mp_src)}:{st.st_size}:{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()
 
 
 def run_mp_on_pi(task_kind="code", mp_src="app", **kw) -> dict:

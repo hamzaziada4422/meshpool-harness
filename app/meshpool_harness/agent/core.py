@@ -75,9 +75,19 @@ WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 
-def _codex_prompt() -> str:
+SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $TMPDIR, which is private to this task, "
+                "never in a fixed /tmp path that another task could also be using.")
+
+
+def _codex_prompt(lean: bool = False) -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
-    for readers of the file and is not sent to the model)."""
+    for readers of the file and is not sent to the model). lean: the short codex-tuned prompt (prompt-core.md)."""
+    if lean:
+        try:
+            text = (C.APP / "defaults" / "engines" / "codex" / "prompt-core.md").read_text(encoding="utf-8")
+            return re.sub(r"\A\s*<!--.*?-->\s*", "", text, count=1, flags=re.S).rstrip() + SCRATCH_RULE
+        except OSError:
+            pass
     try:
         text = (C.APP / "defaults" / "engines" / "codex" / "prompt.md").read_text(encoding="utf-8")
     except OSError:
@@ -86,6 +96,7 @@ def _codex_prompt() -> str:
     if os.environ.get("MH_CODEX_PROMPT") == "full":
         return text
     text = _trim_codex(text)
+    text += SCRATCH_RULE
     if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
     if os.environ.get("MH_OUTPUT_RULES", "0") == "1":      # MH_OUTPUT_RULES=1: fewer output tokens (patches and scripts are most of them)
@@ -955,6 +966,27 @@ def _bad_reply(resp) -> str:
     return ""
 
 
+# a request that says existing behaviour must not change: the agent is reminded to capture it before editing
+_KEEP = re.compile(r"byte[- ]for[- ]byte|\b(?:keep|leave|preserve)\b[^.\n]{0,60}\b(?:identical|unchanged|the same|as it is|"
+                   r"as is|intact)\b|\b(?:must|should|has to|have to)\s+(?:stay|remain)\s+(?:unchanged|identical|the same)"
+                   r"|\bwithout changing (?:the |its )?(?:current|existing) (?:output|behaviou?r|api)", re.I)
+_REQ = re.compile(r"\b(?:must|should|shall|never|always|only|unless|otherwise|falls? back|instead of|before|after|"
+                  r"at most|at least|rounded|ties?|tie-break|in order|ordered|case[- ]insensitive|exactly)\b", re.I)
+
+
+def _requirements(text: str) -> int:
+    """How many separate stated rules a request has: sentences or list items carrying a constraint word."""
+    t = (text or "").split("\n\n\u200b")[0]
+    parts = [p for p in re.split(r"(?<=[.;:!?])\s+|\n+\s*(?:[-*]|\d+[.)])?\s*", t) if p.strip()]
+    return sum(1 for p in parts if _REQ.search(p))
+
+
+REQ_NOTE = ("\n\n\u200b[Meshpool] Before you finish, list each rule the request states, one line each, and next to it "
+            "the check (command and output) that shows it holds. Test the edge cases the request names, and if the input "
+            "could be large, time it on a large input too. A rule you did not check is not done.")
+KEEP_NOTE = ("\n\n\u200b[Meshpool] This request says existing behaviour must stay the same. Before your first edit, run "
+             "the current code and save its exact output; after your edits, run it again and compare line by line.")
+
 class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
@@ -1010,6 +1042,13 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
+    def _lean(self) -> bool:
+        """Lean core (profile "core"): Codex style without the extra verification layers."""
+        try:
+            return self._style() and bool(self.hsettings().get("lean_core"))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _codex(self) -> bool:
         return self._style() and not self.plan           # plan mode keeps its read-only tools
 
@@ -1025,7 +1064,7 @@ class Agent:
         from meshpool_harness.config import find_bash
         bash = find_bash()
         if self._style():
-            text = _codex_prompt()
+            text = _codex_prompt(lean=self._lean())
             for name in PROJECT_FILES:
                 pf = self.root / name
                 if pf.is_file():
@@ -1053,6 +1092,8 @@ class Agent:
             text += rules
         if E2E:
             text += E2E_RULES
+        if self.profile == "code":
+            text += SCRATCH_RULE
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
@@ -1400,6 +1441,15 @@ class Agent:
         if getattr(self, "unfinished", False):
             self.unfinished = False
             body += RESUME_NOTE                      # hidden in the chat (after \u200b)
+        lean = self._lean()
+        if self.profile == "code" and not self.plan and not lean and os.environ.get("MH_KEEP_NOTE", "1") != "0" \
+                and _KEEP.search(text):
+            body += KEEP_NOTE                        # eval: the agent changed output it was told to keep, and its own
+                                                     # check printed the regressed line without it noticing
+        if self.profile == "code" and not self.plan and not lean and os.environ.get("MH_REQ_NOTE", "1") != "0" \
+                and _requirements(text) >= 2:
+            body += REQ_NOTE                         # eval: short wrong answers checked the agent's reading of the task,
+                                                     # not each stated rule (line-diff: the tie-break rule went untested)
         if images:
             parts = [{"type": "text", "text": body}] + [_image_part(im) for im in images[:6]]
             self.messages.append({"role": "user", "content": parts})
@@ -1563,7 +1613,9 @@ class Agent:
             self._plan_start(route, g)
         if cx and len(self.messages) <= 2:           # the route's method rides on the first message (hrouter)
             extra = self._codex_env()
-            if route is not None:
+            if route is not None and os.environ.get("MH_ROUTE_CARD", "1") != "0" and not self._lean():
+                # MH_ROUTE_CARD=0 (A/B): no method card. Eval final13: with the card, 66% more model calls than Codex
+                # (4.5 test runs and 5.1 writes per run vs 2.0 and 2.0) at an equal solve rate
                 from meshpool_harness.hrouter.route import addon
                 ad = addon(route).strip()
                 extra += ("\n\n" + ad) if ad else ""
@@ -1711,8 +1763,10 @@ class Agent:
                             f"`{last['cmd'][:120]}`. The task is not done. Fix the cause and run it again, or, if that "
                             "failure is expected or unrelated, say exactly why in one line.")})
                         continue
-                    if (route is not None and route.family == "code" and not self.plan and not cx
+                    if (route is not None and route.family == "code" and not self.plan
                             and self.ws.edits > g["edits0"]):
+                        # Codex style too: the profile decides (codex: review and mutation off; codex+review: review on).
+                        # Eval: every Meshpool-only wrong answer was a short run whose own check passed, unreviewed.
                         if not g.get("review_done"):
                             g["review_done"] = True    # once per request: a second reader checks it against the ask
                             found = self._review_change(g, turn)
@@ -1729,7 +1783,7 @@ class Agent:
                             if bad:
                                 self.messages.append({"role": "user", "content": bad})
                                 continue
-                        if not g.get("mutation_done"):
+                        if not g.get("mutation_done") and self.hsettings()["mutation"]:
                             g["mutation_done"] = True  # once per request: do the tests notice deliberately broken code?
                             fb = self._mutation_feedback()
                             if fb:
@@ -1791,7 +1845,7 @@ class Agent:
                 if shots:
                     self._attach_images(shots)
                 self._track_progress(calls, step_out, g)
-                note = self._refusal_escalation(g)
+                note = self._refusal_escalation(g) or self._budget_escalation(g, turn)
                 if note:
                     self.messages.append({"role": "user", "content": "[Meshpool] " + note})
                 if V3 and not cx:
@@ -1977,6 +2031,8 @@ class Agent:
         if self.profile != "code":
             return False
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
+        if os.environ.get("MH_GRADER_ANY_GREEN") == "1":   # A/B: a check that passed at any point after the last edit
+            return any(c.get("code") == 0 for c in after)     # (a later probe may fail on purpose), as Codex does
         return bool(after) and after[-1].get("code") == 0
 
     def _grade_commands(self, g: dict) -> list:
@@ -1991,7 +2047,7 @@ class Agent:
         back to the agent to fix, else (False, final with the 'Independent check' section). Never raises, never blocks."""
         try:
             from meshpool_harness.agent import grader as GR
-            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan
+            if (getattr(self, "_is_grader", False) or getattr(self, "_delegate_depth", 0) or self.plan or self._lean()
                     or not final.strip() or final.strip() == "(no reply)" or (not force and not GR.enabled())):
                 return False, final
             info = self._grade_info(g, final)
@@ -2135,6 +2191,8 @@ class Agent:
         out = self._guarded_tool_inner(c, g, cut)
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
+        if not refused:
+            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out)
         g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
         # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
         # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
@@ -2359,6 +2417,90 @@ class Agent:
             return bool(cmds) and all(T.read_only(x) for x in cmds)
         return False
 
+    _SCRATCH_W = re.compile(r"(?:cat|tee)\s*(?:-a\s*)?>?\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)|"
+                            r">\s*['\"]?((?:/tmp/|\$TMPDIR/|\$\{TMPDIR\}/)[\w./-]+)['\"]?\s*<<")
+
+    def _shape_run_note(self, c: dict, g: dict, out: str = "") -> str:
+        """The same shell command again and again with only its numbers changed and no file edited in between, each
+        run succeeding (eval 283eced2, perf-dag-paths: the fix was done at 28 s, then 50 timing runs of one python -c
+        with the input size bumped 44, 50, 56 ... 320, to 352 s; no failure, no refusal, so no other guard saw it).
+        Inspection commands already have a refusal for this; this covers runs. 4th in a row: a note; 8th: tools off.
+        MH_SHAPE_NUDGE / MH_SHAPE_WRAP tune it (0 turns it off)."""
+        f = c.get("function", {})
+        if f.get("name") not in ("shell", "bash", "bash_many"):
+            return ""
+        if self._FAILED.match(str(out)):               # failing runs are the failure guard's: start over
+            g.pop("shape_key", None)
+            return ""
+        try:
+            nudge = int(os.environ.get("MH_SHAPE_NUDGE", "4") or 0)
+            wrap = int(os.environ.get("MH_SHAPE_WRAP", "8") or 0)
+        except ValueError:
+            nudge, wrap = 4, 8
+        shape = re.sub(r"\d+", "#", str(f.get("arguments", ""))[:2000])
+        key = (shape, getattr(self.ws, "edits", 0))
+        if g.get("shape_key") == key:
+            fp = self._tree_fingerprint()              # a command that writes files (touch f1, f2 ...) is progress
+            g["shape_n"] = g.get("shape_n", 0) + 1 if fp == g.get("shape_fp") else 1
+        else:
+            fp, g["shape_n"] = None, 1
+        g["shape_key"], g["shape_fp"] = key, fp if fp is not None else self._tree_fingerprint()
+        n = g["shape_n"]
+        if wrap > 0 and n >= wrap and not g.get("hard_wrap"):
+            g["hard_wrap"] = True
+            return (f"\n[Meshpool] You have run this command {n} times with only its numbers changed and no file "
+                    "changed. Tools are off now: answer with what the runs showed.")
+        if nudge > 0 and n == nudge:
+            return (f"\n[Meshpool] This is the {n}th run of the same command with only its numbers changed, and no file "
+                    "changed in between. More sizes will not change the conclusion: decide from what you have, then "
+                    "finish or make the next change.")
+        return ""
+
+    def _tree_fingerprint(self, cap: int = 20000) -> int:
+        """Names, sizes and mtimes of the project's files (no .git, at most `cap` entries): cheap, and it changes when
+        a shell command writes a file."""
+        h, n = 0, 0
+        try:
+            for dp, dns, fns in os.walk(self.root):
+                dns[:] = [d for d in dns if d not in (".git", "node_modules", "__pycache__", ".venv")]
+                for fn in fns:
+                    try:
+                        st = os.stat(os.path.join(dp, fn))
+                    except OSError:
+                        continue
+                    h ^= hash((dp, fn, st.st_size, st.st_mtime_ns))
+                    n += 1
+                    if n >= cap:
+                        return h
+        except OSError:
+            pass
+        return h
+
+    def _scratch_rewrite_note(self, c: dict, g: dict) -> str:
+        """Eval (4530fc66): 3.3 run calls and 0.8 failed runs a task against Codex's 2.1 and 0.2, mostly the same
+        check script written again and again (7 rewrites of /tmp/check.py in a row on one task) while the project
+        code stayed as it was. From the 3rd write of one scratch path with no project change, the result says so."""
+        if os.environ.get("MH_SCRATCH_NOTE", "1") == "0":
+            return ""
+        f = c.get("function", {})
+        args = str(f.get("arguments", ""))
+        if f.get("name") not in ("shell", "bash", "bash_many") or "<<" not in args and "tee" not in args:
+            return ""
+        edits = getattr(self.ws, "edits", 0)
+        seen = g.setdefault("scratch_w", {})
+        if g.get("scratch_edits") != edits:          # the project changed: rewriting the check now is fair
+            seen.clear()
+            g["scratch_edits"] = edits
+        note = ""
+        for m in self._SCRATCH_W.finditer(args):
+            path = m.group(1) or m.group(2)
+            seen[path] = seen.get(path, 0) + 1
+            if seen[path] == 3:
+                note = (f"\n[Meshpool] You have written {path} 3 times and the project code has not changed since. "
+                        "The check is not the problem to solve: keep this script, fix the project code it tests, and "
+                        "run the same script again after the edit.")
+        return note
+
     def _refusal_escalation(self, g: dict) -> str:
         """A model that keeps re-sending a call the guards refuse burns a request per refusal (eval traces: 18 and 26
         refusals in a row, up to the timeout). After MH_REFUSED_NUDGE refusals in a row it is told plainly to change
@@ -2384,6 +2526,37 @@ class Agent:
         if k == 0:
             g.pop("rnote_at", None)
         return self._failure_escalation(g)
+
+    def _budget_escalation(self, g: dict, turn: dict) -> str:
+        """A turn that has run long AND stopped making progress (no file changed, no new command succeeded for
+        several steps) is told to converge, then, much later, has tools turned off. Eval (283eced2): the default
+        profile cost 1.25x Codex and took 1.59x its time, almost all from a few runs that went to the 600 s limit
+        with 17k-42k output tokens; the median task cost the same as Codex. A turn that keeps progressing is never
+        cut: long builds are fine. MH_TURN_SOFT_S / MH_TURN_HARD_S (seconds), MH_TURN_OUT_SOFT / MH_TURN_OUT_HARD
+        (output tokens) and MH_TURN_STALL (steps without progress) tune it; 0 turns a limit off."""
+        def num(k, d):
+            try:
+                return int(os.environ.get(k, d) or 0)
+            except ValueError:
+                return d
+        stall = num("MH_TURN_STALL", 3)
+        np_ = g.get("np", 0)
+        if stall <= 0 or np_ < stall or g.get("hard_wrap"):
+            return ""
+        secs = time.time() - g.get("t0", time.time())
+        out = int((turn or {}).get("out", 0) or 0) if isinstance(turn, dict) else 0
+        over = lambda v, k, d: (lambda lim: lim > 0 and v >= lim)(num(k, d))
+        if np_ >= 2 * stall and not g.get("bwrap_done") and (
+                over(secs, "MH_TURN_HARD_S", 360) or over(out, "MH_TURN_OUT_HARD", 30000)):
+            g["bwrap_done"] = g["hard_wrap"] = True
+            return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Tools are off now. "
+                    "Give your final answer: what you changed, what works, what does not and why.")
+        if not g.get("bnote_done") and (over(secs, "MH_TURN_SOFT_S", 180) or over(out, "MH_TURN_OUT_SOFT", 15000)):
+            g["bnote_done"] = True
+            return (f"This task has run {int(secs)} s and the last {np_} steps changed nothing. Converge now: pick the "
+                    "one check that decides whether the task is done, fix what it shows with a small patch, run it "
+                    "once more, and answer. Do not write new probe scripts.")
+        return ""
 
     def _failure_escalation(self, g: dict) -> str:
         """Distinct calls that all fail, with no file changed in between, are a loop the repeat guards cannot see. After

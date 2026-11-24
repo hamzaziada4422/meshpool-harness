@@ -260,6 +260,22 @@ def _kill_all_background() -> None:
 __import__("atexit").register(_kill_all_background)
 
 
+def exit_cleanly_on_sigterm() -> None:
+    """SIGTERM (a supervisor, a benchmark, `kill`) skips atexit by default, so commands this process started in their
+    own process group outlived it and kept running (eval: check scripts at 99% CPU minutes after their agent was
+    gone). Turn it into a normal exit, so _kill_all_background runs. Only from the main thread, only when no one
+    else has set a handler."""
+    import signal
+    import threading
+    if os.name == "nt" or threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+            signal.signal(signal.SIGTERM, lambda *_: (_kill_all_background(), __import__("sys").exit(143)))
+    except (ValueError, OSError):
+        pass
+
+
 class AllStr(str):
     """An `old` text that edit replaces everywhere (replace_all)."""
 
@@ -530,6 +546,20 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
         except (OSError, subprocess.SubprocessError):
             continue
     return False
+
+
+def _prune_scratch(tmp: str, max_age_s: float = 86400) -> None:
+    """Scratch folders a crashed or killed process left behind: this user's, older than a day. Never raises."""
+    try:
+        now, uid = time.time(), getattr(os, "getuid", lambda: None)()
+        for e in os.scandir(tmp):
+            if not e.name.startswith("meshpool-scratch-") or not e.is_dir(follow_symlinks=False):
+                continue
+            st = e.stat(follow_symlinks=False)
+            if (uid is None or st.st_uid == uid) and now - st.st_mtime > max_age_s:
+                shutil.rmtree(e.path, ignore_errors=True)
+    except OSError:
+        pass
 
 class Workspace:
     """Executes tools inside workdir, tracks reads/writes/commands for guards."""
@@ -1159,6 +1189,7 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
+        _BG_ALL.add(p)                                   # killed at exit too if this process ends mid-command
         box: dict = {}
         bufs = {"out": _Capped(), "err": _Capped()}
         over = threading.Event()
@@ -1227,6 +1258,7 @@ class Workspace:
                     p.kill()
                 th.join(5)
                 break
+        _BG_ALL.discard(p)                              # finished, stopped or timed out: no longer ours to kill
         out, err = box.get("out") or "", box.get("err") or ""
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
@@ -1239,6 +1271,23 @@ class Workspace:
             err = (err + "\n[the command finished but left a background process running; its output is not captured. "
                          "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
+
+    def _scratch(self, env: dict) -> dict:
+        """A private temp folder per workspace for every command it runs: scratch files (check scripts, repro copies) of
+        one agent cannot be read or overwritten by another running at the same time (parallel subagents, a second
+        chat, the benchmark's parallel runs: eval traces showed agents clobbering each other's /tmp/check.py)."""
+        d = self.__dict__.get("_scratch_dir")
+        if not d or not os.path.isdir(d):
+            import tempfile
+            _prune_scratch(tempfile.gettempdir())
+            try:
+                d = self.__dict__["_scratch_dir"] = tempfile.mkdtemp(prefix="meshpool-scratch-")
+            except OSError:
+                return env
+            import weakref                              # removed with the workspace, or at exit at the latest
+            weakref.finalize(self, shutil.rmtree, d, True)
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = d
+        return env
 
     def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
@@ -1258,6 +1307,7 @@ class Workspace:
                                    capture_output=True, text=True, timeout=timeout_s, errors="replace")
             else:
                 env.setdefault("PYTHONUTF8", "1")
+                self._scratch(env)
                 bash = _bash()
                 from meshpool_harness.core import sandbox as _SB
                 mode = self.get_mode() if self.get_mode else None
@@ -1320,6 +1370,7 @@ class Workspace:
             env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env.setdefault("PYTHONUTF8", "1")
         env["PYTHONUNBUFFERED"] = "1"
+        self._scratch(env)
         bash = _bash()
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         if bash:

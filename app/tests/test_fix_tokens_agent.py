@@ -376,7 +376,9 @@ def test_finish_check_and_scan_rules_are_opt_in(monkeypatch):
 
 
 def test_default_prompt_is_the_measured_one():
-    assert len(core._codex_prompt()) == 14066          # the after2 build's system prompt, byte for byte in size
+    # the after2 build's system prompt, byte for byte in size, plus the private-scratch rule (0.0.16: parallel tasks
+    # overwrote each other's /tmp/check.py)
+    assert len(core._codex_prompt()) == 14066 + len(core.SCRATCH_RULE)
 
 
 def test_auto_reasoning_effort_is_opt_in(monkeypatch):
@@ -794,3 +796,166 @@ def test_a_success_or_a_changed_file_resets_the_failure_count(tmp_path, monkeypa
     g["fseq"] = 2
     a._guarded_tool({"function": {"name": "shell", "arguments": "{}"}}, g)
     assert g["fseq"] == 2                                   # a refusal is counted by the refusal guard, not here
+
+
+def test_keep_behaviour_clause_adds_a_hidden_capture_note(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    assert C._KEEP.search("Keep the current English output byte-for-byte identical.")
+    assert C._KEEP.search("The public API must remain unchanged.")
+    assert C._KEEP.search("Refactor it without changing the existing behavior")
+    assert not C._KEEP.search("Add French plurals to the report")
+    assert not C._KEEP.search("keep going until the tests pass")
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_turn", lambda: "done")
+    a.send("Add French. Keep the current English output byte-for-byte identical.")
+    assert a.messages[-1]["content"].endswith(C.KEEP_NOTE)
+    a.send("Add French plurals.")
+    assert C.KEEP_NOTE not in a.messages[-1]["content"]
+    monkeypatch.setenv("MH_KEEP_NOTE", "0")
+    a.send("Keep the output identical.")
+    assert C.KEEP_NOTE not in a.messages[-1]["content"]
+
+
+def test_requests_with_several_stated_rules_get_the_requirement_check_note(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core as C
+    diff = ("Implement line_diff(a, b) returning '-'/'+' lines. Use a longest common subsequence. When there is a tie, "
+            "put deletions before insertions. Lines must be compared exactly.")
+    assert C._requirements(diff) >= 2 and C._requirements("fix the typo in README") == 0
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_turn", lambda: "done")
+    a.send(diff)
+    assert C.REQ_NOTE in a.messages[-1]["content"]
+    a.send("rename foo to bar")
+    assert C.REQ_NOTE not in a.messages[-1]["content"]
+    monkeypatch.setenv("MH_REQ_NOTE", "0")
+    a.send(diff)
+    assert C.REQ_NOTE not in a.messages[-1]["content"]
+
+
+def test_each_workspace_runs_commands_with_its_own_tmpdir(tmp_path):
+    import os
+    from meshpool_harness.agent import core as C
+    (tmp_path / "a").mkdir(); (tmp_path / "b").mkdir()
+    a, b = _agent(tmp_path / "a"), _agent(tmp_path / "b")
+    ea, eb = a.ws._scratch({}), b.ws._scratch({})
+    assert ea["TMPDIR"] != eb["TMPDIR"] and os.path.isdir(ea["TMPDIR"])
+    assert a.ws._scratch({})["TMPDIR"] == ea["TMPDIR"]           # stable for the life of the workspace
+    assert C.SCRATCH_RULE.strip() in C._codex_prompt() and "$TMPDIR" in a.system_prompt()
+
+
+def test_rewriting_one_scratch_check_three_times_without_a_project_change_gets_a_note(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 1]\nAssertionError")
+    g = {}
+
+    def write(body):
+        cmd = {"command": ["bash", "-lc", "cat > /tmp/check.py <<'EOF'\n" + body + "\nEOF\npython /tmp/check.py"]}
+        return a._guarded_tool({"function": {"name": "shell", "arguments": json.dumps(cmd)}}, g)
+    outs = [write(f"assert f({i})") for i in range(4)]
+    assert "[Meshpool] You have written /tmp/check.py 3 times" in outs[2]
+    assert "written /tmp/check.py" not in outs[0] + outs[1] + outs[3]          # said once
+    a.ws.edits = (a.ws.edits or 0) + 1                                            # a project edit resets the count
+    assert "written" not in write("x") + write("y")
+    monkeypatch.setenv("MH_SCRATCH_NOTE", "0")
+    g = {}
+    assert not any("written /tmp" in write(str(i)) for i in range(4))
+
+
+def test_scratch_folders_are_removed_with_the_workspace_and_stale_ones_pruned(tmp_path):
+    import gc, os, time
+    from meshpool_harness.core import tools as T
+    (tmp_path / "w").mkdir()
+    a = _agent(tmp_path / "w")
+    d = a.ws._scratch({})["TMPDIR"]
+    assert os.path.isdir(d)
+    del a
+    gc.collect()
+    assert not os.path.exists(d)
+    old = tmp_path / "meshpool-scratch-old"
+    new = tmp_path / "meshpool-scratch-new"
+    old.mkdir(); new.mkdir()
+    os.utime(old, (time.time() - 3 * 86400,) * 2)
+    T._prune_scratch(str(tmp_path))
+    assert not old.exists() and new.exists()
+
+
+def test_sigterm_ends_commands_still_running_in_their_own_process_group(tmp_path):
+    import os, signal, subprocess, sys, textwrap, time
+    script = tmp_path / "run.py"
+    marker = tmp_path / "child.pid"
+    script.write_text(textwrap.dedent(f"""
+        import sys; sys.path.insert(0, {str(os.getcwd())!r})
+        from meshpool_harness.core import tools as T
+        T.exit_cleanly_on_sigterm()
+        ws = T.Workspace({str(tmp_path)!r}, {str(tmp_path / "run")!r})
+        ws.bash("echo $$ > {marker}; sleep 60", 120)
+    """))
+    p = subprocess.Popen([sys.executable, str(script)])
+    for _ in range(100):
+        if marker.exists() and marker.read_text().strip():
+            break
+        time.sleep(0.1)
+    child = int(marker.read_text())
+    p.send_signal(signal.SIGTERM)
+    assert p.wait(20) == 143
+    def alive():
+        try:
+            with open(f"/proc/{child}/stat") as fh:
+                return fh.read().split(")")[-1].split()[0] != "Z"     # a zombie has exited; it waits to be reaped
+        except OSError:
+            return False
+    for _ in range(50):
+        if not alive():
+            break
+        time.sleep(0.1)
+    assert not alive()                                    # the command's process group went with the agent
+
+
+def test_a_long_stalled_turn_is_told_to_converge_then_wrapped_but_progress_is_never_cut(tmp_path, monkeypatch):
+    import time as _t
+    a = _agent(tmp_path)
+    now = _t.time()
+    g = {"t0": now - 200, "np": 3}
+    turn = {"out": 1000}
+    n1 = a._budget_escalation(g, turn)
+    assert "Converge now" in n1 and a._budget_escalation(g, turn) == ""        # said once
+    g["np"] = 6
+    g["t0"] = now - 400
+    assert "Tools are off now" in a._budget_escalation(g, turn) and g["hard_wrap"]
+    # a turn that keeps making progress is never touched, however long or wordy it is
+    g2 = {"t0": now - 3000, "np": 1}
+    assert a._budget_escalation(g2, {"out": 99999}) == ""
+    # output alone can trigger it too
+    g3 = {"t0": now, "np": 3}
+    assert "Converge now" in a._budget_escalation(g3, {"out": 16000})
+    monkeypatch.setenv("MH_TURN_STALL", "0")
+    assert a._budget_escalation({"t0": now - 9999, "np": 99}, {"out": 99999}) == ""
+
+
+def test_the_same_run_with_only_numbers_changed_is_nudged_then_wrapped(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    monkeypatch.setattr(a, "_guarded_tool_inner", lambda c, g, cut=False: "[exit 0]\nold 0.12s new 0.03s")
+    g = {}
+
+    def run(n):
+        cmd = {"command": ["bash", "-lc", f"python -c 'L=({n},{n+2},{n+4}); time_it(L)'"]}
+        return a._guarded_tool({"function": {"name": "shell", "arguments": json.dumps(cmd)}}, g)
+    outs = [run(44 + 6 * i) for i in range(8)]
+    assert "4th run of the same command" in outs[3] and not any("Meshpool" in o for o in outs[:3])
+    assert "Tools are off now" in outs[7] and g["hard_wrap"]
+    g = {}
+    a.ws.edits = 0
+    for i in range(3):
+        run(10 + i)
+    a.ws.edits += 1                                    # an edit in between: a fresh count
+    assert not any("Meshpool" in run(20 + i) for i in range(3))
+
+
+def test_grader_any_green_switch_counts_a_passing_check_before_a_failing_probe(tmp_path, monkeypatch):
+    a = _agent(tmp_path)
+    a.ws.edits = 2
+    a.ws.commands = [{"cmd": "python3 t.py", "code": 0, "after_edit": 2, "kind": "run"},
+                     {"cmd": "python3 probe.py", "code": 1, "after_edit": 2, "kind": "run"}]
+    assert not a._small_code_verified()                        # default: the last run decides
+    monkeypatch.setenv("MH_GRADER_ANY_GREEN", "1")
+    assert a._small_code_verified()

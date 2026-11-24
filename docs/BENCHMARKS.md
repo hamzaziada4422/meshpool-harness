@@ -54,9 +54,42 @@ wrongly concludes the model's context window is 9k-50k tokens and shrinks its co
 line to a scratch file 122 times). Both are being fixed in the agent's context handling. The default Work agent stays
 Meshpool Work: it is the only app option at 6/7. Raw rows: `docs/results/v4/fix-8dc9f501-office/`.
 
-Default agent: on these numbers the cheapest agent that passes is vanilla Pi or Codex; Meshpool keeps its own loop as
-the Work default only until a re-measure shows it at or under Codex. The decision is recorded in
-`hrouter` `builtin_for()` when the re-measure is done.
+**Final run on the 0.0.15 release line (24 November 2026, same tasks and model, one run).** The gateway returned
+errors (HTTP 503) on 24% of office requests during this run, so 20 of the 28 office cells and most public-suite
+cells are marked gateway-hit and not counted either way. On the 8 clean office cells: mail-merge letters passed on
+every Meshpool option at $0.006-0.011 and 19-50 s; the budget passed on Meshpool on Codex ($0.014, 60 s) and on Pi
+($0.026, 144 s) but failed on Meshpool Work and CLI (values not linked to the assumptions); the PDF report failed on
+Meshpool Work and CLI (no chart in the PDF); Meshpool on Pi ran out of time on the invoices. Per-task calls, cost
+and seconds, with every gateway-hit cell marked: `docs/results/v4/final-cc8361db-office/NOTES.md`. This run does not
+show Meshpool at Codex or Pi quality on office work, so the comparison above (Codex 7/7 at $0.011 and 45 s, Pi 6/7
+at $0.006 and 35 s) still stands.
+
+**Corrections and fixes after that run (24 November 2026, no new model calls).**
+- The budget grader counted only literal `Assumptions!` references. Formulas that use named ranges defined on the
+  Assumptions sheet (`=CoversPerDay*AverageTicket*...`) are linked too, and the grader's live-update test already
+  passed for them. With the fixed grader these earlier budget failures become passes: Meshpool Work and CLI in the
+  final run above, Meshpool CLI and Meshpool on Pi in the 23 November table, Meshpool on Codex in the 8dc9f501
+  re-run, and Meshpool Work and CLI in the 0.0.12 baseline. The tables above still show the numbers as first
+  graded.
+- Every Meshpool on Pi and Meshpool on Codex time of 900 s in these runs was an app bug, not slow work. After the
+  first turn, every poll of a chat running on Pi or Codex returned an error, so the chat never showed as finished
+  and the kit got no reply. Example: Meshpool on Pi gave the right invoice total in 1 min 50 s and was graded a
+  failure. Fixed.
+- Real failures, fixed: `make_pdf` could not draw a chart (it now draws bar, line and pie charts and embeds
+  images); the sheets engine wrote an unknown format name as an Excel format, so amounts displayed as dates; and
+  the Word edit tool ignored a request for tracked changes and hid its tracked-change operations.
+
+**Partial re-run with the chart and grader fixes (24 November 2026, stopped early).** Six tasks; 19 of 24 runs
+finished before the owner stopped it. A run that hit gateway errors, retried and finished counts; 3 runs failed
+because of the gateway and are excluded. Per valid task: Meshpool Work 5/5 passed, 34 calls, $0.046, 569 s;
+Meshpool CLI 5/6, 33 calls, $0.041, 419 s; Meshpool on Codex 3/3, 20 calls, $0.021, 145 s; Meshpool on Pi 2/2, 19
+calls, $0.015, 139 s. On the same six tasks Codex took 12 calls, $0.012 and 50 s per task (6/6), and Pi 10 calls,
+$0.0065 and 37 s (5/6). The Meshpool times include gateway retries; the Codex and Pi runs had none. Meshpool's pass
+rate is now close to Codex on these tasks, but it costs 1.2 to 3.8 times as much and takes about 3 to 11 times as
+long. Per task: `docs/results/v4/rerun-846ef557-office/NOTES.md`.
+
+Default agent: no Meshpool option has matched Codex or Pi at equal quality, cost and time, so `builtin_for()` is
+unchanged (Meshpool Work for Work chats) until a clean re-measure shows one that does.
 
 Coding sanity check (3 Exercism tasks: Python forth and zipper, Rust react with every test including ignored ones,
 GPT-6 Luna, one run): Pi 3/3 at $0.0025 and 32 s per task, Meshpool on Pi 3/3 at $0.0041 and 32 s, Meshpool Code

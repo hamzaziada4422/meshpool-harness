@@ -122,7 +122,9 @@ def test_M17_03_reading_the_list_does_not_reinstall(home, monkeypatch):
     SK.load_all()
     n = []
     real = SK.ensure_defaults.__globals__["fsio"].file_lock
-    monkeypatch.setattr(SK.fsio, "file_lock", lambda *a, **k: (n.append(1), real(*a, **k))[1])
+    mine = str(SK.folder())                          # only this test's folder: a thread another test left running
+    monkeypatch.setattr(SK.fsio, "file_lock",          # may load skills from its own home at the same time
+                        lambda p, *a, **k: (n.append(1) if str(p).startswith(mine) else None, real(p, *a, **k))[1])
     for _ in range(5):
         SK.load_all()
     assert n == []                                    # settled once; reading never takes the install lock again

@@ -24,7 +24,23 @@ HEADER_FILL = PatternFill("solid", fgColor="1B2333")
 TITLE_FONT = Font(name=FONT, bold=True, size=14)
 TOTAL_BORDER = Border(top=Side(style="thin"))
 FMT = {"usd": '$#,##0;($#,##0);"-"', "usd2": '$#,##0.00;($#,##0.00)', "pct": '0.0%', "int": '#,##0;(#,##0)',
-       "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)'}
+       "x": '0.0"x";(0.0"x")', "num": '#,##0.0;(#,##0.0)',
+       # names a model reaches for by analogy with the ones above
+       "num0": '#,##0;(#,##0)', "num2": '#,##0.00;(#,##0.00)', "pct2": '0.00%', "usd0": '$#,##0;($#,##0);"-"',
+       "text": "@", "date": "yyyy-mm-dd", "general": "General"}
+_TOKEN = re.compile(r"^[A-Za-z]+\d*$")
+
+
+def fmt_code(fmt: str) -> str:
+    """The Excel number format for a token (usd, num2, pct, ...) or a format string given as is. An unknown bare word
+    is refused: written as a format code, "num3" made Excel show every amount as a date (it reads the m as month)."""
+    f = str(fmt)
+    if f in FMT or f.lower() in FMT:
+        return FMT.get(f) or FMT[f.lower()]
+    if _TOKEN.match(f) and f.lower() != "general" and not re.fullmatch(r"[ymdhsYMDHS]+", f):   # yyyy, mmm: real codes
+        raise ValueError(f"unknown number format {f!r}: use one of {', '.join(FMT)} or an Excel format string "
+                         "such as '#,##0.00'")
+    return f
 
 
 class _Book(Workbook):
@@ -92,7 +108,7 @@ def input_cell(ws, ref, value, fmt=None, name=None):
     c.value = value
     c.font, c.fill = INPUT_FONT, INPUT_FILL
     if fmt:
-        c.number_format = FMT.get(fmt, fmt)
+        c.number_format = fmt_code(fmt)
     if name:
         define_name(ws.parent, name, f"{_q(ws.title)}!${c.column_letter}${c.row}")
     return c
@@ -128,7 +144,7 @@ def formula(ws, ref, expr, fmt=None, link=False, total=False):
     c.value = expr if expr.startswith("=") else "=" + expr
     c.font = LINK_FONT if link else CALC_FONT
     if fmt:
-        c.number_format = FMT.get(fmt, fmt)
+        c.number_format = fmt_code(fmt)
     if total:
         c.border = TOTAL_BORDER
         c.font = Font(name=FONT, bold=True, color=c.font.color.rgb if c.font.color else "000000")
@@ -156,7 +172,7 @@ def chart(ws, kind, data_ref, cats_ref, anchor, title_text="", y_fmt=None, heigh
     ch.add_data(data, titles_from_data=True)
     ch.set_categories(cats)
     if y_fmt and kind != "pie":
-        ch.y_axis.numFmt = FMT.get(y_fmt, y_fmt)
+        ch.y_axis.numFmt = fmt_code(y_fmt)
     ws.add_chart(ch, anchor)
     return ch
 
@@ -739,7 +755,7 @@ def football_field(ws, row, methods, fmt="usd2", marker=None, title_text="Valuat
     ch.series[0].graphicalProperties = GraphicalProperties(noFill=True, ln=LineProperties(noFill=True))
     ch.series[1].graphicalProperties = GraphicalProperties(solidFill="2557D6")
     ch.legend = None
-    ch.y_axis.numFmt = FMT.get(fmt, fmt)
+    ch.y_axis.numFmt = fmt_code(fmt)
     ws.add_chart(ch, anchor or f"F{row}")
     if "Checks" in wb.sheetnames:
         add_check(wb, "Football field: every low is at or below its high",

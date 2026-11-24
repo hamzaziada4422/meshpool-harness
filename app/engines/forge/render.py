@@ -33,7 +33,7 @@ from .density import condense
 from .template import default_template, layout
 
 ICONS = Path(__file__).resolve().parents[1] / "slides" / "icons"
-ICON_CACHE = Path(__import__("tempfile").gettempdir()) / "forge_icons"
+ICON_CACHE = Path(__import__("tempfile").gettempdir()) / f"forge_icons_{__import__('engines.icons', fromlist=['_user_tag'])._user_tag()}"
 
 LEFT, RIGHT = 0.6, 12.733
 COLS, GUT = 24, 0.125            # 24-column grid (reference decks use a fine grid); span()/colx() take 12-column units

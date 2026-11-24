@@ -32,7 +32,7 @@ ENGINES = ("meshpool", "pi", "hermes")
 STYLES = ("meshpool", "codex")      # how the Meshpool agent itself runs: its own prompt and tools, or Codex's design
 
 FULL = {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000, "methods": None,
-        "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool"}
+        "lean_tools": True, "step_methods": False, "engine": "meshpool", "engine_style": "meshpool", "lean_core": False}
 
 BUILTIN = {
     "full": {},
@@ -42,6 +42,11 @@ BUILTIN = {
     # Codex's design under Meshpool's routing: no plan/review/mutation rounds, the method text of "lean-stop"
     "codex": {"plan": "off", "review": False, "mutation": False, "step_methods": False, "methods": "v2-stop",
               "engine_style": "codex"},
+    # the same, plus one review of the diff against the request before the turn ends (one extra model call)
+    "codex+review": {"extends": "codex", "review": True},
+    # lean core (docs/design/lean-core.md): Codex's style with its short codex-tuned prompt and none of the extra
+    # verification layers (route method card, grader, keep/requirement notes); the loop guards stay
+    "core": {"extends": "codex", "lean_core": True},
 }
 
 
@@ -55,7 +60,7 @@ def _clean(d: dict) -> dict:
     out: dict = {}
     if "plan" in d:
         out["plan"] = _plan(d["plan"])
-    for k in ("review", "mutation", "lean_tools", "step_methods"):
+    for k in ("review", "mutation", "lean_tools", "step_methods", "lean_core"):
         if k in d:
             out[k] = bool(d[k])
     if "compact_chars" in d:
