@@ -179,6 +179,12 @@ def test_reopened_chat_has_no_live_cards_or_spinners(page, app):
     assert got["liveBtns"] == 0 and got["running"] == 0 and got["liveQ"] == 0, diag()
     # Nothing in the conversation may still animate (the dots of an open work group, the spinners of steps that never ended).
     # Animations outside the chat column (the page's own chrome) are not what this checks.
+    chat_anims = """() => document.getAnimations().filter(a => a.playState === 'running' && (() => {
+        const t = a.effect && a.effect.target; return !!(t && t.closest && t.closest('#conv, #col')); })()).length"""
+    try:                                              # the page closes the old cards on its next polls: wait for that, not a fixed 2.5 s
+        page.wait_for_function(f"({chat_anims})() === 0", timeout=20000)
+    except Exception:  # noqa: BLE001 - the assertion below reports what still runs
+        pass
     anims = page.evaluate("""() => document.getAnimations().filter(a => a.playState === 'running').map(a => {
         const t = a.effect && a.effect.target; return {name: a.animationName || a.id || a.constructor.name,
         inChat: !!(t && t.closest && t.closest('#conv, #col')), el: t && t.className}; })""")
