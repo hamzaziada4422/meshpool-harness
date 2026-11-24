@@ -2134,6 +2134,31 @@ class Agent:
             pass
         return self._repeat_guard(c, g, cut)
 
+    _POLL = re.compile(r"\b(gh\s+(run|pr|workflow)|curl|wget|kubectl\s+get|docker\s+(ps|logs)|systemctl\s+status|squeue|"
+                       r"tail\s+-f|sleep|ping|watch)\b")
+    _SCRATCH = re.compile(r"(^|/)(_[^/]*|(check|probe|scratch|tmp|debug|repro|try)[\w.-]*)\.(py|js|ts|sh|txt|json)$", re.I)
+
+    def _tree_sig(self):
+        """A fingerprint of the project's files except the ones the agent makes only to probe with (_probe.py, check_*.py,
+        scratch files): None for a very large tree. Equal fingerprints mean no task file changed in between."""
+        h, n = 0, 0
+        skip = {".git", "node_modules", "__pycache__", ".run", ".meshpool", ".venv", "venv", ".pytest_cache", ".mypy_cache"}
+        try:
+            for dp, dn, fn in os.walk(self.root):
+                dn[:] = [d for d in dn if d not in skip]
+                for f in fn:
+                    rel = os.path.relpath(os.path.join(dp, f), self.root).replace("\\", "/")
+                    if self._SCRATCH.search(rel):
+                        continue
+                    st = os.stat(os.path.join(dp, f))
+                    h ^= hash((rel, st.st_mtime_ns, st.st_size))
+                    n += 1
+                    if n > 4000:
+                        return None
+        except OSError:
+            return None
+        return h
+
     @staticmethod
     def _write_target(name: str, args: str):
         """(file, tiny) for a call that edits one file, else None. tiny: under 400 characters of change."""
@@ -2183,7 +2208,7 @@ class Agent:
                     len({r[1] for r in prev}) == 1:
                 # the same look, nothing changed since, the same result twice already: a third run says nothing new
                 g["refused"] = g.get("refused", 0) + 1
-                runs.append((key, prev[-1][1], edits, False, prev[-1][4]))      # counts toward the 5th ask
+                runs.append((key, prev[-1][1], edits, False, prev[-1][4], None))      # counts toward the 5th ask
                 del runs[:-12]
                 more = (" You have asked this " + str(len(prev) + 1) + " times. Change your approach: edit, run the "
                         "tests, or answer with what you have." if len(prev) >= 4 else "")
@@ -2200,6 +2225,20 @@ class Agent:
             return ("[Meshpool] Not run: this exact call has run three times with the same result. Running it again "
                     "changes nothing. Change the command or the files first, or finish and tell the user what is "
                     "blocking you.")
+        sh = (nm in ("shell", "bash", "bash_many") and os.environ.get("MH_REPEAT_SHELL", "1") != "0"
+              and not self._POLL.search(str(f.get("arguments", ""))))     # a poll of a job or service may repeat
+        sig = self._tree_sig() if sh else None
+        if sh and sig is not None:
+            bg = self.ws.__dict__.get("_bg") or {}
+            same = [r for r in runs if r[0] == key and len(r) > 5 and r[5] == sig]
+            sq = g.get("sseq") or {}
+            if not any(e["p"].poll() is None for e in list(bg.values())):
+                if len(same) >= 2 and len({r[1] for r in same}) == 1:
+                    return ("[Meshpool] Not run: you already ran this command; the result is unchanged and no project file "
+                            "changed since. It was: " + str(same[-1][4])[:200].replace("\n", " "))
+                if sq.get("sig") == sig and sq.get("n", 0) >= 10:
+                    return ("[Meshpool] Shell checks stopped for this turn: ten runs in a row gave the same result and no "
+                            "project file changed. Give your best answer from what you have, and say what is unresolved.")
         out = self._run_tool(c, cut=cut)
         import hashlib
         h = hashlib.md5(str(out).encode("utf-8", "replace")).hexdigest()
@@ -2222,8 +2261,17 @@ class Agent:
             last = [r for r in runs if r[0] == key]
             if not last or last[-1][3] != failed:
                 g["wprog"] = g.get("wprog", 0) + 1
+        if sh:
+            sig2 = self._tree_sig()
+            sq = g.get("sseq") or {}
+            sq = {"sig": sig2, "h": h, "n": sq["n"] + 1} if sq and sq.get("sig") == sig2 and sq.get("h") == h and sig2 is not None \
+                else {"sig": sig2, "h": h, "n": 1}
+            g["sseq"] = sq
+            if sq["n"] >= 6:
+                wnote += "\n[Meshpool] Your checks keep giving the same result; change approach or answer."
+            sig = sig2
         out = str(out) + wnote if wnote else out
-        runs.append((key, h, edits, failed, str(out)[:240]))   # a failed call counts for the failure breaker; a read for the read breaker
+        runs.append((key, h, edits, failed, str(out)[:240], sig))   # a failed call counts for the failure breaker; a read for the read breaker
         del runs[:-12]
         return out
 
