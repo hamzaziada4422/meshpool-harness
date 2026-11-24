@@ -113,6 +113,9 @@ def main():
     t.send("\x1b")                                       # Esc
     stopped = t.wait(r"Stopped", 15)
     check("Esc stops a running turn within 15 s", stopped and time.time() - t0 < 15, t.plain()[-500:])
+    t.line("/exit")
+    check("leaving prints what the session took", t.wait(r"This session: \d+ model calls?, [\d,]+ tokens in", 10),
+          t.plain()[-400:])
     t.close()
     # a second session in the same folder: history and /resume
     t2 = Tui(work, home)

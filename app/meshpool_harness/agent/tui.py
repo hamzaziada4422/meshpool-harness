@@ -1649,6 +1649,7 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         if (resume or session) and getattr(agent, "unfinished", False):
             term.notices.append("The last task stopped before it finished. Type continue to pick it up.")
         term.startup()
+        t_start = time.time()
         sess.loop(first)
     finally:
         term.spin.stop()
@@ -1663,8 +1664,25 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             agent.close()
     if prompt is None and not sub:
         _leave_worktree(term, wd)
+        _session_summary(term, locals().get("sess"), locals().get("t_start"))
         term.p(st.dim("  Session saved. Resume it with: meshpool --continue"))
     return 0
+
+
+def _session_summary(term: "Terminal", sess, t_start) -> None:
+    """On the way out: what this session took (model calls, tokens, cost when known, time)."""
+    try:
+        u = sess.agent.usage
+        if not u.get("calls"):
+            return
+        cost = u.get("cost") if isinstance(u.get("cost"), (int, float)) else term.cost
+        mins = max(0, int((time.time() - t_start) // 60)) if t_start else None
+        term.p(term.st.dim(f"  This session: {u['calls']} model call{'s' if u['calls'] != 1 else ''}, "
+                           f"{u['in']:,} tokens in, {u['out']:,} out"
+                           + (f", ${cost:.4f}" if cost is not None else "")
+                           + (f", {mins} min" if mins is not None else "") + "."))
+    except Exception:  # noqa: BLE001 - a summary must never fail the exit
+        pass
 
 
 def _leave_worktree(term: "Terminal", wd: str) -> None:
