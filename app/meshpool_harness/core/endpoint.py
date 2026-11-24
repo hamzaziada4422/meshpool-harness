@@ -362,6 +362,7 @@ def _keyed():
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A handler that turns every redirect into an HTTPError (the strictest policy core.http offers)."""
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302      # 308 is unknown to Python 3.10's handler
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return _keyed()._KeyedRedirect(refuse=True).redirect_request(req, fp, code, msg, headers, newurl)
 

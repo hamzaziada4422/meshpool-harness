@@ -123,6 +123,8 @@ def test_C_23_requirements_cover_imports():
                 for m in mods:
                     if m in sys.stdlib_module_names or m in local:
                         continue
+                    if m == "tomllib" and "tomli" in declared:   # stdlib from 3.11; tomli is declared for 3.10
+                        continue
                     if m in OPTIONAL:
                         if id(n) not in guarded:
                             eager.add(f"{m} in {p.name}")

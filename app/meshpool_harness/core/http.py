@@ -78,6 +78,10 @@ class _KeyedRedirect(urllib.request.HTTPRedirectHandler):
     def __init__(self, refuse: bool = False):
         self.refuse = refuse
 
+    # Python 3.10's handler knows 301/302/303/307 only (308 came in 3.11): without this a 308 surfaced as a bare
+    # "HTTP 308" that neither named the target nor said the key stayed home
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if code not in _REDIRECTS:
             return None
