@@ -1645,6 +1645,11 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         sess.loop(first)
     finally:
         term.spin.stop()
+        try:
+            from meshpool_harness.agent import extras as EXE
+            EXE.run_hooks(Path(wd), "SessionEnd", {"session": getattr(sess.agent, "id", "")}, timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
         if mcp:
             mcp.close()
         if sub:

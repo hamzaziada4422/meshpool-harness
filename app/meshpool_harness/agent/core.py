@@ -1714,7 +1714,9 @@ class Agent:
                 a = json.loads(f.get("arguments") or "{}")
             except ValueError:
                 a = {}
-            _, note = EX.run_hooks(self.root, "PostToolUse", {"result": str(out)[:2000]}, tool=f.get("name", ""),
+            failed = str(out).startswith(("ERROR", "Error:", "Not allowed", "Blocked by a hook", "Denied"))
+            _, note = EX.run_hooks(self.root, "PostToolUseFailure" if failed else "PostToolUse",
+                                   {"result": str(out)[:2000]}, tool=f.get("name", ""),
                                    args=a if isinstance(a, dict) else {})
             if note:
                 out = f"{out}\n[Hook] {note}"
@@ -1916,6 +1918,10 @@ class Agent:
             pass
         r = compaction.compact_history(self.messages)
         if r:
+            try:
+                EX.run_hooks(self.root, "PostCompact", {"removed": r.get("removed"), "messages": len(self.messages)})
+            except Exception:  # noqa: BLE001
+                pass
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
                                                  "going" + ("." if r["model"] else " (from the log only).")})
             try:
@@ -2623,6 +2629,11 @@ class Agent:
             body = args.get("markdown") or args.get("request") or args.get("content")
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
+        try:
+            from meshpool_harness.agent import extras as EXN
+            EXN.run_hooks(self.root, "Notification", {"message": title, "kind": kind}, timeout=10)
+        except Exception:  # noqa: BLE001 - a hook never blocks a question
+            pass
         decision, note = self.approve(kind, title, detail)
         if decision == "save":                     # "Always in this folder": a narrow rule, kept for next time
             saved = [] if risky else save_folder_rules(self.root, rule_for(name, args))

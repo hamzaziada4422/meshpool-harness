@@ -23,9 +23,13 @@ from pathlib import Path
 
 from meshpool_harness import config as C
 
-FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
+FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md", "GEMINI.md")
+LOCAL = ("MESHPOOL.local.md", "CLAUDE.local.md")         # personal notes kept out of git, read beside the main file
+RULE_DIRS = (".meshpool/rules", ".claude/rules", ".cursor/rules")
+OTHER = (".cursorrules", ".windsurfrules", ".github/copilot-instructions.md", ".clinerules")   # other agents' files
 MAX_FILE, MAX_ALL = 20000, 40000
-EVENTS = ("PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SessionStart", "PreCompact", "SubagentStop")
+EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SessionStart", "SessionEnd",
+          "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Notification")
 
 
 # ---------------------------------------------------------------- instructions
@@ -68,10 +72,22 @@ def instruction_files(root: Path) -> list[tuple[str, Path]]:
         if p == top:
             break
     for d in reversed(chain):
-        for n in FILES:
+        main = next((d / n for n in FILES if (d / n).is_file()), None)    # one file per folder, in priority order
+        if main:
+            out.append((str(d), main))
+        elif d == top:                                  # no Meshpool, Codex or Claude file: another agent's, if any
+            other = next((d / n for n in OTHER if (d / n).is_file()), None)
+            if other:
+                out.append((str(d), other))
+        for n in LOCAL:
             if (d / n).is_file():
-                out.append((str(d), d / n))
-                break                                   # one file per folder, in priority order
+                out.append((str(d) + " (yours, not in git)", d / n))
+    for rd in RULE_DIRS:                                # every rules file of the project, in name order
+        base = top / rd
+        if base.is_dir():
+            for f in sorted(base.rglob("*.md")) + sorted(base.rglob("*.mdc")):
+                if f.is_file():
+                    out.append((f"{top} ({rd})", f))
     return out
 
 
@@ -91,6 +107,8 @@ def hooks(root: Path) -> dict:
     """The user's own hooks, plus the project's when the user trusts the folder (see trust.py)."""
     from meshpool_harness import trust as TR
     out: dict = {e: [] for e in EVENTS}
+    if os.environ.get("MH_HOOKS", "1") == "0":           # Settings: turn every hook off
+        return out
     files = [C.home() / "hooks.json"]
     if TR.is_trusted(root):
         files.append(Path(root) / ".meshpool" / "hooks.json")
@@ -132,7 +150,8 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
     data = json.dumps(dict(payload, event=event, tool=tool, args=args or {}, cwd=str(root)), ensure_ascii=False, default=str)
     notes = []
     for h in hs:
-        if event in ("PreToolUse", "PostToolUse") and not _tool_matches(h.get("matcher", ""), tool, args or {}):
+        if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and \
+                not _tool_matches(h.get("matcher", ""), tool, args or {}):
             continue
         try:
             r = subprocess.run(h["command"], shell=True, cwd=str(root), input=data, capture_output=True, text=True,

@@ -1,8 +1,8 @@
 """Folder trust: a project's own hooks and "always allow" rules run only after the user trusts the folder.
 
-A cloned repository can ship `.meshpool/hooks.json` (commands that run on agent events) and
-`.meshpool/permissions.json` (allow rules that skip the approval question). Both would let a stranger's repo run
-commands on this computer, so they are ignored until the user says the folder is theirs. Deny rules always apply:
+A cloned repository can ship `.meshpool/hooks.json` (commands that run on agent events), `.meshpool/permissions.json`
+(allow rules that skip the approval question) and `.mcp.json` (MCP servers, which are programs). Each would let a
+stranger's repo run commands on this computer, so they are ignored until the user says the folder is theirs. Deny rules always apply:
 they only make the agent more careful. Instruction files (MESHPOOL.md, AGENTS.md, CLAUDE.md) and custom commands
 are text for the model, not code, and are not gated.
 
@@ -59,6 +59,13 @@ def risky_files(root) -> list[str]:
             out.append(".meshpool/permissions.json")
     except (OSError, ValueError):
         pass
+    for rel in (".mcp.json", ".meshpool/mcp.json"):
+        try:
+            m = json.loads((Path(root) / rel).read_text(encoding="utf-8"))
+            if isinstance(m, dict) and (m.get("mcpServers") or m.get("servers")):
+                out.append(rel)
+        except (OSError, ValueError):
+            pass
     return out
 
 

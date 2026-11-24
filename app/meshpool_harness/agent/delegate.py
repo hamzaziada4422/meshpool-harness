@@ -289,6 +289,15 @@ class ChildMcp:
 
 
 # ---------- one delegation (a call with one or more tasks) ----------------------------------------------------------
+def _hook(parent, event: str, payload: dict) -> None:
+    """Runs the user's hooks for a sub-agent event (agent/extras.py). Never raises."""
+    try:
+        from meshpool_harness.agent import extras as EX
+        EX.run_hooks(parent.root, event, payload, timeout=15)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 class Delegation:
     def __init__(self, parent, rows: list[dict], cfg: dict, depth: int):
         self.parent, self.rows, self.cfg, self.depth = parent, rows, cfg, depth
@@ -422,6 +431,7 @@ class Delegation:
             self.children[sid] = rec
         self.parent.emit({"type": "subagent", "delegation": self.id, "sid": sid, "index": index,
                           "count": len(self.rows), "title": row["title"], "kind": "start"})
+        _hook(self.parent, "SubagentStart", {"subagent": sid, "title": row["title"], "goal": str(row["goal"])[:2000]})
         if self.stopped:
             rec.update(status="interrupted", summary="Not started: the sub-agents were stopped.")
             return self._entry(sid, rec)
@@ -553,6 +563,7 @@ class Delegation:
         self.parent.emit({"type": "subagent", "delegation": self.id, "sid": sid, "index": rec["index"],
                           "count": len(self.rows), "title": self.rows[rec["index"]]["title"], "kind": "done",
                           "status": e["status"], "text": f"{e['status']} in {e['duration_seconds']:.0f} s"})
+        _hook(self.parent, "SubagentStop", {"subagent": sid, "status": rec.get("status"), "summary": str(rec.get("summary") or "")[:2000]})
         return e
 
     def run(self, cancelled=lambda: False) -> dict:

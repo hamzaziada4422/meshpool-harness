@@ -66,6 +66,25 @@ def load_config(path: Path | None = None) -> dict:
     return a or b or {}
 
 
+PROJECT_FILES = (".mcp.json", ".meshpool/mcp.json")
+
+
+def project_servers(root) -> dict:
+    """MCP servers a project lists in .mcp.json (the shared format) or .meshpool/mcp.json. They start programs, so
+    they are used only when the user trusts the folder (trust.py). The user's own servers win on a name clash."""
+    from meshpool_harness import trust as TR
+    if not root or not TR.is_trusted(root):
+        return {}
+    out: dict = {}
+    for rel in PROJECT_FILES:
+        try:
+            got = load_config(Path(root) / rel)
+        except (ValueError, OSError):
+            continue
+        out.update({k: v for k, v in got.items() if isinstance(v, dict)})
+    return out
+
+
 _CFG_LOCK = threading.Lock()
 
 
@@ -803,7 +822,7 @@ class Manager:
         except (ValueError, OSError) as e:
             self.config_error = f"{self.path.name} is not valid JSON: {e}"
             cfg = {}
-        cfg = {**cfg, **self.extra}
+        cfg = {**project_servers(self.roots[0]), **cfg, **self.extra}
         log_dir = C.runs_dir() / "mcp-logs"
         os.environ["MESHPOOL_PROJECT"] = str(Path(self.roots[0]).resolve())   # usable as ${MESHPOOL_PROJECT}
         threads = []
