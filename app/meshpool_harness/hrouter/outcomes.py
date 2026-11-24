@@ -61,7 +61,9 @@ def log_turn(session, route, usage_before: dict) -> None:
                         or getattr(route, "reason", "") or "")[:300],
              "error": any(e.get("type") == "error" for e in ev),
              "stopped": any(e.get("type") == "interrupted" for e in ev),
-             "review": _review_of(a)})
+             "review": _review_of(a),
+             **({"cost": round(float(u["cost"]) - float(usage_before.get("cost", 0) or 0), 6)}
+                if isinstance(u.get("cost"), (int, float)) else {})})
 
 
 def mark(chat: str, outcome: str) -> None:

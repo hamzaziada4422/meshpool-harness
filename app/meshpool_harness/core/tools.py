@@ -66,6 +66,53 @@ def read_only(cmd: str) -> bool:
     return True
 
 
+_GIT_LIST = {"branch": {"-a", "-r", "-v", "-vv", "--all", "--remotes", "--list", "-l", "--show-current", "--merged",
+                        "--no-merged", "--contains"},
+             "tag": {"-l", "--list", "-n"}, "remote": {"-v", "--verbose", "show", "get-url"}, "stash": {"list", "show"}}
+_GIT_PLAIN = {"status", "log", "diff", "show", "rev-parse", "ls-files", "blame", "describe", "shortlog", "cat-file",
+              "ls-tree", "grep", "merge-base", "rev-list", "reflog"}
+_GIT_BAD_ARG = re.compile(r"^(--output|--ext-diff|--textconv|--exec|--upload-pack|--receive-pack|--config|-c$|-C$|"
+                          r"--git-dir|--work-tree|--open-files-in-pager)", re.I)
+
+
+def git_read_only(cmd: str) -> bool:
+    """True only for a single git command that reads the repository and cannot write, run another program or look
+    outside the project: status, log, diff, show and similar, and branch, tag, remote and stash in their listing forms.
+    The approval question is skipped for these, as other agents do. Anything unusual returns False (it asks)."""
+    import shlex
+    c = (cmd or "").strip()
+    if not c or re.search(r"[|;&<>`\n]|\$\(", c):
+        return False
+    try:
+        w = shlex.split(c)
+    except ValueError:
+        return False
+    if len(w) < 2 or w[0] != "git":
+        return False
+    rest = w[1:]
+    if rest[0] == "--no-pager":
+        rest = rest[1:]
+    if not rest:
+        return False
+    sub, args = rest[0], rest[1:]
+    if any(_GIT_BAD_ARG.match(a) for a in args):
+        return False
+    if sub == "grep" and any(a in ("-O", "--open-files-in-pager") for a in args):
+        return False
+    if sub == "reflog" and args and args[0] in ("expire", "delete"):
+        return False
+    if sub in _GIT_PLAIN:
+        return True
+    ok = _GIT_LIST.get(sub)
+    if ok is None:
+        return False
+    if sub == "stash":                                    # a bare "git stash" saves and resets: it writes
+        return bool(args) and args[0] in ok
+    if sub == "remote":
+        return not args or args[0] in ok and len(args) <= 2
+    return all(a in ok or (a.startswith("-") and a in ok) for a in args) if args else True
+
+
 _PATCH_CMDS = ("apply_patch", "applypatch")
 _HEREDOC = re.compile(r"\A\s*(?:cd\s+(?P<cd>'[^']*'|\"[^\"]*\"|[^\s&;|<>]+)\s*&&\s*)?(?:apply_patch|applypatch)\s*"
                       r"<<-?\s*(?P<q>['\"]?)(?P<tag>\w+)(?P=q)[ \t]*\n(?P<body>.*)\n[ \t]*(?P=tag)[ \t]*\n?\s*\Z", re.S)
@@ -477,6 +524,14 @@ class Workspace:
         if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
+        try:
+            head = p.open("rb").read(8192)
+        except OSError as e:
+            raise ToolError(f"could not read {path}: {e}")
+        if b"\0" in head and not head.startswith((b"\xff\xfe", b"\xfe\xff")):   # binary (UTF-16 text has a BOM)
+            size = p.stat().st_size
+            return (f"{path} is a binary file ({size:,} bytes), not text. Use a tool made for its format, or "
+                    f"`file`, `xxd | head` or `strings | head` in the shell to look inside.")
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
@@ -493,6 +548,27 @@ class Workspace:
             return any(q.is_relative_to(Path(r).resolve()) for r in (roots or [self.root]))
         except (OSError, ValueError):
             return False
+
+    def _ignored(self, files: list, base: Path | None = None) -> set:
+        """The files git ignores (.gitignore, .git/info/exclude, the global excludes), so search skips build output,
+        caches and dependencies the way other agents do. Empty when this is not a git repo, git is missing, or the
+        folder being searched is itself ignored (the user pointed at it on purpose)."""
+        if not files or os.environ.get("MH_SEARCH_IGNORED") == "1" or not shutil.which("git"):
+            return set()
+        try:
+            top = subprocess.run(["git", "-C", str(self.root), "rev-parse", "--show-toplevel"], capture_output=True,
+                                 text=True, timeout=10)
+            if top.returncode:
+                return set()
+            if base is not None and base != self.root and subprocess.run(
+                    ["git", "-C", str(self.root), "check-ignore", "-q", str(base)], capture_output=True,
+                    timeout=10).returncode == 0:
+                return set()
+            r = subprocess.run(["git", "-C", str(self.root), "check-ignore", "--stdin", "-z"],
+                               input="\0".join(str(f) for f in files) + "\0", capture_output=True, text=True, timeout=30)
+            return {Path(x) for x in r.stdout.split("\0") if x}
+        except (OSError, subprocess.SubprocessError):
+            return set()
 
     def grep(self, pattern, path=".", glob=None, inside_only=False, context=0, before=0, after=0,
              output_mode="content", head_limit=400, ignore_case=False, multiline=False):
@@ -520,20 +596,26 @@ class Workspace:
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
-        files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
+        files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()
+                                                 and not any(part in (".git", "node_modules", "__pycache__", ".venv")
+                                                             for part in f.relative_to(base).parts)]
+        if not base.is_file():
+            skip = self._ignored(files, base)
+            files = [f for f in files if f not in skip]
         out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
-            if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
-                continue
             if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
                 continue
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
-                text = f.read_text(errors="ignore")
-            except (OSError, UnicodeDecodeError):
+                raw = f.read_bytes()
+            except OSError:
                 continue
+            if b"\0" in raw[:8192]:                               # a binary file: never matched as text
+                continue
+            text = raw.decode("utf-8", errors="ignore")
             lines = text.splitlines()
             hits: list[int] = []                                   # 1-based line numbers that start a match
             if multiline:
@@ -576,9 +658,10 @@ class Workspace:
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
-        res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts
-                     and (not inside_only or self._inside(p)))
+        found = [p for p in self.root.glob(pattern) if ".git" not in p.relative_to(self.root).parts
+                 and "node_modules" not in p.relative_to(self.root).parts and (not inside_only or self._inside(p))]
+        skip = self._ignored(found) if not any(ch in pattern for ch in ("node_modules", "dist/", "build/")) else set()
+        res = sorted(str(p.relative_to(self.root)) for p in found if p not in skip)
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
 
     @staticmethod

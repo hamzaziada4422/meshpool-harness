@@ -360,7 +360,9 @@ class Terminal:
             self.usage[k] += int(ev.get(k, 0) or 0)
         if not ev.get("aux"):
             self.ctx_tokens = int(ev.get("in", 0) or 0)
-        self.cost = self._price()
+        if isinstance(ev.get("cost"), (int, float)):     # the provider's own figure for this call
+            self.measured = getattr(self, "measured", 0.0) + float(ev["cost"])
+        self.cost = getattr(self, "measured", None) if getattr(self, "measured", None) is not None else self._price()
 
     def _price(self) -> float | None:
         """Session cost from MH_PRICE_IN / MH_PRICE_OUT / MH_PRICE_CACHED (USD per million tokens). MeshPool has no
@@ -1071,6 +1073,7 @@ class Session:
         self.agent.reset()
         self.ctx = True
         t.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        t.measured, t.cost = None, None
         t.ctx_tokens, t.started, t.last_block = 0, False, None
         if t.interactive:
             t._write(self.term._clear_seq() + "\x1b[2J\x1b[H")
@@ -1090,8 +1093,11 @@ class Session:
     def cmd_tokens(self, arg):
         u = self.agent.usage
         pct = round(100 * u["cached"] / u["in"]) if u["in"] else 0
+        cost = u.get("cost") if isinstance(u.get("cost"), (int, float)) else self.term.cost
         self.term.p(f"  {u['calls']} model calls, {u['in']:,} input tokens ({pct}% from cache), "
-                    f"{u['out']:,} output tokens.")
+                    f"{u['out']:,} output tokens" + (f", ${cost:.4f}." if cost is not None else
+                                                     ". Cost not measured: the endpoint sends no price; set "
+                                                     "MH_PRICE_IN and MH_PRICE_OUT (USD per million tokens) to see one."))
 
     def cmd_mcp(self, arg):
         _mcp_status(self.term, self.mcp)

@@ -319,6 +319,8 @@ class Delegation:
             elif t == "usage":
                 for k in ("in", "cached", "out", "calls"):
                     rec["usage"][k] += int(ev.get(k) or 0)
+                if isinstance(ev.get("cost"), (int, float)):
+                    rec["usage"]["cost"] = rec["usage"].get("cost", 0.0) + float(ev["cost"])
             elif t == "error":
                 rec["errors"].append(str(ev.get("text") or "")[:300])
         return emit
@@ -514,7 +516,9 @@ class Delegation:
             p._delegate_rec["files"].update(rec["files"])
         turn = getattr(p, "_turn_usage", None)            # and in this turn's total
         with _USAGE_LOCK:                                 # children finish on several threads at once
-            for k in ("in", "cached", "out", "calls"):    # the chat pays for its sub-agents: count it there
+            for k in ("in", "cached", "out", "calls", "cost"):   # the chat pays for its sub-agents: count it there
+                if k not in rec["usage"]:
+                    continue
                 p.usage[k] = p.usage.get(k, 0) + rec["usage"][k]
                 if isinstance(turn, dict):
                     turn[k] = turn.get(k, 0) + rec["usage"][k]

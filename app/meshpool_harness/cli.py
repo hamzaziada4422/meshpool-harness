@@ -154,6 +154,8 @@ def _agent_parser():
     ap.add_argument("--model", help="model id for this session")
     ap.add_argument("--no-mcp", action="store_true", help="do not start MCP servers")
     ap.add_argument("--profile", choices=["code", "work"], help="code (default): a coding agent; work: Cowork, for documents, research and connected apps")
+    from meshpool_harness import __version__
+    ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
     return ap
 
 

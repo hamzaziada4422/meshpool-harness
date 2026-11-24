@@ -102,7 +102,7 @@ def receipt_for(chat_id: str, turn_index: int | None = None) -> dict | None:
         return None
     r = rows[i]
     tin, tc, tout = int(r.get("tokens_in") or 0), int(r.get("tokens_cached") or 0), int(r.get("tokens_out") or 0)
-    cost = cost_of(tin, tc, tout)
+    cost = r.get("cost") if isinstance(r.get("cost"), (int, float)) else cost_of(tin, tc, tout)
     reason = r.get("reason") or (_reason_from_events(chat_id) if r.get("harness") else "")
     hid = r.get("harness") or ""
     out = {"chat": chat_id, "turn": i, "ts": r.get("ts"), "secs": r.get("secs"),
