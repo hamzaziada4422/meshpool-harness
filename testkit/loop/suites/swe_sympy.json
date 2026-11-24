@@ -8,7 +8,6 @@
    "commit": "193e3825645d93c73e31cdceb6d742cc6919624d"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/polys/tests/test_rings.py b/sympy/polys/tests/test_rings.py\n--- a/sympy/polys/tests/test_rings.py\n+++ b/sympy/polys/tests/test_rings.py\n@@ -259,11 +259,11 @@ def test_PolyElement_as_expr():\n     assert f != g\n     assert f.as_expr() == g\n \n-    X, Y, Z = symbols(\"x,y,z\")\n-    g = 3*X**2*Y - X*Y*Z + 7*Z**3 + 1\n+    U, V, W = symbols(\"u,v,w\")\n+    g = 3*U**2*V - U*V*W + 7*W**3 + 1\n \n     assert f != g\n-    assert f.as_expr(X, Y, Z) == g\n+    assert f.as_expr(U, V, W) == g\n \n     raises(ValueError, lambda: f.as_expr(X))\n \n",
@@ -95,7 +94,6 @@
    "commit": "e8c22f6eac7314be8d92590bfff92ced79ee03e2"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/physics/units/tests/test_quantities.py b/sympy/physics/units/tests/test_quantities.py\n--- a/sympy/physics/units/tests/test_quantities.py\n+++ b/sympy/physics/units/tests/test_quantities.py\n@@ -561,6 +561,22 @@ def test_issue_24062():\n     exp_expr = 1 + exp(expr)\n     assert SI._collect_factor_and_dimension(exp_expr) == (1 + E, Dimension(1))\n \n+def test_issue_24211():\n+    from sympy.physics.units import time, velocity, acceleration, second, meter\n+    V1 = Quantity('V1')\n+    SI.set_quantity_dimension(V1, velocity)\n+    SI.set_quantity_scale_factor(V1, 1 * meter / second)\n+    A1 = Quantity('A1')\n+    SI.set_quantity_dimension(A1, acceleration)\n+    SI.set_quantity_scale_factor(A1, 1 * meter / second**2)\n+    T1 = Quantity('T1')\n+    SI.set_quantity_dimension(T1, time)\n+    SI.set_quantity_scale_factor(T1, 1 * second)\n+\n+    expr = A1*T1 + V1\n+    # should not throw ValueError here\n+    SI._collect_factor_and_dimension(expr)\n+\n \n def test_prefixed_property():\n     assert not meter.is_prefixed\n",
@@ -151,7 +149,6 @@
    "commit": "832c24fec1046eaa544a4cab4c69e3af3e651759"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/core/tests/test_symbol.py b/sympy/core/tests/test_symbol.py\n--- a/sympy/core/tests/test_symbol.py\n+++ b/sympy/core/tests/test_symbol.py\n@@ -1,3 +1,4 @@\n+from sympy.core.function import Function, UndefinedFunction\n from sympy.core.numbers import (I, Rational, pi)\n from sympy.core.relational import (GreaterThan, LessThan, StrictGreaterThan, StrictLessThan)\n from sympy.core.symbol import (Dummy, Symbol, Wild, symbols)\n@@ -294,6 +295,7 @@ def test_symbols():\n     assert symbols('aa:d,x:z') == (aa, ab, ac, ad, x, y, z)\n     assert symbols(('aa:d','x:z')) == ((aa, ab, ac, ad), (x, y, z))\n \n+    assert type(symbols(('q:2', 'u:2'), cls=Function)[0][0]) == UndefinedFunction  # issue 23532\n \n     # issue 6675\n     def sym(s):\n",
@@ -187,7 +184,6 @@
    "commit": "3ff4717b6aef6086e78f01cdfa06f64ae23aed7e"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/geometry/tests/test_point.py b/sympy/geometry/tests/test_point.py\n--- a/sympy/geometry/tests/test_point.py\n+++ b/sympy/geometry/tests/test_point.py\n@@ -1,5 +1,6 @@\n from sympy.core.basic import Basic\n from sympy.core.numbers import (I, Rational, pi)\n+from sympy.core.parameters import evaluate\n from sympy.core.singleton import S\n from sympy.core.symbol import Symbol\n from sympy.core.sympify import sympify\n@@ -452,6 +453,12 @@ def test__normalize_dimension():\n         Point(1, 2, 0), Point(3, 4, 0)]\n \n \n+def test_issue_22684():\n+    # Used to give an error\n+    with evaluate(False):\n+        Point(1, 2)\n+\n+\n def test_direction_cosine():\n     p1 = Point3D(0, 0, 0)\n     p2 = Point3D(1, 1, 1)\n",
@@ -223,7 +219,6 @@
    "commit": "a3475b3f9ac662cd425157dd3bdb93ad7111c090"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/codegen/tests/test_ast.py b/sympy/codegen/tests/test_ast.py\n--- a/sympy/codegen/tests/test_ast.py\n+++ b/sympy/codegen/tests/test_ast.py\n@@ -267,6 +267,7 @@ def test_String():\n     assert st == String('foobar')\n     assert st.text == 'foobar'\n     assert st.func(**st.kwargs()) == st\n+    assert st.func(*st.args) == st\n \n \n     class Signifier(String):\n",
@@ -277,7 +272,6 @@
    "commit": "514579c655bf22e2af14f0743376ae1d7befe345"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/physics/units/tests/test_quantities.py b/sympy/physics/units/tests/test_quantities.py\n--- a/sympy/physics/units/tests/test_quantities.py\n+++ b/sympy/physics/units/tests/test_quantities.py\n@@ -541,6 +541,27 @@ def test_issue_20288():\n     assert SI._collect_factor_and_dimension(expr) == (1 + E, Dimension(1))\n \n \n+def test_issue_24062():\n+    from sympy.core.numbers import E\n+    from sympy.physics.units import impedance, capacitance, time, ohm, farad, second\n+\n+    R = Quantity('R')\n+    C = Quantity('C')\n+    T = Quantity('T')\n+    SI.set_quantity_dimension(R, impedance)\n+    SI.set_quantity_dimension(C, capacitance)\n+    SI.set_quantity_dimension(T, time)\n+    R.set_global_relative_scale_factor(1, ohm)\n+    C.set_global_relative_scale_factor(1, farad)\n+    T.set_global_relative_scale_factor(1, second)\n+    expr = T / (R * C)\n+    dim = SI._collect_factor_and_dimension(expr)[1]\n+    assert SI.get_dimension_system().is_dimensionless(dim)\n+\n+    exp_expr = 1 + exp(expr)\n+    assert SI._collect_factor_and_dimension(exp_expr) == (1 + E, Dimension(1))\n+\n+\n def test_prefixed_property():\n     assert not meter.is_prefixed\n     assert not joule.is_prefixed\n",
@@ -332,7 +326,6 @@
    "commit": "fdc707f73a65a429935c01532cd3970d3355eab6"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/utilities/tests/test_lambdify.py b/sympy/utilities/tests/test_lambdify.py\n--- a/sympy/utilities/tests/test_lambdify.py\n+++ b/sympy/utilities/tests/test_lambdify.py\n@@ -1192,6 +1192,8 @@ def test_issue_14941():\n     # test tuple\n     f2 = lambdify([x, y], (y, x), 'sympy')\n     assert f2(2, 3) == (3, 2)\n+    f2b = lambdify([], (1,))  # gh-23224\n+    assert f2b() == (1,)\n \n     # test list\n     f3 = lambdify([x, y], [y, x], 'sympy')\n",
@@ -418,7 +411,6 @@
    "commit": "809c53c077485ca48a206cee78340389cb83b7f1"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/combinatorics/tests/test_homomorphisms.py b/sympy/combinatorics/tests/test_homomorphisms.py\n--- a/sympy/combinatorics/tests/test_homomorphisms.py\n+++ b/sympy/combinatorics/tests/test_homomorphisms.py\n@@ -57,6 +57,11 @@ def test_homomorphism():\n     assert T.codomain == D\n     assert T(a*b) == p\n \n+    D3 = DihedralGroup(3)\n+    T = homomorphism(D3, D3, D3.generators, D3.generators)\n+    assert T.is_isomorphism()\n+\n+\n def test_isomorphisms():\n \n     F, a, b = free_group(\"a, b\")\n",
@@ -444,7 +436,6 @@
    "commit": "c4e836cdf73fc6aa7bab6a86719a0f08861ffb1d"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/printing/tests/test_pycode.py b/sympy/printing/tests/test_pycode.py\n--- a/sympy/printing/tests/test_pycode.py\n+++ b/sympy/printing/tests/test_pycode.py\n@@ -6,7 +6,7 @@\n from sympy.core import Expr, Mod, symbols, Eq, Le, Gt, zoo, oo, Rational, Pow\n from sympy.core.numbers import pi\n from sympy.core.singleton import S\n-from sympy.functions import acos, KroneckerDelta, Piecewise, sign, sqrt\n+from sympy.functions import acos, KroneckerDelta, Piecewise, sign, sqrt, Min, Max\n from sympy.logic import And, Or\n from sympy.matrices import SparseMatrix, MatrixSymbol, Identity\n from sympy.printing.pycode import (\n@@ -58,6 +58,9 @@ def test_PythonCodePrinter():\n     assert prntr.doprint((2,3)) == \"(2, 3)\"\n     assert prntr.doprint([2,3]) == \"[2, 3]\"\n \n+    assert prntr.doprint(Min(x, y)) == \"min(x, y)\"\n+    assert prntr.doprint(Max(x, y)) == \"max(x, y)\"\n+\n \n def test_PythonCodePrinter_standard():\n     prntr = PythonCodePrinter()\n",
@@ -486,7 +477,6 @@
    "commit": "88664e6e0b781d0a8b5347896af74b555e92891e"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/sets/tests/test_contains.py b/sympy/sets/tests/test_contains.py\n--- a/sympy/sets/tests/test_contains.py\n+++ b/sympy/sets/tests/test_contains.py\n@@ -41,10 +41,9 @@ def test_binary_symbols():\n def test_as_set():\n     x = Symbol('x')\n     y = Symbol('y')\n-    # Contains is a BooleanFunction whose value depends on an arg's\n-    # containment in a Set -- rewriting as a Set is not yet implemented\n-    raises(NotImplementedError, lambda:\n-           Contains(x, FiniteSet(y)).as_set())\n+    assert Contains(x, FiniteSet(y)).as_set() == FiniteSet(y)\n+    assert Contains(x, S.Integers).as_set() == S.Integers\n+    assert Contains(x, S.Reals).as_set() == S.Reals\n \n def test_type_error():\n     # Pass in a parameter not of type \"set\"\n",
@@ -515,7 +505,6 @@
    "commit": "39de9a2698ad4bb90681c0fdb70b30a78233145f"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/physics/hep/tests/test_gamma_matrices.py b/sympy/physics/hep/tests/test_gamma_matrices.py\n--- a/sympy/physics/hep/tests/test_gamma_matrices.py\n+++ b/sympy/physics/hep/tests/test_gamma_matrices.py\n@@ -257,10 +257,12 @@ def test_kahane_simplify1():\n     t = (G(mu)*G(nu)*G(rho)*G(sigma)*G(-mu))\n     r = kahane_simplify(t)\n     assert r.equals(-2*G(sigma)*G(rho)*G(nu))\n-    t = (G(mu)*G(nu)*G(rho)*G(sigma)*G(-mu))\n+    t = (G(mu)*G(-mu)*G(rho)*G(sigma))\n     r = kahane_simplify(t)\n-    assert r.equals(-2*G(sigma)*G(rho)*G(nu))\n-\n+    assert r.equals(4*G(rho)*G(sigma))\n+    t = (G(rho)*G(sigma)*G(mu)*G(-mu))\n+    r = kahane_simplify(t)\n+    assert r.equals(4*G(rho)*G(sigma))\n \n def test_gamma_matrix_class():\n     i, j, k = tensor_indices('i,j,k', LorentzIndex)\n",
@@ -542,7 +531,6 @@
    "commit": "10de1a18a0efac0b19b611e40c928250dda688bf"
   },
   "path_prepend": "${MESHPOOL_SWE_DIR}/venv/bin",
-  "max_steps": 60,
   "grade": {
    "swe": {
     "test_patch": "diff --git a/sympy/matrices/tests/test_normalforms.py b/sympy/matrices/tests/test_normalforms.py\n--- a/sympy/matrices/tests/test_normalforms.py\n+++ b/sympy/matrices/tests/test_normalforms.py\n@@ -77,5 +77,11 @@ def test_hermite_normal():\n     assert hermite_normal_form(m) == hnf\n \n     m = Matrix([[2, 7], [0, 0], [0, 0]])\n-    hnf = Matrix(3, 0, [])\n+    hnf = Matrix([[1], [0], [0]])\n     assert hermite_normal_form(m) == hnf\n+\n+\n+def test_issue_23410():\n+    A = Matrix([[1, 12], [0, 8], [0, 5]])\n+    H = Matrix([[1, 0], [0, 8], [0, 5]])\n+    assert hermite_normal_form(A) == H\ndiff --git a/sympy/polys/matrices/tests/test_normalforms.py b/sympy/polys/matrices/tests/test_normalforms.py\n--- a/sympy/polys/matrices/tests/test_normalforms.py\n+++ b/sympy/polys/matrices/tests/test_normalforms.py\n@@ -62,7 +62,7 @@ def test_hermite_normal():\n     assert hermite_normal_form(m) == hnf\n \n     m = DM([[2, 7], [0, 0], [0, 0]], ZZ)\n-    hnf = DM([[], [], []], ZZ)\n+    hnf = DM([[1], [0], [0]], ZZ)\n     assert hermite_normal_form(m) == hnf\n \n     m = DM([[-2, 1], [0, 1]], ZZ)\n",

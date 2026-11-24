@@ -169,7 +169,7 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     elif arm.split("@")[0].endswith("-routed") and arm.split("@")[0][:-7] in ACP_ARMS:
         res = run_acp_agent(arm.split("@")[0][:-7], task, wd, routed=True)
     else:
-        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
+        res = run_task(task["prompt"], workdir=wd, engine=engine, max_steps=task.get("max_steps", _bench_steps()))
     ok, why = grade(task, res.get("answer", ""), wd)
     row = {"task": task["id"], "suite": task["suite"], "arm": arm, "pass": ok, "why": why,
            "secs": round(time.time() - t0, 1), "route": res.get("route"), "route_keys": res.get("route_keys"),
@@ -200,6 +200,13 @@ def child(task_json: str, arm: str, out_path: str) -> None:
     shutil.rmtree(wd, ignore_errors=True)
 
 
+def _bench_steps() -> int:
+    """Step cap for the Meshpool arms: the product default (Max steps per reply, 200), as a user gets. The old default of
+    60 applied to Meshpool only, while the Codex arm has just the wall timeout (broad1: both swe_sympy misses were cut at
+    exactly 60 steps). MH_BENCH_MAX_STEPS overrides it; set it only together with a matching cap on the Codex arm."""
+    return int(os.environ.get("MH_BENCH_MAX_STEPS", "200"))
+
+
 def run_meta(task: dict, wd: str, engine: str) -> tuple[dict, dict]:
     """The "meta" arm: the harness router (hrouter/harness_select.py) picks the harness for this task from the
     scorecard, then the task runs on it exactly as that harness's own arm would. The classifier's one model call goes
@@ -214,7 +221,7 @@ def run_meta(task: dict, wd: str, engine: str) -> tuple[dict, dict]:
         if sel["profile"]:
             os.environ["MH_HARNESS_PROFILE"] = os.environ["MH_PROFILE"] = sel["profile"]
         res = run_task(task["prompt"], workdir=wd, engine=engine,
-                       max_steps=task.get("max_steps", int(os.environ.get("MH_BENCH_MAX_STEPS", "60"))))
+                       max_steps=task.get("max_steps", _bench_steps()))
     elif base == "pi":
         res = run_pi_agent(task, wd, routed=routed)
     elif base in ACP_ARMS:
