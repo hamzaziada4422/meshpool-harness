@@ -455,7 +455,7 @@ class Session:
         p = self.pendings.get(aid)
         if not p:
             raise ValueError("That approval is no longer waiting.")
-        allowed = {"yes", "always", "no"} | {o["id"] for o in (p.get("options") or [])}
+        allowed = {"yes", "always", "save", "no"} | {o["id"] for o in (p.get("options") or [])}
         p["decision"] = decision if decision in allowed else "no"
         p["note"] = note
         p["answered"] = True

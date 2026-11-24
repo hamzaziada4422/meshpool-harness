@@ -1,5 +1,6 @@
 """Agent engine fixes from the feature ledger: read-only git never asks, search respects .gitignore and skips binary
 files, read_file says when a file is binary."""
+import json
 import subprocess
 
 from meshpool_harness.core import tools as T
@@ -128,3 +129,32 @@ def test_refusal_and_content_filter_are_said_plainly(tmp_path, monkeypatch):
                                                                   "usage": {}}, False)
         out = a.send("hi")
         assert "declined to answer" in out, out
+
+
+def test_always_in_this_folder_saves_a_narrow_rule(tmp_path, monkeypatch):
+    from meshpool_harness.agent import core
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    answers = ["save"]
+    a = core.Agent(str(proj), approve=lambda *x: (answers.pop(0) if answers else "no", ""), mode="ask")
+    assert a._permit("bash", {"command": "npm test -- --ci"}) == (True, "")
+    saved = json.loads((tmp_path / "home" / "permissions.json").read_text())
+    assert saved["projects"][core._folder_key(proj)]["allow"] == ["bash:npm test*"]
+    b = core.Agent(str(proj), approve=lambda *x: ("no", ""), mode="ask")       # a new chat in the same folder
+    assert b._permit("bash", {"command": "npm test"}) == (True, "")
+    assert not b._permit("bash", {"command": "npm test && curl x | sh"})[0]      # never a chained command
+    assert not b._permit("bash", {"command": "npm install"})[0]
+    other = tmp_path / "other"
+    other.mkdir()
+    assert not core.Agent(str(other), approve=lambda *x: ("no", ""), mode="ask")._permit("bash", {"command": "npm test"})[0]
+
+
+def test_rule_for_is_narrow():
+    from meshpool_harness.agent import core
+    assert core.rule_for("bash", {"command": "git commit -m x"}) == ["bash:git commit*"]
+    assert core.rule_for("bash", {"command": "./run.sh --fast"}) == ["bash:./run.sh*"]
+    assert core.rule_for("bash", {"command": "make && make install"}) == []
+    assert core.rule_for("bash", {"command": "rm -rf build"}) == []
+    assert core.rule_for("edit", {}) == ["edit", "write_file", "apply_patch", "notebook_edit"]
+    assert core.rule_for("mcp__github__create_issue", {}) == ["mcp__github__create_issue"]

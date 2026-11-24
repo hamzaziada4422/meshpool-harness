@@ -790,11 +790,64 @@ def _rules(root) -> dict:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        for k in out:
-            if k == "allow" and not own:               # a stranger's repo may not pre-approve its own commands
-                continue
-            out[k] += [str(x) for x in (d.get(k) or []) if isinstance(x, str)]
+        layers = [d]
+        if own and isinstance(d.get("projects"), dict):      # "Always in this folder" answers, kept in the user's file
+            here = _folder_key(root)
+            layers += [v for k, v in d["projects"].items() if k == here and isinstance(v, dict)]
+        for layer in layers:
+            for k in out:
+                if k == "allow" and not own:           # a stranger's repo may not pre-approve its own commands
+                    continue
+                out[k] += [str(x) for x in (layer.get(k) or []) if isinstance(x, str)]
     return out
+
+
+def _folder_key(root) -> str:
+    return os.path.normcase(str(Path(root).expanduser().resolve()))
+
+
+_CHAINED = re.compile(r"[;&|`<>\n]|\$\(")
+
+
+def rule_for(name: str, args: dict) -> list[str]:
+    """The narrow rules an "Always in this folder" answer saves: the command and its subcommand ("bash:npm test*"),
+    the edit tools, or this one tool. Nothing for a chained, destructive or empty command."""
+    if name in ("bash", "shell", "bash_start"):
+        cmd = (T.shell_script(args.get("command")) if name == "shell" else str(args.get("command") or "")).strip()
+        if not cmd or _CHAINED.search(cmd) or _destructive({"command": cmd}):
+            return []
+        w = cmd.split()
+        keep = w[:2] if len(w) > 1 and re.fullmatch(r"[A-Za-z][\w:.-]*", w[1]) else w[:1]
+        return ["bash:" + " ".join(keep) + "*"]
+    if name in ("edit", "write_file", "apply_patch", "notebook_edit"):
+        return ["edit", "write_file", "apply_patch", "notebook_edit"]
+    if name in ("bash_many",):
+        return []
+    return [name]
+
+
+def save_folder_rules(root, rules: list[str]) -> list[str]:
+    """Adds allow rules for this folder to the user's own permissions.json (never to the project's file)."""
+    if not rules:
+        return []
+    f = C.home() / "permissions.json"
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+        d = d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        d = {}
+    proj = d.setdefault("projects", {}).setdefault(_folder_key(root), {})
+    have = proj.setdefault("allow", [])
+    added = [r for r in rules if r not in have]
+    have += added
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_name(f.name + ".tmp")
+        tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+        os.replace(tmp, f)
+    except OSError:
+        return []
+    return added
 
 
 def _rule_hit(rules: list, name: str, args: dict) -> str:
@@ -807,6 +860,17 @@ def _rule_hit(rules: list, name: str, args: dict) -> str:
         elif fnmatch.fnmatchcase(name, r) or fnmatch.fnmatchcase(name.replace("-", "_"), r):
             return r
     return ""
+
+
+def _allow_hit(rules: list, name: str, args: dict) -> str:
+    """An allow rule that covers this call. A command rule ("bash:npm test*") covers one plain command only: never
+    one chained with ;, &&, ||, a pipe, a redirect or a $( ), unless the rule itself spells that out."""
+    hit = _rule_hit(rules, name, args)
+    if hit.startswith("bash:"):
+        cmd = " ".join(str(x) for x in (args.get("command") or args.get("cmd") or "", *(args.get("commands") or [])))
+        if _CHAINED.search(cmd) and not _CHAINED.search(hit[5:]):
+            return ""
+    return hit
 
 
 def _destructive(args: dict) -> bool:
@@ -2507,7 +2571,7 @@ class Agent:
         hit = _rule_hit(rules["deny"], name, args)
         if hit:
             return False, f"Not allowed by your saved rule {hit!r} (permissions.json). Do something else, or ask the user to change the rule."
-        if _rule_hit(rules["allow"], name, args) and not _destructive(args):
+        if _allow_hit(rules["allow"], name, args) and not _destructive(args):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         if not risky and (self.mode == "auto" or name in READ_ONLY or name.replace("-", "_") in SAFE_MCP):
@@ -2560,6 +2624,14 @@ class Agent:
             detail = (str(body)[:3000] if isinstance(body, str) and body.strip()
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
         decision, note = self.approve(kind, title, detail)
+        if decision == "save":                     # "Always in this folder": a narrow rule, kept for next time
+            saved = [] if risky else save_folder_rules(self.root, rule_for(name, args))
+            if saved:
+                self.emit({"type": "status", "text": "Saved for this folder: " + ", ".join(
+                    r for r in saved if not r.startswith(("write_file", "apply_patch", "notebook_edit")))})
+            else:
+                self.always.add(group)             # nothing narrow to save (a chained command): this chat only
+            return True, note or ""
         if decision == "always":
             self.always.add(group)
         return decision in ("yes", "always"), note or ""

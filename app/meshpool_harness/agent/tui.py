@@ -889,10 +889,12 @@ class Terminal:
         else:
             shown = [style(ln) for ln in rows]
         what = {"edit": "file edits", "bash": "commands", "mcp": "this MCP tool"}.get(kind, "this")
-        i = self.choose(title, shown, ["Yes", f"Yes, and don't ask again for {what} in this session", "No"],
-                        hotkeys={"y": 0, "a": 1, "n": 2},
-                        hint="↑↓ or 1-3 · enter to confirm · esc: no")
-        return {0: "yes", 1: "always"}.get(i, "no"), ""
+        opts = ["Yes", f"Yes, and don't ask again for {what} in this session"]
+        if kind in ("bash", "edit", "mcp"):
+            opts.append("Yes, and always allow this in this folder")
+        i = self.choose(title, shown, opts + ["No"], hotkeys={"y": 0, "a": 1, "n": len(opts), **({"f": 2} if len(opts) > 2 else {})},
+                        hint=f"↑↓ or 1-{len(opts) + 1} · enter to confirm · esc: no")
+        return {0: "yes", 1: "always", 2: "save" if len(opts) > 2 else "no"}.get(i, "no"), ""
 
     def _approve(self, kind: str, title: str, detail: str):
         """The same question with plain input(): no raw keys (a pipe, a test)."""
