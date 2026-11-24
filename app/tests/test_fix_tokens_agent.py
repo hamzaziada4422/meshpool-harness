@@ -376,7 +376,9 @@ def test_finish_check_and_scan_rules_are_opt_in(monkeypatch):
 
 
 def test_default_prompt_is_the_measured_one():
-    assert len(core._codex_prompt()) == 14066          # the after2 build's system prompt, byte for byte in size
+    # the after2 build's system prompt, byte for byte in size, plus the private-scratch rule (0.0.16: parallel tasks
+    # overwrote each other's /tmp/check.py)
+    assert len(core._codex_prompt()) == 14066 + len(core.SCRATCH_RULE)
 
 
 def test_auto_reasoning_effort_is_opt_in(monkeypatch):
@@ -828,3 +830,14 @@ def test_requests_with_several_stated_rules_get_the_requirement_check_note(tmp_p
     monkeypatch.setenv("MH_REQ_NOTE", "0")
     a.send(diff)
     assert C.REQ_NOTE not in a.messages[-1]["content"]
+
+
+def test_each_workspace_runs_commands_with_its_own_tmpdir(tmp_path):
+    import os
+    from meshpool_harness.agent import core as C
+    (tmp_path / "a").mkdir(); (tmp_path / "b").mkdir()
+    a, b = _agent(tmp_path / "a"), _agent(tmp_path / "b")
+    ea, eb = a.ws._scratch({}), b.ws._scratch({})
+    assert ea["TMPDIR"] != eb["TMPDIR"] and os.path.isdir(ea["TMPDIR"])
+    assert a.ws._scratch({})["TMPDIR"] == ea["TMPDIR"]           # stable for the life of the workspace
+    assert C.SCRATCH_RULE.strip() in C._codex_prompt() and "$TMPDIR" in a.system_prompt()

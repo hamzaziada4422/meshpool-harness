@@ -105,3 +105,18 @@ def test_report_on_synthetic(tmp_path):
 def test_arms_for():
     assert "mp-work" in arms.arms_for("office", None) and "mp-code" not in arms.arms_for("office", None)
     assert arms.arms_for("code", ["mp-code", "mp-work"]) == ["mp-code"]
+
+
+def test_private_tmp_isolates_runs_and_never_hides_run_folders(tmp_path, monkeypatch):
+    import subprocess
+    from testkit.bench3 import arms as A
+    if not A._private_tmp_ok():
+        import pytest
+        pytest.skip("no user namespaces here")
+    open("/tmp/bench-shared-marker", "w").close()
+    out = subprocess.run(A.private_tmp(["sh", "-c", "ls /tmp; echo x > /tmp/check.py"], "/home"),
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and "bench-shared-marker" not in out.stdout
+    import os
+    assert not os.path.exists("/tmp/check.py") or open("/tmp/check.py").read() != "x\n"
+    assert A.private_tmp(["true"], "/tmp/somewhere") == ["true"]       # a run folder under /tmp: no tmpfs over it

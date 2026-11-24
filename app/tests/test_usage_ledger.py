@@ -255,13 +255,14 @@ def test_record_is_fast_and_memory_totals_are_immediate():
     t0 = time.perf_counter()
     for _ in range(2000):
         U.record(M, {"prompt_tokens": 100, "completion_tokens": 10}, task=t)
-    assert time.perf_counter() - t0 < 0.5
+    assert time.perf_counter() - t0 < 2.0          # 1 ms a record: a disk write or fsync per record is 10x that and
+                                                   # still fails; 0.5 s flaked on a slow CI runner (0.61 s)
     assert t.totals()["calls"] == 2000                    # visible at once, before any flush
     assert t.spent() > 0
     t0 = time.perf_counter()
     for _ in range(500):
         U.reserve(M, request_chars=100, task=t).close()
-    assert time.perf_counter() - t0 < 0.5
+    assert time.perf_counter() - t0 < 1.0
     U.flush()
     assert len(_lines(t.path)) == 2000
     assert t.totals()["calls"] == 2000                    # file lines merge without double counting

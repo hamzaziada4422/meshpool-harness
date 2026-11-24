@@ -41,6 +41,39 @@ def kill_group(p: subprocess.Popen) -> None:
             continue
 
 
+_PRIVATE_TMP: bool | None = None
+
+
+def _private_tmp_ok() -> bool:
+    """unshare can give a run its own /tmp (a user + mount namespace with a tmpfs on /tmp). Checked once."""
+    global _PRIVATE_TMP
+    if _PRIVATE_TMP is None:
+        _PRIVATE_TMP = False
+        if os.name != "nt" and os.environ.get("BENCH_PRIVATE_TMP", "1") != "0" and shutil.which("unshare"):
+            try:
+                r = subprocess.run(["unshare", "--mount", "--map-root-user", "sh", "-c", "mount -t tmpfs tmpfs /tmp"],
+                                   capture_output=True, timeout=10)
+                _PRIVATE_TMP = r.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                pass
+    return _PRIVATE_TMP
+
+
+def private_tmp(cmd: list, *paths) -> list:
+    """Wrap cmd so it sees an empty /tmp of its own: agents write literal /tmp/check.py, and parallel runs read and
+    overwrite each other's (eval: 142 Meshpool bodies used /tmp/check.py). Not possible when the run's own folders
+    live under /tmp (the tmpfs would hide them) or the system has no user namespaces: then cmd is returned as is."""
+    if not _private_tmp_ok():
+        return cmd
+    for p in paths:
+        try:
+            if p and Path(p).resolve().is_relative_to("/tmp"):
+                return cmd
+        except (OSError, ValueError):
+            return cmd
+    return ["unshare", "--mount", "--map-root-user", "sh", "-c", 'mount -t tmpfs tmpfs /tmp && exec "$@"', "sh", *cmd]
+
+
 def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
     """Run cmd in its own process group with stdin=/dev/null, stdout+stderr to log; kill the group on timeout."""
     Path(log).parent.mkdir(parents=True, exist_ok=True)
@@ -50,6 +83,7 @@ def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
     shutil.rmtree(tmp, ignore_errors=True)
     tmp.mkdir(parents=True, exist_ok=True)
     env = {**env, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)}
+    cmd = private_tmp(cmd, cwd, log, tmp, env.get("HOME"), env.get("CODEX_HOME"), env.get("PI_CODING_AGENT_DIR"))
     t0 = time.time()
     timed_out = False
     with open(log, "wb") as lf:

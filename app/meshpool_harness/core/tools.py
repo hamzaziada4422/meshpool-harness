@@ -1240,6 +1240,20 @@ class Workspace:
                          "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
+    def _scratch(self, env: dict) -> dict:
+        """A private temp folder per workspace for every command it runs: scratch files (check scripts, repro copies) of
+        one agent cannot be read or overwritten by another running at the same time (parallel subagents, a second
+        chat, the benchmark's parallel runs: eval traces showed agents clobbering each other's /tmp/check.py)."""
+        d = self.__dict__.get("_scratch_dir")
+        if not d or not os.path.isdir(d):
+            import tempfile
+            try:
+                d = self.__dict__["_scratch_dir"] = tempfile.mkdtemp(prefix="meshpool-scratch-")
+            except OSError:
+                return env
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = d
+        return env
+
     def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
@@ -1258,6 +1272,7 @@ class Workspace:
                                    capture_output=True, text=True, timeout=timeout_s, errors="replace")
             else:
                 env.setdefault("PYTHONUTF8", "1")
+                self._scratch(env)
                 bash = _bash()
                 from meshpool_harness.core import sandbox as _SB
                 mode = self.get_mode() if self.get_mode else None
@@ -1320,6 +1335,7 @@ class Workspace:
             env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         env.setdefault("PYTHONUTF8", "1")
         env["PYTHONUNBUFFERED"] = "1"
+        self._scratch(env)
         bash = _bash()
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         if bash:

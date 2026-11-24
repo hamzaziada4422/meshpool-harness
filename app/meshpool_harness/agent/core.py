@@ -75,6 +75,10 @@ WORK_TOOLS = BUILTIN + ["office_task"]
 PROJECT_FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 
 
+SCRATCH_RULE = ("\n\nPut scratch files (check scripts, repro copies, notes) in $TMPDIR, which is private to this task, "
+                "never in a fixed /tmp path that another task could also be using.")
+
+
 def _codex_prompt() -> str:
     """Codex's base instructions (app/defaults/engines/codex/prompt.md, Apache-2.0, see its NOTICE comment, which is
     for readers of the file and is not sent to the model)."""
@@ -86,6 +90,7 @@ def _codex_prompt() -> str:
     if os.environ.get("MH_CODEX_PROMPT") == "full":
         return text
     text = _trim_codex(text)
+    text += SCRATCH_RULE
     if os.environ.get("MH_FINISH_CHECK", "0") != "1":      # MH_FINISH_CHECK=1: re-check each requirement before the answer
         text = re.sub(r"## Before you finish\n.*?\n\n", "", text, count=1, flags=re.S)
     if os.environ.get("MH_OUTPUT_RULES", "0") == "1":      # MH_OUTPUT_RULES=1: fewer output tokens (patches and scripts are most of them)
@@ -1074,6 +1079,8 @@ class Agent:
             text += rules
         if E2E:
             text += E2E_RULES
+        if self.profile == "code":
+            text += SCRATCH_RULE
         if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
