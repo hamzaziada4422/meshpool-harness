@@ -233,7 +233,13 @@ def _header(ws) -> tuple[int, tuple]:
     rows = [(r[0].row, tuple(c.value for c in r if c.value not in (None, "")))
             for r in ws.iter_rows(max_row=min(ws.max_row, 50)) if r]
     width = max((len(v) for _, v in rows), default=0)
-    return next(((n, v) for n, v in rows if width and len(v) == width), (1, ()))
+    if not width:
+        return 1, ()
+    # a header is a row of labels: the first wide row whose cells are all text (no numbers, no formulas). A data row
+    # with an extra filled cell (an added Total) is wider than the header and must not be taken for it.
+    wide = [(n, v) for n, v in rows if len(v) >= max(2, width // 2) or len(v) == width]
+    labels = next(((n, v) for n, v in wide if all(isinstance(x, str) and not x.startswith("=") for x in v)), None)
+    return labels or next(((n, v) for n, v in rows if len(v) == width), (1, ()))
 
 
 def derive_issues(path: str, sources: list[str], asks: set[str]) -> list[dict]:

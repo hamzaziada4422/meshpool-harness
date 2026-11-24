@@ -272,3 +272,14 @@ def test_sheets_sources_are_absolute(tmp_path, monkeypatch):
     E.solve(TASK, workdir=str(tmp_path / "w"), task_id="t", client=MockClient([]), model="mock",
             files=["score.xlsx"])
     assert seen["src"] == str(tmp_path / "score.xlsx")
+
+
+def test_a_data_row_wider_than_the_header_is_not_taken_for_it(tmp_path):
+    wb = Workbook(); ws = wb.active
+    for r in [("name", "a", "b"), ("Ann", 1, 2), ("Bo", 3, 4)]:
+        ws.append(r)
+    wb.save(tmp_path / "src.xlsx")
+    wb = load_workbook(tmp_path / "src.xlsx")
+    wb.active["D2"], wb.active["E2"] = "=B2+C2", "note"                  # the edit fills cells past the header
+    wb.save(tmp_path / "src (edited).xlsx")
+    assert E.derive_issues(str(tmp_path / "src (edited).xlsx"), [str(tmp_path / "src.xlsx")], set()) == []
