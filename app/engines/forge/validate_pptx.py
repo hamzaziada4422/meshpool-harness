@@ -185,6 +185,12 @@ def _within(q: dict, p: dict, share: float) -> bool:
     return ix > 0 and iy > 0 and ix * iy >= share * area
 
 
+def _unavailable(e: BaseException) -> bool:
+    """No LibreOffice to run (not installed, or a system copy Meshpool does not use): the rule did not run."""
+    from meshpool_harness.office_runtime import is_unavailable
+    return is_unavailable(e)
+
+
 def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
     """P1: render with LibreOffice; every rendered text span must sit inside some text box on its slide."""
     with tempfile.TemporaryDirectory() as td:
@@ -192,7 +198,7 @@ def _render_check(path: str, m: dict, R: dict, failures: list, stats: dict):
             pdf = soffice_convert(path, "pdf", td, R["render"]["timeout_s"])
         except Exception as e:
             failures.append(F("P1", "render", f"The deck could not be rendered by LibreOffice: {e}",
-                              fix_scope="renderer", status="not_run" if "not installed" in str(e) else "fail"))
+                              fix_scope="renderer", status="not_run" if _unavailable(e) else "fail"))
             return
         try:
             pages = _pdf_spans(str(pdf))

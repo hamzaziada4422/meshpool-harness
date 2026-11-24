@@ -905,6 +905,68 @@ def _bash_segments_match(cmd: str, pattern: str) -> bool:
     return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
 
 
+_TEST_RUN = re.compile(
+    r"\b(pytest|py\.test|unittest|nosetests|tox|nox|jest|vitest|mocha|karma|playwright\s+test|rspec|phpunit|ctest|"
+    r"go\s+(test|vet)|cargo\s+(test|check|clippy|nextest)|(npm|yarn|pnpm|bun)\s+(run\s+)?(test|check|lint)\w*|"
+    r"bun\s+test|deno\s+(test|check|lint)|make\s+(test|check|lint)\w*|mvn\s+\S*\s*(test|verify)|"
+    r"gradlew?\s+\S*\s*(test|check)|dotnet\s+test|swift\s+test|mix\s+test|ruff|flake8|pylint|mypy|pyright|eslint|"
+    r"tsc|tests?|checks?|lint)\b", re.I)
+_PIPEFAIL = re.compile(r"(^|[\s;&(])-\w*o\s+pipefail\b")      # set -o pipefail, set -euo pipefail, bash -o pipefail
+
+
+def _pipe_stages(cmd: str) -> list[str]:
+    """The stages of a shell command split at its unquoted pipes (| and |&, not ||); one stage when there are none.
+    Quotes and backslash escapes are honoured, so `grep 'a|b' x` is a single stage."""
+    stages, cur, quote, i = [], [], "", 0
+    while i < len(cmd):
+        ch = cmd[i]
+        if quote:
+            if ch == "\\" and quote == '"' and i + 1 < len(cmd):
+                cur.append(cmd[i:i + 2])
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+        elif ch == "\\" and i + 1 < len(cmd):
+            cur.append(cmd[i:i + 2])
+            i += 2
+            continue
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "|":
+            if cmd[i + 1:i + 2] == "|":                  # || is "or", not a pipe
+                cur.append("||")
+                i += 2
+                continue
+            stages.append("".join(cur))
+            cur = []
+            i += 2 if cmd[i + 1:i + 2] == "&" else 1     # |& pipes stderr too
+            continue
+        cur.append(ch)
+        i += 1
+    stages.append("".join(cur))
+    return stages
+
+
+def _piped_check_hides_status(cmd: str) -> bool:
+    """True when a test or check run feeds a pipe (`pytest -q | tail -5`) and pipefail is not on: the shell's exit
+    status is then the last stage's (tail's), so a failing run can still exit 0. Commands run with plain bash -c."""
+    stages = _pipe_stages(cmd or "")
+    if len(stages) < 2 or _PIPEFAIL.search(cmd):
+        return False
+    return any(_TEST_RUN.search(s) for s in stages[:-1])
+
+
+def _check_line(cmd: str, shown: str, code: int) -> str:
+    """The receipt's verdict on the last command after the last change: never "passed" when the exit status could
+    not show a failure (a check piped into another command without pipefail)."""
+    if code != 0:
+        return f"`{shown}` FAILED (exit {code})"
+    if _piped_check_hides_status(cmd):
+        return (f"`{shown}` ran (exit status is the last command's in the pipe; failures before it are not visible)")
+    return f"`{shown}` passed"
+
+
 def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     import fnmatch
     from meshpool_harness.core import permrules as PR
@@ -2832,7 +2894,7 @@ class Agent:
             # the command, not the `cd <long project path> &&` the model put in front of it
             cmd = re.sub(r"^\s*cd\s+(\"[^\"]*\"|'[^']*'|\S+)\s*&&\s*", "", last["cmd"]).strip() or last["cmd"]
             cmd = cmd.splitlines()[0][:80]
-            check = (f"`{cmd}` passed" if last["code"] == 0 else f"`{cmd}` FAILED (exit {last['code']})")
+            check = _check_line(last["cmd"], cmd, last["code"])
             check += f" ({len(after)} command{'s' if len(after) > 1 else ''} after the last change)"
         else:
             check = "nothing was run after the last change, so it is not verified"

@@ -235,9 +235,45 @@ def section(ws, row, text, ncols=6):
     ws.cell(row=row, column=1, value=text).font = SECTION_FONT
 
 
-def add_check(wb, label: str, diff_formula: str, tol: float = 0.01):
-    """Append a check row: difference formula must be ~0. Status shows OK / ERROR. Returns the status cell ref."""
+_BARE_REF = re.compile(r"^(\$?[A-Za-z]{1,3}\$?\d+(:\$?[A-Za-z]{1,3}\$?\d+)?|\$?[A-Za-z]{1,3}:\$?[A-Za-z]{1,3}|"
+                       r"\$?\d+:\$?\d+)$")
+
+
+def qualify_refs(expr: str, sheet: str | None) -> tuple[str, list[str]]:
+    """(formula, bare refs). Every cell reference in expr without a sheet name (B12, B10:G10, $C$4) gets sheet's
+    name in front when sheet is given; names, functions and already-qualified references are left alone."""
+    from openpyxl.formula.tokenizer import Token, Tokenizer, TokenizerError
+    expr = expr if expr.startswith("=") else "=" + expr
+    try:
+        tok = Tokenizer(expr)
+    except TokenizerError:                     # not parseable here: left as written; the workbook QA still reads it
+        return expr, []
+    bare = []
+    for t in tok.items:
+        if t.type == Token.OPERAND and t.subtype == Token.RANGE and "!" not in t.value and _BARE_REF.match(t.value):
+            bare.append(t.value)
+            if sheet:
+                t.value = f"{_q(sheet)}!{t.value}"
+    return tok.render(), bare
+
+
+def add_check(wb, label: str, diff_formula: str, tol: float = 0.01, sheet: str | None = None):
+    """Append a check row: difference formula must be ~0. Status shows OK / ERROR. Returns the status cell ref.
+
+    The formula is written on the Checks tab, so a reference without a sheet name (=B12-SUM(B10:G10)) would point at
+    the Checks tab's own empty cells and the check would always show OK. Name the tab holding the figures: either in
+    the formula (='Budget'!B12-SUM('Budget'!B10:G10)) or with sheet="Budget", which puts it in front of every bare
+    reference. A bare reference without sheet= is refused."""
     ch = wb["Checks"]
+    if sheet is not None and sheet not in wb.sheetnames:
+        raise ValueError(f"add_check({label!r}): no sheet named {sheet!r}; sheets are {wb.sheetnames}")
+    diff_formula, bare = qualify_refs(diff_formula, sheet)
+    if bare and sheet is None:
+        raise ValueError(
+            f"add_check({label!r}): {', '.join(bare)} in {diff_formula} has no sheet name, so on the Checks tab it "
+            "would read the Checks tab's own empty cells and the check would show OK without checking anything. "
+            f"Name the tab that holds the figures: B.add_check(wb, {label!r}, {diff_formula!r}, sheet='<tab>'), or "
+            "write the sheet into each reference, e.g. ='Budget'!B12-SUM('Budget'!B10:G10).")
     if "check_tolerance" not in wb.defined_names:          # the tolerance is a labelled input, not a typed literal
         ch["H3"] = "Tolerance"
         ch["H3"].font = Font(name=FONT, bold=True)

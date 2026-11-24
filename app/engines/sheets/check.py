@@ -24,8 +24,15 @@ def main(argv=None) -> int:
     st = check(path)["stats"]
     print(f"PASS: {st['formulas']} formulas, sheets {st['sheets']}, named ranges {st['named_ranges']}"
           + ("" if st.get("recalculated") else
-             " (structure only: LibreOffice is not installed, so formula values were not recalculated and are unverified)"))
+             f" (structure only: formula values were not recalculated ({_why_not_recalculated()}), so they and the "
+             "Checks tab results are unverified)"))
     return 0
+
+
+def _why_not_recalculated() -> str:
+    """The real reason: no soffice at all, or a system copy Meshpool deliberately does not use, or a failed run."""
+    from meshpool_harness.office_runtime import unavailable_reason
+    return unavailable_reason() or "the LibreOffice recalculation did not complete"
 
 
 if __name__ == "__main__":

@@ -222,7 +222,7 @@ def finish_check(answer, artifacts, ws, report=None):
                     status = None
             except Exception:
                 status = None
-            if status not in (None, "OK"):
+            if status not in (None, "OK") and not any(i["cell"] == "Checks!F3" for i in r["issues"]):
                 r["issues"].append({"check": "checks_tab", "cell": "Checks!F3", "detail": f"shows {status}"})
         if "Cover" not in r["stats"]["sheets"]:
             r["issues"].append({"check": "structure", "cell": "", "detail": "no Cover tab; use B.banker_workbook"})
@@ -235,7 +235,8 @@ def finish_check(answer, artifacts, ws, report=None):
                     f"{f['rule']} {f.get('cell') or f.get('sheet') or ''}: {f['message']}".replace("  ", " ")
                     for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "warning")
             r["issues"] += [{"check": f["rule"], "cell": f.get("cell") or f.get("sheet") or "", "detail": f["message"]}
-                            for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"][:10]
+                            for f in fr["failures"] if f["status"] == "fail" and f["severity"] == "error"
+                            and f["check"] not in ("check_refs_empty", "check_refs_own_sheet")][:10]   # QA said it
         except Exception:
             pass
         from engines.sheets.qa import missing_sources          # valuation workbooks: every input carries a source

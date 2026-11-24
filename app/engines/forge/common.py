@@ -173,7 +173,7 @@ def soffice_convert(src: str, to: str, out_dir: str, timeout: int = 240) -> Path
     from meshpool_harness import office_runtime
     exe = find_soffice()
     if not exe:
-        raise RuntimeError(f"LibreOffice not installed ({office_runtime.missing_reason()})")
+        raise office_runtime.Unavailable()
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as profile:
         _profile_fonts(Path(profile))
