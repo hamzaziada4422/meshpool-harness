@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -43,6 +44,12 @@ def kill_group(p: subprocess.Popen) -> None:
 def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
     """Run cmd in its own process group with stdin=/dev/null, stdout+stderr to log; kill the group on timeout."""
     Path(log).parent.mkdir(parents=True, exist_ok=True)
+    # a private temp dir per run: scratch files one run leaves in $TMPDIR (repro copies, probe scripts) must not be
+    # found by the next rep of the same task. Literal /tmp paths cannot be isolated here: runs share /tmp in parallel.
+    tmp = Path(log).with_suffix(".tmp.d")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True, exist_ok=True)
+    env = {**env, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)}
     t0 = time.time()
     timed_out = False
     with open(log, "wb") as lf:
@@ -56,6 +63,7 @@ def run_proc(cmd: list, *, cwd, env: dict, timeout: float, log: Path) -> dict:
         except subprocess.TimeoutExpired:
             timed_out = True
         kill_group(p)       # also reaps stragglers (engines, browsers) the agent left in the group
+        shutil.rmtree(tmp, ignore_errors=True)
     return {"rc": p.returncode, "secs": round(time.time() - t0, 2), "timed_out": timed_out,
             "error": f"timeout after {timeout}s" if timed_out else "", "log": str(log)}
 

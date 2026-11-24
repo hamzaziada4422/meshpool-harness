@@ -2129,11 +2129,22 @@ class Agent:
     _LOOP_SHAPE = 5      # the same call with only numbers changed (od -c | sed -n '8,9p', '9,10p', ...): from the 5th
 
     _REFUSED = ("[Meshpool] Not run", "[Meshpool] Shell checks stopped")
+    _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\])")
 
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
         out = self._guarded_tool_inner(c, g, cut)
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
-        g["rseq"] = g.get("rseq", 0) + 1 if str(out).startswith(self._REFUSED) else 0
+        refused = str(out).startswith(self._REFUSED)
+        g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
+        # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
+        # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
+        if not refused:
+            edits = getattr(self.ws, "edits", None)
+            if edits != g.get("f_edits", edits) or not self._FAILED.match(str(out)):
+                g["fseq"] = 0
+            else:
+                g["fseq"] = g.get("fseq", 0) + 1
+            g["f_edits"] = edits
         try:
             from meshpool_harness.agent import extras as EX
             f = c.get("function", {})
@@ -2372,6 +2383,34 @@ class Agent:
                     + (" If you send it again, tools turn off." if level >= 2 * nudge and wrap > 0 else ""))
         if k == 0:
             g.pop("rnote_at", None)
+        return self._failure_escalation(g)
+
+    def _failure_escalation(self, g: dict) -> str:
+        """Distinct calls that all fail, with no file changed in between, are a loop the repeat guards cannot see. After
+        MH_FAILED_NUDGE failures in a row the model is told to stop and read the error; at twice that, again; at
+        MH_FAILED_WRAP the next reply has tools off. A changed file or any call that succeeds resets the count."""
+        try:
+            nudge = int(os.environ.get("MH_FAILED_NUDGE", "4") or 0)
+            wrap = int(os.environ.get("MH_FAILED_WRAP", "12") or 0)
+        except ValueError:
+            nudge, wrap = 4, 12
+        k = g.get("fseq", 0)
+        if k == 0:
+            g.pop("fnote_at", None)
+            return ""
+        if wrap > 0 and k >= wrap and not g.get("fwrap_done") and not g.get("hard_wrap"):
+            g["fwrap_done"] = g["hard_wrap"] = True        # once per turn: the next call has no tools
+            g["fseq"] = 0
+            return ("Your last " + str(k) + " calls all failed and no file changed. Tools are off now. Give your "
+                    "final answer: what you changed, what works, what fails and the exact error.")
+        level = (2 * nudge if k >= 2 * nudge else nudge) if nudge > 0 else 0
+        if nudge > 0 and k >= nudge and g.get("fnote_at", 0) < level:
+            g["fnote_at"] = level
+            return ("Your last " + str(k) + " calls all failed and no file changed since. Stop varying the same "
+                    "attempt: read the last error message word for word and fix its cause. If a one-line python -c "
+                    "keeps failing, write the script to a file first. If an edit is rejected, read the file and patch "
+                    "a smaller, exact hunk."
+                    + (" If the failures go on, tools turn off." if level >= 2 * nudge and wrap > 0 else ""))
         return ""
 
     def _v3_notes(self, step: int, calls: list, g: dict) -> str:
