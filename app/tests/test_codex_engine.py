@@ -149,7 +149,7 @@ def test_parser_errors_follow_upstream_texts(tmp_path):
     w = ws(tmp_path)
     with pytest.raises(T.ToolError, match="The first line of the patch must be '\\*\\*\\* Begin Patch'"):
         w.apply_patch("hello")
-    w.apply_patch("*** Begin Patch\n*** Add File: a\n+x")  # a missing end marker is repaired, not a failed call
+    w.apply_patch("*** Begin Patch\n*** Add File: a\n+x")         # a missing end marker is repaired (it cost a failed call)
     assert (tmp_path / "a").read_text() == "x\n"
     with pytest.raises(T.ToolError, match="Invalid patch hunk on line 2"):
         w.apply_patch("*** Begin Patch\nnonsense\n*** End Patch")
