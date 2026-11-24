@@ -1,4 +1,4 @@
-"""Recover tool calls that a model wrote as text in `content` (local / OpenAI-compatible servers).
+"""Recover tool calls that a model wrote as text in `content` (local / OpenAI-compatible servers, DeepSeek DSML).
 
 `recover(msg, tool_names)` turns them into `msg["tool_calls"]` only when every call names a tool offered in this
 request; prose around tagged calls stays as content. Never raises."""
@@ -14,6 +14,17 @@ _THINK = re.compile(r"<think>.*?(?:</think>|\Z)", re.S | re.I)
 _TC_BLOCK = re.compile(r"<tool_call>(.*?)(?:</tool_call>|\Z)", re.S | re.I)
 _FUNC_BLOCK = re.compile(r"<function=([^>\s]+)\s*>(.*?)(?:</function>|\Z)", re.S | re.I)
 _PARAM = re.compile(r"<parameter=([^>\s]+)\s*>(.*?)(?:</parameter>|(?=<parameter=)|\Z)", re.S | re.I)
+# DeepSeek DSML (V4: <｜DSML｜tool_calls>; V4.1: <｜DSML｜ calls>, a space before the tag name; an ASCII "|" variant
+# also occurs on the wire). Gateways sometimes return it as plain content instead of structured tool_calls.
+_D = r"<\s*[｜|]\s*DSML\s*[｜|]\s*"
+_DE = r"<\s*/\s*[｜|]\s*DSML\s*[｜|]\s*"
+_DSML_WRAP = re.compile(_D + r"(?:tool_)?calls\s*>(.*?)(?:" + _DE + r"(?:tool_)?calls\s*>|\Z)", re.S)
+_DSML_INVOKE = re.compile(_D + r'invoke\s+name\s*=\s*"([^"]+)"\s*>(.*?)(?:' + _DE + r"invoke\s*>|(?=" + _D + r"invoke\b)|\Z)",
+                          re.S)
+_DSML_PARAM = re.compile(_D + r'parameter\s+name\s*=\s*"([^"]+)"(?:\s+string\s*=\s*"(true|false)")?\s*>(.*?)(?:'
+                         + _DE + r"parameter\s*>|(?=" + _D + r"parameter\b)|(?=" + _DE + r"invoke)|\Z)", re.S)
+_DSML_ANY = re.compile(r"[｜|]\s*DSML\s*[｜|]")
+_EOS = re.compile(r"<[｜|]end▁of▁sentence[｜|]>")
 _NAME_KEYS = ("name", "tool", "tool_name", "function")
 _ARG_KEYS = ("arguments", "parameters", "args", "input")
 
@@ -123,10 +134,50 @@ def _function_block(name, body, names):
     return None
 
 
+def _dsml_invokes(body: str, names):
+    """[(name, args)] for the DSML invoke blocks in body, or None when one names an unknown tool or nothing parses.
+    string="true" (the default) keeps a value verbatim; string="false" is JSON (raw text when it does not parse)."""
+    out = []
+    for m in _DSML_INVOKE.finditer(body):
+        name = m.group(1).strip().split("::")[-1]          # V4.1 namespaces: "search::lookup" -> "lookup"
+        if name not in names:
+            return None
+        args = {}
+        for k, is_str, v in _DSML_PARAM.findall(m.group(2)):
+            if is_str == "false":
+                try:
+                    args[k] = json.loads(v.strip())
+                except ValueError:
+                    args[k] = v
+            else:
+                args[k] = v[1:] if v.startswith("\n") else v   # the value starts right after ">" by the spec
+        out.append((name, args))
+    return out or None
+
+
 def _tagged_blocks(text: str, names):
     """Find calls in formats a-d. Returns (calls, spans) or None if nothing found / an unknown name appears."""
     masked = _mask_think(text)
     calls, spans = [], []
+    # DeepSeek DSML: a <｜DSML｜tool_calls> (or "｜DSML｜ calls") wrapper around invoke blocks, or bare invoke blocks
+    if _DSML_ANY.search(masked):
+        wraps = list(_DSML_WRAP.finditer(masked))
+        for m in wraps:
+            got = _dsml_invokes(text[m.start(1):m.end(1)], names)
+            if not got:
+                return None
+            calls += got
+            spans.append((m.start(), m.end()))
+        if not wraps:
+            inv = list(_DSML_INVOKE.finditer(masked))
+            got = _dsml_invokes(text[inv[0].start():inv[-1].end()], names) if inv else None
+            if not got:
+                return None
+            calls += got
+            spans.append((inv[0].start(), inv[-1].end()))
+        for m in _EOS.finditer(masked):
+            spans.append((m.start(), m.end()))
+        return calls, spans
     # <tool_call> ... </tool_call>, whose body is JSON or a <function=...> block
     for m in _TC_BLOCK.finditer(masked):
         body = text[m.start(1):m.end(1)].strip()
@@ -233,7 +284,7 @@ def recover(msg: dict, tool_names) -> bool:
             return False
         masked = _mask_think(content)
         tagged = None
-        if re.search(r"<tool_call>|<function=|<\|python_tag\|>|\[TOOL_CALLS\]", masked, re.I):
+        if re.search(r"<tool_call>|<function=|<\|python_tag\|>|\[TOOL_CALLS\]", masked, re.I) or _DSML_ANY.search(masked):
             tagged = _tagged_blocks(content, names)
         if tagged:
             calls, spans = tagged
@@ -254,3 +305,17 @@ def recover(msg: dict, tool_names) -> bool:
         return True
     except Exception:
         return False
+
+
+def strip_markup(text: str) -> str:
+    """Text with DeepSeek DSML call markup and end-of-sentence tokens removed: for a reply whose calls cannot run
+    (tools are off for the final answer), so the user never sees raw `<｜DSML｜ invoke ...>` lines."""
+    try:
+        if not isinstance(text, str) or not _DSML_ANY.search(text):
+            return text
+        out = _DSML_WRAP.sub("", text)
+        out = _DSML_INVOKE.sub("", out)
+        out = re.sub(_DE + r"(?:tool_)?calls\s*>", "", out)
+        return _EOS.sub("", out).strip()
+    except Exception:  # noqa: BLE001
+        return text

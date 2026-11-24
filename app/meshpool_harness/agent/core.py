@@ -1725,6 +1725,14 @@ class Agent:
                     if _TC.recover(msg, offered) and streamed:
                         self.emit({"type": "stream_reset"})   # the raw call text was shown as it streamed: drop it
                         streamed = False
+                elif tools_off and isinstance(msg.get("content"), str):
+                    from meshpool_harness.core import textcalls as _TC
+                    _plain = _TC.strip_markup(msg["content"])   # calls written as text cannot run now: not for the user
+                    if _plain != msg["content"]:
+                        msg["content"] = _plain
+                        if streamed:
+                            self.emit({"type": "stream_reset"})
+                            streamed = False
                 cut_off = self._finish == "length"     # the reply hit the output limit (max_tokens)
                 cut = {i for i, c in enumerate(msg.get("tool_calls") or []) if cut_off and not _args_ok(c)}
                 calls = _sanitize_calls(msg.get("tool_calls") or [])
