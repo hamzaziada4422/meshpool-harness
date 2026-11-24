@@ -88,7 +88,7 @@ def test_calls_after_a_failed_edit_in_the_same_turn_are_skipped(tmp_path):
 def _ws(tmp_path):
     from meshpool_harness.core.tools import Workspace
     proj = tmp_path / "proj"
-    proj.mkdir(exist_ok=True)
+    proj.mkdir(parents=True, exist_ok=True)
     (proj / "a.py").write_text("x = 1\n")
     return Workspace(str(proj), str(tmp_path / "run")), proj
 
@@ -122,3 +122,23 @@ def test_a_reread_is_printed_again_once_the_text_has_left_the_history(tmp_path):
     assert "is unchanged since" in a.ws._reread("cat a.py", None)          # still in the conversation: pointer
     a.messages[-1]["content"] = "[output trimmed]"                         # compaction dropped it
     assert a.ws._reread("cat a.py", None) == ""                            # printed for real again
+def test_recheck_reruns_the_last_check_after_a_patch(tmp_path):
+    ws, proj = _ws(tmp_path)
+    ws.recheck = True
+    ws.get_mode = lambda: "auto"                    # full access: commands already run unasked
+    ws.shell(["bash", "-lc", "python3 -c 'import a; print(\"x is\", a.x)'"])
+    out = ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 5\n*** End Patch")
+    assert out.startswith("Success.") and "Meshpool re-ran your last check" in out and "x is 5" in out
+    ws.get_mode = lambda: "ask"                     # asking before commands: a re-run would be an unasked run
+    assert "re-ran" not in ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 5\n+x = 6\n*** End Patch")
+
+
+def test_recheck_skips_writes_and_off_by_default(tmp_path):
+    ws, proj = _ws(tmp_path)
+    ws.shell(["bash", "-lc", "python3 -c 'print(1)'"])
+    assert "re-ran" not in ws.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 2\n*** End Patch")
+    ws2, _ = _ws(tmp_path / "second")
+    ws2.recheck = True
+    ws2.get_mode = lambda: "auto"
+    ws2.shell(["bash", "-lc", "python3 -c 'print(1)' > out.txt"])
+    assert "re-ran" not in ws2.apply_patch("*** Begin Patch\n*** Update File: a.py\n@@\n-x = 1\n+x = 3\n*** End Patch")
