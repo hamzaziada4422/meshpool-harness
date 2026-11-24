@@ -193,9 +193,12 @@ def _no_console() -> bool:
 def _worktree_cli(args: list) -> int:
     from meshpool_harness import worktrees as WT
     ap = argparse.ArgumentParser(prog="meshpool worktree", description="Git worktrees Meshpool makes for tasks.")
-    ap.add_argument("action", choices=["list", "add", "remove"])
+    ap.add_argument("action", choices=["list", "add", "remove", "prune"])
     ap.add_argument("name", nargs="?", default="")
     ap.add_argument("--force", action="store_true", help="remove even with uncommitted changes (commits stay on the branch)")
+    ap.add_argument("--base", default="", help="start from HEAD (default), a branch or commit, or 'remote' (origin's default branch, fetched)")
+    ap.add_argument("--sparse", default="", help="comma-separated folders to check out (a sparse checkout)")
+    ap.add_argument("--keep", type=int, default=5, help="prune: how many of the newest worktrees to keep (default 5)")
     a = ap.parse_args(args)
     try:
         if a.action == "list":
@@ -207,8 +210,11 @@ def _worktree_cli(args: list) -> int:
             if not rows:
                 print("No worktrees. Start one with: meshpool -w [name]")
         elif a.action == "add":
-            w = WT.create(os.getcwd(), a.name)
-            print(f"{w['path']} (branch {w['branch']})")
+            w = WT.create(os.getcwd(), a.name, base=a.base, sparse=[s for s in a.sparse.split(",") if s])
+            print(f"{w['path']} (branch {w['branch']}, from {w['base']})")
+        elif a.action == "prune":
+            gone = WT.prune(os.getcwd(), a.keep)
+            print("Removed " + ", ".join(gone) if gone else "Nothing to remove: the rest have changes or unpushed commits.")
         else:
             if not a.name:
                 print("Usage: meshpool worktree remove NAME [--force]")
@@ -301,6 +307,7 @@ def main(argv=None):
             print(f"Working in {w['path']} on branch {w['branch']}" + (
                 f" (copied {', '.join(w['copied'])})" if w["copied"] else ""), file=sys.stderr)
             a.dir = w["path"]
+            os.environ["MH_WORKTREE_MADE"] = w["path"]   # the terminal asks to keep or remove it on the way out
         if a.append_system_prompt:
             os.environ["MH_APPEND_PROMPT"] = a.append_system_prompt
         if a.permission_mode:

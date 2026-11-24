@@ -5,6 +5,12 @@ same files, and the main checkout stays as it is.
                        folder is added to .git/info/exclude (local, never committed). Files listed in a
                        .worktreeinclude at the repo root (ignored files such as .env) are copied in.
   listing(repo)        the worktrees Meshpool made, with branch, uncommitted changes and unpushed commits.
+  prune(repo, keep)    removes the oldest clean, fully pushed worktrees beyond the newest `keep`.
+  owner(path)          (repo, name) when path is inside one of Meshpool's worktrees, else None.
+
+  Options of create: base "HEAD" (default), a branch or commit, or "remote" (the remote's default branch, fetched
+  first); sparse: folders to check out (a sparse checkout for big monorepos). Each new worktree is locked
+  (git worktree lock) so git worktree prune never drops it while Meshpool uses it; remove unlocks it.
   remove(path)         refuses while the worktree has uncommitted changes or commits that are on no other branch
                        or remote, unless force=True; the branch is deleted only when nothing would be lost.
 """
@@ -88,7 +94,53 @@ def _include(root: Path, dest: Path) -> list[str]:
     return copied
 
 
-def create(path, name: str = "", base: str = "") -> dict:
+def _base_ref(root: Path, base: str) -> str:
+    """HEAD, a ref the user named, or "remote": the default branch of origin, freshly fetched."""
+    base = (base or os.environ.get("MH_WORKTREE_BASE", "") or "HEAD").strip()
+    if base.lower() != "remote":
+        if base != "HEAD" and _git(["rev-parse", "--verify", "--quiet", base + "^{commit}"], root, check=False).returncode:
+            raise WorktreeError(f"No branch or commit named {base}.")
+        return base
+    _git(["-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin"], root, timeout=180)
+    head = _git(["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], root, check=False).stdout.strip()
+    if not head:
+        for cand in ("refs/remotes/origin/main", "refs/remotes/origin/master"):
+            if _git(["rev-parse", "--verify", "--quiet", cand], root, check=False).returncode == 0:
+                head = cand
+                break
+    if not head:
+        raise WorktreeError("Could not find the remote's default branch (origin/HEAD).")
+    return head.replace("refs/remotes/", "")
+
+
+def owner(path) -> tuple[Path, str] | None:
+    """(main checkout, worktree name) when path is in one of Meshpool's worktrees."""
+    p = Path(path).expanduser().resolve()
+    for parent in (p, *p.parents):
+        if parent.parent.name == "worktrees" and parent.parent.parent.name == ".meshpool":
+            return parent.parent.parent.parent, parent.name
+    return None
+
+
+def prune(path, keep: int = 5) -> list[str]:
+    """Removes the oldest of Meshpool's worktrees beyond the newest `keep`, only those with no uncommitted changes
+    and no unpushed commits (remove refuses the rest). Returns the names removed."""
+    root = repo_root(path)
+    rows = [w for w in listing(root) if not w.get("missing")]
+    rows.sort(key=lambda w: Path(w["path"]).stat().st_mtime if Path(w["path"]).exists() else 0, reverse=True)
+    gone = []
+    for w in rows[max(0, int(keep)):]:
+        if w.get("dirty") or w.get("unpushed"):
+            continue
+        try:
+            remove(w["path"])
+            gone.append(w["name"])
+        except WorktreeError:
+            continue
+    return gone
+
+
+def create(path, name: str = "", base: str = "", sparse: list | None = None) -> dict:
     root = repo_root(path)
     from meshpool_harness.core import tools as T
     if not T.git_config_safe(root):
@@ -103,11 +155,23 @@ def create(path, name: str = "", base: str = "") -> dict:
     branch = f"meshpool/{name}"
     if _git(["rev-parse", "--verify", "--quiet", "refs/heads/" + branch], root, check=False).returncode == 0:
         raise WorktreeError(f"The branch {branch} already exists. Pick another name.")
+    ref = _base_ref(root, base)
+    sparse = [s.strip().strip("/") for s in (sparse or []) if s and s.strip().strip("/")]
+    if any(".." in Path(s).parts or Path(s).is_absolute() for s in sparse):
+        raise WorktreeError("Sparse folders are paths inside the repository.")
     _exclude(root)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _git(["-c", "core.hooksPath=/dev/null", "worktree", "add", "-b", branch, str(dest), base or "HEAD"], root, timeout=300)
+    nohooks = ["-c", "core.hooksPath=/dev/null"]
+    _git(nohooks + ["worktree", "add", "--lock", "--reason", "Meshpool task", "-b", branch]
+         + (["--no-checkout"] if sparse else []) + [str(dest), ref], root, timeout=300)
+    if sparse:                                            # only these folders on disk: fast in a big monorepo
+        _git(nohooks + ["sparse-checkout", "set", "--cone", *sparse], dest, timeout=120)
+        _git(nohooks + ["checkout"], dest, timeout=300)
     copied = _include(root, dest)
-    return {"name": name, "path": str(dest), "branch": branch, "repo": str(root), "copied": copied}
+    keep = os.environ.get("MH_WORKTREE_KEEP", "")
+    pruned = prune(root, int(keep)) if keep.isdigit() and int(keep) > 0 else []
+    return {"name": name, "path": str(dest), "branch": branch, "repo": str(root), "copied": copied, "base": ref,
+            "sparse": sparse, "pruned": pruned}
 
 
 def _next_name(root: Path) -> str:
@@ -171,6 +235,7 @@ def remove(path, force: bool = False) -> dict:
             why.append(f"{item['unpushed']} commit{'s' if item['unpushed'] != 1 else ''} that no other branch or remote has")
         raise WorktreeError(f"{item['name']} has {' and '.join(why)}. Commit and push them first, or remove it "
                             "anyway: uncommitted changes are lost, commits stay on the branch.")
+    _git(["worktree", "unlock", str(p)], root, check=False)     # Meshpool's own lock, from create
     _git(["worktree", "remove", "--force", str(p)] if force else ["worktree", "remove", str(p)], root, timeout=120)
     gone = False
     if item.get("branch"):                               # -d refuses a branch whose commits would be lost

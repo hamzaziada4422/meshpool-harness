@@ -2,6 +2,7 @@
 loses commits or changes without force."""
 import json
 import subprocess
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -83,3 +84,53 @@ def test_the_app_routes_reach_the_worktree_api(repo):
     from meshpool_harness.ui import routes_extra as R
     st, out = R.handle("GET", urlparse("/api/worktree?root=" + str(repo)))
     assert st == 200 and out == {"worktrees": []}
+
+
+def test_base_ref_sparse_lock_and_owner(repo):
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "x.py").write_text("x")
+    (repo / "docs").mkdir()
+    (repo / "docs" / "d.md").write_text("d")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-qm", "two", cwd=repo)
+    first = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"], cwd=repo, capture_output=True,
+                           text=True).stdout.strip()
+    w = WT.create(repo, "old", base=first)
+    assert w["base"] == first and not (Path(w["path"]) / "pkg").exists()
+    with pytest.raises(WT.WorktreeError, match="No branch"):
+        WT.create(repo, "bad", base="nope")
+    s = WT.create(repo, "slim", sparse=["pkg"])
+    assert (Path(s["path"]) / "pkg" / "x.py").exists() and not (Path(s["path"]) / "docs").exists()
+    assert next(x for x in WT.listing(repo) if x["name"] == "slim")["locked"] is True
+    assert WT.owner(Path(s["path"]) / "pkg") == (repo, "slim") and WT.owner(repo) is None
+    with pytest.raises(WT.WorktreeError):
+        WT.create(repo, "esc", sparse=["../x"])
+    WT.remove(s["path"])                                        # unlocks its own lock
+    assert "slim" not in [x["name"] for x in WT.listing(repo)]
+
+
+def test_prune_keeps_the_newest_and_anything_with_work(repo):
+    import os
+    import time as _t
+    names = []
+    for i in range(4):
+        w = WT.create(repo, f"t{i}")
+        os.utime(w["path"], (_t.time() - 100 + i, _t.time() - 100 + i))
+        names.append(w["name"])
+    (repo / ".meshpool" / "worktrees" / "t0" / "wip.txt").write_text("unsaved")   # the oldest has work: kept
+    os.utime(repo / ".meshpool" / "worktrees" / "t0", (_t.time() - 100, _t.time() - 100))
+    gone = WT.prune(repo, keep=1)
+    left = [x["name"] for x in WT.listing(repo)]
+    assert sorted(gone) == ["t1", "t2"] and sorted(left) == ["t0", "t3"]
+
+
+def test_a_worktree_chat_asks_before_touching_the_main_checkout(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    from meshpool_harness.agent import core
+    w = WT.create(repo, "guarded")
+    a = core.Agent(w["path"], approve=lambda *x: ("no", ""), mode="auto")
+    for cmd in (f"git -C {repo} reset --hard", f"rm {repo}/a.txt", "GIT_DIR=../../../.git git log",
+                "git --work-tree=/x status"):
+        assert not a._permit("bash", {"command": cmd})[0], cmd
+    assert a._permit("bash", {"command": f"ls {w['path']}"})[0]           # its own folder is fine
+    assert a._permit("bash", {"command": "make build"})[0]

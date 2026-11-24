@@ -2618,6 +2618,12 @@ class Agent:
         if hk["allow"] and not _destructive(args):
             return True, ""
         rules = _rules(self.root)
+        main = self._main_checkout_touch(name, args)
+        if main:
+            if not self.approve:
+                return False, main + " Work in this worktree only, or ask the user."
+            decision, note = self.approve("bash", main, str(args.get("command") or args.get("commands") or ""))
+            return decision in ("yes", "always", "save"), note or ""
         guard = self._power_file(name, args)
         if guard and name in ("bash", "shell", "bash_start", "bash_many") and self.mode == "auto":
             guard = ""                             # full access: commands run as the user chose
@@ -2705,6 +2711,28 @@ class Agent:
         if decision == "always":
             self.always.add(group)
         return decision in ("yes", "always"), note or ""
+
+    def _main_checkout_touch(self, name: str, args: dict) -> str:
+        """In one of Meshpool's worktrees: why a command reaches the main checkout (its path, git -C, --git-dir,
+        --work-tree, GIT_DIR=), or "". Such a command always asks, so a task in a worktree cannot change the
+        checkout the user works in."""
+        if name not in ("bash", "shell", "bash_start", "bash_many"):
+            return ""
+        try:
+            from meshpool_harness import worktrees as WTG
+            own = WTG.owner(self.root)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not own:
+            return ""
+        main, wname = own
+        text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
+                                         else args.get("command")) + list(args.get("commands") or []))
+        mine = str(main / ".meshpool" / "worktrees" / wname)
+        if re.search(r"(^|\s)git\s+(-C\b|--git-dir|--work-tree)|GIT_DIR=|GIT_WORK_TREE=", text) or \
+                str(main) in text.replace(mine, "") or re.search(r"(^|[\s;&|])cd\s+(\.\./){3,}", text):
+            return "This command reaches the main checkout, outside this task's worktree. Run it?"
+        return ""
 
     _POWER_FILES = (".meshpool/hooks.json", ".meshpool/permissions.json", ".meshpool/mcp.json", ".mcp.json")
 

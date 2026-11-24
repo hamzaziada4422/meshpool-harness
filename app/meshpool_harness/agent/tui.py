@@ -1662,6 +1662,35 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         if sub:
             agent.close()
     if prompt is None and not sub:
+        _leave_worktree(term, wd)
         term.p(st.dim("  Session saved. Resume it with: meshpool --continue"))
     return 0
+
+
+def _leave_worktree(term: "Terminal", wd: str) -> None:
+    """Leaving a session that meshpool -w started in a new worktree: keep it, or remove it (safely, or with its
+    uncommitted changes discarded; commits always stay on the branch)."""
+    made = os.environ.get("MH_WORKTREE_MADE", "")
+    if not made or not sys.stdin.isatty() or os.path.realpath(made) != os.path.realpath(wd) or not os.path.isdir(made):
+        return
+    from meshpool_harness import worktrees as WT
+    st = term.st
+    try:
+        state = next((w for w in WT.listing(made) if os.path.realpath(w["path"]) == os.path.realpath(made)), {})
+    except WT.WorktreeError:
+        return
+    note = ("it has uncommitted changes" if state.get("dirty") else "") + \
+        (("; " if state.get("dirty") else "") + f"{state['unpushed']} unpushed commit(s)" if state.get("unpushed") else "")
+    opts = ["Keep it", "Remove it"] + (["Remove it and discard the uncommitted changes"] if state.get("dirty") else [])
+    pick = term.choose(f"Keep the worktree {state.get('name', '')}?",
+                       [_tilde(made) + (f" ({note})" if note else " (no changes)"),
+                        f"Branch {state.get('branch', '')} stays either way unless nothing would be lost."], opts, sel=0)
+    if pick in (1, 2):
+        try:
+            r = WT.remove(made, force=pick == 2)
+            term.p(st.dim(f"  Removed {r['removed']}" + ("" if r["branch_deleted"] else f"; branch {r['branch']} kept")))
+        except WT.WorktreeError as e:
+            term.p(st.amber(f"  Kept it: {e}"))
+    else:
+        term.p(st.dim(f"  Kept {_tilde(made)}. Remove it later with: meshpool worktree remove {state.get('name', '')}"))
 
