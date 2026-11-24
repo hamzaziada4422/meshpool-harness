@@ -235,6 +235,8 @@ def test_running_diff_writes_nothing(tmp_path, mode):
 
 def test_old_turn_records_still_undo(tmp_path):
     root = _proj(tmp_path, {"a.py": "new\n", "added.py": "agent\n", "user.md": "mine\n"})
+    for f in ("a.py", "added.py"):                      # the records below say 644; a umask of 002 would make 664
+        os.chmod(root / f, 0o644)
     store = tmp_path / "old"
 
     def put(data):
