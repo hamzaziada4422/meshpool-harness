@@ -7,6 +7,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 LOG = sys.argv[2] if len(sys.argv) > 2 else "/tmp/mock_requests.jsonl"
 
 
+def _write(names, path, content):
+    """A file write in the tool set this chat offers: write_file (classic), apply_patch (Codex-style lanes) or write."""
+    if "write_file" in names:
+        return ("tool", "write_file", {"path": path, "content": content})
+    if "apply_patch" in names:
+        body = "".join("+" + ln + "\n" for ln in content.splitlines())
+        return ("tool", "apply_patch", {"input": f"*** Begin Patch\n*** Add File: {path}\n{body}*** End Patch\n"})
+    return ("tool", "write", {"path": path, "content": content})
+
+
 def plan(messages, tools):
     names = {t["function"]["name"] for t in tools or []}
     if str(messages[0].get("content", "")).startswith("You are the INDEPENDENT REVIEWER"):   # the grader (0.0.11)
@@ -40,13 +50,12 @@ def plan(messages, tools):
     if "the goal of this chat" in u and "goal test" in u:   # /goal: three turns, one file each, then done
         n = sum(1 for m in messages if m["role"] == "user" and "the goal of this chat" in str(m["content"]).lower())
         if step == 0:
-            return ("tool", "write_file" if "write_file" in names else "write", {"path": f"goal{n}.txt", "content": f"part {n}\n"})
+            return _write(names, f"goal{n}.txt", f"part {n}\n")
         return ("text", f"Wrote goal{n}.txt.\nGOAL: DONE" if n >= 3 else f"Wrote goal{n}.txt.\nGOAL: CONTINUE with part {n + 1}")
     mf = __import__("re").search(r"make the file (\S+)", u)
     if mf:                                                 # Undo and rewind tests: one file per message
         if step == 0:
-            return ("tool", "write_file" if "write_file" in names else "write",
-                    {"path": mf.group(1).strip(".,"), "content": "made for " + mf.group(1) + "\n"})
+            return _write(names, mf.group(1).strip(".,"), "made for " + mf.group(1) + "\n")
         return ("text", "Made " + mf.group(1).strip(".,") + ".")
     if "remember that" in u:                              # memory: shared by every agent through meshpool-assistant
         mem = next((n for n in names if n.endswith("memory_save")), None)

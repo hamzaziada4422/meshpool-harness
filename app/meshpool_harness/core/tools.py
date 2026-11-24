@@ -1734,12 +1734,27 @@ class Workspace:
     _CHECKISH = re.compile(r"\b(pytest|python3?|node|npm (?:run )?test|go test|cargo test|ruby|bash \S+\.sh|sh \S+\.sh)\b")
     _WRITES = re.compile(r"(cat\s*>|>\s*[\w./$\"'-]+\.(?:py|js|ts|json|txt|csv)\b|tee |sed -i|rm |mv |cp |git |pip |npm i)")
 
+    # What may be re-run unasked: a test runner, an inline assertion (python -c / node -e), a test file, or a check
+    # script in the task's scratch folder. Never a project script with side effects (an importer writing rows twice),
+    # and never sudo, network or destructive commands, which the user may have approved once (review, 0.0.16).
+    _TEST_RUNNER = re.compile(r"\b(pytest|unittest|tox|nox|npm (?:run )?test|yarn test|pnpm test|go test|cargo test|jest|"
+                              r"vitest|mocha|rspec|phpunit|dotnet test|mvn test|gradle test)\b|\bpython3?\s+-c\b|"
+                              r"\bnode\s+-e\b|(?:^|[\s/])(?:test_\w+|\w+_test)\.py\b|\$TMPDIR|\$\{TMPDIR\}")
+    _UNSAFE = re.compile(r"\b(sudo|doas|su|curl|wget|ssh|scp|rsync|docker|kubectl|psql|mysql|mongo|redis-cli|dd|mkfs|"
+                         r"shutdown|reboot|kill|pkill|chmod|chown)\b|\brm\s|git\s+(?:push|reset|clean|checkout)")
+
+    def _recheckable(self, cmd: str) -> bool:
+        if self._UNSAFE.search(cmd):
+            return False
+        scratch = str(self.__dict__.get("_scratch_dir") or "")              # the task's private $TMPDIR
+        return bool(self._TEST_RUNNER.search(cmd)) or bool(scratch and len(scratch) > 4 and scratch in cmd)
+
     def _last_check(self):
         for c in reversed(self.commands):
             cmd = c.get("cmd", "")
             if c.get("kind") != "bash" or not self._CHECKISH.search(cmd) or self._WRITES.search(cmd):
                 continue
-            if (c.get("secs") or 0) > 60 or len(cmd) > 2000:
+            if (c.get("secs") or 0) > 60 or len(cmd) > 2000 or not self._recheckable(cmd):
                 return None
             return c
         return None

@@ -100,9 +100,11 @@ def test_flag_on_work_keeps_its_office_and_web_tools(tmp_path, monkeypatch):
     assert a._tool_names() == CODEX3 + ["office_task", "web_research", "fetch_url"]
     a.mcp = _Mcp()
     assert not a.office_on
-    names = _names(a)
-    assert "mcp__meshpool_office__make_deck" in names and "mcp__meshpool_office__make_document" in names
+    names = _names(a)                         # the office server loads when a message asks for a file, as in Code
+    assert "mcp__meshpool_office__make_deck" not in names and "office_task" in names
     assert "mcp__demo__calculate" in names and "mcp__meshpool_web__web_search" not in names   # built-in web tools
+    a.office_on = True
+    assert "mcp__meshpool_office__make_deck" in _names(a) and "mcp__meshpool_office__make_document" in _names(a)
     a.plan = True                                                            # plan mode keeps its read-only tools
     assert not a._codex() and "read_file" in _names(a)
 

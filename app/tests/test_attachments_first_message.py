@@ -198,6 +198,7 @@ def test_unwritable_folder_gives_one_toast_no_empty_chat_and_keeps_the_text(page
         if not immutable:
             pytest.skip("root can write to a read-only folder here")
     before = len(_rows(_threads(app)))
+    page.click("#newThread")                       # a draft, not a chat from an earlier test that waits for approval
     page.evaluate("p => { S.draft.project = p; S.draft.mode = 'auto'; renderHero(); }", app["ro"])
     _attach_text(page)
     page.evaluate("window.__toasts = []; new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(n => { if (n.className && String(n.className) === 'toast') window.__toasts.push(n.innerText); }))).observe(document.body, {childList: true, subtree: true})")

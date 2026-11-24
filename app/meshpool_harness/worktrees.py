@@ -612,7 +612,13 @@ def _merge_copy(rec: dict) -> dict:
             Path(_long(t)).unlink(missing_ok=True)
         else:
             Path(_long(t)).parent.mkdir(parents=True, exist_ok=True)
-            fsio.atomic_write_bytes(_long(t), new, fsync=False)
+            try:                                     # keep the file's own bits (an executable stays executable)
+                mode = os.stat(_long(t)).st_mode & 0o7777
+            except OSError:                          # a new file: open()'s default, not mkstemp's 0600
+                um = os.umask(0o022)
+                os.umask(um)
+                mode = 0o666 & ~um
+            fsio.atomic_write_bytes(_long(t), new, fsync=False, mode=None if os.name == "nt" else mode)
     for rel, new in plan:                           # the copy's base is now the folder's state
         b = Path(rec["base_dir"]) / rel
         if new is None:

@@ -479,3 +479,21 @@ def test_cli_merge_conflict_exits_1_and_lists_files(repo, monkeypatch):
     git(repo, "commit", "-qam", "u")
     out = io.StringIO()
     assert WT.cli(["merge", rec["id"]], out) == 1 and "conflict: a.txt" in out.getvalue()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_plain_copy_merge_keeps_file_modes(tmp_path):
+    """Review (0.0.16): merging a plain copy wrote every file 0600 (mkstemp), so run.sh lost its x bit."""
+    f = tmp_path / "plain"
+    f.mkdir()
+    (f / "run.sh").write_text("echo a\n")
+    os.chmod(f / "run.sh", 0o755)
+    (f / "notes.txt").write_text("a\n")
+    os.chmod(f / "notes.txt", 0o644)
+    rec = WT.create(f, owner_kind="cli")
+    assert rec["kind"] == "copy"
+    (Path(rec["workdir"]) / "run.sh").write_text("echo b\n")
+    (Path(rec["workdir"]) / "new.txt").write_text("n\n")
+    assert WT.merge(rec["id"])["ok"]
+    assert (f / "run.sh").read_text() == "echo b\n" and (f / "run.sh").stat().st_mode & 0o777 == 0o755
+    assert (f / "new.txt").stat().st_mode & 0o044          # a new file is readable as open() would make it, not 0600

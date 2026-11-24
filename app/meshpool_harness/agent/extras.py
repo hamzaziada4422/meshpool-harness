@@ -187,7 +187,7 @@ def _tool_matches(matcher: str, name: str, args: dict) -> bool:
     for m in matcher.split("|"):
         m = m.strip()
         if m.lower().startswith("bash:") or m.lower().startswith("bash("):
-            pat = m[5:].strip().rstrip(")") if m[4] == ":" else m[5:].rstrip(")").strip()
+            pat = m[5:].strip() if m[4] == ":" else (m[5:-1] if m.endswith(")") else m[5:]).strip()
             if cmd and fnmatch.fnmatchcase(cmd, pat):
                 return True
         elif fnmatch.fnmatchcase(name, m) or fnmatch.fnmatchcase(name.lower(), m.lower()) \

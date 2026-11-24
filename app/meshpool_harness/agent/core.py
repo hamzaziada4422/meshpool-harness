@@ -1255,12 +1255,12 @@ class Agent:
             text += E2E_RULES
         if self.profile == "code":
             text += SCRATCH_RULE
-        if stable:
-            text += "\n" + env_block                    # after the shared rules, before the per-project parts
-        if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":
+        if os.environ.get("MH_OBSERVE") == "1" and self.profile == "code":   # a working rule: before the Environment
             text += ("\n- Before your first edit to fix a bug, reproduce it with probe (a failing test or a short "
                      "script) and read its diagnosis. If the cause is not clear, run trace on the same command to see "
                      "which project functions run. After an edit, use probe to see what still fails.")
+        if stable:
+            text += "\n" + env_block                    # after the shared rules, before the per-project parts
         from meshpool_harness.agent import extras as EX
         text += EX.instruction_text(self.root)          # home, parent folders and the project, with @imports
         try:
@@ -1319,12 +1319,13 @@ class Agent:
         if self._codex():                          # Codex's tools, and the user's own MCP tools
             # Meshpool's own servers stay out of a coding chat (about 2k tokens a call), except the office tools
             # once a message in this chat asks for a PowerPoint, document, workbook or PDF (office_on, set by the
-            # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot. A Work chat
-            # (MH_LEAN_WORK=1) always has them: making documents is its job.
+            # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot. A lean Work
+            # chat works the same way (office_task is always there): loading the office server for every message added
+            # about 3k tokens a call and its start-up time to chats that never touch a document.
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):
-                    return self.profile == "work" or bool(getattr(self, "office_on", False))
+                    return bool(getattr(self, "office_on", False))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
@@ -2939,18 +2940,19 @@ class Agent:
                 rel.append(os.path.relpath(f, self.root))
             except ValueError:
                 rel.append(f)
-        stats = self._turn_line_stats()                 # this turn's own lines, from its checkpoint
-        if not stats:
-            try:                                         # no checkpoint: against HEAD (counts uncommitted work too)
-                r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *rel], cwd=self.root,
+        stats = {k.replace("/", os.sep): v for k, v in Agent._turn_line_stats(self).items()}   # this turn's own lines
+        missing = [r for r in rel if r not in stats]     # changed outside the edit tools (a script): git fills them in
+        if missing:
+            try:                                         # against HEAD (counts uncommitted work too)
+                r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *missing], cwd=self.root,
                                    capture_output=True, text=True, timeout=10)
                 for line in r.stdout.splitlines():
                     a, d, name = line.split("\t", 2)
-                    stats[name] = f"+{a} -{d}"
+                    stats.setdefault(name.replace("/", os.sep), f"+{a} -{d}")
             except Exception:  # noqa: BLE001 - not a git repo, or git missing
                 pass
-        stats = {k.replace("/", os.sep): v for k, v in stats.items()}
         created = {os.path.relpath(c, self.root) for c in getattr(self.ws, "turn_new", set()) if os.path.isabs(c)}
+        stats = {k: v for k, v in stats.items() if k not in created}   # a file this turn made reads "(new)"
         parts = [f"{r} ({stats[r]})" if r in stats else f"{r} (new)" if r in created else r for r in rel[:12]]
         more = f" and {len(rel) - 12} more" if len(rel) > 12 else ""
         after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits and c.get("kind") != "read"]
@@ -4063,8 +4065,8 @@ class Agent:
             pats = [x[5:] for x in self.always if x.startswith("bash:")]
             if cmds and not _destructive(args) and all(PR.granted(c, pats) for c in cmds):
                 return True, ""                # the chat grant covers only the command patterns the user allowed
-        elif group in self.always:
-            return True, ""
+        elif group in self.always and risky != "destructive" and not _destructive(args):
+            return True, ""                    # a chat grant never covers a destructive command (OSS-18)
         if not self.approve:
             return False, "No one is available to approve this. Run with --auto to allow changes."
         if risky:
@@ -4100,10 +4102,11 @@ class Agent:
                       else json.dumps(args, indent=1, ensure_ascii=False)[:3000])
         pats = [p for c in cmds for p in PR.grant_patterns(c)] if group == "bash" and not _destructive(args) else []
         pats = list(dict.fromkeys(pats))
-        scope = ("all file edits" if group == "edit" else "this tool" if group != "bash" else
+        scope = ("once" if risky == "destructive" or _destructive(args) else   # a destructive command: this once only
+                 "all file edits" if group == "edit" else "this tool" if group != "bash" else
                  " and ".join(f"`{p}`" for p in pats[:3]) + " commands" if pats else "once")   # once: no chat grant
         decision, note = PR.approve_with_scope(self.approve, kind, title, detail, scope)
-        if decision == "always":
+        if decision == "always" and scope != "once":
             if group == "bash":
                 self.always.update("bash:" + p for p in pats)   # no pattern (a chain, a redirect): this once only
             else:

@@ -116,8 +116,12 @@ def granted(cmd: str, patterns) -> bool:
 
 def _inside(arg: str, root) -> bool:
     p = os.path.expanduser(arg)
-    if not (p.startswith("/") or arg.startswith("~") or ".." in arg):
+    absolute = (p.startswith(("/", "\\")) or os.path.isabs(p)
+                or bool(re.match(r"^[A-Za-z]:[\\/]", p)))      # C:/..., C:\..., UNC, also when checked on Linux
+    if not (absolute or arg.startswith("~") or ".." in arg):
         return True
+    if (re.match(r"^[A-Za-z]:[\\/]", p) or p.startswith("\\")) and os.name != "nt":
+        return False                                  # a drive or UNC path is never inside a POSIX project root
     try:
         rp = Path(os.path.realpath(p if os.path.isabs(p) else os.path.join(str(root), p)))
         r = Path(os.path.realpath(str(root)))
