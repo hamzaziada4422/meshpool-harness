@@ -209,6 +209,26 @@ class Browser:
             self._guarded = self.ctx
         except Exception:  # noqa: BLE001 - a browser that cannot route keeps the first-page check only
             pass
+
+    def _check_where(self):
+        """Where the page ended up (a server redirect is not seen by the route check) must be on the user's site
+        lists too; if not, the page is closed before anything of it reaches the agent."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or self.page is None:
+            return
+        u = self.page.url or ""
+        if not u.lower().startswith(("http:", "https:")):
+            return
+        from meshpool_harness import web as WEB
+        try:
+            WEB.check_domain(u)
+        except WEB.WebError as e:
+            try:
+                self.page.goto("about:blank")
+            except Exception:  # noqa: BLE001
+                pass
+            raise ToolFailed(f"The page went to a site your lists do not allow, so it was closed: {e}")
+
+    def _launch(self, prof: Path, **kw):
         prof.mkdir(parents=True, exist_ok=True)
         return self.pw.chromium.launch_persistent_context(
             str(prof), headless=kw.pop("headless"), no_viewport=True,
@@ -317,6 +337,7 @@ class Browser:
 
     def snapshot(self, note: str = "") -> str:
         self.settle()
+        self._check_where()
         if os.environ.get("MH_BROWSER_STATES") == "1":
             self.page.evaluate("() => { window.__mpStates = true; }")
         s = self.page.evaluate(SNAPSHOT_JS)
@@ -464,6 +485,7 @@ def browser_screenshot(full_page: bool = False) -> list:
     def go():
         B.ensure()
         B.settle()
+        B._check_where()                                  # never a picture of a site the lists do not allow
         png = B.page.screenshot(full_page=bool(full_page), type="png")
         out = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / "screenshots"
         try:
