@@ -2049,6 +2049,7 @@ class Agent:
     office_on = False      # a message in this chat asked for an office file: Codex style shows the office tools too
     browser_on = False     # a message in this chat is about a web page or app UI: Codex style shows the browser tools
     office_engines = False  # MH_OFFICE_DIRECT=1: a message asked for a new deck, report or model (engine tools shown)
+    office_c171 = False  # MH_WORK_OFFICE_STYLE=c171: this Work chat's office job sends Codex 0.171's request
     office_revisions = False  # MH_OFFICE_DIRECT=1: a message asked for tracked changes or comments (edit_office_file shown)
     usage_task = None      # the session may set one usage task before send() to share it across goal / resume turns
     usage_source = "chat"  # what this agent's own calls are called in the usage ledger ("subagent" for a sub-agent)
@@ -2158,6 +2159,8 @@ class Agent:
         task (CI 0.57-0.90), 0.93x its time; the lean core there solved 20/24 at 1.86x. MH_LARGE_REPO_STYLE=codex
         keeps the plain Codex design (_bare_codex), =core the lean core."""
         try:
+            if self.profile == "work" and getattr(self, "office_c171", False) and self._style():
+                return True                              # a Work chat's office edit (MH_WORK_OFFICE_STYLE=c171, send)
             if self.profile != "code" or not self._style():
                 return False
             if self.hsettings().get("codex171"):
@@ -2203,10 +2206,36 @@ class Agent:
     def _codex(self) -> bool:
         return self._style() and not self.plan           # plan mode keeps its read-only tools
 
+    def _office_direct_raw(self) -> bool:
+        return self.profile == "work" and _office_direct_on() and self._codex()
+
+    def office_c171_for(self, asked: str) -> bool:
+        """MH_WORK_OFFICE_STYLE=c171: whether this message's office job runs on Codex CLI 0.171's request (its prompt and
+        its one command tool, the way Codex itself edits a workbook, document or deck with openpyxl, python-docx or
+        python-pptx). A message about an office file (or an earlier one in the chat) does; a new deck, report or model
+        (the engines) and Word tracked changes or comments (edit_office_file) keep the Work route. The session asks
+        before it builds the message, so the office notes stay off a Codex request (ui.agent_api)."""
+        try:
+            if not (self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "lean") == "c171"):
+                return False
+            from meshpool_harness import capabilities as CAP
+            from meshpool_harness.office_intent import engines_wanted, wants_revisions
+            own = str(asked or "").split(CAP.SEP)[0]
+            if self.office_engines or engines_wanted(own) or wants_revisions(own):
+                return False
+            return bool(getattr(self, "office_on", False) or re.search(r"\.(docx?|xlsx?|pptx?|pdf)\b", own, re.I)
+                        or CAP.needs(own))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _office_direct(self) -> bool:
         """MH_OFFICE_DIRECT=1 in a lean Work chat: office jobs on existing files are done by hand; the engine tools are
-        offered only for a new deck, report or model (office_engines, decided per message in send)."""
-        return self.profile == "work" and _office_direct_on() and self._codex()
+        offered only for a new deck, report or model (office_engines, decided per message in send). Off while the
+        chat's office job runs on Codex 0.171's request (office_c171): no office notes, pre-answer checks or caps then,
+        as Codex has none (MH_OFFICE_C171_CHECKS=1 keeps the checks)."""
+        if getattr(self, "office_c171", False) and os.environ.get("MH_OFFICE_C171_CHECKS", "0") != "1":
+            return False
+        return self._office_direct_raw()
 
     def _codex_env(self) -> str:
         """Codex's <environment_context>: where it is, and how much it may do without asking."""
@@ -2357,8 +2386,8 @@ class Agent:
 
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
-                if n.startswith("mcp__meshpool_office__"):
-                    return bool(getattr(self, "office_on", False))
+                if n.startswith("mcp__meshpool_office__"):      # not on Codex's request for a Work office edit:
+                    return bool(getattr(self, "office_on", False)) and not getattr(self, "office_c171", False)
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
                 if name in own_browser:                          # Meshpool's own browser server: on request, as
@@ -2727,7 +2756,7 @@ class Agent:
                 self.browser_on = True
         except Exception:  # noqa: BLE001
             pass
-        if self._office_direct() and not self.office_engines:   # decided here, before the turn: fixed for the turn
+        if self._office_direct_raw() and not self.office_engines:   # decided here, before the turn: fixed for the turn
             from meshpool_harness.office_intent import engines_wanted, wants_revisions
             if engines_wanted(asked):                        # a new deck, report or model: the engines join, and stay
                 self.office_engines = self.office_on = True
@@ -2735,6 +2764,12 @@ class Agent:
                 self.office_revisions = wants_revisions(asked)   # for this message only
                 if self.office_revisions:
                     self.office_on = True
+        if self._office_direct_raw() and os.environ.get("MH_WORK_OFFICE_STYLE", "lean") == "c171":
+            want = self.office_c171_for(asked)
+            if want != bool(self.office_c171):
+                self.office_c171 = want
+                if self.messages and self.messages[0].get("role") == "system":
+                    self.messages[0] = {"role": "system", "content": self.system_prompt()}
         if not self.title:
             self.title = os.environ.pop("MH_SESSION_NAME", "").strip()[:80] or (
                 text.strip().splitlines()[0][:80] if text.strip() else "Session")
