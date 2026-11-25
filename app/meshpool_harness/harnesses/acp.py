@@ -14,6 +14,7 @@ Meshpool UI events:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import os
@@ -27,9 +28,28 @@ from pathlib import Path
 
 from meshpool_harness import __version__ as _VERSION
 from meshpool_harness import config as C
+from meshpool_harness import session_store as SS
+from meshpool_harness.core import usage as USAGE
 
 PROTOCOL_VERSION = 1
 
+
+
+def _kill_group(proc) -> None:
+    """Without psutil: end the process and its whole process group (POSIX) or tree (Windows taskkill /T)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=15,
+                           creationflags=0x08000000)
+        else:
+            import signal
+            os.killpg(proc.pid, signal.SIGKILL)      # started with start_new_session: its pid is the group id
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _kill_tree(proc) -> None:
@@ -40,6 +60,9 @@ def _kill_tree(proc) -> None:
         import psutil
         root = psutil.Process(proc.pid)
         kids = root.children(recursive=True)
+    except ImportError:
+        _kill_group(proc)
+        return
     except Exception:  # noqa: BLE001
         kids = []
     for k in kids:
@@ -47,6 +70,23 @@ def _kill_tree(proc) -> None:
             k.kill()
         except Exception:  # noqa: BLE001
             pass
+
+
+def stop_file(chat: str) -> Path:
+    """A chat's Stop stamp: Meshpool's MCP servers started for an outside harness read it (MESHPOOL_STOP_FILE), so Stop
+    reaches their sub-agents even when the harness does not forward notifications/cancelled."""
+    return C.runs_dir() / "sessions" / chat / "stop"
+
+
+def stamp_stop(chat: str) -> None:
+    if not chat:
+        return
+    try:
+        from meshpool_harness import fsio
+        fsio.atomic_write_text(stop_file(chat), repr(time.time()), fsync=False)
+    except OSError:
+        pass
+
 
 class ACPError(Exception):
     pass
@@ -150,7 +190,17 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
         if M.recently_failed(name, spec) is not None:
             continue                                 # a broken server would make the harness wait and retry it
         spec = M._expand(spec)
-        if spec.get("url"):
+        if spec.get("url") and spec.get("connector") and spec.get("headers"):
+            # A signed-in connector: through Meshpool's bridge, which refreshes the token (it lasts about an hour). A
+            # harness given the header itself keeps it until it restarts and then gets 401 on every call.
+            env = {**passthrough_env(), "PYTHONPATH": str(C.APP), "MESHPOOL_HOME": str(C.home()),
+                   "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+            if not os.environ.get("PYTHONPYCACHEPREFIX"):
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+            out.append({"name": name, "command": sys.executable,
+                        "args": ["-m", "meshpool_harness.agent.connector_bridge", name],
+                        "env": [{"name": k, "value": str(v)} for k, v in env.items()]})
+        elif spec.get("url"):
             out.append({"type": "http", "name": name, "url": spec["url"],
                         "headers": [{"name": k, "value": str(v)} for k, v in (spec.get("headers") or {}).items()]})
         elif spec.get("command"):
@@ -164,8 +214,11 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
                 env.setdefault("MESHPOOL_CONFIG", str(C.config_path()))
                 env.setdefault("MESHPOOL_PROJECT", os.environ["MESHPOOL_PROJECT"])
                 env.setdefault("PYTHONUTF8", "1")
-                if chat and any("browser_mcp_server" in str(x) for x in spec.get("args", [])):
-                    env["MH_CHAT_ID"] = chat                  # the app finds this chat's browser for its live view
+                if chat and any(k in str(x) for x in spec.get("args", [])
+                                for k in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
+                    env["MH_CHAT_ID"] = chat                  # browser view; scheduled tasks keep the mode; office builds per chat
+                if chat:
+                    env["MESHPOOL_STOP_FILE"] = str(stop_file(chat))   # the chat's Stop reaches its sub-agents
                 if os.environ.get("PYTHONPYCACHEPREFIX"):        # never write caches inside the signed app
                     env["PYTHONPYCACHEPREFIX"] = os.environ["PYTHONPYCACHEPREFIX"]
                 else:
@@ -176,15 +229,21 @@ def mcp_servers_for_acp(roots: list[str], chat: str = "") -> list[dict]:
     return out
 
 
-def office_server(roots: list[str]) -> dict:
+def office_server(roots: list[str], edit_only: bool = False) -> dict:
     """Meshpool Office MCP server (PowerPoint, Excel, Word, data analysis) for ACP harnesses."""
     env = {"PYTHONPATH": str(C.APP), "MESHPOOL_PROJECT": str(Path(roots[0]).resolve()) if roots else os.getcwd(),
            "MESHPOOL_HOME": str(C.home()), "MESHPOOL_CONFIG": str(C.config_path()), "PYTHONUTF8": "1",
            "PYTHONIOENCODING": "utf-8"}
     env = {**passthrough_env(), **env}                 # proxies, CA bundles, MH_* and MESHPOOL_* settings
-    for k in ("MESHPOOL_API_KEY", "MESHPOOL_BASE_URL", "MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
+    for k in ("MH_MODEL", "PYTHONPYCACHEPREFIX", "PATH"):
         if os.environ.get(k):
             env[k] = os.environ[k]
+    if edit_only:
+        env["MH_OFFICE_TOOLS"] = "edit"                # read, edit, convert and check: no engines to build a file
+    from meshpool_harness import providers as PV
+    base, key, _src = PV.endpoint_pair()               # a key goes only with the address it was set for
+    if key:
+        env["MESHPOOL_API_KEY"], env["MESHPOOL_BASE_URL"] = key, base
     if not os.environ.get("PYTHONPYCACHEPREFIX"):
         env["PYTHONDONTWRITEBYTECODE"] = "1"
     return {"name": "meshpool-office", "command": sys.executable, "args": ["-m", "meshpool_harness.agent.office_mcp_server"],
@@ -198,7 +257,30 @@ def office_extra(workdir: str) -> dict:
     spec = office_server([workdir])
     env_ = {e["name"]: e["value"] for e in spec["env"]}
     env_.setdefault("OFFICE_WAIT_S", "280")
-    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330}}
+    # per_call_project: one office process for the whole app; each call carries its own chat's folder
+    return {spec["name"]: {"command": spec["command"], "args": spec["args"], "env": env_, "timeout": 330,
+                           "per_call_project": True}}
+
+
+_OWN_RX = re.compile(r"meshpool_harness\.agent\.\w*_mcp_server")
+
+
+def is_own_server(spec: dict) -> bool:
+    """One of Meshpool's own stdio servers (browser, assistant, tools, web, office), as opposed to a server or
+    connector the user added."""
+    return any(_OWN_RX.search(str(a)) for a in spec.get("args") or [])
+
+
+def lean_mcp(servers: list[dict], office: bool, root: str, allowed: bool = True, edit_only: bool = False) -> list[dict]:
+    """The MCP servers an outside agent is given at session start. Each server's tool schemas ride in every request of
+    the chat (Codex: 46 tools, 5.5k tokens), so Meshpool's own servers are passed only when the chat needs them: the
+    office server for a chat that asks for an office file (`office`; `allowed` is the manifest's office switch), and
+    none otherwise. Servers and connectors the user added always go. MH_ACP_MCP=all passes everything, as before."""
+    every = os.environ.get("MH_ACP_MCP", "").lower() == "all"
+    out = list(servers) if every else [s for s in servers if not is_own_server(s)]
+    if allowed and (office or every):
+        out.append(office_server([root], edit_only and not every))
+    return out
 
 
 def _auth_failure(text: str) -> bool:
@@ -245,6 +327,10 @@ def earlier_context(events: list, limit: int = 40000) -> str:
 
 class ACPAgent:
     """One ACP agent process serving one Meshpool session."""
+    usage_task = None          # the session's usage task (core/usage.py): the harness's calls are recorded in it
+    budget_stopped = False     # the last turn ended on the spending limit (agent_api pauses a goal on it)
+    _usage_recorded = False        # set once the current prompt response is in the ledger (any code path)
+    _cost_now = _cost_seen = 0.0   # session cost the harness reported (usage_update), and the part already recorded
 
     def __init__(self, manifest: dict, workdir: str, *, emit=None, approve=None, mode: str | None = None,
                  session_id: str | None = None):
@@ -256,7 +342,7 @@ class ACPAgent:
         self.dir = C.runs_dir() / "sessions" / self.id
         self.emit_cb = emit or (lambda ev: None)
         self.approve = approve
-        self.mode = mode or os.environ.get("MH_AGENT_PERMISSIONS", "ask")
+        self.mode = C.normalize_mode(mode, None) or C.permission_mode()
         self.title = ""
         self.created = time.time()
         self.usage = {"in": 0, "cached": 0, "out": 0, "calls": 0}
@@ -266,6 +352,9 @@ class ACPAgent:
         self.mcp = None
         self.acp_session = None
         self.loaded_from = None                # ACP session id to load on first send (resume)
+        self.office_on = False                 # the chat asked for an office file: the office server goes with the session
+        self.office_edit = False               # ... only to change a file the user has (a smaller set of office tools)
+        self._session_office = False           # whether the live session was opened with the office server (and how)
         self.agent_info = {}
         self.capabilities = {}
         self.model: str | None = None          # chosen in the app; applied with session/set_model
@@ -280,7 +369,9 @@ class ACPAgent:
         self._text = []
         self._replaying = False
         self._tools: dict[str, dict] = {}
+        self._open_tools: dict[str, str] = {}          # started this turn, no tool_end yet: id -> label
         self._lock = threading.Lock()
+        self._in_turn = False                  # Stop ends only requests made for a running turn
 
     # ---------- process + JSON-RPC ----------------------------------------------------------------------------
     def _emit(self, ev: dict):
@@ -298,16 +389,16 @@ class ACPAgent:
         from meshpool_harness.harnesses import unsupported
         if m.get("builtin") and unsupported(m.get("id", "")):    # Codex, OpenCode: not part of the packaged app
             raise ACPError(unsupported(m["id"]))
+        extra = {}                             # this chat's own provider settings: never a file another chat rewrites
         if m.get("prepare") == "hermes":
             from meshpool_harness.harnesses import prepare_hermes
-            prepare_hermes(self.model)
+            extra = prepare_hermes(self.model) or {}
         elif m.get("prepare") == "codex":
             from meshpool_harness.harnesses import prepare_codex
-            prepare_codex(self.model)
-        extra = {}
-        if m.get("prepare") == "opencode":
+            extra = prepare_codex(self.model, self.id) or {}
+        elif m.get("prepare") == "opencode":
             from meshpool_harness.harnesses import prepare_opencode
-            extra = prepare_opencode(self.model)
+            extra = prepare_opencode(self.model, self.id) or {}
         cmd = m.get("command", "")
         exe = shutil.which(cmd) or (cmd if Path(cmd).exists() else None)
         if not exe:
@@ -331,12 +422,27 @@ class ACPAgent:
                 self._err.close()              # the log of a process that exited
             except OSError:
                 pass
-        self._err = open(log_dir / f"{m.get('id', 'acp')}.log", "a", encoding="utf-8", errors="replace")
+        from meshpool_harness.logfiles import RotatingFile      # H-23: rotates by size while the harness runs
+        self._err = RotatingFile(log_dir / f"{m.get('id', 'acp')}.log")
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {"start_new_session": True}
         self._p = subprocess.Popen([exe, *[str(a) for a in m.get("args", [])]], stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=self._err, cwd=str(self.root), env=env, **kw)
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=str(self.root), env=env, **kw)
         self._alive = True
+        self._last_msg = time.time()
+        threading.Thread(target=self._pump_stderr, args=(self._p, self._err), daemon=True).start()
         threading.Thread(target=self._reader, args=(self._p,), daemon=True).start()
+        try:
+            return self._handshake(m)
+        except BaseException:                  # a failed or timed-out handshake must not leave a half-started process
+            dead, self._p = self._p, None
+            _kill_tree(dead)
+            try:
+                dead.kill()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
+
+    def _handshake(self, m) -> bool:
         init = self._request("initialize", {
             "protocolVersion": PROTOCOL_VERSION,
             "clientCapabilities": {"fs": {"readTextFile": True, "writeTextFile": True}, "terminal": False,
@@ -349,14 +455,42 @@ class ACPAgent:
             self._request("authenticate", auth, timeout=120)
         return True
 
+    def _pump_stderr(self, proc, log):
+        """The harness's stderr into its log with secret-looking values removed (OSS-29); a Codex sandbox failure
+        (OSS-02) is told to the user once, plainly."""
+        told = False
+        for raw in proc.stderr:
+            line = C.redact_secrets(raw.decode("utf-8", "replace"))
+            try:
+                log.write(line)
+                log.flush()
+            except (OSError, ValueError):
+                pass
+            if not told and self.manifest.get("id") == "codex":
+                from meshpool_harness.harnesses import codex_sandbox_failure
+                note = codex_sandbox_failure(line)
+                if note:
+                    told = True
+                    self.sandbox_note = note
+                    self._emit({"type": "text_delta", "text": "\n" + note + "\n"})
+
+    def _serve_counted(self, msg):
+        self._serving = getattr(self, "_serving", 0) + 1          # a request waiting on the user is not idleness
+        try:
+            self._serve_request(msg)
+        finally:
+            self._serving -= 1
+            self._last_msg = time.time()
+
     def _reader(self, proc):
         for raw in proc.stdout:
+            self._last_msg = time.time()
             try:
                 msg = json.loads(raw.decode("utf-8", "replace"))
             except ValueError:
                 continue
             if "method" in msg and "id" in msg:
-                threading.Thread(target=self._serve_request, args=(msg,), daemon=True).start()
+                threading.Thread(target=self._serve_counted, args=(msg,), daemon=True).start()
             elif "method" in msg:
                 try:
                     self._notification(msg)
@@ -392,8 +526,13 @@ class ACPAgent:
                                    f"See runs/harness-logs/{self.manifest.get('id', 'acp')}.log")
                 if end and time.time() > end:
                     raise ACPError(f"No reply to {method} within {int(timeout)} s.")
-                if method.startswith("session/") and self._stop and time.time() - getattr(self, "_stop_t", 1e18) > 3:
-                    break                                # the harness ignored the cancel: stop it hard below
+                if method == "session/prompt" and not getattr(self, "_serving", 0) and self._idle_s() and \
+                        time.time() - getattr(self, "_last_msg", time.time()) > self._idle_s():
+                    break                                   # OSS-09: nothing for MH_ACP_IDLE_S: the harness is hung
+                if self._stop and self._in_turn and (method != "session/prompt" or time.time() - getattr(self, "_stop_t", 1e18) > 3):
+                    # session/prompt: the harness ignored the cancel. Anything else (initialize, authenticate,
+                    # session/new ...) is start-up, which no cancel reaches: give up now, not at its timeout.
+                    break
                 self._cv.wait(0.3)
             else:
                 msg = self._pending.pop(rid)
@@ -402,7 +541,17 @@ class ACPAgent:
                     raise ACPError(f"{e.get('message', 'error')}" + (f": {e.get('data')}" if e.get("data") else ""))
                 return msg.get("result") or {}
         self._hard_restart()
+        if self._idle_s() and not self._stop and method == "session/prompt":
+            raise ACPError(f"{self.manifest.get('name', 'The harness')} sent nothing for {int(self._idle_s())} seconds, so "
+                           "this turn was ended. It restarts with your next message (MH_ACP_IDLE_S sets the limit).")
         raise ACPStopped("stopped")
+
+    @staticmethod
+    def _idle_s() -> float:
+        try:
+            return float(os.environ.get("MH_ACP_IDLE_S") or C.read().get("MH_ACP_IDLE_S") or 300)
+        except (TypeError, ValueError, OSError):
+            return 300.0
 
     def _hard_restart(self):
         """End the harness process (and what it started); the next message restarts it and reloads the session."""
@@ -411,6 +560,10 @@ class ACPAgent:
             import psutil
             root = psutil.Process(self._p.pid)
             procs = root.children(recursive=True) + [root]
+        except ImportError:
+            procs = []
+            if self._p:
+                _kill_group(self._p)
         except Exception:  # noqa: BLE001
             procs = []
         for pr in procs:
@@ -442,7 +595,8 @@ class ACPAgent:
                 if not any(path == r or r in path.parents for r in (self.root, ups)):
                     return self._respond(rid, error={"code": -32602, "message": "reads through Meshpool are limited "
                                                      "to the project folder and attached files"})
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+                from meshpool_harness.core.tools import read_src, shown
+                lines = shown(read_src(path)[0]).splitlines(keepends=True)
                 start = max(0, int(p.get("line") or 1) - 1)
                 lim = p.get("limit")
                 return self._respond(rid, {"content": "".join(lines[start:start + int(lim)] if lim else lines[start:])})
@@ -450,8 +604,17 @@ class ACPAgent:
                 path = Path(p["path"]).resolve()
                 if self.root not in path.parents and path != self.root:
                     return self._respond(rid, error={"code": -32602, "message": "writes are limited to the project folder"})
+                if ".git" in path.relative_to(self.root).parts:
+                    return self._respond(rid, error={"code": -32602, "message": "writes inside .git are not allowed"})
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(p.get("content", ""), encoding="utf-8")
+                from meshpool_harness.core.tools import read_src, write_src
+                eol, bom = "\n", False
+                if path.is_file():                   # keep the file's own line ending and BOM
+                    try:
+                        _t, eol, bom = read_src(path)
+                    except OSError:
+                        pass
+                write_src(path, p.get("content", ""), eol, bom)
                 return self._respond(rid, None)
             self._respond(rid, error={"code": -32601, "message": f"method not supported: {m}"})
         except ACPError:
@@ -522,6 +685,7 @@ class ACPAgent:
             tid = u.get("toolCallId") or uuid.uuid4().hex
             self._tools[tid] = u
             name, summary = _label(u)
+            self._open_tools[tid] = name
             self._emit({"type": "tool_start", "id": tid, "name": name, "summary": summary,
                         "mcp": False, "diff": _diff_of(u.get("content"))})
             if u.get("status") in ("completed", "failed"):
@@ -543,11 +707,23 @@ class ACPAgent:
                                                     for e in u.get("entries") or []]})
         elif kind == "usage_update":
             self.context = {"used": u.get("used", 0), "size": u.get("size", 0)}
+            c = u.get("cost")
+            if isinstance(c, dict) and str(c.get("currency") or "USD").upper() == "USD":
+                with contextlib.suppress(TypeError, ValueError):
+                    self._cost_now = max(self._cost_now, float(c.get("amount") or 0))
             self._emit({"type": "context", **self.context})
         elif kind == "session_info_update" and u.get("title"):
             self.title = self.title or str(u["title"])[:80]
 
+    def _close_open_tools(self):
+        """The turn is over: a tool card that never got a final status must not stay 'running'."""
+        for tid, name in list(self._open_tools.items()):
+            self._open_tools.pop(tid, None)
+            self._emit({"type": "tool_end", "id": tid, "name": name, "ok": False, "denied": False,
+                        "output": "Not finished: the turn ended."})
+
     def _tool_end(self, tid, u):
+        self._open_tools.pop(tid, None)
         out = _text_of(u.get("content"))
         if not out.strip() or re.fullmatch(r"\s*\[terminal [^\]]*\]\s*", out):
             out = u.get("_term_out") or _raw_text(u.get("rawOutput")) or ""
@@ -566,16 +742,53 @@ class ACPAgent:
     def _before_turn(self) -> list:
         return before_turn(self)
 
+    def _ensure_session_tracked(self):
+        """_ensure_session, recording whether the agent could start (hrouter/health.py: Auto skips one that cannot)."""
+        hid = self.manifest.get("id")
+        try:
+            self._ensure_session()
+        except ACPStopped:
+            raise                                    # the user pressed Stop: says nothing about the install
+        except Exception as e:  # noqa: BLE001 - ACPError, or the process could not even be spawned (OSError)
+            self.start_error = str(e)
+            if hid:
+                try:
+                    from meshpool_harness.hrouter import health
+                    health.start_failed(hid, str(e))
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
+        if hid:
+            try:
+                from meshpool_harness.hrouter import health
+                health.start_ok(hid)
+            except Exception:  # noqa: BLE001
+                pass
+
     def _ensure_session(self):
+        if self.acp_session and self.office_on and self._session_office != self._office_kind() \
+                and self.manifest.get("office", True) \
+                and self._p and self._p.poll() is None:
+            # The chat started without the office server and has now asked for an office file: open the same session
+            # again with the server (a harness that cannot load it starts a new one, which carries the history).
+            self.loaded_from, self.acp_session = self.acp_session, None
+            if not self.capabilities.get("loadSession"):
+                self.loaded_from = None
         if self._start() and self.acp_session:
             # The process exited and a new one started: its session is not in the new process. Load it (or start
             # a new one), as after a hard restart.
             self.loaded_from, self.acp_session = self.acp_session, None
         if self.acp_session:
             return
+        allowed = bool(self.manifest.get("office", True))
+        office = bool(self.office_on and allowed)
         mcp = mcp_servers_for_acp([str(self.root)], self.id) if self.manifest.get("share_mcp", True) else []
-        if self.manifest.get("office", True):
+        if self.manifest.get("lean"):          # Codex: only what the chat needs (see lean_mcp)
+            mcp = lean_mcp(mcp, office, str(self.root), allowed, bool(self.office_edit))
+        elif allowed:
             mcp.append(office_server([str(self.root)]))
+            office = True
+        self._session_office = self._office_kind() if office else ""
         if self.loaded_from and self.capabilities.get("loadSession"):
             try:
                 self._replaying = True
@@ -602,9 +815,27 @@ class ACPAgent:
         self._ask_mode(r.get("modes") or {})
         self._models_from(r)
         self._apply_model()
+        self._set_title()
         # A fresh session for a chat that already has a history (the harness lost or cannot load its old session,
         # e.g. a chat from weeks ago): it would start with no memory of the chat. Carry the history in the prompt.
         self._carry = any(e.get("type") in ("user", "assistant") for e in self._before_turn())
+
+    def _office_kind(self) -> str:
+        return "edit" if self.office_edit else "all"
+
+    def _set_title(self):
+        """Give the session Meshpool's own title. codex-acp starts a second Codex session (about 12k tokens, on its own
+        title model) to write a title for a session that has none; once a title is set explicitly it does not. An agent
+        that does not know the method refuses it, and that is fine."""
+        title = (self.title or "").strip()
+        if not (title and self.acp_session and self.manifest.get("lean")) or os.environ.get("MH_ACP_TITLE", "1") == "0":
+            return
+        if getattr(self, "_title_refused", False):
+            return
+        try:
+            self._request("session/set_title", {"sessionId": self.acp_session, "title": title[:80]}, timeout=30)
+        except Exception:  # noqa: BLE001 - ACPError or a timeout: the agent titles the chat itself, as before
+            self._title_refused = True
 
     def _models_from(self, r: dict):
         ms = r.get("models") or {}
@@ -615,7 +846,7 @@ class ACPAgent:
 
     def _ask_mode(self, modes: dict):
         """Run the harness in its own ask-before-acting mode, so every edit and command comes to Meshpool, which
-        applies the user's permission setting (Supervised, Auto-accept edits, Full access) the same way for every
+        applies the user's permission setting (Ask, Accept edits, Full access) the same way for every
         harness. Without this Codex, for one, edits files on its own."""
         ids = [m.get("id") for m in modes.get("availableModes") or [] if m.get("id")]
         self.modes_seen, self.mode_now = ids, modes.get("currentModeId")
@@ -632,7 +863,7 @@ class ACPAgent:
                 pass
 
     def apply_mode(self):
-        """The user changed Supervised / Auto-accept edits / Full access: tell a harness that has its own modes."""
+        """The user changed Ask / Accept edits / Full access: tell a harness that has its own modes."""
         if self.acp_session and self._p and self._p.poll() is None and getattr(self, "modes_seen", None):
             self._ask_mode({"availableModes": [{"id": i} for i in self.modes_seen], "currentModeId": self.mode_now})
 
@@ -641,13 +872,32 @@ class ACPAgent:
         bare = PV.split(self.model)[1] if self.model else ""
         if not (bare and bare != "default" and self.acp_session):
             return                             # "default": the harness's own account picks the model
-        if bare == getattr(self, "model_now", None):
-            return                             # already on it; switching anyway makes Hermes rebuild its agent
+        now = getattr(self, "model_now", None) or ""
+        ids = [m["id"] for m in self.available_models or [] if m.get("id")]
+        eff = (getattr(self, "effort", "") or "").lower()
+        pick = f"{bare}[{eff}]" if eff and eff not in ("off", "none", "default") else ""
+        if pick and pick in ids:                   # the chat's effort level: Codex's own id for this model at that level
+            if pick == now:
+                return
+            want = pick
+        else:
+            if bare == now or now.startswith((bare + "[", bare + "/")):
+                return                         # already on it; switching anyway makes Hermes rebuild its agent
+            # Codex names its models "<model>[<effort>]" (deepseek-v4.1-flash[medium]) and refuses a bare id
+            want = bare if bare in ids or not ids else next((i for i in ids if i.startswith((bare + "[", bare + "/"))),
+                                                            bare)
         try:
-            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": bare}, timeout=60)
-            self.model_now = bare
+            self._request("session/set_model", {"sessionId": self.acp_session, "modelId": want}, timeout=60)
+            self.model_now = want
         except ACPError as e:
             self._emit({"type": "status", "text": f"{self.manifest.get('name')} kept its own model ({e})."})
+
+    effort = ""
+
+    def set_effort(self, level: str):
+        self.effort = level or ""
+        if self.model and self.acp_session and self._p and self._p.poll() is None:
+            self._apply_model()
 
     def set_model(self, model: str):
         self.model = model or None
@@ -682,12 +932,51 @@ class ACPAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+    def _prompt_call(self, prompt: list) -> dict:
+        """One session/prompt request; its usage goes to the ledger once (_record_usage)."""
+        self._usage_recorded = False
+        r = self._prompt(prompt)                         # the turn's and chat's own counts (ws17); the ledger row is below
+        self._record_usage(r, "".join(str(p.get("text") or "") for p in prompt if isinstance(p, dict)),
+                           "".join(self._text))
+        return r
+
+    def _record_usage(self, r: dict, prompt_text: str, final_text: str) -> None:
+        """The harness's own usage from a prompt response, else one call counted from the text sizes (flagged as an
+        estimate, never free). At most once per response: other code that records it sets _usage_recorded."""
+        if self._usage_recorded:
+            return
+        self._usage_recorded = True
+        try:
+            hid = str(self.manifest.get("id") or "acp")
+            extra = None
+            if self._cost_now > self._cost_seen:
+                extra = {"reported_cost": round(self._cost_now - self._cost_seen, 6)}
+                self._cost_seen = self._cost_now
+            USAGE.record(str(getattr(self, "model_now", None) or self.model or hid),
+                         (r.get("usage") if isinstance(r, dict) else None) or None, source=f"external:{hid}",
+                         task=self.usage_task or None, extra=extra, request_chars=len(prompt_text),
+                         reply_chars=len(final_text))
+            if self.usage_task and USAGE.over_budget(self.usage_task) is not None and not self._stop:
+                self.budget_stopped = True               # the call that crossed the limit is kept; nothing more runs
+                self._emit({"type": "error", "text": str(USAGE.over_budget(self.usage_task)) + " The agent was "
+                            "stopped. Raise the limit in Settings or send a message to continue."})
+                self.stop()
+        except Exception:  # noqa: BLE001 - accounting never breaks a turn
+            pass
+
     def send(self, text: str, images: list | None = None) -> str:
+        over = USAGE.over_budget(self.usage_task) if self.usage_task else None
+        if over is not None:                             # the spending limit: an outside agent cannot be refused per call
+            self.budget_stopped = True
+            self._emit({"type": "error", "text": str(over) + " Raise the limit in Settings or send a message to continue."})
+            return ""
+        self.budget_stopped = False
         kt = getattr(self, "_kill_timer", None)
         if kt:
             kt.cancel()                                  # the sweep after a Stop must not hit this new turn's commands
             self._kill_timer = None
         self._stop = False
+        self.start_error = None                          # set when this turn's agent could not start (Session hands off)
         self._before = None                              # taken once the process and its MCP servers run (below)
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"  # first line only
@@ -704,10 +993,14 @@ class ACPAgent:
         self._text = []
         final = ""
         self.usage["calls"] += 1
+        self._turn = {"in": 0, "cached": 0, "out": 0, "calls": 0}
+        self._in_turn = True
         try:
             self._emit({"type": "model_start"})
             self._turn_tools = 0
-            self._ensure_session()
+            self._ensure_session_tracked()
+            if self._stop:                               # Stop pressed while the harness was starting
+                raise ACPStopped("stopped")
             self._before = self._descendants()           # Stop then ends only what this turn starts
             if getattr(self, "_carry", False):
                 self._carry = False
@@ -723,22 +1016,23 @@ class ACPAgent:
                 else:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name')} does not take images; "
                                                           "they were left out."})
-            r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
-            if r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text:
+            r = self._prompt_call(prompt)
+            if (r.get("stopReason") == "refusal" and getattr(self, "_reloaded", False) and not self._text
+                    and not self._stop):                 # a refusal to a stopped prompt is just the stop
                 self.acp_session, self.loaded_from = None, None     # the reloaded session was gone: start fresh
                 self._ensure_session()
                 if getattr(self, "_carry", False):        # and it starts knowing the chat so far
                     self._carry = False
                     prompt[0]["text"] = earlier_context(self._before_turn()) + prompt[0]["text"]
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+                r = self._prompt_call(prompt)
             self._reloaded = False
             final = "".join(self._text)
             if (not final.strip() and not self._stop and r.get("stopReason", "end_turn") == "end_turn"
                     and getattr(self, "_turn_tools", 0) == 0):
                 # An empty reply with nothing done (the model sometimes returns a blank turn): ask once more.
                 self._text = []
-                r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": [
-                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}]})
+                r = self._prompt_call([
+                    {"type": "text", "text": "Your last reply was empty. Please answer my previous message."}])
                 final = "".join(self._text)
                 if not final.strip() and not self._stop and getattr(self, "_turn_tools", 0) == 0:
                     self._emit({"type": "status", "text": f"{self.manifest.get('name', 'The harness')} didn't "
@@ -765,14 +1059,44 @@ class ACPAgent:
             else:
                 self._emit({"type": "error", "text": str(e)})
         finally:
-            self._emit({"type": "turn_end", "turn": {"in": 0, "cached": 0, "out": 0, "calls": 0},
-                        "session": dict(self.usage), "context": self.context})
+            self._in_turn = False
+            self._close_open_tools()
+            self._emit({"type": "turn_end", "turn": dict(self._turn), "session": dict(self.usage),
+                        "context": self.context})
             self.save()
         return final
+
+    def _prompt(self, prompt: list) -> dict:
+        """One session/prompt. The token usage a harness reports with its answer (ACP PromptResponse.usage, e.g.
+        Codex) goes into the turn's and the chat's usage, so the usage ledger counts outside harnesses too."""
+        r = self._request("session/prompt", {"sessionId": self.acp_session, "prompt": prompt})
+        u = r.get("usage") if isinstance(r, dict) else None
+        if isinstance(u, dict):
+            def n(*keys):
+                for k in keys:
+                    try:
+                        return max(0, int(u.get(k) or 0))
+                    except (TypeError, ValueError):
+                        continue
+                return 0
+            cached = n("cachedReadTokens", "cached_read_tokens")
+            # ACP counts cached input apart (Codex: inputTokens 200 + cachedReadTokens 1000 for a 1,200-token
+            # prompt); Meshpool's "in" is the whole prompt, cached part included, as for Pi and the built-in agents
+            add = {"in": n("inputTokens", "input_tokens") + cached + n("cachedWriteTokens", "cached_write_tokens"),
+                   "cached": cached, "out": n("outputTokens", "output_tokens") + n("thoughtTokens", "thought_tokens"),
+                   "calls": 1}
+            turn = getattr(self, "_turn", None)          # none outside a send() (a bare prompt call)
+            for k, v in add.items():
+                if turn is not None:
+                    turn[k] += v
+                if k != "calls":                         # calls: counted once per message in send()
+                    self.usage[k] += v
+        return r
 
     def stop(self):
         self._stop = True
         self._stop_t = time.time()
+        stamp_stop(self.id)                              # sub-agents in this chat's Meshpool MCP servers stop too
         if self.acp_session and self._p and self._p.poll() is None:
             try:
                 self._write({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.acp_session}})
@@ -784,6 +1108,12 @@ class ACPAgent:
                 t = threading.Timer(1.0, self._kill_new_children, args=(before,))
                 self._kill_timer = t                     # cancelled if a new turn starts first (see send)
                 t.start()
+
+    def forget_session(self):
+        """Undo cut the chat: the harness's own session still holds the undone turns. The next message opens a new
+        session, which gets the chat as it now is (see _carry in _ensure_session)."""
+        self.acp_session = None
+        self.loaded_from = None
 
     def reset(self):
         self.acp_session = None
@@ -814,11 +1144,11 @@ class ACPAgent:
             return
         try:
             self.dir.mkdir(parents=True, exist_ok=True)
-            (self.dir / "session.json").write_text(json.dumps({
+            SS.write_snapshot(self.dir, {
                 "id": self.id, "workdir": str(self.root), "title": self.title, "created": self.created,
                 "updated": time.time(), "harness": self.manifest.get("id"), "kind": self.manifest.get("mode", "cowork"),
                 "acp_session": self.acp_session or self.loaded_from, "usage": self.usage,
-                "events": self.events[-2000:]}, ensure_ascii=False), encoding="utf-8")
+                "events": self.events[-2000:]})
         except OSError:
             pass
 

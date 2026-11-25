@@ -186,7 +186,8 @@ def large(info: dict) -> str:
     """Why this turn counts as a large task, or "" when it does not. info: todos, calls, research, final, files, request,
     after_plan, deep (see Agent._grade_info)."""
     todos = [t for t in info.get("todos") or [] if isinstance(t, dict)]
-    if len(todos) >= 3:
+    if len(todos) >= 3 and info.get("calls", 0) >= _num("MH_GRADER_TODO_CALLS", 8, 0, 60):
+        # a todo list alone is not a big job: every multi-step request is told to write one
         return f"a plan with {len(todos)} steps"
     if info.get("after_plan"):
         return "an approved plan"
@@ -707,6 +708,10 @@ def run(parent, info: dict, commands: list, *, on_event=None) -> dict:
         except Exception:  # noqa: BLE001
             pass
         a.messages.append({"role": "user", "content": evidence(info, commands) + "\n\n" + CHECK})
+        if os.environ.get("MH_GRADER_LIGHT", "1") != "0":
+            # one call on the evidence (files, commands, facts), no tool loop of up to 15 steps; MH_GRADER_LIGHT=0 restores
+            # the full reviewer (on the 23 long tasks: 94% solved at 0.0030 per solved against 89% at 0.0051)
+            a.max_steps, a._no_tools = 1, True
         reply = a._turn() or ""
         res = normalise(parse(reply))
         stopped_hard = flags["over"]

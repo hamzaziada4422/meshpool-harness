@@ -89,3 +89,32 @@ def describe() -> dict:
 
 def missing_reason() -> str:
     return describe()["note"]
+
+
+def unavailable_reason() -> str:
+    """Why Meshpool has no LibreOffice to run, in words a user can trust; "" when it has one. Says "not installed"
+    only when no soffice exists on this computer at all: a system copy Meshpool deliberately leaves alone (the
+    packaged app never uses it; a source checkout needs MH_ALLOW_SYSTEM_SOFFICE=1) is named as such."""
+    if find_soffice():
+        return ""
+    if _system_copy():
+        if is_packaged():
+            return ("Meshpool's bundled LibreOffice is not available; Meshpool does not use the LibreOffice installed "
+                    "on this computer")
+        return ("Meshpool's bundled LibreOffice is not available; a system LibreOffice is installed but is used only "
+                "with MH_ALLOW_SYSTEM_SOFFICE=1")
+    return "LibreOffice is not installed"
+
+
+class Unavailable(RuntimeError):
+    """Raised where a LibreOffice run is needed and Meshpool has none to use. The message carries the real reason."""
+
+    def __init__(self):
+        why = unavailable_reason() or "LibreOffice is not available"
+        super().__init__(why if "bundled" in why else f"{why} ({missing_reason()})")
+
+
+def is_unavailable(exc: BaseException) -> bool:
+    """True for "no LibreOffice to run" (Unavailable, or the older "not installed" RuntimeError text), as opposed to
+    a run that started and failed."""
+    return isinstance(exc, Unavailable) or (isinstance(exc, RuntimeError) and "not installed" in str(exc))

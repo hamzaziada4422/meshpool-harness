@@ -127,6 +127,115 @@ def _norm(spec: dict) -> dict | None:
     return out
 
 
+def norm_existing(spec: dict) -> dict | None:
+    """An entry already in Meshpool's mcp.json, switched on or off (imports start switched off)."""
+    return _norm({k: v for k, v in spec.items() if k not in ("disabled", "enabled")}) if isinstance(spec, dict) else None
+
+
+def toml_loads(text: str) -> dict:
+    """Parse TOML: tomllib (Python 3.11+), else `tomli` if installed, else a small parser that understands what MCP
+    server tables use (dotted [tables], strings, numbers, booleans, arrays and inline tables)."""
+    try:
+        import tomllib as _t
+    except ImportError:
+        try:
+            import tomli as _t  # type: ignore[no-redef]
+        except ImportError:
+            return _mini_toml(text)
+    return _t.loads(text)
+
+
+def _mini_toml(text: str) -> dict:
+    root: dict = {}
+    cur = root
+
+    def value(v: str):
+        v = v.strip()
+        out, i = _mini_value(v, 0)
+        if v[i:].strip() not in ("", ) and not v[i:].strip().startswith("#"):
+            raise ValueError("unsupported TOML value")
+        return out
+
+    buf = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not buf and (not line or line.startswith("#")):
+            continue
+        if not buf and line.startswith("["):
+            m = re.match(r"^\[\s*(\[?)\s*([^\]]+?)\s*\]\]?\s*(#.*)?$", line)
+            if not m:
+                raise ValueError("bad table header")
+            cur = root
+            for part in [x.strip().strip("\"'") for x in re.findall(r'"[^"]*"|\'[^\']*\'|[^.\s]+', m.group(2)) if x != "."]:
+                nxt = cur.setdefault(part, {})
+                if isinstance(nxt, list):
+                    nxt = nxt[-1]
+                cur = nxt
+            continue
+        buf += (" " if buf else "") + line
+        if buf.count("[") != buf.count("]") or buf.count("{") != buf.count("}"):
+            continue                                           # a multi-line array or table: keep reading
+        k, sep, v = buf.partition("=")
+        buf = ""
+        if not sep:
+            raise ValueError("bad line")
+        key = k.strip().strip("\"'")
+        cur[key] = value(v)
+    if buf:
+        raise ValueError("unterminated value")
+    return root
+
+
+def _mini_value(s: str, i: int):
+    while i < len(s) and s[i] in " \t":
+        i += 1
+    if i >= len(s):
+        raise ValueError("missing value")
+    c = s[i]
+    if c in "\"'":
+        j = i + 1
+        while j < len(s) and s[j] != c:
+            j += 2 if (c == '"' and s[j] == "\\") else 1
+        if j >= len(s):
+            raise ValueError("unterminated string")
+        body = s[i + 1:j]
+        return (json.loads('"' + body + '"') if c == '"' else body), j + 1
+    if c == "[":
+        items, i = [], i + 1
+        while True:
+            while i < len(s) and s[i] in " \t,":
+                i += 1
+            if i >= len(s):
+                raise ValueError("unterminated array")
+            if s[i] == "]":
+                return items, i + 1
+            v, i = _mini_value(s, i)
+            items.append(v)
+    if c == "{":
+        d, i = {}, i + 1
+        while True:
+            while i < len(s) and s[i] in " \t,":
+                i += 1
+            if i >= len(s):
+                raise ValueError("unterminated table")
+            if s[i] == "}":
+                return d, i + 1
+            m = re.match(r'\s*("[^"]*"|\'[^\']*\'|[A-Za-z0-9_-]+)\s*=', s[i:])
+            if not m:
+                raise ValueError("bad inline table")
+            i += m.end()
+            v, i = _mini_value(s, i)
+            d[m.group(1).strip("\"'")] = v
+    m = re.match(r"[^\s,\]}#]+", s[i:])
+    tok = m.group(0) if m else ""
+    if tok in ("true", "false"):
+        return tok == "true", i + len(tok)
+    try:
+        return (int(tok.replace("_", "")) if re.fullmatch(r"[+-]?\d[\d_]*", tok) else float(tok)), i + len(tok)
+    except ValueError:
+        raise ValueError("unsupported TOML value") from None
+
+
 def mcp_sources() -> list[tuple[str, dict]]:
     """(app name, {server name: raw spec}) for every app config found on this computer."""
     found = []
@@ -150,8 +259,7 @@ def mcp_sources() -> list[tuple[str, dict]]:
     codex = HOME / ".codex" / "config.toml"
     if codex.is_file():
         try:
-            import tomllib
-            servers = tomllib.loads(codex.read_text(encoding="utf-8")).get("mcp_servers") or {}
+            servers = toml_loads(codex.read_text(encoding="utf-8")).get("mcp_servers") or {}
             if servers:
                 found.append(("Codex", servers))
         except Exception:  # noqa: BLE001 - a broken config file is skipped
@@ -165,7 +273,7 @@ def find_mcp() -> list[dict]:
         have = M.load_config()
     except Exception:  # noqa: BLE001
         have = {}
-    have_sig = {json.dumps(_norm(v) or {}, sort_keys=True) for v in have.values() if isinstance(v, dict)}
+    have_sig = {json.dumps(norm_existing(v) or {}, sort_keys=True) for v in have.values() if isinstance(v, dict)}
     out, seen = [], set()
     for app, servers in mcp_sources():
         for name, raw in servers.items():
@@ -180,22 +288,25 @@ def find_mcp() -> list[dict]:
             seen.add(sig)
             what = ("Connects to " + urllib.parse.urlparse(spec["url"]).netloc) if spec.get("url") else \
                 "Runs on this computer"
+            broken = bool(spec.get("command")) and not shutil.which(str(spec["command"]))
             out.append({"key": f"mcp:{app}:{name}", "kind": "mcp", "source": app, "name": str(name),
                         "description": what, "spec": spec, "exists": sig in have_sig,
-                        "has_secrets": bool(gone), "stripped": gone})
+                        "has_secrets": bool(gone), "stripped": gone,
+                        "default": not (broken or gone), "broken": broken})
     return out
 
 
-def import_mcp(name: str, spec: dict, description: str | None = None) -> str:
+def import_mcp(name: str, spec: dict, description: str | None = None, needs_test: bool = True) -> str:
     """Add a server to Meshpool's mcp.json under a free name (an identical entry keeps its name); returns the name."""
     from meshpool_harness.agent import mcp as M
     base = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-")[:40] or "server"
 
     def add(servers: dict) -> str:
         n, i = base, 2
-        while n in servers and json.dumps(_norm(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
+        while n in servers and json.dumps(norm_existing(servers[n]) or {}, sort_keys=True) != json.dumps(spec, sort_keys=True):
             n, i = f"{base}-{i}", i + 1
-        servers[n] = dict(spec, description=description or f"Imported from another app ({name}).")
+        servers[n] = dict(spec, description=description or f"Imported from another app ({name}).",
+                          disabled=True, **({"needs_test": True} if needs_test else {}))   # another app's command: it starts once before it can be on
         return n
     try:
         return M.edit_config(add)
@@ -270,6 +381,33 @@ def _sections(text: str) -> dict:
         if item and cur is not None:
             out[cur].append(item.group(1).strip())
     return out
+
+
+def context_model() -> str:
+    """The model that reads an export: MH_CONTEXT_MODEL, else the one the person configured (Settings, or the settings
+    file), never a name written into the code (F-32)."""
+    from meshpool_harness import config as C
+    for k in ("MH_CONTEXT_MODEL", "MH_MODEL"):
+        v = os.environ.get(k) or C.read().get(k)
+        if v:
+            return v
+    return next(d for key, _l, d, _h in C.FIELDS if key == "MH_MODEL")
+
+
+KNOWN_SECTIONS = ("instruction", "about", "recurring", "prefer", "style", "work")
+
+
+def check_context_answer(text: str) -> str:
+    """"" when a model's answer has the shape CONTEXT_PROMPT asks for (headings with "- " lines under them); else why
+    not, in plain words. Chat, a refusal or an unrelated list must never become memory."""
+    sec = _sections(text)
+    known = {k: v for k, v in sec.items() if any(w in k for w in KNOWN_SECTIONS)}
+    n = sum(len(v) for v in known.values())
+    if not known or not n:
+        return "The model did not answer in the format asked for, so nothing was saved from the conversations."
+    if n > 120 or any(len(x) > 400 for v in known.values() for x in v):
+        return "The model's answer was too long or too loose to trust, so nothing was saved from the conversations."
+    return ""
 
 
 def import_context_text(text: str) -> dict:
@@ -402,16 +540,20 @@ def import_export(path: str, client=None) -> dict:
         try:
             from meshpool_harness.core.client import LiveClient
             client = client or LiveClient("context_import")
-            r = client.chat(model=os.environ.get("MH_CONTEXT_MODEL", "gpt-6-luna"), max_tokens=2000, temperature=0.1,
+            r = client.chat(model=context_model(), max_tokens=2000, temperature=0.1,
                             task_id="context-import", role="worker", messages=[
                                 {"role": "system", "content": "From these conversation titles and first messages, write "
                                  "what a new assistant should know about this person, in the format below. Only lasting "
                                  "facts and preferences supported by several conversations; no secrets, no one-off "
                                  "questions, no guesses.\n\n" + CONTEXT_PROMPT.split("in exactly this format and nothing else:")[1]},
                                 {"role": "user", "content": "\n".join(lines)}])
-            got = import_context_text(r["choices"][0]["message"].get("content") or "")
+            answer = r["choices"][0]["message"].get("content") or ""
+            problem = check_context_answer(answer)
+            if problem:                                  # not the format asked for: save nothing (F-32)
+                raise ValueError(problem)
+            got = import_context_text(answer)
             done.update(memory=got["memory"], instructions=got["instructions"], skipped=got["skipped"])
         except Exception as e:  # the export still counts: projects were imported
-            done["skipped"].append(f"context from conversations: {type(e).__name__}")
+            done["skipped"].append(f"context from conversations: {type(e).__name__}: {str(e)[:160]}")
     done["conversations_seen"] = len(convs)
     return done

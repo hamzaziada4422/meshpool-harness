@@ -30,7 +30,7 @@ async function fresh010(my) {
       return;
     }
     if (b.dataset.fr === "more") { e.stopPropagation(); $(".starters").innerHTML = STARTERS.map(([a, c]) => `<button data-s="${esc(c)}">${esc(a)}</button>`).join(""); return; }
-    if (b.dataset.s) store("firstrun_done", true);
+    if (b.dataset.s) { store("firstrun_done", true); e.stopPropagation(); const inp = $("#input"); inp.value = b.dataset.s; inp.focus(); inp.dispatchEvent(new Event("input")); }
   }, true);
 }
 async function away010(my) {

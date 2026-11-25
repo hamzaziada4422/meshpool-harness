@@ -1,0 +1,7 @@
+<environment_context>
+  <cwd>/root/work/mhloop-v2-perf-anagrams-o_q_w8wy</cwd>
+  <shell>bash</shell>
+  <current_date>2026-11-24</current_date>
+  <timezone>Etc/UTC</timezone>
+  <filesystem><workspace_roots><root>/root/work/mhloop-v2-perf-anagrams-o_q_w8wy</root></workspace_roots><permission_profile type="disabled"><file_system type="unrestricted" /></permission_profile></filesystem>
+</environment_context>

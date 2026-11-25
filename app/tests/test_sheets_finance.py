@@ -205,8 +205,11 @@ def test_engine_refuses_source_reads_and_pushes_a_first_build(tmp_path):
     tools = [m["content"] for m in last if m["role"] == "tool"]
     assert len(tools) == 4 and sum("REFUSED" in t for t in tools) == 3
     assert "revenue" in tools[3] and "REFUSED" not in tools[3]          # the given input file stays readable
-    nudges = [m["content"] for m in last if m["role"] == "user" and "BUILD NOW" in m["content"]]
-    assert len(nudges) == 1 and "3 of 5 turns" in nudges[0]              # injected once, at 60% of the budget
+    nudges = [m["content"] for m in last if m["role"] == "user" and ("BUILD NOW" in m["content"]
+                                                                     or "SAVE NOW" in m["content"])]
+    # at 60% of a 5-turn budget only two turns are left, so the note (turns 3 and 4) is SAVE NOW, never BUILD NOW
+    assert len(nudges) == 2 and "3 of 5 turns" in nudges[0] and all("SAVE NOW" in n for n in nudges)
+    assert not any("BUILD NOW" in m["content"] for m in last if m["role"] == "user")
     assert "do NOT read" in E.SYSTEM and "B.dcf_block" in E.SYSTEM and "B.assumption_book" in E.SYSTEM
     ws = E.SheetsWorkspace(str(tmp_path), str(tmp_path / ".run"))
     for cmd in (f"sed -n 1,50p {src}", 'python -c "import inspect, engines.sheets.builder as B; '

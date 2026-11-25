@@ -4,7 +4,7 @@
 "use strict";
 
 // The three things a chat may do without asking. The keys are what the server stores; the words are for people.
-const MODE_NAME = {ask: "Manual", edits: "Auto", auto: "Full access"};
+const MODE_NAME = {ask: "Ask", edits: "Accept edits", auto: "Full access"};
 
 /* ---------- a searchable list in a popover: project, environment and repository selectors ---------- */
 // groups: [{label, items: [{id, label, desc, icon, check, note, fn}]}], footer: same item shape. Arrow keys, Enter, Esc.
@@ -52,6 +52,7 @@ function plusMenu(anchor) {
     {sep: true},
     {label: "Skills", icon: ICON.skill, sub: skills.length ? skills : [{label: "No skills yet", fn: () => openSettings("skills")}]},
     {label: "Plugins", icon: ICON.plug, sub: [...conns, ...(conns.length ? [{sep: true}] : []), {label: "Manage plugins", icon: ICON.gear, fn: () => goPage("plugins")}]},
+    ...(typeof wtMenuItem === "function" ? wtMenuItem() : []),
     ...(!S.cur && S.view !== "project" ? [{sep: true}, {label: S.draft.project ? "Change folder" : "Work in a folder", icon: ICON.folder, desc: S.draft.project ? projName(S.draft.project) : "", fn: chooseDraftFolder}, ...(S.draft.project ? [{label: "Don’t use a folder", icon: ICON.x, fn: () => { S.draft.project = ""; renderTop(); renderBar(); renderHero(); }}] : [])] : []),
   ], {cls: "plusmenu", up: true});
 }
@@ -78,7 +79,7 @@ function styleMenu(anchor) {
 // The default for new chats is kept on this computer; a chat keeps the harness it started with.
 const modeHarness = () => store("harness_default") || "meshpool-auto";
 const harnessChoices = () => S.harnesses.filter(h => !h.error && h.available !== false && h.id !== "meshpool-auto");
-function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "MeshPool" : harness(c).name); }
+function harnessShort() { const c = cfg().harness; return c === "meshpool-auto" || !c ? "Auto" : (c.startsWith("meshpool") ? "Meshpool" : harness(c).name); }
 function pickHarness(id) {
   if (S.cur) { if (id === S.cur.view.harness?.id || (id === "meshpool-auto" && S.cur.auto)) return; toast("An agent can’t change mid-chat, so this started a new chat with " + (id === "meshpool-auto" ? "Auto" : harness(id).name) + "."); newThread(); }
   S.draft.harness = id; renderBar(); renderHero();
@@ -112,7 +113,7 @@ function modelMenu(anchor) {
     {head: S.cur ? "Model · this chat" : "Model · new chats"},
     ...(rows.length ? rows : [{label: "No models yet", desc: "Add a key in Settings to see models", fn: () => openSettings("general")}]),
     {sep: true},
-    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "MeshPool") : harnessShort(), sub: harnessMenuItems()},
+    {label: "Harness", note: S.cur && !S.cur.auto ? harness(c.harness).name.replace(/^Meshpool .*/, "Meshpool") : harnessShort(), sub: harnessMenuItems()},
     {label: "Effort", note: "Auto", sub: [{head: "Effort"}, {label: "Auto", desc: "Meshpool sizes the effort to each request: quick questions stay quick, big jobs get more steps.", checked: true, fn: () => {}}]},
     {label: "More models", more: true, fn: () => modelPop(anchor)},
   ], {cls: "modelmenu", up: true});
@@ -129,7 +130,7 @@ function renderSel() {
   if (home && !code) left = `<button class="sel" id="projSel" aria-haspopup="listbox">${pj ? esc(clip(pj.name, 28)) : "Project"}${ICON.chev}</button>`;
   else if (home && code) left = `<button class="sel" id="envSel" aria-haspopup="listbox">${mg ? ICON.cloud : ICON.monitor}<span>${root ? esc(clip(projName(root), 24)) : "Choose a folder"}</span>${ICON.chev}</button><button class="sel" id="repoSel" aria-haspopup="listbox">${ICON.pr}<span>${mg ? esc(clip(projName(root), 22)) : "Repo"}</span>${ICON.chev}</button>`;
   else left = `<span class="disc">Answers can be wrong. Check what matters.</span>`;
-  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>Auto</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" data-tip="What it may do without asking" data-tip-pos="above">${esc(MODE_NAME[c.mode] || "Manual")}</button></span>`;
+  const html = `<span class="sl">${left}</span><span class="sr2"><button class="sel mdl" id="mPill" aria-haspopup="menu" data-tip="Choose a model" data-tip-pos="above"><span class="lbl">${esc(label)}</span><em>Auto</em></button><button class="sel ${c.mode === "auto" ? "hot" : ""}" id="aPill" aria-haspopup="menu" data-tip="What it may do without asking" data-tip-pos="above">${esc(MODE_NAME[c.mode] || "Ask")}</button></span>`;
   if (setHTML($("#selrow"), html, true)) {
     $("#mPill").onclick = e => modelMenu(e.currentTarget);
     $("#aPill").onclick = e => permMenu(e.currentTarget);
@@ -148,7 +149,7 @@ function renderBar() {
     ${window.cbar010 ? cbar010() : ""}
     <span class="sp"></span>
     ${c.busy ? `<button class="send stop ${S.stopping ? "stopping" : ""}" id="stopBtn" data-tip="Stop" data-kbd="Esc" aria-label="Stop">${S.stopping ? `<span class="spbody"></span>` : ICON.stop}</button><button class="intr" id="intrBtn" data-tip="Stop what it is doing and send this instead" data-kbd="${MOD}Enter" ${S.stopping || !$("#input")?.value.trim() ? "disabled" : ""}>Send now</button>` : ""}
-    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}" ${c.starting ? "disabled" : ""}>${ICON.send}</button>`;
+    <button class="send ${c.busy ? "add" : ""}" id="sendBtn" data-tip="${c.busy ? "Add to the task" : "Send"}" data-kbd="Enter" aria-label="${c.busy ? "Add to the task" : "Send"}">${ICON.send}</button>`;
   if (setHTML($("#cbar"), barHTML, true)) {       // rebuilt only when something in it changed; focus and hover survive a run
     $("#attBtn").onclick = e => plusMenu(e.currentTarget);
     $("#planChip")?.addEventListener("click", () => setPlan(false));
@@ -198,12 +199,12 @@ function repoSelector(anchor) {
     try { repos = (await api("/api/github/repos?q=" + encodeURIComponent(q || ""))).repos; } catch (e) { repos = []; p.note = e.message; $(".lp-n", p) && ($(".lp-n", p).innerHTML = `${esc(e.message)} ${/Connect GitHub/.test(e.message) ? `<button class="linkbtn" id="lpConn">Connect GitHub</button>` : ""}`); $("#lpConn", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); }); }
     p.redraw();
   };
-  p = listPop({anchor, placeholder: "Search repositories", width: 340, empty: "Loading repositories…",
+  p = listPop({anchor, placeholder: "Search repositories", width: 340, empty: "No repositories found.",
     note: `Don’t see yours? <button class="linkbtn" id="lpGh">Connect GitHub</button>`,
     tools: `<button class="iconbtn" id="lpRef" data-tip="Refresh" aria-label="Refresh">${ICON.refresh}</button><button class="iconbtn" id="lpSet" data-tip="Connector settings" aria-label="Connector settings">${ICON.gear}</button>`,
-    groups: () => [{label: "", items: [{label: "No repository", icon: ICON.x, check: !isMgd(S.draft.project), fn: () => { if (isMgd(S.draft.project)) S.draft.project = ""; renderBar(); renderTop(); renderHero(); }}]}, {label: "Repositories", items: (repos || []).map(r => ({label: r.full_name, desc: r.description || "", note: r.private ? "private" : "", fn: async () => {
+    groups: () => [{label: "", items: [{label: "No repository", icon: ICON.x, check: !isMgd(S.draft.project), fn: () => { if (isMgd(S.draft.project)) S.draft.project = ""; renderBar(); renderTop(); renderHero(); }}]}, {label: "Repositories", items: (repos === null ? [{label: "Loading repositories…", disabled: true}] : repos.length ? [] : [{label: "No repositories found", disabled: true}]).concat((repos || []).map(r => ({label: r.full_name, desc: r.description || "", note: r.private ? "private" : "", fn: async () => {
       try { toast(`Getting ${r.full_name} ready…`); const b = await api("/api/github/branches?repo=" + encodeURIComponent(r.full_name)); const w = await post("/api/github/workspace", {repo: r.full_name, branch: b.default, create: false, base: b.default}); await loadProjects(); S.draft.project = w.path; renderBar(); renderTop(); renderHero(); toast(`${w.name} on ${w.branch} is ready`); } catch (e) { toast(e.message, 5000); }
-    }}))}]});
+    }})))}]});
   $("#lpRef", p)?.addEventListener("click", () => load($(".lp-q", p).value));
   $("#lpSet", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); });
   $("#lpGh", p)?.addEventListener("click", () => { closePop(); openSettings("connectors"); });
@@ -213,9 +214,9 @@ function repoSelector(anchor) {
 
 /* ================================== home ================================== */
 const CARDS = () => [
-  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your Meshpool key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
+  {id: "key", show: S.settings && !S.settings.has_key && !S.settings.ready, title: "Add your " + (S.settings?.key_name || "Meshpool") + " key", text: "Meshpool needs a key to talk to a model. It takes a minute.", cta: "Add key", fn: () => openSettings("general")},
   {id: "github", show: (S.connCache || []).some(c => /github/i.test(c.id || c.name) && !c.connected), title: "Connect GitHub", text: "Let Meshpool work on your repositories and pull requests.", cta: "Connect", fn: () => openSettings("connectors")},
-  {id: "project", show: !!S.settings?.ready && !S.pj.length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
+  {id: "project", show: !!S.settings?.ready && !(S.pj || []).length, title: "Keep related work together", text: "A project gives its chats shared instructions, files and memory.", cta: "New project", fn: () => newProjectFlow()},
 ];
 function waitingList() { return chatList().filter(t => isCodeThread(t) && t.state === "waiting").slice(0, 3); }
 function renderHero() {

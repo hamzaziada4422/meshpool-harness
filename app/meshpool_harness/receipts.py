@@ -1,9 +1,10 @@
 """The per-task receipt: one quiet line under a finished reply. Time, cost, and which agent and model Auto chose, with
 the reason. Every number comes from the outcome log (hrouter/outcomes.py); nothing is estimated or invented.
 
-Cost: Meshpool has no price list, so a dollar figure appears only when the user set the prices of their model
-(MH_PRICE_IN, MH_PRICE_OUT and optionally MH_PRICE_CACHED, USD per million tokens, the same variables the terminal
-shows its session cost from). Without them the receipt shows measured tokens and says the cost was not measured.
+Cost: the outcome row carries the turn's cost from the call ledger (each call priced for its own model, nested engine
+calls included) and the number of calls with no known price. A call with no known price is never shown as $0. Rows
+written before that existed fall back to the user's own prices (MH_PRICE_IN, MH_PRICE_OUT and optionally
+MH_PRICE_CACHED, USD per million tokens), else the receipt says the cost was not measured.
 """
 from __future__ import annotations
 
@@ -102,12 +103,20 @@ def receipt_for(chat_id: str, turn_index: int | None = None) -> dict | None:
         return None
     r = rows[i]
     tin, tc, tout = int(r.get("tokens_in") or 0), int(r.get("tokens_cached") or 0), int(r.get("tokens_out") or 0)
-    cost = cost_of(tin, tc, tout)
+    new_row = "cost_usd" in r or "unpriced_calls" in r
+    unpriced = int(r.get("unpriced_calls") or 0)
+    if new_row:
+        cost = r.get("cost_usd") if isinstance(r.get("cost_usd"), (int, float)) else None
+    else:
+        cost = cost_of(tin, tc, tout)
     reason = r.get("reason") or (_reason_from_events(chat_id) if r.get("harness") else "")
     hid = r.get("harness") or ""
     out = {"chat": chat_id, "turn": i, "ts": r.get("ts"), "secs": r.get("secs"),
            "tokens_in": tin, "tokens_cached": tc, "tokens_out": tout, "calls": int(r.get("calls") or 0),
-           "cost": cost, "cost_label": "" if cost is not None else "not measured",
+           "cost": cost, "unpriced_calls": unpriced,
+           "cost_label": "" if cost is not None and not unpriced else
+           ("cost not known (unpriced model)" if new_row and unpriced and cost is None else
+            "" if cost is not None else "not measured"),
            "harness": hid, "harness_name": _harness_name(hid), "model": r.get("model") or "", "reason": reason,
            "spec": r.get("spec"), "error": bool(r.get("error")), "stopped": bool(r.get("stopped")),
            "review": r.get("review") if isinstance(r.get("review"), dict) else None}
@@ -135,8 +144,12 @@ def line(r: dict) -> str:
     bits = []
     if r.get("secs") is not None:
         bits.append(_fmt_secs(r["secs"]))
+    unpriced = int(r.get("unpriced_calls") or 0)
     if r.get("cost") is not None:
-        bits.append(f"${r['cost']:.2f}" if r["cost"] >= 0.01 else f"${r['cost']:.4f}")
+        money = f"${r['cost']:.2f}" if r["cost"] >= 0.01 else f"${r['cost']:.4f}"
+        bits.append(money + (f" + {unpriced} unpriced call{'s' if unpriced != 1 else ''}" if unpriced else ""))
+    elif unpriced:
+        bits.append("cost not known (unpriced model)")
     elif r.get("tokens_in") or r.get("tokens_out"):
         bits.append(f"{_fmt_tokens(r['tokens_in'] + r['tokens_out'])} tokens, cost not measured")
     rv = r.get("review")

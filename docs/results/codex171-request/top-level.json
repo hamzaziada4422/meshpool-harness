@@ -1,0 +1,15 @@
+{
+ "model": "deepseek-v4.1-flash",
+ "stream": true,
+ "tool_choice": "auto",
+ "parallel_tool_calls": true,
+ "reasoning": {
+  "summary": "auto"
+ },
+ "store": false,
+ "include": [
+  "reasoning.encrypted_content"
+ ],
+ "prompt_cache_key": "<per-session id, removed>",
+ "client_metadata": "<installation and session identifiers, removed>"
+}

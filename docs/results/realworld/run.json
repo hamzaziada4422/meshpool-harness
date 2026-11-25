@@ -1,0 +1,176 @@
+{
+ "invocations": [
+  {
+   "date": "2026-11-23T21:28:23+00:00",
+   "model": "deepseek-v4.1-flash",
+   "price_used": {
+    "in": 0.33,
+    "cached": 0.0066,
+    "out": 1.32
+   },
+   "upstream": "https://llm.meshpool.ai/v1",
+   "budget_usd": 3.0,
+   "spent_before": 0.0201,
+   "parallel": 3,
+   "reps": [
+    1,
+    1
+   ],
+   "tasks": [
+    "sympy__sympy-24539",
+    "sympy__sympy-22914",
+    "sympy__sympy-23824",
+    "sympy__sympy-23534",
+    "sympy__sympy-24213",
+    "sympy__sympy-23262"
+   ],
+   "arms": [
+    "mp",
+    "codex",
+    "pi"
+   ],
+   "versions": {
+    "codex": "codex-cli 0.171.0",
+    "pi": "1.5.2",
+    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
+    "meshpool_version": "meshpool 0.0.12",
+    "python": "/usr/local/bin/python3"
+   },
+   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+  },
+  {
+   "date": "2026-11-23T21:48:52+00:00",
+   "model": "deepseek-v4.1-flash",
+   "price_used": {
+    "in": 0.33,
+    "cached": 0.0066,
+    "out": 1.32
+   },
+   "upstream": "https://llm.meshpool.ai/v1",
+   "budget_usd": 3.0,
+   "spent_before": 0.2876,
+   "parallel": 3,
+   "reps": [
+    1,
+    1
+   ],
+   "tasks": [
+    "xlsx_budget",
+    "pdf_report",
+    "docx_tracked",
+    "pptx_chart",
+    "invoices_fx"
+   ],
+   "arms": [
+    "mp",
+    "codex",
+    "pi"
+   ],
+   "versions": {
+    "codex": "codex-cli 0.171.0",
+    "pi": "1.5.2",
+    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
+    "meshpool_version": "meshpool 0.0.12",
+    "python": "/usr/local/bin/python3"
+   },
+   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+  },
+  {
+   "date": "2026-11-23T22:10:13+00:00",
+   "model": "deepseek-v4.1-flash",
+   "price_used": {
+    "in": 0.33,
+    "cached": 0.0066,
+    "out": 1.32
+   },
+   "upstream": "https://llm.meshpool.ai/v1",
+   "budget_usd": 3.0,
+   "spent_before": 1.1222,
+   "parallel": 3,
+   "reps": [
+    1,
+    1
+   ],
+   "tasks": [
+    "pdf_facts",
+    "csv_sales",
+    "fix_test",
+    "flask_feature",
+    "bash_rename",
+    "md_to_docx",
+    "js_refactor",
+    "three_files",
+    "csv_clean"
+   ],
+   "arms": [
+    "mp",
+    "codex",
+    "pi"
+   ],
+   "versions": {
+    "codex": "codex-cli 0.171.0",
+    "pi": "1.5.2",
+    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
+    "meshpool_version": "meshpool 0.0.12",
+    "python": "/usr/local/bin/python3"
+   },
+   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+  },
+  {
+   "date": "2026-11-23T22:15:11+00:00",
+   "model": "deepseek-v4.1-flash",
+   "price_used": {
+    "in": 0.33,
+    "cached": 0.0066,
+    "out": 1.32
+   },
+   "upstream": "https://llm.meshpool.ai/v1",
+   "budget_usd": 3.0,
+   "spent_before": 1.3494,
+   "parallel": 3,
+   "reps": [
+    2,
+    2
+   ],
+   "tasks": [
+    "pdf_facts",
+    "csv_sales",
+    "fix_test",
+    "flask_feature",
+    "bash_rename",
+    "md_to_docx",
+    "js_refactor",
+    "three_files",
+    "csv_clean",
+    "sympy__sympy-24539",
+    "sympy__sympy-22914",
+    "sympy__sympy-23824",
+    "sympy__sympy-23534",
+    "sympy__sympy-24213",
+    "sympy__sympy-23262",
+    "xlsx_budget",
+    "pdf_report",
+    "docx_tracked",
+    "pptx_chart",
+    "invoices_fx"
+   ],
+   "arms": [
+    "mp",
+    "codex",
+    "pi"
+   ],
+   "versions": {
+    "codex": "codex-cli 0.171.0",
+    "pi": "1.5.2",
+    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
+    "meshpool_version": "meshpool 0.0.12",
+    "python": "/usr/local/bin/python3"
+   },
+   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+  }
+ ]
+}

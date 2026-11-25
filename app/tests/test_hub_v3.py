@@ -138,7 +138,7 @@ def test_account_menu_data(home):
     AS_profile.save_profile(name="Sam Rivera", address="Sam")
     make_session(home, "x1", "Chat", home, unread=True)
     a = HUB.account()
-    assert a["first_name"] == "Sam" and a["initial"] == "S" and a["key_set"] is True and a["plan"] == "MeshPool key"
+    assert a["first_name"] == "Sam" and a["initial"] == "S" and a["key_set"] is True and a["plan"] == "Meshpool key"
     assert a["device"]["connected"] is True and a["billing_url"].startswith("https://")
     assert a["chat_unread"] == 1 and a["code_waiting"] == 0
 

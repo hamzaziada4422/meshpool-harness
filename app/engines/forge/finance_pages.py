@@ -19,9 +19,9 @@ FIRM_SRC = "Meshpool model"
 
 
 def _recalc(path: str):
-    from engines.sheets.qa import recalc
+    from engines.sheets.qa import recalc_values
     try:
-        return load_workbook(recalc(path), data_only=True), load_workbook(path)
+        return recalc_values(path), load_workbook(path)
     except RuntimeError:                                   # no LibreOffice: cached values (may be empty)
         return load_workbook(path, data_only=True), load_workbook(path)
 
@@ -643,7 +643,11 @@ def finance_workbook(paths: list[str]) -> str | None:
         if not str(p).lower().endswith((".xlsx", ".xlsm")) or not Path(p).exists():
             continue
         try:
-            names = {k.lower() for k in load_workbook(p, read_only=False).defined_names.keys()}
+            wb = load_workbook(p, read_only=True)
+            try:
+                names = {k.lower() for k in wb.defined_names.keys()}
+            finally:
+                wb.close()
         except Exception:                                      # noqa: BLE001
             continue
         if names & {"dcf_per_share", "comps_ev_ebitda_median", "weighted_value_per_share", "ts_revenue_final",

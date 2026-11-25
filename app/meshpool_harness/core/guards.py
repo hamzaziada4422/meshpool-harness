@@ -29,7 +29,7 @@ def log_failure(ctx: dict, category: str, caught: bool, detail: str = ""):
     path = Path(dest) if dest else FAILURES
     try:
         new = not path.exists()
-        with path.open("a", newline="") as f:
+        with path.open("a", newline="", encoding="utf-8", errors="replace") as f:
             w = csv.DictWriter(f, fieldnames=FIELDS)
             if new:
                 w.writeheader()
@@ -65,12 +65,52 @@ def key_error_line(output: str) -> str | None:
     return hits[-1] if hits else None
 
 
+_DELIV_VERB = re.compile(r"\b(?:write|save|create|produce|output|generate)s?\b(?P<mid>[^.\n;]{0,60}?)"
+                         r"(?<![\w\-./])(?P<f>(?:[\w\-]{1,40}/){0,6}[\w\-]{1,80}\.(?:json|txt|csv|xlsx|pptx|png|md))\b", re.I)
+_DELIV_NEG = re.compile(r"(?:n't|\b(?:not|never|without|avoid|no|instead of))\s+(?:\w+\s+){0,2}$", re.I)
+_DELIV_INPUT = re.compile(r"\b(?:that|which|who|parses?|reads?|loads?|opens?|from|using|takes?|accepts?|given|input|with|"
+                          r"for)\b", re.I)
+
+
+def deliverable_names(task_text: str) -> set[str]:
+    """Files the task asks to be written: the object of write/save/create/produce/output, not an input file the new
+    code reads ("write a function that parses data/in.csv") and not something the user said not to make."""
+    names: set[str] = set()
+    for clause in re.split(r"[;\n]|\.(?=\s|$)", (task_text or "")[:20000]):
+        for m in _DELIV_VERB.finditer(clause):
+            if _DELIV_NEG.search(clause[:m.start()]) or _DELIV_INPUT.search(m.group("mid")):
+                continue
+            names.add(m.group("f"))
+    return names
+
+
+_VOLATILE = [
+    (re.compile(r"0x[0-9a-fA-F]+"), "0xH"),
+    (re.compile(r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?"), "TS"),
+    (re.compile(r"\b\d{1,2}:\d{2}:\d{2}(?:[.,]\d+)?"), "HMS"),
+    (re.compile(r"\b\d+(?:\.\d+)?\s*(?:ms|msec|milliseconds?|seconds?|secs?|s)\b"), "DUR"),
+    (re.compile(r"(?i)\b(pid|process|thread)[ =:#]*\d+"), r"\1 N"),
+    (re.compile(r"/tmp/[^\s'\"]+|/var/folders/[^\s'\"]+|[A-Za-z]:\\Users\\[^\s'\"]*?\\AppData\\Local\\Temp[^\s'\"]*"), "TMP"),
+]
+
+
+def failure_signature(code: int, output: str) -> str:
+    """Identity of a failure: all error lines (last 20, 2000 chars) with volatile tokens (addresses, durations, times,
+    temp paths, pids) normalised; ordinary digits are kept so 'FAIL: 7 issues' != 'FAIL: 6 issues'."""
+    lines = [l.strip() for l in output.splitlines() if l.strip()]
+    hits = [l for l in lines if ERR_LINE.search(l)]
+    text = "\n".join(hits[-20:])[-2000:] if hits else f"exit {code}|" + output.strip()[-300:]
+    for rx, rep in _VOLATILE:
+        text = rx.sub(rep, text)
+    return text
+
+
 class Guards:
     def __init__(self, ctx: dict, ws, allow_test_edits: bool = False, require_check: bool = True):
         self.ctx, self.ws = ctx, ws
         self.allow_test_edits = allow_test_edits
         self.require_check = require_check
-        self.fail_counts: dict[str, int] = {}
+        self.fail_counts: dict[str, tuple[str, int]] = {}   # cmd -> (last failure signature, consecutive count)
         self.pending_error: str | None = None
         self.reminded = False
 
@@ -116,8 +156,8 @@ class Guards:
         return None
 
     def repeat_calls(self, calls: list) -> str | None:
-        """MH_DOOM=1: 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
-        if os.environ.get("MH_DOOM") != "1" or not calls:
+        """Default on (MH_DOOM=0 turns it off): 3 identical tool calls in a row, or a 2-3 call pattern repeated 3 times -> one reminder."""
+        if os.environ.get("MH_DOOM") == "0" or not calls:
             return None
         hist = getattr(self, "_call_hist", [])
         for c in calls:
@@ -157,15 +197,17 @@ class Guards:
     def after_command(self, cmd: str, code: int, output: str) -> str | None:
         if code == 0:
             self.pending_error = None
+            self.fail_counts.pop(cmd.strip(), None)
             return None
         if not enabled("repeat_failure"):
             return None
         real = key_error_line(output)
-        line = real or f"exit {code}"
         self.pending_error = real          # only nag about real error lines, not '[exit 1]' or timeouts
-        sig = cmd.strip() + "|" + re.sub(r"\d+", "N", line)[:200]
-        self.fail_counts[sig] = self.fail_counts.get(sig, 0) + 1
-        n = self.fail_counts[sig]
+        sig = failure_signature(code, output)
+        key = cmd.strip()
+        last_sig, n = self.fail_counts.get(key, (None, 0))
+        n = n + 1 if sig == last_sig else 1      # consecutive identical failures only
+        self.fail_counts[key] = (sig, n)
         if n == 3:
             log_failure(self.ctx, "repeat_failure", True, cmd)
             return ("GUARD repeat_failure: this exact command has failed 3 times with the same error. Do not run it "
@@ -225,7 +267,9 @@ class Guards:
         if not enabled("deliverables"):
             return None
         import json as _json
-        names = set(re.findall(r"\b(?:[Ww]rite|[Ss]ave|[Cc]reate|[Pp]roduce|[Oo]utput)\b[^.\n]{0,60}?\b([\w\-]+\.(?:json|txt|csv|xlsx|pptx|png|md))\b", task_text))
+        if getattr(self, "_deliv_refused", 0) >= 2:      # a wrong guess must not hold finish forever
+            return None
+        names = deliverable_names(task_text)
         missing, bad = [], []
         for n in sorted(names):
             p = self.ws.root / n
@@ -235,10 +279,11 @@ class Guards:
                 missing.append(n)
             elif n.endswith(".json") and p.exists():
                 try:
-                    _json.loads(p.read_text())
+                    _json.loads(p.read_text(encoding="utf-8-sig", errors="replace"))
                 except ValueError as e:
                     bad.append(f"{n} ({e})")
         if missing or bad:
+            self._deliv_refused = getattr(self, "_deliv_refused", 0) + 1
             log_failure(self.ctx, "missing_deliverable", True, ", ".join(missing + bad))
             return ("GUARD deliverables: the task asks for " + ", ".join(sorted(names)) + ". "
                     + (f"Missing in {self.ws.root}: {', '.join(missing)}. " if missing else "")
@@ -264,12 +309,20 @@ class Guards:
 
     def _git_test_changes(self) -> list[str] | None:
         try:
-            r = self._git(["-c", "core.fsmonitor=false", "status", "--porcelain"])
+            r = self._git(["-c", "core.fsmonitor=false", "status", "--porcelain", "-z"])
             if r.returncode != 0:
                 return None
-            names = [l[3:].strip() for l in r.stdout.splitlines()]
+            ents, parts = [], r.stdout.split("\0")
+            i = 0
+            while i < len(parts):                       # -z: unquoted paths; a rename is "XY new" then "old"
+                e = parts[i]
+                i += 1
+                if len(e) > 3:
+                    ents.append((e[:2], e[3:]))
+                    if e[0] in "RC":
+                        i += 1
             # only modified/deleted tracked tests count; new test files the agent adds are allowed
-            mod = [l[3:].strip() for l in r.stdout.splitlines() if l[:2].strip() in ("M", "D", "MM", "AM", "R")]
+            mod = [n for st, n in ents if st.strip() in ("M", "D", "MM", "AM", "R")]
             tests = [n for n in mod if TEST_PATH.search(n)]
             if test_guard_mode() == "additive":         # only removed or changed existing lines count as tampering
                 kept = []

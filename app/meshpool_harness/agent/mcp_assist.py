@@ -192,6 +192,9 @@ FIND_SCHEMA = {"type": "function", "function": {
         "names": {"type": "array", "items": {"type": "string"}, "description": "Exact tool names to load"}}}}}
 
 
+WORK_LAZY_MIN = 8
+
+
 def lazy_at() -> int:
     try:
         return int(os.environ.get("MH_MCP_LAZY_AT", "60"))
@@ -199,8 +202,14 @@ def lazy_at() -> int:
         return 60
 
 
-def _builtin(name: str) -> bool:
-    return name.replace("-", "_").startswith("mcp__meshpool_")
+def _builtin(name: str, profile: str | None = None) -> bool:
+    """Meshpool's own tools, which are always sent in full. In the Work profile only the office tools are: the browser,
+    assistant, tools and web servers (about 20 tools, 4k tokens) are found through mcp_find_tools like connected apps,
+    since most office tasks use none of them. MH_MCP_LAZY_WORK=0 keeps them in full."""
+    n = name.replace("-", "_")
+    if profile == "work" and os.environ.get("MH_MCP_LAZY_WORK", "1") != "0":
+        return n.startswith("mcp__meshpool_office__")
+    return n.startswith("mcp__meshpool_")
 
 
 def _words(s: str) -> list[str]:
@@ -208,23 +217,28 @@ def _words(s: str) -> list[str]:
 
 
 class LazyTools:
-    """Which connected tools show their full schema. State lives on the Agent (one per chat)."""
+    """Which connected tools show their full schema. State lives on the Agent (one per chat). `profile` is the Agent's
+    profile ("work", "code", ...): the exemption of Meshpool's own tools depends on it (see _builtin)."""
 
-    def __init__(self):
+    def __init__(self, profile: str | None = None):
         self.active: set[str] = set()
+        self.profile = profile
 
     @staticmethod
-    def wanted(schemas: list) -> bool:
+    def wanted(schemas: list, profile: str | None = None) -> bool:
         if os.environ.get("MH_MCP_LAZY", "1") == "0":
             return False
-        return sum(1 for s in schemas if not _builtin(s["function"]["name"])) > lazy_at()
+        n = sum(1 for s in schemas if not _builtin(s["function"]["name"], profile))
+        if profile == "work" and os.environ.get("MH_MCP_LAZY_WORK", "1") != "0":
+            return n >= WORK_LAZY_MIN                     # a few servers' worth of Meshpool tools is already too many
+        return n > lazy_at()
 
     def split(self, schemas: list) -> tuple[list, list]:
         """(schemas to send, hidden schemas). Meshpool's own tools and activated ones are sent in full."""
         shown, hidden = [], []
         for s in schemas:
             n = s["function"]["name"]
-            (shown if _builtin(n) or n in self.active else hidden).append(s)
+            (shown if _builtin(n, self.profile) or n in self.active else hidden).append(s)
         return shown, hidden
 
     def find_schema(self, hidden: list) -> dict:

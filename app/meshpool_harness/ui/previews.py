@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -40,6 +41,8 @@ OFFICE = {".pptx", ".ppt", ".pptm", ".ppsx", ".pps", ".potx", ".odp", ".docx", "
           ".xls", ".xlsb", ".ods", ".key", ".pages", ".numbers"}
 SHEET = {".xlsx", ".xlsm", ".csv", ".tsv"}
 IMAGE = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp"}
+AUDIO = {".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac"}
+VIDEO = {".mp4", ".mov", ".m4v", ".webm", ".ogv"}
 TEXT_SKIP = {".zip", ".gz", ".exe", ".dll", ".so", ".dylib", ".bin", ".mp4", ".mov", ".mp3", ".wav", ".7z", ".tar", ".db",
              ".sqlite", ".pyc", ".woff", ".woff2", ".ttf", ".otf", ".ico", ".psd", ".docx~"}
 
@@ -59,6 +62,10 @@ def kind_of(p: Path) -> str:
         return "sheet"
     if ext in IMAGE:
         return "image"
+    if ext in AUDIO:
+        return "audio"
+    if ext in VIDEO:
+        return "video"
     if ext in (".html", ".htm"):
         return "html"
     if ext in (".md", ".markdown"):
@@ -127,10 +134,21 @@ def _render(pdf: Path, page: int, width: int) -> bytes:
 
 # ------------------------------------------------------------------ Office -> PDF (background, one at a time)
 def _convert_job(src: Path, key: str) -> None:
+    if sys.platform.startswith("linux"):          # background work: the chat and the page come first (this thread's
+        try:                                      # priority, inherited by LibreOffice)
+            os.nice(10)
+        except OSError:
+            pass
     out = _dir() / key
     try:
         with _CONVERT:
             if (out / "doc.pdf").exists():
+                if not (out / "meta.json").exists():          # a crash between the two writes: finish the job
+                    part = out / f"meta.{os.getpid()}.{threading.get_ident()}.tmp"
+                    part.write_text(json.dumps({"total": _pdf_pages(out / "doc.pdf")}))
+                    os.replace(part, out / "meta.json")
+                with _JOBS_LOCK:
+                    _JOBS.pop(key, None)
                 return
             from engines.forge.common import soffice_convert
             tmp = _dir() / (key + ".tmp")
@@ -150,9 +168,19 @@ def _convert_job(src: Path, key: str) -> None:
             _JOBS.pop(key, None)
     except subprocess.TimeoutExpired:
         _fail(key, f"Converting {src.name} took longer than {CONVERT_TIMEOUT} seconds. Try again in a moment.")
-    except Exception as e:  # noqa: BLE001 - shown in the pane
-        msg = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
-        _fail(key, msg[:300])
+    except Exception as e:  # noqa: BLE001 - shown in the pane, in plain words (B6: no paths, no parser errors)
+        _fail(key, friendly_error(src, e))
+
+
+def friendly_error(p: Path, e: BaseException) -> str:
+    """A parser or converter failure as one plain sentence: no paths, no exception names, no tool output."""
+    what = {".docx": "Word document", ".doc": "Word document", ".docm": "Word document", ".dotx": "Word document",
+            ".odt": "document", ".rtf": "document", ".pdf": "PDF"}.get(p.suffix.lower(), "file")
+    if isinstance(e, subprocess.TimeoutExpired):
+        return f"Converting this {what} took too long. Try again in a moment."
+    if isinstance(e, (OSError, MemoryError)) and not isinstance(e, (ValueError, RuntimeError)) and getattr(e, "errno", None) in (13, 1):
+        return f"Meshpool is not allowed to read this {what}."
+    return f"This {what} is damaged or is not what its name says, so it cannot be previewed here. Open it in its app."
 
 
 def _fail(key: str, msg: str) -> None:
@@ -200,14 +228,22 @@ def _cell(v) -> str:
 def _xlsx_sheets(p: Path) -> list[dict]:
     import openpyxl
     wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
+    wf = openpyxl.load_workbook(p, read_only=True, data_only=False)     # F-24: formulas with no cached value show as text
     out = []
     try:
         for ws in wb.worksheets[:MAX_SHEETS]:
             rows, cols, more = [], 0, False
+            try:
+                frows = wf[ws.title].iter_rows(max_col=MAX_COLS, values_only=True)
+            except Exception:  # noqa: BLE001
+                frows = iter(())
             for i, row in enumerate(ws.iter_rows(max_col=MAX_COLS, values_only=True)):
                 if i >= MAX_ROWS:
                     more = True
                     break
+                frow = next(frows, ())
+                row = [f if v is None and isinstance(f, str) and f.startswith("=") else v
+                       for v, f in zip(row, tuple(frow) + (None,) * (len(row) - len(frow)))]
                 cells = [_cell(v) for v in row]
                 while cells and cells[-1] == "":
                     cells.pop()
@@ -220,6 +256,7 @@ def _xlsx_sheets(p: Path) -> list[dict]:
         extra = len(wb.worksheets) - MAX_SHEETS
     finally:
         wb.close()
+        wf.close()
     if extra > 0:
         out.append({"name": f"+{extra} more", "rows": [], "cols": 0, "more": False, "wide": False})
     return out
@@ -237,12 +274,16 @@ def _csv_sheet(p: Path) -> list[dict]:
             delim = csv.Sniffer().sniff(text[:8192], delimiters=",;\t|").delimiter
         except csv.Error:
             pass
+    try:                                          # a cell over 128 KB must not fail the whole preview
+        csv.field_size_limit(max(csv.field_size_limit(), min(len(text) + 1, 2 ** 31 - 1)))
+    except (OverflowError, ValueError):
+        pass
     rows, cols, more = [], 0, False
     for i, row in enumerate(csv.reader(io.StringIO(text), delimiter=delim)):
         if i >= MAX_ROWS:
             more = True
             break
-        rows.append(row[:MAX_COLS])
+        rows.append([c[:2000] for c in row[:MAX_COLS]])
         cols = max(cols, len(rows[-1]))
     return [{"name": p.stem, "rows": [r + [""] * (cols - len(r)) for r in rows], "cols": cols, "more": more, "wide": False}]
 
@@ -255,9 +296,16 @@ def meta(root: str, rel: str) -> dict:
     base = {"name": p.name, "path": rel, "ext": p.suffix.lower().lstrip("."), "size": st.st_size, "mtime": st.st_mtime,
             "kind": k}
     if k == "pdf":
-        n = _pdf_pages(p)
+        try:
+            n = _pdf_pages(p)
+        except Exception:  # noqa: BLE001
+            raise ValueError("This PDF is damaged or protected, so it cannot be previewed here. Open it in its app.") from None
         return base | {"kind": "pages", "state": "ready", "pages": min(n, MAX_PAGES), "total": n}
     if k == "office":
+        if p.suffix.lower() in (".docx", ".docm", ".dotx", ".pptx", ".pptm", ".ppsx", ".potx"):
+            import zipfile
+            if not zipfile.is_zipfile(p):               # B6: not even a package: say so before LibreOffice is asked
+                raise ValueError(friendly_error(p, ValueError("not a package")))
         return base | {"kind": "pages"} | _office_state(p)
     if k == "sheet":
         if st.st_size > SHEET_MAX_BYTES:
@@ -266,10 +314,15 @@ def meta(root: str, rel: str) -> dict:
             try:
                 return base | {"state": "ready", "sheets": _xlsx_sheets(p)}
             except Exception:  # noqa: BLE001 - a workbook openpyxl cannot read: let LibreOffice draw it
+                import zipfile
+                if not zipfile.is_zipfile(p):
+                    raise ValueError("This workbook is damaged, so it cannot be previewed. Open it in its app.") from None
                 return base | {"kind": "pages"} | _office_state(p)
         return base | {"state": "ready", "sheets": _csv_sheet(p)}
     if k == "image":
         return base | {"state": "ready", "mime": "image/svg+xml" if p.suffix.lower() == ".svg" else None}
+    if k in ("audio", "video"):
+        return base | {"state": "ready"}
     if k == "none":
         return base | {"state": "ready", "note": "There is no preview for this kind of file. Meshpool cannot show it here."}
     if st.st_size > MAX_TEXT:

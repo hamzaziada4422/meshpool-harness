@@ -40,12 +40,12 @@ def test_repeated_builds_are_told_to_stop(tmp_path, monkeypatch):
 def test_build_numbers_count_per_engine(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "_project", lambda: tmp_path)
     monkeypatch.setattr(O, "WAIT", 0)
-    monkeypatch.setattr(O, "_run_job", lambda jid: None)
+    monkeypatch.setattr(O, "_run_job", lambda jid, *a: None)
     saved = dict(O.JOBS)
     O.JOBS.clear()
     try:
-        for _ in range(3):
-            O._engine("slides", "a deck", None)
+        for i in range(3):
+            O._engine("slides", f"a deck about topic {i}", None)   # distinct requests: the same one is not rebuilt
         O._engine("sheets", "a model", None)
         nos = sorted((j["engine"], j["build_no"]) for j in O.JOBS.values())
         assert nos == [("sheets", 1), ("slides", 1), ("slides", 2), ("slides", 3)]
@@ -106,9 +106,9 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
     try:
         text, ok = a._office({"engine": "sheets", "request": "a model"})
         assert ok and "flagged" in text and "checks passed" not in text
-        assert "- Meshpool outputs/" in text and text.rstrip().endswith("rules failing: X3.")
-        for _ in range(OJ.REBUILD_LIMIT - 1):
-            text, _ = a._office({"engine": "sheets", "request": "a model"})
+        assert "- Meshpool outputs/" in text and "rules failing: X3." in text
+        for i in range(OJ.REBUILD_LIMIT - 1):             # distinct requests: the same one is returned, not rebuilt
+            text, _ = a._office({"engine": "sheets", "request": f"a model of topic {i}"})
         assert "stop here" in text
         text, ok = a._office({"engine": "sheets", "request": "x", "files": ["missing.csv"]})
         assert not ok and "missing.csv" in text
@@ -120,7 +120,7 @@ def test_office_task_uses_the_shared_report(tmp_path, monkeypatch):
 def test_conversions_keep_the_words(tmp_path, monkeypatch):
     monkeypatch.setattr(O, "_project", lambda: tmp_path)
     seen = {}
-    monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True: (seen.update(clarity=_clarity), ("ok", False))[1])
+    monkeypatch.setattr(O, "make_document", lambda md, name, _clarity=True, **kw: (seen.update(clarity=_clarity), ("ok", False))[1])
     (tmp_path / "a.md").write_text("# Title\n\nSome words.")
     assert O.convert_document("a.md", "docx") == ("ok", False) and seen["clarity"] is False
 

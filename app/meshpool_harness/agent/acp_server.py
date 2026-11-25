@@ -77,7 +77,9 @@ class Server:
                                     "env": {e["name"]: e["value"] for e in s.get("env") or []}}
         mcp = Manager(roots=[cwd], extra=extra).start(timeout=60)
         sid = uuid.uuid4().hex
-        st = {"id": sid, "busy": False}
+        # turn: one prompt at a time (Agent.send clears the stop flag, so a prompt sent right after a cancel made
+        # the cancelled turn run on beside the new one); seq/cancelled: which prompts a cancel covers
+        st = {"id": sid, "busy": False, "turn": threading.Lock(), "seq": 0, "cancelled": 0}
         agent = Agent(cwd, mcp=mcp, emit=lambda ev: self.on_event(sid, ev),
                       approve=lambda kind, title, detail: self.on_permission(sid, kind, title, detail),
                       mode="auto" if self.auto else "ask", profile=self.profile)
@@ -99,16 +101,24 @@ class Server:
             elif b.get("type") == "resource_link":
                 parts.append(f"(attached: {b.get('uri', '')})")
 
+        st["seq"] = seq = st.get("seq", 0) + 1
+
         def run():
-            st["busy"] = True
-            a = st["agent"]
-            try:
-                a.send("\n\n".join(parts))
-                self.reply(rid, {"stopReason": "cancelled" if a._stop else "end_turn"})
-            except Exception as e:
-                self.reply(rid, error={"code": -32603, "message": str(e)})
-            finally:
-                st["busy"] = False
+            with st.setdefault("turn", threading.Lock()):
+                if st.get("cancelled", 0) >= seq:            # cancelled before it started: never runs
+                    return self.reply(rid, {"stopReason": "cancelled"})
+                st["busy"] = True
+                a = st["agent"]
+                try:
+                    st["errored"] = False
+                    a.send("\n\n".join(parts))
+                    stopped = a._stop or st.get("cancelled", 0) >= seq
+                    self.reply(rid, {"stopReason": "cancelled" if stopped else "refusal" if st.get("errored")
+                                     else "end_turn"})
+                except Exception as e:
+                    self.reply(rid, error={"code": -32603, "message": str(e)})
+                finally:
+                    st["busy"] = False
         threading.Thread(target=run, daemon=True).start()
 
     # ---------- agent -> client --------------------------------------------------------------------------------
@@ -135,7 +145,12 @@ class Server:
             self.notify_update(sid, {"sessionUpdate": "plan", "entries": [
                 {"content": e["content"], "status": e.get("status", "pending"), "priority": "medium"}
                 for e in ev.get("entries") or []]})
-        elif t in ("status", "error", "interrupted"):
+        elif t in ("error", "interrupted"):                 # the user must see these, not a silent finish
+            if t == "error":
+                st["errored"] = True
+            self.notify_update(sid, {"sessionUpdate": "agent_message_chunk",
+                                     "content": {"type": "text", "text": ev.get("text", "") + "\n"}})
+        elif t == "status":
             self.notify_update(sid, {"sessionUpdate": "agent_thought_chunk",
                                      "content": {"type": "text", "text": ev.get("text", "") + "\n"}})
 
@@ -175,6 +190,7 @@ class Server:
             if m == "session/cancel":
                 st = self.sessions.get(p.get("sessionId"))
                 if st:
+                    st["cancelled"] = st.get("seq", 0)           # every prompt received so far
                     st["agent"].stop()
                 return None
             if m == "session/set_mode":
@@ -196,6 +212,8 @@ class Server:
             try:
                 msg = json.loads(line)
             except ValueError:
+                continue
+            if not isinstance(msg, dict):
                 continue
             threading.Thread(target=self.handle, args=(msg,), daemon=True).start() if msg.get("method") == "session/new" \
                 else self.handle(msg)

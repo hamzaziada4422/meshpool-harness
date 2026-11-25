@@ -38,8 +38,16 @@ def memory_forget(text: str) -> str:
 
 
 def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", day: str = "mon", at: str = "",
-                  minutes: int = 60, folder: str = "", mode: str = "cowork", only_on_change: bool = False) -> str:
+                  minutes: int = 60, folder: str = "", mode: str = "", only_on_change: bool = False) -> str:
     import os
+    if not mode:                                     # a task made in a Code chat runs in Code mode
+        mode = "code" if os.environ.get("MH_CHAT_KIND") == "code" else "cowork"
+        try:
+            from meshpool_harness.ui.agent_api import read_meta
+            if os.environ.get("MH_CHAT_ID") and read_meta(os.environ["MH_CHAT_ID"]).get("kind") == "code":
+                mode = "code"
+        except Exception:  # noqa: BLE001
+            pass
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
                    "", mode, only_on_change)
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
@@ -53,7 +61,10 @@ def list_scheduled_tasks() -> str:
 
 
 def delete_scheduled_task(id: str) -> str:
-    return "Deleted." if A.delete_task(id) else "No task with that id or name."
+    try:
+        return "Deleted." if A.delete_task(id) else "No task with that id or name."
+    except ValueError as e:                          # several tasks share the name: say which
+        return str(e)
 
 
 def search_chats(query: str) -> str:
@@ -64,8 +75,23 @@ def run_subtasks(tasks: list, max_parallel: int = 0) -> str:
     """For Hermes, Codex, Pi and other harnesses: read-only sub-agents in this server's project. Meshpool's own chats
     run sub-agents in the app instead (agent/core.py _run_subtasks), where their mode and project are known."""
     import os
-    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel,
-                          cancelled=cancel_check())       # Stop in Hermes, Codex or Pi cancels the call
+    import time
+    asked, t0 = cancel_check(), time.time()
+
+    def cancelled() -> bool:
+        # Stop in Hermes, Codex or Pi: the call's notifications/cancelled when the harness forwards it, and in any
+        # case the chat's own Stop stamp (MESHPOOL_STOP_FILE), so sub-agents never run on after Stop.
+        if asked():
+            return True
+        f = os.environ.get("MESHPOOL_STOP_FILE")
+        if not f:
+            return False
+        try:
+            with open(f, encoding="utf-8") as fh:
+                return float(fh.read().strip() or 0) >= t0
+        except (OSError, ValueError):
+            return False
+    return A.run_subtasks(tasks, os.environ.get("MESHPOOL_PROJECT", ""), max_parallel, cancelled=cancelled)
 
 
 TOOLS = {

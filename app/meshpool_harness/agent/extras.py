@@ -21,6 +21,7 @@ import subprocess
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.core.permrules import TOOL_FAMILY as _TOOL_FAMILY
 
 FILES = ("MESHPOOL.md", "AGENTS.md", "CLAUDE.md")
 MAX_FILE, MAX_ALL = 20000, 40000
@@ -42,14 +43,20 @@ def _read(p: Path) -> str:
         return ""
 
 
-def _imports(text: str, base: Path, seen: set, depth: int = 0) -> str:
-    """Lines that are only `@relative/path.md` are replaced by that file's text (up to three levels)."""
+def _imports(text: str, base: Path, seen: set, depth: int = 0, fence: Path | None = None) -> str:
+    """Lines that are only `@relative/path.md` are replaced by that file's text (up to three levels). With a `fence`
+    (a project's instruction file) only files inside that folder are imported."""
     def sub(m):
         t = (base / m.group(1)).resolve()
         if depth >= 3 or t in seen or not t.is_file():
             return m.group(0)
+        if fence is not None:
+            try:
+                t.relative_to(fence)
+            except ValueError:
+                return m.group(0)
         seen.add(t)
-        return _imports(_read(t), t.parent, seen, depth + 1)
+        return _imports(_read(t), t.parent, seen, depth + 1, fence)
     return re.sub(r"^@(\S+\.(?:md|txt))\s*$", sub, text, flags=re.M)
 
 
@@ -77,7 +84,12 @@ def instruction_files(root: Path) -> list[tuple[str, Path]]:
 def instruction_text(root: Path) -> str:
     parts, total = [], 0
     for where, f in instruction_files(root):
-        body = _imports(_read(f), f.parent, {f.resolve()}).strip()
+        try:
+            f.resolve().relative_to(C.home().resolve())
+            fence = None                                    # the user's own file may import from anywhere
+        except (ValueError, OSError):
+            fence = _git_root(f.parent).resolve()           # a project's file stays inside the project
+        body = _imports(_read(f), f.parent, {f.resolve()}, fence=fence).strip()
         if not body or total + len(body) > MAX_ALL:
             continue
         total += len(body)
@@ -86,12 +98,62 @@ def instruction_text(root: Path) -> str:
 
 
 # ---------------------------------------------------------------- hooks
+def _trust_file() -> Path:
+    return C.home() / "trusted_projects.json"
+
+
+def _norm(root) -> str:
+    try:
+        return str(Path(root).expanduser().resolve())
+    except OSError:
+        return str(root)
+
+
+def project_trusted(root) -> bool:
+    """A project's own .meshpool/permissions.json "allow" rules and hooks.json commands (which run shell commands)
+    are honoured only after the user trusted the folder (/trust, or MH_TRUST_PROJECT=1)."""
+    if os.environ.get("MH_TRUST_PROJECT") == "1":
+        return True
+    try:
+        d = json.loads(_trust_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(d, list) and _norm(root) in d
+
+
+def trust_project(root) -> None:
+    try:
+        d = json.loads(_trust_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = []
+    d = [x for x in d if isinstance(x, str)] if isinstance(d, list) else []
+    if _norm(root) not in d:
+        d.append(_norm(root))
+    f = _trust_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_name(f.name + ".tmp")
+    tmp.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    os.replace(tmp, f)
+
+
+def untrusted_config(root) -> list[str]:
+    """Project files that would add allow rules or hooks but are ignored until the folder is trusted."""
+    if project_trusted(root):
+        return []
+    return [n for n in ("permissions.json", "hooks.json") if (Path(root) / ".meshpool" / n).is_file()]
+
+
 def hooks(root: Path) -> dict:
     out: dict = {e: [] for e in EVENTS}
-    for f in (C.home() / "hooks.json", Path(root) / ".meshpool" / "hooks.json"):
+    # <home>/hooks.json and the hooks of plugins the user installed are global; a project's own file needs its trust
+    files = ([C.home() / "hooks.json"] + sorted((C.home() / "plugin-hooks").glob("*.json"))
+             + ([Path(root) / ".meshpool" / "hooks.json"] if project_trusted(root) else []))
+    for f in files:
         try:
             d = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
             continue
         for e in EVENTS:
             for h in (d.get(e) or []):
@@ -100,16 +162,38 @@ def hooks(root: Path) -> dict:
     return out
 
 
+# A hook names a tool the way Claude Code or Meshpool's classic tools do; the lean (Codex-style) lanes run "shell" and
+# "apply_patch", the "c171" profile "exec_command" (its script is `cmd`, read through permrules.commands_of). Each
+# family matches every tool that does that job, in any letter case ("Bash", "Edit|Write" from a Claude Code plugin;
+# "bash", "edit" from a Meshpool hooks file). Saved permission rules use the same map.
+
+
+def _hook_commands(name: str, args: dict) -> list[str]:
+    """Every command text a bash: matcher is tested against: each command a call runs (bash_many's `commands` one by
+    one, shell's script), and the call's own `command` as it was written."""
+    from meshpool_harness.core import permrules as PR
+    out = list(PR.commands_of(name, args))
+    cmd = args.get("command") or ""
+    if isinstance(cmd, list):                       # shell takes an argv list (["bash", "-lc", "rm -rf x"])
+        cmd = cmd[-1] if len(cmd) >= 3 and str(cmd[-2]) in ("-c", "-lc") else " ".join(map(str, cmd))
+    if cmd:
+        out.append(str(cmd))
+    out += [str(c) for c in args.get("commands") or [] if c and isinstance(c, str)]
+    return list(dict.fromkeys(out))
+
+
 def _tool_matches(matcher: str, name: str, args: dict) -> bool:
     if not matcher or matcher == "*":
         return True
-    cmd = str(args.get("command") or "")
+    cmds = _hook_commands(name, args or {})
     for m in matcher.split("|"):
         m = m.strip()
-        if m.startswith("bash:"):
-            if cmd and fnmatch.fnmatchcase(cmd, m[5:].strip()):
+        if m.lower().startswith("bash:") or m.lower().startswith("bash("):
+            pat = m[5:].strip() if m[4] == ":" else (m[5:-1] if m.endswith(")") else m[5:]).strip()
+            if any(fnmatch.fnmatchcase(c, pat) for c in cmds):
                 return True
-        elif fnmatch.fnmatchcase(name, m) or (m == "bash" and name in ("bash", "bash_many", "bash_start", "shell")):
+        elif fnmatch.fnmatchcase(name, m) or fnmatch.fnmatchcase(name.lower(), m.lower()) \
+                or name in _TOOL_FAMILY.get(m.lower(), ()):
             return True
     return False
 
@@ -128,13 +212,20 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
     for h in hs:
         if event in ("PreToolUse", "PostToolUse") and not _tool_matches(h.get("matcher", ""), tool, args or {}):
             continue
+        can_block = event in ("PreToolUse", "UserPromptSubmit")
+        try:
+            secs = float(str(h.get("timeout") or timeout).strip().rstrip("sS") or timeout)
+        except ValueError:
+            secs = timeout
         try:
             r = subprocess.run(h["command"], shell=True, cwd=str(root), input=data, capture_output=True, text=True,
-                               timeout=int(h.get("timeout") or timeout), env=C.scrub_env(dict(os.environ)))
+                               timeout=secs, env=C.scrub_env(dict(os.environ)))
         except (subprocess.TimeoutExpired, OSError) as e:
+            if can_block:                                 # a check that did not finish is not a pass
+                out.update(blocked=True, message=f"The hook {h['command'][:40]} failed ({e}), so this was stopped.")
+                return out
             notes.append(f"[hook {h['command'][:40]} failed: {e}]")
             continue
-        can_block = event in ("PreToolUse", "UserPromptSubmit")
         if r.returncode == 2 and can_block:
             out.update(blocked=True, message=(r.stderr or r.stdout).strip() or "A hook blocked this.")
             return out
@@ -223,11 +314,13 @@ def expand_mentions(text: str, root: Path, limit: int = 60000) -> str:
             parts.append(f"[@{rel}] folder contents: " + ", ".join(names))
         else:
             try:
-                data = p.read_bytes()
+                size = p.stat().st_size
+                with open(p, "rb") as fh:
+                    data = fh.read(100000)                  # never the whole of a multi-GB log
             except OSError:
                 continue
             if b"\0" in data[:2000]:
-                parts.append(f"[@{rel}] binary file, {len(data)} bytes (use a tool to read it)")
+                parts.append(f"[@{rel}] binary file, {size} bytes (use a tool to read it)")
                 continue
             body = data.decode("utf-8", errors="replace")
             body = body[:max(0, min(20000, limit - used))]

@@ -122,8 +122,10 @@ def restore(workdir: str, snap: tuple[str, str]) -> bool:
     return _worktree_tree(workdir) == tree
 
 
-def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: str = "deepseek-v4.1-flash",
+def solve(task: str, *, workdir: str, task_id: str, max_turns: int = 60, model: str | None = None,
           client=None, phase: str = "phase_2_build", temperature: float | None = None) -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     cont = cdir = None
     mounted = True
     m = re.search(r"docker exec -w (\S+) (\S+) bash -lc", task)

@@ -48,6 +48,7 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None, ti
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"Accept": "application/json", "Content-Type": "application/json", **headers})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    from meshpool_harness.core import http as _HTTP     # same-host redirects only: the token stays with its host
+    with _HTTP.open(req, timeout) as r:
         raw = r.read()
     return json.loads(raw) if raw else {}

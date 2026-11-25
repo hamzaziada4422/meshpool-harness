@@ -1,0 +1,49 @@
+{
+ "date": "2026-11-23T22:04:06+00:00",
+ "model": "deepseek-v4.1-flash",
+ "prices": {
+  "gpt-6-luna": {
+   "in": 0.1,
+   "cached": 0.01,
+   "out": 0.5
+  },
+  "deepseek-v4.1-flash": {
+   "in": 0.33,
+   "cached": 0.0066,
+   "out": 1.32
+  }
+ },
+ "price_used": {
+  "in": 0.33,
+  "cached": 0.0066,
+  "out": 1.32
+ },
+ "upstream": "https://llm.meshpool.ai/v1",
+ "budget_usd": 2.4,
+ "reps": 1,
+ "tasks": [
+  "xlsx_edit",
+  "docx_tracked",
+  "invoices_fx",
+  "docx_mailmerge",
+  "xlsx_budget",
+  "pptx_chart",
+  "pdf_report"
+ ],
+ "arms": [
+  "codex",
+  "pi",
+  "mp-work",
+  "mp-on-pi",
+  "mp-on-codex",
+  "mp-cli"
+ ],
+ "versions": {
+  "codex": "codex-cli 0.171.0",
+  "pi": "0.73.1",
+  "meshpool_src": "/tmp/claude-0/final/app",
+  "meshpool_git": "ab173821023bce2dab6414507864d4031f946c01",
+  "python": "/root/.venvs/mp/bin/python"
+ },
+ "meter": "testkit/loop/small_meter.py (no reasoning-token field; reasoning is reported as null)"
+}

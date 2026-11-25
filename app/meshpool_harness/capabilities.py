@@ -43,6 +43,13 @@ _READ_ONLY = re.compile(r"\b(read|open|summari[sz]e|what(?:'s| is) in|explain|re
                         r"attached|that)\b", re.I)
 
 
+# A how-to or explain question, or a request for a summary, is about reading, not making, unless it names a making verb.
+_QUESTION = re.compile(r"^\W*(?:how (?:do|can|should|would|could|to)\b|what(?:'s| is| are| does)\b|why\b|explain\b|where\b)", re.I)
+_SUMMARY = re.compile(r"\b(?:summary|summaries|summari[sz]e|tl;?dr|overview) ?(?:of|for)?\b", re.I)
+_DO_MAKE = re.compile(r"\b(make|create|build|generate|produce|prepare|put together|draft|write|design|convert|export|"
+                      r"turn (?:this|it|that|these|them) into|save (?:it )?as)\b", re.I)
+
+
 def _rx(words: str) -> re.Pattern | None:
     return re.compile(r"(?<![a-z0-9])(?:" + words + r")(?![a-z0-9])", re.I) if words else None
 
@@ -52,13 +59,31 @@ _WEAK_RX = {k: _rx(v) for k, v in _WEAK.items()}
 SEP = "\n\n​"                       # notes only the model sees follow this (pace.SEP)
 
 
+_FILE = re.compile(r"[\w][\w .()-]*\.(?:xlsx?|xlsm|docx?|pptx?)(?![\w])", re.I)
+_EDIT = re.compile(r"\b(add|raise|lower|change|fix|update|replace|edit|modify|rename|delete|remove|insert|set|correct|"
+                   r"adjust|increase|decrease|fill|append|reformat|format|sort|filter|swap|highlight|translate|"
+                   r"proofread|tidy|clean up|shorten|rewrite|tweak|bump|apply)\b", re.I)
+_NEW = re.compile(r"\b(new|another|fresh|from scratch|create|build|generate|make|produce|draft|design|put together|"
+                  r"turn (?:this|it|that|these|them) into|convert|export|save (?:it )?as)\b", re.I)
+
+
+def edits(text: str) -> bool:
+    """The message changes an office file that exists ("In inventory.xlsx add a Value column"): a named .xlsx, .docx or
+    .pptx with an edit verb and no ask for a new file. That is edit_office_file's job (or python on the file), never
+    the engines that build a file from nothing (make_spreadsheet, make_deck: minutes and many model calls)."""
+    t = str(text or "").split(SEP)[0]
+    return bool(_FILE.search(t) and _EDIT.search(t) and not _NEW.search(t))
+
+
 def needs(text: str) -> list[str]:
     """The capabilities a message asks for, in CAPS order. Empty for a question about a file the user already has
     ("summarize this pdf") unless it also asks to make one."""
     t = str(text or "").split(SEP)[0]
-    if not t.strip():
+    if not t.strip() or edits(t):
         return []
     make = bool(_MAKE.search(t))
+    if _QUESTION.search(t) or (_SUMMARY.search(t) and not _DO_MAKE.search(t)):
+        return []
     if not make and _READ_ONLY.search(t):
         return []
     out = []
@@ -88,21 +113,59 @@ def labels(caps) -> str:
     return " and ".join(names) if len(names) < 3 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def note(caps, harness: dict | None = None) -> str:
+EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_file (it keeps the formatting and "
+             "formulas), add_slides for new slides in an existing deck, or edit it directly with openpyxl, "
+             "python-docx or python-pptx. Do not rebuild it with "
+             "make_spreadsheet, make_deck or office_task.")
+
+
+# The same for office direct (a lean Work chat), where edit_office_file and the engines are not offered: SpreadsheetBench
+# on 38f57ffb, sb-374-31 got EDIT_NOTE, which named tools the turn did not have.
+EDIT_NOTE_DIRECT = (SEP + "[Meshpool] Change the existing file in place with openpyxl, python-docx or python-pptx, "
+                    "keeping its sheets, styles and formulas, and do exactly what was asked to every row or cell it "
+                    "applies to. Keep the years, dates and labels the request names as literal values in formulas: "
+                    "never put TODAY(), NOW() or YEAR(TODAY()) in place of a year it states. "
+                    "Check a formula change by reading the formula text; do not recalculate unless the "
+                    "request asks for computed values. For Word tracked changes or comments, use edit_office_file "
+                    "(tracked_replace, tracked_delete, tracked_insert_after, comments): it writes real revisions. "
+                    "Do not rebuild the file.")
+
+
+# How the agent makes each file itself when it writes office files directly (office direct, a lean Work chat).
+DIRECT = {
+    "presentation": "python-pptx (native charts through chart_data, not pictures)",
+    "document": "python-docx",
+    "spreadsheet": "openpyxl (live formulas, not typed results)",
+    "pdf": "reportlab",
+}
+
+
+def note(caps, harness: dict | None = None, direct: bool = False) -> str:
     """The hidden note that goes with a message asking for a file: the agent can make it, with which tools, and must
-    not answer that it cannot."""
+    not answer that it cannot. direct: the agent writes the file itself (office direct), so the note names the
+    library, not an engine tool it may not have (office3 xlsx_budget: 27 calls spent looking for make_spreadsheet)."""
+    if list(caps or []) == ["edit"]:
+        return EDIT_NOTE_DIRECT if direct else EDIT_NOTE
     caps = [c for c in caps if c in CAPS]
     if not caps:
         return ""
+    if direct:
+        how = "; ".join(f"{CAPS[c][0]}: {DIRECT[c]}" for c in caps)
+        return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Write "
+                + ("these files" if len(caps) > 1 else "this file")
+                + f" yourself ({how}) in the project folder under the exact name the user gave, check it once "
+                "(reopen it; recalculate through LibreOffice headless only when computed values are asked for) "
+                "and say where it is. Do not answer that "
+                "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
+                "real defects only.")
     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
-    return (SEP + f"[Meshpool] This message asks for {labels(caps)}. You can make "
+    return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
             + ("these files" if len(caps) > 1 else "this file")
-            + f" with the Meshpool office tools ({how}). Make it, save it in the project folder, check it, and tell "
-            "the user where it is. Do not answer that you cannot create it, and do not hand over only text or code "
-            "to paste instead of the file. Where the request leaves details open (audience, length, look), build with "
-            "the recommended defaults (make_deck: brief_ok=true) and say which you chose, instead of asking first; "
-            "ask at most one question, and only when the answer would change the whole file. After a check, fix "
-            "only real defects, and rebuild a whole file at most once.")
+            + f" with the office tools ({how}), save in the project folder under the name the user gave, check it, "
+            "and say where it is. Do not answer that you cannot, or hand over code to paste. For open details use "
+            "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
+            "user's file name) and say which; ask at most one question, only if "
+            "it changes the whole file. Fix real defects only; rebuild at most once.")
 
 
 def pick(caps, current: str, ranked: list[str], ready: dict) -> str | None:

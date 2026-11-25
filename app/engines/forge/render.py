@@ -33,7 +33,7 @@ from .density import condense
 from .template import default_template, layout
 
 ICONS = Path(__file__).resolve().parents[1] / "slides" / "icons"
-ICON_CACHE = Path(__import__("tempfile").gettempdir()) / "forge_icons"
+ICON_CACHE = Path(__import__("tempfile").gettempdir()) / f"forge_icons_{__import__('engines.icons', fromlist=['_user_tag'])._user_tag()}"
 
 LEFT, RIGHT = 0.6, 12.733
 COLS, GUT = 24, 0.125            # 24-column grid (reference decks use a fine grid); span()/colx() take 12-column units
@@ -700,7 +700,7 @@ def _header(ctx, s, sl, n, title_w=None):
     tf.text = ""
     if not band:                                       # the title starts on the body's left edge, not inset from it
         tf.margin_left = 0                             # (the right inset stays: a wide face sets past it)
-    title = re.sub(r"\*\*", "", s["title"])
+    title = re.sub(r"\*\*", "", str(s.get("title") or ""))
     tsize = _title_size(title, title_w or (RIGHT - LEFT))
     if tsize is None:
         ctx.miss(n, "the title", max(3, len(title.split()) // 4))
@@ -1302,7 +1302,8 @@ def _range_chart(ctx, sl, n, c, x, y, w, h, name="FootballField"):
         placed.append((mx, tw, row))
         ly = y + (0.0 if row else 0.2) if head > 0.3 else y
         lx = min(max(mx - tw / 2, x), x + w - tw)
-        _write(_box(sl, lx, ly, tw, 0.2, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
+        lab_h = max(0.2, _need([{"text": lab, "size": T["label"], "bold": True}], max(tw - 0.1, 0.3)) - 0.05)
+        _write(_box(sl, lx, ly + 0.2 - lab_h, tw, lab_h, f"{pre}MarkerLabel{k + 1}", MSO_ANCHOR.BOTTOM),
                [{"text": lab, "size": T["label"], "bold": True, "align": PP_ALIGN.CENTER, "numbers": False,
                  "color": TC.ACCENT_1 if k == len(marks) - 1 else TC.TEXT_1}], ctx, n)
         ln = sl.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, Inches(mx), Inches(ly + 0.21), Inches(mx),
@@ -2538,7 +2539,7 @@ def chart_problems(c: dict) -> list[str]:
     units = {m.group(0).lower() for cat in cats
              for m in re.finditer(r"\(([^)\d]*)\)|%|\$|thousand|million|share", re.sub(r"\([^)]*\d[^)]*\)", "", cat), re.I)}
     bad = [v for se in series for v in se.get("values") or []
-           if not isinstance(v, (int, float)) and not (v is None and c.get("kind") == "line")]
+           if not isinstance(v, (int, float)) and not (v is None and (c.get("kind") == "line" or c.get("gaps")))]
     if bad:
         out.append(f"{len(bad)} chart values are not numbers (gap markers or text); chart only the points the facts "
                    "support, or show the numbers you have as a stat stack")
@@ -2776,7 +2777,8 @@ def fallback(s: dict) -> dict:
         return s
     if s.get("archetype") in ("table_focus", "table_highlight") and isinstance(s.get("table"), dict):
         t = s["table"]
-        keep = [r for r in t.get("rows") or [] if not any("[GAP" in str(c) for c in r[1:])]
+        keep = [r for r in t.get("rows") or [] if isinstance(r, (list, tuple)) and r
+                and not any("[GAP" in str(c) for c in r[1:])]
         s["blocks"] = [{"text": (s.get("takeaway") or {}).get("text", ""), "bullets": [
             {"text": f"**{r[0]}**: " + "; ".join(f"{h} {v}" for h, v in zip(t["columns"][1:], r[1:]))} for r in keep[:6]]}]
         s["archetype"] = "argument_only"
@@ -2812,7 +2814,9 @@ def a_cover(ctx, s, sl, n):
     clean = lambda t: re.sub(r"\*\*|\^\w+", "", t or "")
     secs = (getattr(ctx, "sections", None) or []) if s.get("archetype") == "cover" else []
     secs = secs if 2 <= len(secs) <= 6 else []
-    x, w = LEFT, (colx24(14) if secs else colx24(17)) - LEFT   # with the sections listed, the title keeps the left
+    mets = [m for m in (s.get("metrics") or []) if isinstance(m, dict) and str(m.get("value") or "").strip()][:3]
+    mets = [] if secs else mets                            # the sections list owns the right half when it is there
+    x, w = LEFT, (colx24(14) if secs else colx24(15 if mets else 17)) - LEFT   # the title keeps the left
     from .common import font_file, wrap_lines
     f = _font("head", True)
     size = next((z for z in ((44, 40, 36, 32, 28) if COVER_DARK else (36, 32, 28))
@@ -2890,6 +2894,20 @@ def a_cover(ctx, s, sl, n):
                    [{"text": clean(sec["title"]), "size": 15, "numbers": False, "color": ink}])
             if k < len(secs) - 1:
                 _rule(sl, sx, yy + rh, sw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"ov_CoverSecRule{k + 1}")
+    if mets:                                               # the cover's empty right half carries the decision's size
+        mx = colx24(16) + 0.2
+        mw, top, bot = RIGHT - mx, 1.55, 6.25
+        mh = (bot - top) / len(mets)
+        for i, m in enumerate(mets):
+            my = top + i * mh
+            if i:
+                _rule(sl, mx, my, mw, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, f"CoverMetricRule{i}")
+            _write(_box(sl, mx, my + 0.1, mw, 0.7, f"role_numeral_CoverMetric{i + 1}"),
+                   [{"text": clean(str(m["value"])), "size": 34, "bold": True, "heading": True, "numbers": False,
+                     "color": TC.ACCENT_2 if dark else TC.ACCENT_1}])
+            ctx.track(n, str(m["value"]), m.get("prov") or s.get("title_prov"))
+            _write(_box(sl, mx, my + 0.82, mw, max(0.3, mh - 0.95), f"CoverMetricLabel{i + 1}"),
+                   [{"text": clean(str(m.get("label") or "")), "size": 13, "numbers": False, "color": soft}])
     _rule(sl, LEFT, 6.55, RIGHT - LEFT, TC.ACCENT_1 if dark else TC.ACCENT_5, 0.5, "CoverRule")
     if s.get("date"):
         _write(_box(sl, LEFT, 6.65, 6.0, 0.3, "Date"), [{"text": clean(s["date"]), "size": 11, "numbers": False,
@@ -3329,7 +3347,7 @@ def draw_points(ctx, s, sl, n, x, y, w, h, blocks, card=TC.BACKGROUND_1, dry=Fal
         ib = [{"text": intro, "size": ARGUMENT["intro"], "bold": not (s or {}).get("title_right"), "numbers": False,
                "prov": intro_prov}]                        # under a panel heading the intro is plain: two bold
         # headings stacked over the cards read as redundant (blind review)
-        ih = _need(ib, w) + 0.1
+        ih = _need(ib, max(w - 0.2, 0.5)) + 0.15           # the box's insets take width: measure the inner width
     room = h - ih
     d = POINT_MARK
     short = all(len(plain(it["lead"]).split()) <= 16 and sum(len(plain(b["text"]).split()) for b in it["bullets"]) <= 14
@@ -3811,7 +3829,23 @@ def a_chart_takeaway(ctx, s, sl, n):
         for b in bl:
             b["size"] = T["body"]
         need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
-    band = min(need + 0.3, 0.45 * body_h)
+    cap = 0.45 * body_h
+    for _ in range(8):                                  # the band is capped: shrink the type until it fits the cap
+        if need + 0.3 <= cap:
+            break
+        small = False
+        for b in bl:
+            if b["size"] > 10:
+                b["size"] -= 1
+                small = True
+        for b in lead:
+            if b["size"] > 12:
+                b["size"] -= 1
+                small = True
+        if not small:
+            break
+        need = max([_need(lead, lw)] + [_need(c, cw) for c in cols if c])
+    band = min(need + 0.3, cap)
     cy = BODY_B - band
     _chart(ctx, sl, n, s["chart"], LEFT, BODY_Y, RIGHT - LEFT, cy - BODY_Y - 0.15)
     box = _fill(sl, LEFT, cy, RIGHT - LEFT, band, TC.BACKGROUND_2, "ov_Panel")
@@ -3892,7 +3926,7 @@ def _summary_panel(ctx, s, sl, n) -> bool:
     tree.insert(2, panel._element)
     t = sl.shapes.title
     tw = colx24(8) - 0.32 - LEFT - 0.35
-    title = re.sub(r"\*\*", "", s["title"])
+    title = re.sub(r"\*\*", "", str(s.get("title") or ""))
     tz = next((z for z in (30, 28, 26, 24, 22, 20) if _need([{"text": title, "size": z, "bold": True,
                                                               "heading": True}], tw) <= 2.7), 20)
     t.left, t.top, t.width = Inches(LEFT), Inches(0.75), Inches(tw)
@@ -4455,6 +4489,9 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
+    from .common import find_soffice
+    if not find_soffice():                                   # no LibreOffice: nothing to measure labels with
+        return res
     try:
         for _ in range(3):
             moved = _relabel(slides, out_path)
@@ -4684,6 +4721,28 @@ def plan_forms(slides: list) -> list:
 CHART_SIDE = ("bar_takeaway", "column_trend", "line_trend", "stacked_composition", "waterfall_bridge")
 
 
+def _tag_list(s: dict) -> list[str]:
+    t = s.get("tags")
+    if not isinstance(t, (list, tuple)):
+        return []
+    return [x for x in (str(v).strip() for v in t if isinstance(v, (str, int, float))) if x]
+
+
+def _finite(s: dict) -> dict:
+    """NaN/Infinity (json.loads accepts them) in chart numbers would abort chart drawing: they become 0."""
+    import math
+
+    def fix(v):
+        if isinstance(v, float) and not math.isfinite(v):
+            return 0.0
+        if isinstance(v, list):
+            return [fix(x) for x in v]
+        if isinstance(v, dict):
+            return {k: fix(x) for k, x in v.items()}
+        return v
+    return dict(s, chart=fix(s["chart"])) if isinstance(s.get("chart"), (dict, list)) else s
+
+
 def _render(slides: list[dict], out_path: str, template: str | None = None, carry: bool = True) -> dict:
     _register_diagram_archetypes()
     _register_library_archetype()
@@ -4695,25 +4754,48 @@ def _render(slides: list[dict], out_path: str, template: str | None = None, carr
     ctx = Ctx({})
     ctx.design = {}                                       # slide number -> which path drew it (design.py)
     errors = []
-    queue = plan_forms(list(slides))
+    try:
+        queue = plan_forms(list(slides))
+    except Exception:                                      # noqa: BLE001 - one bad slide must not lose the deck
+        queue = []
+        for s0 in slides:
+            try:
+                queue += plan_forms([s0])
+            except Exception as e:                         # noqa: BLE001
+                errors.append(f"slide {len(queue) + 1}: could not plan its form ({type(e).__name__}: {e}); drawn as given")
+                queue.append(s0)
     ctx.sections = agenda_sections([s0 for s0 in slides if isinstance(s0, dict)])   # the cover lists them
     n = 0
     from collections import Counter
-    used = Counter(str(t) for s0 in slides if s0.get("archetype") not in DIVIDERS
-                   for t in set(s0.get("tags") or []) if str(t).strip())
+    used = Counter(t for s0 in slides if isinstance(s0, dict) and s0.get("archetype") not in DIVIDERS
+                   for t in set(_tag_list(s0)))
     deck_stamps = [t for t, k in used.most_common() if k >= 2][:2]   # "Preliminary" marks the deck: every slide (P19)
     while queue:
         s = queue.pop(0)
         mode = set_density(s.get("density") or DENSITY.get("deck"))
-        own = [str(t) for t in s.get("tags") or [] if str(t).strip() and str(t) not in deck_stamps]
+        own = [t for t in _tag_list(s) if t not in deck_stamps]
         ctx.stamps = (deck_stamps + own)[:2]               # a slide's own qualifier stays on that slide
-        s = dict(condense(normalize(s), mode), tags=[])
+        raw = s
+        try:
+            s = dict(condense(normalize(_finite(s)), mode), tags=[])
+            bad = None
+        except Exception as e:                             # noqa: BLE001 - a wrong-typed field costs this slide only
+            s, bad = dict(raw, tags=[]), f"{type(e).__name__}: {e}"
         spec = s.pop("_design", None)                      # a design-first layout spec (design.py), if any
         n += 1
         ctx.carry = None
-        if s.get("archetype") not in DIVIDERS and not s.get("_cont") and schema_errors(s):
-            errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in schema_errors(s)]
-            s = fallback(s)
+        try:
+            serr = ([f"missing or malformed field: {bad}"] if bad else []) or (
+                schema_errors(s) if s.get("archetype") not in DIVIDERS and not s.get("_cont") else [])
+        except Exception as e:                             # noqa: BLE001
+            serr = [f"missing or malformed field: {type(e).__name__}: {e}"]
+        if serr:
+            errors += [f"slide {n} ({s.get('archetype')}): {e}" for e in serr]
+            try:
+                s = fallback(s)
+            except Exception:                              # noqa: BLE001
+                s = dict(s, archetype="argument_only", chart=None, table=None, blocks=[{"text": _txt(s.get("title")),
+                         "bullets": []}], bullets=[])
             if spec:
                 ctx.design[n] = {"path": "archetype", "why": "the slide failed its schema; the archetype fallback "
                                  "draws it"}

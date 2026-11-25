@@ -9,8 +9,10 @@ Meshpool endpoint, or another OpenAI-compatible endpoint the user set):
 """
 from __future__ import annotations
 
+import base64
 import os
-from urllib.parse import urlparse
+import re
+from urllib.parse import quote, urlparse
 
 from meshpool_harness import config as C
 
@@ -30,11 +32,55 @@ SUPPORTS = {
 
 
 def _cfg(k: str) -> str:
-    return (C.read().get(k) or os.environ.get(k) or "").strip()
+    env = os.environ.get(k)
+    if env and k not in C._INJECTED:                  # a value the shell set wins over the saved file
+        return env.strip()
+    return (C.read().get(k) or env or "").strip()
 
 
 def host(url: str) -> str:
     return (urlparse(url).hostname or "").lower()
+
+
+DEFAULT = "https://llm.meshpool.ai/v1"
+
+
+def _shell(k: str) -> str:
+    """The value the user's own shell gave (never one Meshpool copied in from the settings file)."""
+    if k in C._INJECTED:
+        return (C.SHELL.get(k) or "").strip()
+    return (os.environ.get(k) or "").strip()
+
+
+def _file(k: str) -> str:
+    env = os.environ.get(k) if k in C._INJECTED else ""
+    return (C.read().get(k) or env or "").strip()
+
+
+def endpoint_pair() -> tuple[str, str, str]:
+    """(base URL, key, source): the key endpoint decided once, so a key is never paired with an address that came from
+    somewhere else. source is "environment" (the shell's key, with the shell's base or the default), "settings" (the
+    saved file's key, with its base or the default) or "none" (no key anywhere: an explicit base, else the default)."""
+    sk = _shell("MESHPOOL_API_KEY")
+    if sk:
+        return (_shell("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), sk, "environment"
+    fk = _file("MESHPOOL_API_KEY")
+    if fk:
+        return (_file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), fk, "settings"
+    ek, eb, _esrc = _env_pair()                    # OPENAI_API_KEY+OPENAI_BASE_URL, or the AZURE_OPENAI_* pair: each
+    if ek:                                         # key only with the address set next to it, never with another
+        return eb.rstrip("/"), ek, "environment"
+    return (_shell("MESHPOOL_BASE_URL") or _file("MESHPOOL_BASE_URL") or DEFAULT).rstrip("/"), "", "none"
+
+
+def _ecfg(k: str) -> str:
+    """A per-endpoint setting (wire, auth header, scheme, Azure version) from the same place the key came from."""
+    src = endpoint_pair()[2]
+    if src == "environment":
+        return _shell(k)
+    if src == "settings":
+        return _file(k)
+    return _cfg(k)
 
 
 def _openai_pair() -> tuple[str, str]:
@@ -73,11 +119,11 @@ def _env_pair() -> tuple[str, str, str]:
 
 
 def key_base() -> str:
-    return (_env_pair()[1] or _cfg("MESHPOOL_BASE_URL") or "https://llm.meshpool.ai/v1").rstrip("/")
+    return endpoint_pair()[0]
 
 
 def key() -> str:
-    return _cfg("MESHPOOL_API_KEY") or _env_pair()[0]
+    return endpoint_pair()[1]
 
 
 def key_kind() -> str:
@@ -85,7 +131,7 @@ def key_kind() -> str:
     address. A kind saved for one address is ignored when the address comes from the environment."""
     from meshpool_harness.core import endpoint as EP
     src = _env_pair()[2]
-    saved = "" if src else _cfg("MH_API_KIND")
+    saved = "" if src else _ecfg("MH_API_KIND")
     if src == "azure":
         try:
             return EP.parse_pasted(os.environ.get("AZURE_OPENAI_ENDPOINT", ""), "azure-classic",
@@ -99,7 +145,7 @@ def key_api_version() -> str:
     """The api-version the user chose for an Azure endpoint ("" = the kind's default)."""
     if _env_pair()[2] == "azure":
         return os.environ.get("AZURE_OPENAI_API_VERSION", "").strip()
-    return "" if _env_pair()[2] else _cfg("MH_API_VERSION")
+    return "" if _env_pair()[2] else _ecfg("MH_API_VERSION")
 
 
 def env_deployment() -> str:
@@ -111,11 +157,162 @@ def key_wire() -> str:
     """The wire the key endpoint speaks: "openai" (chat completions) or "anthropic" (Messages). MH_API_WIRE when set
     (provider_setup saves it); otherwise guessed from the kind, so settings saved by older versions keep working."""
     from meshpool_harness.core import endpoint as EP
-    w = _cfg("MH_API_WIRE").lower()
+    w = _ecfg("MH_API_WIRE").lower()
     if w in ("openai", "anthropic"):
         return w
     return "anthropic" if host(key_base()).endswith("anthropic.com") or EP.wire_of(key_kind()) == "anthropic" \
         else "openai"
+
+
+# ---------- how a request to the key endpoint is addressed and authorised ---------------------------------------------
+# One place decides the URL and the headers for every call to the key endpoint (chat, model list, probes), so Azure
+# OpenAI, Foundry, Anthropic-style and custom-header endpoints work the same way everywhere.
+AZURE_SUFFIXES = (".openai.azure.com", ".cognitiveservices.azure.com", ".services.ai.azure.com")
+AZURE_API_VERSION = "2024-10-21"             # the current GA data-plane version of Azure OpenAI chat completions
+AZURE_MODELS_API_VERSION = "2024-05-01-preview"   # the Foundry /models (model inference) route
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+SCHEMES = ("", "bearer", "basic", "token", "raw")
+
+
+def keyless_ok(base: str | None = None) -> bool:
+    """A local or LAN server (localhost, 127.x, 10.x, 192.168.x, 172.16-31.x, *.local, *.lan, a bare host name) may be
+    used with no key at all."""
+    h = host(base if base is not None else key_base())
+    if not h:
+        return False
+    if h in ("localhost", "0.0.0.0", "::1") or h.endswith((".local", ".lan", ".localhost", ".internal")):
+        return True
+    m = re.match(r"^(\d+)\.(\d+)\.\d+\.\d+$", h)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        return a in (10, 127) or (a == 192 and b == 168) or (a == 172 and 16 <= b <= 31) or (a == 169 and b == 254)
+    return "." not in h and ":" not in h
+
+
+def is_azure(base: str | None = None) -> bool:
+    h = host(base if base is not None else key_base())
+    return h.endswith(AZURE_SUFFIXES)
+
+
+def azure_version(base: str = "") -> str:
+    """The api-version to send: MESHPOOL_AZURE_API_VERSION (settings or environment), else the one pasted in the base
+    URL's query, else the current GA version."""
+    v = _ecfg("MESHPOOL_AZURE_API_VERSION")
+    if not v and base and "api-version=" in base:
+        m = re.search(r"api-version=([^&#\s]+)", base)
+        v = m.group(1) if m else ""
+    return v or AZURE_API_VERSION
+
+
+def azure_deployment(base: str) -> str:
+    """The deployment named in an address like https://RES.openai.azure.com/openai/deployments/DEP, else ""."""
+    m = re.match(r"^/openai/deployments/([^/]+)", urlparse(base).path)
+    return m.group(1) if m else ""
+
+
+def looks_jwt(k: str) -> bool:
+    return k.count(".") == 2 and k.startswith("eyJ")
+
+
+def auth_headers(k: str, base: str | None = None, wire: str | None = None, header: str | None = None,
+                 scheme: str | None = None) -> dict:
+    """The authentication header(s) for the key endpoint. No key, no header (a local or LAN server). A custom header
+    name and scheme (MH_AUTH_HEADER, MH_AUTH_SCHEME: bearer, basic, token or raw) win; else Anthropic-style endpoints
+    send x-api-key with anthropic-version, Azure sends api-key (or Authorization: Bearer for an Entra token) and
+    everything else Authorization: Bearer. The key is sent exactly as saved."""
+    k = k or ""
+    base = base if base is not None else key_base()
+    wire = wire or key_wire()
+    header = (_ecfg("MH_AUTH_HEADER") if header is None else header).strip()
+    scheme = (_ecfg("MH_AUTH_SCHEME") if scheme is None else scheme).strip().lower()
+    if header and not _HEADER_NAME.match(header):
+        header = ""
+    if scheme not in SCHEMES:
+        scheme = ""
+    out = {}
+    if wire == "anthropic":
+        from meshpool_harness.core import anthropic_wire as AW
+        out["anthropic-version"] = AW.VERSION
+    if not k:
+        return out
+    if not header and not scheme:
+        if wire == "anthropic":
+            header, scheme = "x-api-key", "raw"
+        elif is_azure(base) and not looks_jwt(k):
+            header, scheme = "api-key", "raw"
+        else:
+            header, scheme = "Authorization", "bearer"
+    header = header or "Authorization"
+    if not scheme:
+        scheme = "bearer" if header.lower() == "authorization" else "raw"
+    if scheme == "bearer":
+        v = f"Bearer {k}"
+    elif scheme == "token":
+        v = f"Token {k}"
+    elif scheme == "basic":
+        v = "Basic " + (base64.b64encode(k.encode("utf-8")).decode() if ":" in k else k)
+    else:
+        v = k
+    out[header] = v
+    return out
+
+
+def chat_url(base: str, model: str = "", path: str = "chat/completions", version: str = "") -> str:
+    """The URL of a call. Azure OpenAI puts the deployment (the model name) in the path and an api-version in the
+    query; the /openai/v1 route and every other endpoint use {base}/{path}."""
+    base = (base or "").rstrip("/")
+    if "?" in base:
+        base = base.split("?", 1)[0].rstrip("/")
+    if not is_azure(base):
+        return f"{base}/{path}"
+    u = urlparse(base)
+    origin, p = f"{u.scheme}://{u.netloc}", u.path.rstrip("/")
+    if p.startswith("/openai/v1"):
+        v = version or _ecfg("MESHPOOL_AZURE_API_VERSION")
+        return f"{origin}{p}/{path}" + (f"?api-version={quote(v)}" if v else "")
+    if p.startswith("/models"):
+        return f"{origin}{p}/{path}?api-version={quote(version or _ecfg('MESHPOOL_AZURE_API_VERSION') or AZURE_MODELS_API_VERSION)}"
+    dep = azure_deployment(base) or model
+    if path in ("models", "info") or not dep:
+        return f"{origin}/openai/{path}?api-version={quote(version or azure_version())}"
+    return f"{origin}/openai/deployments/{quote(dep, safe='')}/{path}?api-version={quote(version or azure_version())}"
+
+
+def adapt_body(base: str, body: dict) -> dict:
+    """Azure's chat completions take max_completion_tokens (every current model, the reasoning ones only that)."""
+    if is_azure(base) and "max_tokens" in body and "max_completion_tokens" not in body:
+        body = dict(body)
+        body["max_completion_tokens"] = body.pop("max_tokens")
+    return body
+
+
+def chat_target(base: str, key_: str, model: str, path: str = "chat/completions") -> tuple[str, dict]:
+    """(URL, auth headers) for a call to `base`. The saved custom header and scheme apply to the saved endpoint only:
+    the local ChatGPT relay or another host gets the standard form for its kind."""
+    mine = is_key_endpoint(base)
+    h = auth_headers(key_, base, wire_for(base), None if mine else "", None if mine else "")
+    return chat_url(base, model, path), h
+
+
+def _norm_base(u: str) -> str:
+    return (u or "").strip().rstrip("/").lower()
+
+
+def is_key_endpoint(base: str) -> bool:
+    """Whether `base` is the key endpoint: the one in use now, or the saved or environment one (they can differ
+    when the shell overrides the saved address)."""
+    b = _norm_base(base)
+    return bool(b) and b in {_norm_base(key_base()), _norm_base(C.read().get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("MESHPOOL_BASE_URL", "")),
+                             _norm_base(os.environ.get("OPENAI_BASE_URL", ""))}
+
+
+def wire_for(base: str) -> str:
+    """The wire to speak to `base`, decided from the address the request really goes to: the key endpoint's wire
+    for the key endpoint (whatever spelling of its address), else Anthropic for an anthropic.com host, else OpenAI."""
+    if is_key_endpoint(base):
+        return key_wire()
+    return "anthropic" if host(base).endswith("anthropic.com") else "openai"
 
 
 def key_problem(k: str | None) -> str:
@@ -171,6 +368,19 @@ def name(prov: str) -> str:
 
 
 DEFAULT_MODEL = "deepseek-v4.1-flash"
+
+
+def configured_model(explicit: str | None = None) -> str:
+    """The one resolver for every engine: the explicit model, else MH_MODEL (environment, then saved settings), else the default."""
+    saved = ""
+    if not ((explicit or "").strip() or os.environ.get("MH_MODEL")):
+        try:
+            saved = (C.read().get("MH_MODEL") or "").strip()
+        except OSError:                          # an unreadable settings file must not stop an engine
+            saved = ""
+    return (explicit or "").strip() or (os.environ.get("MH_MODEL") or "").strip() or saved or DEFAULT_MODEL
+
+
 RETIRED = ("claude", "anthropic", "google", "gemini")   # providers of older builds; their saved model ids mean nothing now
 
 
@@ -195,12 +405,12 @@ def join(prov: str, model: str) -> str:
 
 def ready(prov: str) -> bool:
     from meshpool_harness import harnesses as HR
-    return {"key": lambda: bool(key()),
+    return {"key": lambda: bool(key()) or keyless_ok(),
             "chatgpt": lambda: HR.signed_in("codex")}[prov]()
 
 
 def setup(prov: str) -> str:
-    return {"key": "Add your Meshpool key: Settings, Account.",
+    return {"key": f"Add your {key_name()} key: Settings, Account.",
             "chatgpt": "Sign in with ChatGPT: Settings, Account."}[prov]
 
 
@@ -241,7 +451,7 @@ def list_models(prov: str, refresh: bool = False) -> tuple[list[str], str]:
     if prov == "chatgpt":
         from meshpool_harness.core import chatgpt as CG
         if refresh:
-            CG._MODELS.update(t=0.0)
+            CG.forget_models()
         ids = CG.models()
         d = CG.default_model()
         note = CG.limit_note() or ("" if ids else "Showing the default model; the plan's list did not load.")
@@ -263,4 +473,14 @@ def groups(key_rows: list[dict], key_error: str, refresh: bool = False) -> list[
             g["models"] = [{"id": join(prov, i), "name": i, "provider": "OpenAI", "caps": ["vision"]} for i in ids]
             g["error"] = err
         out.append(g)
+    return out
+
+
+def custom_auth(hdrs: dict, base: str, key_: str) -> dict:
+    """`hdrs` (the standard headers for the endpoint's kind) with the saved custom key header and scheme applied, when
+    the user set one for this endpoint (MH_AUTH_HEADER, MH_AUTH_SCHEME). Otherwise `hdrs` unchanged."""
+    if not key_ or not is_key_endpoint(base) or not (_ecfg("MH_AUTH_HEADER") or _ecfg("MH_AUTH_SCHEME")):
+        return hdrs
+    out = {k: v for k, v in hdrs.items() if k.lower() not in ("authorization", "api-key", "x-api-key")}
+    out.update(auth_headers(key_, base, "openai"))
     return out

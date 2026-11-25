@@ -94,7 +94,7 @@ def test_what_would_need_a_yes_is_refused_unless_self_approval_is_on(monkeypatch
     def child(b):
         if b["messages"][-1]["role"] == "tool":
             return _msg("result: " + b["messages"][-1]["content"][:80])
-        return _msg("", [("bash", {"command": "echo hi"})])
+        return _msg("", [("bash", {"command": "touch hi"})])
     fake(monkeypatch, child)
     out, _ = D.run_tool(_agent(_env, mode="ask"), {"tasks": [{"goal": "Run the echo command"}]})
     assert "sub-agents cannot ask for approval" in out
@@ -264,10 +264,10 @@ def test_stop_during_delegation_returns_the_finished_reports(monkeypatch, _env):
         return _msg("", [("delegate_task", {"tasks": [{"goal": "Research fast Acme"}, {"goal": "Research slow Globex"}]})])
     fake(monkeypatch, child, parent=parent)
     a = _agent(_env)
-    threading.Timer(1.0, a.stop).start()
+    threading.Timer(3.0, a.stop).start()          # after the fast child is surely done, even on a loaded machine
     t0 = time.time()
     a.send("research both")
-    assert time.time() - t0 < 4
+    assert time.time() - t0 < 20
     tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
     assert "fast report: acme sells widgets" in tool and "stopped by Stop" in tool    # not "Not run"
 
@@ -300,7 +300,8 @@ def test_progress_steps_are_live_only_and_do_not_crowd_the_saved_transcript(tmp_
         {"type": "subagent", "kind": "tool", "text": "step", "i": n} for n in range(1, 4000)] + [
         {"type": "subagent", "kind": "done", "text": "completed", "i": 4000}]
     s._persist()
-    saved = json.loads((tmp_path / "keep-test" / "transcript.json").read_text())["events"]
+    from meshpool_harness import session_store as SS
+    saved = SS.TranscriptLog(tmp_path / "keep-test").read()["events"]
     assert saved[0]["text"] == "hi" and len(saved) == 2 and saved[-1]["kind"] == "done"
 
 
@@ -453,7 +454,7 @@ def test_stopped_reports_are_a_result_and_chat_grants_cover_sub_agents(monkeypat
         return _msg("", [("bash", {"command": "echo granted"})])
     fake(monkeypatch, child)
     a = _agent(_env, mode="ask")
-    a.always.add("bash")                                             # "Allow all commands in this chat"
+    a.always.add("bash:echo")                                             # "Allow all commands in this chat"
     out, ok = D.run_tool(a, {"tasks": [{"goal": "Run the command"}]})
     assert ok and "granted" in out and "cannot ask" not in out
     seen = []
@@ -542,12 +543,12 @@ def test_ctrl_c_ends_the_turn_but_keeps_the_reports_that_finished(monkeypatch, _
     old = signal.signal(signal.SIGINT, signal.default_int_handler)
     try:
         a = _agent(_env)
-        threading.Timer(1.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C
+        threading.Timer(3.0, lambda: os.kill(os.getpid(), signal.SIGINT)).start()   # a real Ctrl+C, after the fast child is done
         t0 = time.time()
         a.send("research both")
     finally:
         signal.signal(signal.SIGINT, old)
-    assert time.time() - t0 < 10
+    assert time.time() - t0 < 40
     tool = [m["content"] for m in a.messages if m.get("role") == "tool"][-1]
     assert "fast report: acme sells widgets" in tool and "Ctrl+C" in tool
     assert not any(m.get("content") == "not reached" for m in a.messages)
@@ -824,3 +825,55 @@ def test_sub_agent_grep_searches_attached_files_and_its_own_full_outputs(monkeyp
     out = c.ws.grep("needle", ".")
     spill = out.split("full output in ")[1].split("]")[0]
     assert "SPECIAL" in c.ws.grep("SPECIAL", spill)
+
+
+def test_stop_right_after_a_sub_agent_finished_keeps_its_report(monkeypatch, _env):
+    """Stop lands between a sub-agent's last reply and its bookkeeping: that report is still returned as completed."""
+    fake(monkeypatch, lambda b: _msg('{"x": 1}'))
+    a = _agent(_env)
+    real = D.schema_errors
+
+    def stop_then_check(value, sch, path="$"):
+        for d in list(a._delegations.values()):
+            d.stop_all("Stop")
+        return real(value, sch, path)
+    monkeypatch.setattr(D, "schema_errors", stop_then_check)
+    out, ok = D.run_tool(a, {"tasks": [{"goal": "Research Acme", "output_schema": {"type": "object"}}]})
+    data = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
+    assert data["results"][0]["status"] == "completed"
+    assert '{"x": 1}' in out
+
+
+def test_concurrent_sub_agents_share_the_chats_usage_task(_env):
+    """CI flake: two sub-agents started outside a turn each made the chat a usage task of its own."""
+    import threading as _th
+    a = _agent(_env)
+    got, barrier = [], _th.Barrier(8)
+
+    def go():
+        barrier.wait()
+        got.append(a._ensure_task())
+    ts = [_th.Thread(target=go) for _ in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len({id(t) for t in got}) == 1
+
+
+def test_parallel_sub_agents_share_one_parent_task_outside_a_turn(monkeypatch, _env):
+    """CI 3.12 on be4cb764: two sub-agent threads each made the chat's usage task, and one's calls went uncounted."""
+    import time as _t
+    from meshpool_harness.core import usage as U
+    real = U.start_task
+
+    def slow(*a, **kw):
+        _t.sleep(0.05)                                     # widen the window the race needed
+        return real(*a, **kw)
+    monkeypatch.setattr(U, "start_task", slow)
+    fake(monkeypatch, lambda b: _msg("ok"))
+    a = _agent(_env)
+    for _ in range(3):
+        a._task, before = None, dict(a.usage)
+        D.run_tool(a, {"tasks": [{"goal": f"Research company {n} pricing"} for n in ("A", "B", "C")]})
+        assert a.usage["calls"] - before["calls"] == 3

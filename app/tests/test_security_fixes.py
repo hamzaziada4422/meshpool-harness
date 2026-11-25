@@ -115,7 +115,7 @@ def test_documents_survive_control_characters_long_names_and_other_scripts(tmp_p
     assert not bad, out
     out, bad = O.make_pdf("# Привет\n\n1. first\n2. second", "ع" * 200 + ".pdf")
     assert not bad, out
-    made = list((tmp_path / "Meshpool outputs").glob("*.pdf"))
+    made = list(tmp_path.rglob("*.pdf"))   # a named file lands where asked (ws20), else in Meshpool outputs
     assert made and len(made[0].name.encode()) <= 160
     reg, _ = O._pdf_font("Привет")
     assert reg != "Helvetica" or not any(__import__("pathlib").Path(p).exists() for p in

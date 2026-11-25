@@ -14,6 +14,78 @@ import time
 from pathlib import Path
 
 
+OUTPUT_HEAD, OUTPUT_TAIL, OUTPUT_KILL_CHARS = 200_000, 200_000, 64_000_000
+SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".venv", "venv", "build", "dist", "target"})   # H-11
+MAX_GREP_FILE = 5_000_000                       # H-11: bytes read per file by grep
+_WIN_RESERVED = frozenset({"con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+                           "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"})
+
+
+def reserved_name(path: str) -> str | None:
+    """H-22: a Windows device name (nul, con, aux ...) as a file name: creating it makes a file Explorer cannot delete."""
+    for part in re.split(r"[\\/]", str(path)):
+        if part.split(".")[0].strip().lower() in _WIN_RESERVED and part:
+            return part
+    return None
+
+
+def _git_dir_name(part: str) -> bool:
+    """A path part that is the repository's .git folder on some file system: any letter case (.GIT on macOS APFS and
+    Windows NTFS), with the trailing dots or spaces Windows drops, or its 8.3 short name (GIT~1)."""
+    p = part.lower()
+    return p.rstrip(". ") == ".git" or bool(re.fullmatch(r"git~\d+", p))
+
+
+def fix_win_path(p):
+    """OSS-28: a drive-letter path a model or a URI gave as /C:\\Users\\x, /C:/x or file:///C:/x becomes C:\\Users\\x."""
+    if not isinstance(p, str):
+        return p
+    q = re.sub(r"^file:///(?=[A-Za-z]:)", "", p)
+    return re.sub(r"^[/\\]+(?=[A-Za-z]:([\\/]|$))", "", q)
+
+
+_NUL_REDIRECT = re.compile(r"(?<![\w/])((?:\d|&)?>>?)\s*nul\b(?!\.)", re.I)
+
+
+def fix_nul_redirect(command: str) -> str:
+    """H-22: `2>nul` in Git Bash makes a real file called nul (undeletable in Explorer); /dev/null is what was meant."""
+    return _NUL_REDIRECT.sub(lambda m: m.group(1) + " /dev/null", command)
+
+
+def _quiet_close(f) -> None:
+    try:
+        f.close()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class _Capped:
+    """A command's output kept as its first and last characters only, so a runaway producer cannot fill memory."""
+
+    def __init__(self):
+        self.head, self.tail, self.total, self.dropped = [], "", 0, 0
+        self._hn = 0
+
+    def add(self, chunk: str):
+        self.total += len(chunk)
+        if self._hn < OUTPUT_HEAD:
+            take = chunk[:OUTPUT_HEAD - self._hn]
+            self.head.append(take)
+            self._hn += len(take)
+            chunk = chunk[len(take):]
+        if chunk:
+            self.tail += chunk
+            if len(self.tail) > 2 * OUTPUT_TAIL:
+                self.dropped += len(self.tail) - OUTPUT_TAIL
+                self.tail = self.tail[-OUTPUT_TAIL:]
+
+    def text(self) -> str:
+        head = "".join(self.head)
+        if not self.dropped:
+            return head + self.tail
+        return head + f"\n... [{self.dropped} characters of output dropped] ...\n" + self.tail
+
+
 def _bash():
     from meshpool_harness.config import find_bash
     return find_bash()
@@ -29,7 +101,70 @@ _RO_PROGS = {"cat", "head", "tail", "ls", "find", "grep", "egrep", "fgrep", "rg"
              "awk", "sed", "git", "pip", "pip3", "python", "python3", "node", "npm", "cargo", "go", "java", "gcc",
              "rustc", "ldd", "nproc", "free", "hostname", "lsb_release", "getconf", "test", "["}
 _RO_GIT = {"log", "show", "diff", "status", "grep", "ls-files", "blame", "rev-parse", "branch", "remote", "describe",
-           "--no-pager", "-C", "shortlog", "cat-file", "ls-tree", "tag"}
+           "shortlog", "cat-file", "ls-tree", "tag"}
+
+
+def _git_subcommand(rest: list) -> list:
+    """git's arguments from the subcommand on, past the global options that only pick a folder or the pager (-C dir,
+    --no-pager). [] for any other global option: -c core.fsmonitor=... and --config-env run commands from
+    settings, --exec-path, --git-dir and --work-tree point git at other programs or another repository."""
+    i = 0
+    while i < len(rest) and rest[i].startswith("-"):
+        a = rest[i]
+        if a == "--no-pager":
+            i += 1
+        elif a == "-C" and i + 1 < len(rest):
+            i += 2
+        else:
+            return []
+    return rest[i:]
+
+
+def _brace_expand(pat: str) -> list[str]:
+    m = re.search(r"\{([^{}]*)\}", pat)
+    if not m:
+        return [pat]
+    return [x for alt in m.group(1).split(",") for x in _brace_expand(pat[:m.start()] + alt + pat[m.end():])]
+
+
+def _glob_rx(pat: str):
+    out, i = "", 0
+    while i < len(pat):
+        c = pat[i]
+        if pat.startswith("**/", i):
+            out += "(?:.*/)?"
+            i += 3
+            continue
+        if pat.startswith("**", i):
+            out += ".*"
+            i += 2
+            continue
+        out += "[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c)
+        i += 1
+    return re.compile(out + r"\Z", re.S)
+
+
+def glob_match(rel: str, glob: str) -> bool:
+    """ripgrep-like file filter: comma-less braces ({py,txt}), ** across folders (also none), a leading ! to exclude,
+    a pattern without / matches the file name at any depth, one with / matches the path from the project root."""
+    rel = rel.replace("\\", "/")
+    name = rel.rsplit("/", 1)[-1]
+    pos, neg = [], []
+    for g in re.split(r"\s+", glob.strip()):
+        if not g:
+            continue
+        (neg if g.startswith("!") else pos).append(g.lstrip("!"))
+
+    def one(p: str) -> bool:
+        for q in _brace_expand(p):
+            q = q[2:] if q.startswith("./") else q
+            if "/" not in q:
+                if fnmatch.fnmatch(name, q):
+                    return True
+            elif _glob_rx(q.lstrip("/")).match(rel):
+                return True
+        return False
+    return (not pos or any(one(p) for p in pos)) and not any(one(n) for n in neg)
 
 
 def read_only(cmd: str) -> bool:
@@ -37,7 +172,7 @@ def read_only(cmd: str) -> bool:
     import re
     import shlex
     s = re.sub(r"\d?>\s*/dev/null|2>&1|>&2", " ", cmd)
-    if re.search(r"[>`]|\$\(|<<|\bxargs\b|-exec\b|-delete\b|\bsudo\b", s):
+    if re.search(r"[>`]|\$\(|<\(|<<|\bxargs\b|-exec\b|-execdir\b|-ok\b|-delete\b|\bsudo\b", s):
         return False
     for seg in re.split(r"\|\|?|&&|;|\n", s):
         try:
@@ -53,10 +188,36 @@ def read_only(cmd: str) -> bool:
             return False
         if prog == "sed" and any(a.startswith("-i") or a == "--in-place" for a in rest):
             return False
-        if prog == "awk" and "system" in seg:
+        if prog == "awk" and ("system" in seg or "getline" in seg):
             return False
-        if prog == "git" and not (rest and rest[0] in _RO_GIT):
+        if prog == "sort" and any(a == "-o" or a.startswith(("--output", "-o")) for a in rest):
             return False
+        if prog == "find" and any(a in ("-fprint", "-fprint0", "-fprintf", "-fls") for a in rest):
+            return False
+        if prog == "sed" and any(re.search(r"(^|[;\s{])[wWeE]\s*\S|^s(.).*?\1.*?\1[gIpm0-9]*[we]", a)
+                                 for a in rest if not a.startswith("-")):
+            return False
+        if prog in ("rg", "grep", "egrep", "fgrep") and any(a in ("-z", "--search-zip", "--pre") or a.startswith("--pre=")
+                                                           for a in rest):
+            return False
+        if prog == "git":
+            rest = _git_subcommand(rest)
+            if not (rest and rest[0] in _RO_GIT):
+                return False
+            if any(a.startswith(("--output", "--ext-diff", "--textconv", "-O", "--open-files-in-pager")) for a in rest):
+                return False
+            if rest[0] in ("branch", "tag", "remote"):
+                pos = [a for a in rest[1:] if not a.startswith("-")]
+                bad = {"-d", "-D", "-m", "-M", "-c", "-C", "-u", "-f", "-a", "--delete", "--move", "--copy", "--force",
+                       "--set-upstream-to", "--unset-upstream", "--edit-description", "-s", "-S", "-F", "-e"}
+                if rest[0] == "remote":
+                    if pos and pos[0] not in ("show", "get-url"):
+                        return False
+                elif pos and not any(a in ("-l", "--list", "--contains", "--merged", "--no-merged", "--points-at")
+                                     for a in rest[1:]):
+                    return False                     # `git branch x` / `git tag v1` create refs
+                if any(a.split("=")[0] in bad - {"-a"} for a in rest[1:]):
+                    return False
         if prog in ("pip", "pip3") and not (rest and rest[0] in ("show", "list", "freeze", "--version", "-V")):
             return False
         if prog in ("python", "python3", "node", "npm", "cargo", "go", "java", "gcc", "rustc") and not (
@@ -79,7 +240,39 @@ def shell_script(argv) -> str:
     argv = [str(a) for a in argv or []]
     if len(argv) >= 3 and os.path.basename(argv[0]) in ("bash", "sh", "zsh") and argv[1] in ("-c", "-lc"):
         return argv[2]
-    return argv[0] if len(argv) == 1 else shlex.join(argv)
+    if len(argv) == 1:
+        return argv[0]
+    if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]) \
+            and not _pattern_is_operator(argv):
+        # swe6 traces (D0, 7 calls in 23 runs): ["python", "t.py", "2>&1", "|", "tail"] meant a pipeline; joined as
+        # quoted words it ran python with "|" as an argument and failed. Operators standing alone stay operators. The
+        # permission checks read this same script (permrules.commands_of), so they judge what really runs.
+        execs = any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in argv)   # find -exec ... ; ends with ";"
+        return " ".join(a if _ARGV_OP.match(a) and not (execs and a == ";") else shlex.quote(a) for a in argv)
+    return shlex.join(argv)
+
+
+def _pattern_is_operator(argv) -> bool:
+    """A search whose pattern is itself an operator character (["grep", "-c", "|", "notes.md"]): the "|" is the text
+    searched for, not a pipe (code review). The pattern is the first argument that is not an option (or -e's value)."""
+    if os.path.basename(argv[0]) not in ("grep", "egrep", "fgrep", "rg", "ag", "ack"):
+        return False
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-e", "--regexp"):
+            return i + 1 < len(argv) and bool(_ARGV_OP.match(argv[i + 1]))
+        if a == "--":
+            return i + 1 < len(argv) and bool(_ARGV_OP.match(argv[i + 1]))
+        if a.startswith("-") and a != "-":
+            i += 1
+            continue
+        return bool(_ARGV_OP.match(a))
+    return False
+
+
+# An argv element that is a shell operator on its own: | || && ; & > >> 2> 2>&1 &> < and a redirect to /dev/null
+_ARGV_OP = re.compile(r"^(\|\||\||&&|;|&|\d?>>?|\d?>&\d|&>>?|<|\d?>/dev/null)$")
 
 
 def patch_from_shell(argv):
@@ -121,6 +314,22 @@ def _kill_all_background() -> None:
 
 
 __import__("atexit").register(_kill_all_background)
+
+
+def exit_cleanly_on_sigterm() -> None:
+    """SIGTERM (a supervisor, a benchmark, `kill`) skips atexit by default, so commands this process started in their
+    own process group outlived it and kept running (eval: check scripts at 99% CPU minutes after their agent was
+    gone). Turn it into a normal exit, so _kill_all_background runs. Only from the main thread, only when no one
+    else has set a handler."""
+    import signal
+    import threading
+    if os.name == "nt" or threading.current_thread() is not threading.main_thread():
+        return
+    try:
+        if signal.getsignal(signal.SIGTERM) in (signal.SIG_DFL, None):
+            signal.signal(signal.SIGTERM, lambda *_: (_kill_all_background(), __import__("sys").exit(143)))
+    except (ValueError, OSError):
+        pass
 
 
 class AllStr(str):
@@ -246,6 +455,90 @@ SCHEMAS["update_plan"] = _fn(
          "required": ["step", "status"], "additionalProperties": False}}}, ["plan"])
 
 
+# Codex CLI 0.171's exec_command (harness profile "c171", agent/core.py _c171): the definition exactly as Codex sent it
+# (docs/results/codex171-request/tools.json; Apache-2.0, see THIRD_PARTY_NOTICES.md), less the Responses API's
+# "strict": false, which is the chat API's default. It runs on the same command runner as bash and shell; the result
+# is formatted as Codex formats it (exec_result). There is no PTY and no session to come back to (no write_stdin):
+# tty, shell, justification, sandbox_permissions and prefix_rule are accepted and not used.
+SCHEMAS["exec_command"] = {"type": "function", "function": {
+    "name": "exec_command",
+    "description": "Runs a command in a PTY, returning output or a session ID for ongoing interaction.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "cmd": {"type": "string", "description": "Shell command to execute."},
+            "justification": {"type": "string", "description":
+                              "User-facing approval question for `require_escalated`; omit otherwise."},
+            "login": {"type": "boolean", "description": "Request login-shell startup. Omit to inherit."},
+            "max_output_tokens": {"type": "number", "description":
+                                  "Output token budget. Defaults to 10000 tokens; larger requests may be capped by "
+                                  "policy."},
+            "prefix_rule": {"type": "array", "description":
+                            "Reusable approval prefix for `cmd`, only with "
+                            "`sandbox_permissions: \"require_escalated\"`; for example [\"git\", \"pull\"].",
+                            "items": {"type": "string"}},
+            "sandbox_permissions": {"type": "string", "description":
+                                    "Per-command sandbox override. Defaults to `use_default`; use `require_escalated` "
+                                    "for unsandboxed execution.", "enum": ["use_default", "require_escalated"]},
+            "shell": {"type": "string", "description": "Shell binary to launch. Defaults to the user's default shell."},
+            "tty": {"type": "boolean", "description":
+                    "True allocates a PTY for the command; false or omitted uses plain pipes."},
+            "workdir": {"type": "string", "description":
+                        "Working directory for the command. Defaults to the turn cwd."},
+            "yield_time_ms": {"type": "number", "description":
+                              "Wait before yielding output. Defaults to 10000 ms; effective range is 250-30000 ms."},
+        },
+        "required": ["cmd"],
+        "additionalProperties": False,
+    }}}
+EXEC_TOKENS = 10000         # exec_command's default max_output_tokens
+EXEC_POLICY_BYTES = 10000   # the model's truncation policy on top: Codex cut long outputs to 10,000 bytes (outputs.json)
+
+
+def _exec_tokens(text: str) -> int:
+    """Codex's token estimate: UTF-8 bytes / 4, rounded up (51 for 203 bytes, 7354 for 29,415: outputs.json)."""
+    return -(-len(text.encode("utf-8", "surrogatepass")) // 4)
+
+
+def _exec_truncate(text: str, budget: int) -> str:
+    """Codex's cut of a long output: a warning and the line count, then the first and last budget/2 bytes around
+    "…N chars truncated…" (outputs.json, "long": 29,415 bytes -> 5,000 + 5,000, "…19415 chars truncated…")."""
+    raw = text.encode("utf-8", "surrogatepass")
+    if len(raw) <= budget:
+        return text
+    half = budget // 2
+    head = raw[:half].decode("utf-8", "ignore")                      # whole characters only
+    tail = raw[len(raw) - (budget - half):]
+    while tail and (tail[0] & 0xC0) == 0x80:                          # never start inside a character
+        tail = tail[1:]
+    tail = tail.decode("utf-8", "ignore")
+    cut = len(text) - len(head) - len(tail)
+    lines = text.count("\n") + (0 if text.endswith("\n") or not text else 1)
+    return (f"Warning: truncated output (original token count: {_exec_tokens(text)})\nTotal output lines: {lines}\n\n"
+            f"{head}…{cut} chars truncated…{tail}")
+
+
+def exec_result(output: str, code, wall_s: float, max_output_tokens=None, chunk_id: str | None = None) -> str:
+    """exec_command's result, byte for byte as Codex 0.171 writes it (docs/results/codex171-request/outputs.json)."""
+    import secrets
+    try:
+        tokens = int(max_output_tokens) if max_output_tokens is not None else EXEC_TOKENS
+    except (TypeError, ValueError):
+        tokens = EXEC_TOKENS
+    budget = min(max(1, tokens) * 4, EXEC_POLICY_BYTES)
+    parts = [f"Chunk ID: {chunk_id or secrets.token_hex(3)}", f"Wall time: {wall_s:.4f} seconds"]
+    if code is not None:
+        parts.append(f"Process exited with code {code}")
+    parts += [f"Original token count: {_exec_tokens(output)}", "Output:", _exec_truncate(output, budget)]
+    return "\n".join(parts)
+
+
+def exec_exit_code(out: str):
+    """The exit code an exec_command result reports, or None."""
+    m = re.match(r"Chunk ID: [0-9a-f]+\nWall time: [^\n]*\nProcess exited with code (-?\d+)\n", str(out or ""))
+    return int(m.group(1)) if m else None
+
+
 def _delegate_schema():
     from meshpool_harness.agent.delegate import schema
     return schema(12)
@@ -274,6 +567,8 @@ class ToolError(Exception):
 def validate(name: str, raw_args, allowed: list[str]) -> dict:
     if name not in allowed:
         raise ToolError(f"unknown tool '{name}'. Available: {', '.join(allowed)}")
+    if isinstance(raw_args, str) and raw_args.strip() in ("", "null"):
+        raw_args = "{}"                          # some models/gateways send "" for a no-argument call
     try:
         args = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args or {})
     except json.JSONDecodeError as e:
@@ -281,11 +576,17 @@ def validate(name: str, raw_args, allowed: list[str]) -> dict:
                         f"Send a single JSON object.")
     if not isinstance(args, dict):
         raise ToolError(f"arguments for {name} must be a JSON object")
+    if args.get("__truncated__") is True:
+        raise ToolError(f"your {name} call was cut off before its arguments were complete (the reply hit the output "
+                        f"limit). Send it again with shorter arguments.")
     if (name == "write_file" and isinstance(args.get("content"), (dict, list))
             and str(args.get("path", "")).lower().endswith(".json")):
         args["content"] = json.dumps(args["content"], indent=2, ensure_ascii=False) + "\n"   # models often send JSON as an object
     if name == "shell" and isinstance(args.get("command"), str):        # a plain string: run it with bash
         args["command"] = ["bash", "-lc", args["command"]]
+    for k in ("path", "file_path", "cwd", "dir", "directory"):
+        if isinstance(args.get(k), str):
+            args[k] = fix_win_path(args[k])
     sch = SCHEMAS[name]["function"]["parameters"]
     for k in sch["required"]:
         if k not in args:
@@ -322,6 +623,35 @@ def read_src(p: Path) -> tuple[str, str, bool]:
     return text, "\n", bom
 
 
+def _user_python_env(env: dict) -> dict:
+    """The user's project runs its own Python: Meshpool's app folder is never on its PYTHONPATH. That folder holds
+    sitecustomize.py (run at every interpreter start: update recovery against the app folder) and a `tests` package
+    that shadowed the project's own; swe4 saw 8 import errors in Meshpool's runs against 1 in Codex's. Bytecode is
+    allowed (a big repo recompiled on every test run without it); a stale .pyc after a same-size, same-second edit
+    is prevented by write_src dropping the edited module's cached bytecode."""
+    app = os.path.normcase(os.path.abspath(str(Path(__file__).resolve().parents[2])))
+    parts = [p for p in (env.get("PYTHONPATH") or "").split(os.pathsep)
+             if p and os.path.normcase(os.path.abspath(p)) != app]
+    if parts:
+        env["PYTHONPATH"] = os.pathsep.join(parts)
+    else:
+        env.pop("PYTHONPATH", None)
+    env.pop("PYTHONDONTWRITEBYTECODE", None)
+    return env
+
+
+def _drop_pyc(p: Path) -> None:
+    """Remove the cached bytecode of an edited .py file: Python validates a .pyc by the source's whole-second mtime
+    and size, so a same-size edit within the same second would otherwise run the old code."""
+    if p.suffix != ".py":
+        return
+    try:
+        for c in (p.parent / "__pycache__").glob(p.stem + ".*.pyc"):
+            c.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bool = False) -> None:
     """Write text with the file's own line ending and BOM, byte for byte (Python's text mode would turn every \\n
     into CRLF on Windows and drop a CRLF file's endings elsewhere)."""
@@ -332,7 +662,15 @@ def write_src(p: Path, text: str, eol: str = "\n", bom: bool = False, append: bo
         with p.open("ab") as f:
             f.write(data)
     else:
-        p.write_bytes((_BOM if bom else b"") + data)
+        from meshpool_harness import fsio
+        try:
+            mode = p.stat().st_mode & 0o7777
+        except OSError:
+            mode = None
+        # OSS-15: never a half-written file. A symlink (CLAUDE.md -> AGENTS.md) stays a link and a hard-linked file
+        # stays one file: both are written through, not replaced by a new regular file.
+        fsio.atomic_write_bytes(p, (_BOM if bom else b"") + data, mode=mode, keep_links=True)
+    _drop_pyc(p)
 
 
 def shown(text: str) -> str:
@@ -381,6 +719,39 @@ def _parses_with_newer_python(path: Path, text: str) -> bool:
             continue
     return False
 
+
+def _squeeze(text: str, keep: int = 2) -> str:
+    """Runs of identical lines (progress bars, repeated warnings, polling output) shown once with a count: tool
+    output is information-sparse (agents use about a quarter of it, arXiv 2611.12122) and every line is billed."""
+    if os.environ.get("MH_SQUEEZE", "1") == "0" or "\n" not in text:
+        return text
+    lines, out, i = text.split("\n"), [], 0
+    while i < len(lines):
+        j = i
+        while j + 1 < len(lines) and lines[j + 1] == lines[i]:
+            j += 1
+        n = j - i + 1
+        if n > keep + 1 and lines[i].strip():
+            out += lines[i:i + keep] + [f"[... the line above repeated {n - keep} more times]"]
+        else:
+            out += lines[i:j + 1]
+        i = j + 1
+    return "\n".join(out)
+
+
+def _prune_scratch(tmp: str, max_age_s: float = 86400) -> None:
+    """Scratch folders a crashed or killed process left behind: this user's, older than a day. Never raises."""
+    try:
+        now, uid = time.time(), getattr(os, "getuid", lambda: None)()
+        for e in os.scandir(tmp):
+            if not e.name.startswith("meshpool-scratch-") or not e.is_dir(follow_symlinks=False):
+                continue
+            st = e.stat(follow_symlinks=False)
+            if (uid is None or st.st_uid == uid) and now - st.st_mtime > max_age_s:
+                shutil.rmtree(e.path, ignore_errors=True)
+    except OSError:
+        pass
+
 class Workspace:
     """Executes tools inside workdir, tracks reads/writes/commands for guards."""
 
@@ -400,6 +771,7 @@ class Workspace:
         self.edits = 0
         self.written: set[str] = set()
         self.created: set[str] = set()        # files the agent created (new tests are allowed)
+        self.turn_new: set[str] = set()       # files created in the current turn (the receipt's "new")
         self.turn_files: set[str] = set()     # files changed in the current turn (the review receipt)
         self._n = 0
 
@@ -407,12 +779,27 @@ class Workspace:
     def _path(self, p: str, write=False) -> Path:
         if self.container and self.mounted and self.cdir and os.path.isabs(p) and (p == self.cdir or p.startswith(self.cdir.rstrip("/") + "/")):
             p = str(self.root / os.path.relpath(p, self.cdir))     # container path -> host copy
+        p = fix_win_path(p)
+        if write and (bad := reserved_name(p)):
+            raise ToolError(f"'{bad}' is a reserved device name on Windows and cannot be used as a file name")
         q = (self.root / p).resolve() if not os.path.isabs(p) else Path(p).resolve()
+        scratch = self.__dict__.get("_scratch_dir")
+        if write and scratch and Path(scratch).resolve() in q.parents:
+            return q                          # the task's own private scratch folder ($TMPDIR): edits there are fine
         if write and self.root not in q.parents and q != self.root:
             raise ToolError(f"writes must stay inside the workdir {self.root}; got {q}")
-        if write and ".git" in q.relative_to(self.root).parts:
+        if write and any(_git_dir_name(x) for x in q.relative_to(self.root).parts):
             # git runs settings and hooks from here (core.fsmonitor, hooks/): a write there can run any command
             raise ToolError("agents cannot change files inside .git; use git commands instead")
+        try:
+            rel = [x.lower().rstrip(". ") for x in q.relative_to(self.root).parts] if write else []
+        except ValueError:                             # an allowed folder outside the project (uploads, scratch)
+            rel = []
+        if len(rel) == 2 and rel[0] == ".meshpool" and rel[1] in ("hooks.json", "permissions.json"):
+            # the project's hooks run commands and its rules approve them: an agent that writes them approves itself
+            # (security review: in a trusted folder, a written hooks.json ran on the next tool call with shell=True)
+            raise ToolError("agents cannot change .meshpool/hooks.json or .meshpool/permissions.json; ask the user to "
+                            "change hooks and permission rules in Settings")
         return q
 
     @staticmethod
@@ -420,21 +807,39 @@ class Workspace:
         # line endings and a BOM do not count: read_file/edit see \\n text, apply_patch sees the raw text
         return hashlib.sha1(text.lstrip("\ufeff").replace("\r\n", "\n").encode("utf-8", "replace")).hexdigest()
 
+    max_tool_chars = MAX_TOOL_CHARS          # lowered for a small context window (core/context.py)
+
+    engine_libs = True        # an engine's own scripts import its helper libraries (from engines.sheets import ...)
+
+    def _py_env(self, env: dict) -> dict:
+        """The Python environment for a command: the user's project gets its own Python only (the chat agent sets
+        engine_libs False); an engine's workspace also gets Meshpool's app folder, for its helper libraries."""
+        env = _user_python_env(env)
+        if self.engine_libs:
+            app = str(Path(__file__).resolve().parents[2])
+            env["PYTHONPATH"] = app + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        return env
+
     def _cap(self, text: str, label: str) -> str:
-        text = clean(text)
-        if len(text) <= MAX_TOOL_CHARS:
+        text = _squeeze(clean(text))
+        cap = self.max_tool_chars
+        if len(text) <= cap:
             return text
+        head = tail = HEAD if cap >= MAX_TOOL_CHARS else max(250, int(cap * 0.375))
+        more = {"read": " Read the rest with read_file start/end.", "grep": " Narrow the pattern or the path.",
+                "glob": " Use a narrower pattern."}.get(label, "") if cap < MAX_TOOL_CHARS else ""
         with _CAP_LOCK:                          # bash_many may run commands in threads (MH_PARALLEL_MANY)
             self._n += 1
             n = self._n
         f = self.run_dir / f"out_{n:03d}_{label}.txt"
+        cut = len(text) - head - tail
         try:                                     # the task may delete .run (e.g. git clean): recreate it
             f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(text)
+            f.write_text(text, encoding="utf-8", errors="replace")
         except OSError:
-            return text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated] ...\n" + text[-TAIL:]
-        return (text[:HEAD] + f"\n... [{len(text) - HEAD - TAIL} chars truncated; full output in {f}] ...\n"
-                + text[-TAIL:])
+            return text[:head] + f"\n... [{cut} chars truncated{'.' + more if more else ''}] ...\n" + text[-tail:]
+        return (text[:head] + f"\n... [{cut} chars truncated; full output in {f}{'.' + more if more else ''}] ...\n"
+                + text[-tail:])
 
     # -- container (unmounted) file access
     def _cpath(self, p: str) -> str:
@@ -477,12 +882,17 @@ class Workspace:
         if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
             pages = f"{start or 1}-{end or ''}" if (start or end) else None
             return self._cap(docread.extract(p, pages=pages), "read")
+        with p.open("rb") as _f:
+            if b"\0" in _f.read(8192):
+                raise ToolError(f"{path} is a binary file ({p.stat().st_size} bytes); read_file shows text only")
         text = read_src(p)[0]
         self.seen[str(p)] = self._hash(text)
         self.original.setdefault(str(p), self.seen[str(p)])
         lines = shown(text).splitlines()
         s = max(1, start or 1)
         e = min(len(lines), end or len(lines))
+        if s > len(lines) and lines:
+            return f"{path}: file has {len(lines)} lines (start={s} is past the end)"
         body = "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(s, e + 1))
         return self._cap(f"{path} lines {s}-{e} of {len(lines)}\n{body}", "read")
 
@@ -520,29 +930,41 @@ class Workspace:
         except re.error as e:
             raise ToolError(f"invalid regex: {e}")
         base = self._path(path)
-        files = [base] if base.is_file() else [f for f in base.rglob("*") if f.is_file()]
+        if not base.exists():
+            raise ToolError(f"path not found: {path}")
+        files = [base] if base.is_file() else self._walk(base)
         out, matched, truncated = [], 0, False
         for f in files:
             rel = f.relative_to(self.root) if self.root in f.parents else f
-            if any(part in (".git", "node_modules", "__pycache__", ".venv") for part in f.parts):
-                continue
-            if glob and not fnmatch.fnmatch(str(rel), glob) and not fnmatch.fnmatch(f.name, glob):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            if glob and not glob_match(str(rel), glob):
                 continue
             if inside_only and not self._inside(f, inside_only if isinstance(inside_only, (list, tuple)) else None):
                 continue
             try:
+                if f.stat().st_size > MAX_GREP_FILE:
+                    continue                                       # H-11: a huge file is not source
                 text = f.read_text(errors="ignore")
             except (OSError, UnicodeDecodeError):
                 continue
             lines = text.splitlines()
             hits: list[int] = []                                   # 1-based line numbers that start a match
+            need = head - len(out) + 1                             # enough to know the list is full; no more
             if multiline:
                 for m in rx.finditer(text):
                     hits.append(text.count("\n", 0, m.start()) + 1)
+                    if output_mode != "count" and len(hits) >= need:
+                        break
             else:
-                hits = [i for i, line in enumerate(lines, 1) if rx.search(line)]
+                for i, line in enumerate(lines, 1):
+                    if rx.search(line):
+                        hits.append(i)
+                        if output_mode != "count" and len(hits) >= need:
+                            break
             if not hits:
                 continue
+            hitset = set(hits)
             matched += 1
             if output_mode == "files_with_matches":
                 out.append(str(rel))
@@ -552,6 +974,8 @@ class Workspace:
                 shown: set[int] = set()
                 last = 0
                 for h in hits:
+                    if len(out) > head:
+                        break
                     lo, hi = max(1, h - before), min(len(lines), h + after)
                     if (before or after) and last and lo > last + 1:
                         out.append("--")
@@ -559,7 +983,8 @@ class Workspace:
                         if n in shown:
                             continue
                         shown.add(n)
-                        out.append(f"{rel}{':' if n in hits else '-'}{n}{':' if n in hits else '-'}{lines[n - 1][:300]}")
+                        sep = ":" if n in hitset else "-"
+                        out.append(f"{rel}{sep}{n}{sep}{lines[n - 1][:300]}")
                     last = max(last, hi)
             if len(out) >= head:
                 truncated = True
@@ -576,10 +1001,30 @@ class Workspace:
                                if "/" in pattern else f"find . -name {json.dumps(pattern.split('/')[-1])} -not -path './.git/*' | head -2000",
                                60, "glob", record=False)
             return out
-        res = sorted(str(p.relative_to(self.root)) for p in self.root.glob(pattern)
-                     if ".git" not in p.parts and "node_modules" not in p.parts
-                     and (not inside_only or self._inside(p)))
+        if os.path.isabs(pattern) or re.match(r"^[A-Za-z]:", pattern) or ".." in Path(pattern).parts:
+            raise ToolError("glob patterns are relative to the working directory (no absolute paths or '..')")
+        try:
+            res = []
+            for p in self.root.glob(pattern):
+                if self.should_stop and self.should_stop():
+                    raise ToolError("stopped by the user")
+                if SKIP_DIRS.isdisjoint(p.relative_to(self.root).parts) and (not inside_only or self._inside(p)):
+                    res.append(str(p.relative_to(self.root)))
+            res.sort()
+        except (NotImplementedError, ValueError) as e:
+            raise ToolError(f"invalid glob pattern: {e}")
         return self._cap("\n".join(res[:2000]) or "no files", "glob")
+
+    def _walk(self, base: Path):
+        """H-11: files under base, never entering SKIP_DIRS, and checking the Stop flag as it walks."""
+        for dp, dns, fns in os.walk(base):
+            if self.should_stop and self.should_stop():
+                raise ToolError("stopped by the user")
+            dns[:] = [d for d in dns if d not in SKIP_DIRS]
+            for fn in fns:
+                f = Path(dp, fn)
+                if f.is_file():
+                    yield f
 
     @staticmethod
     def _syntax_error(path: Path, text: str) -> str | None:
@@ -597,7 +1042,7 @@ class Workspace:
                 compile(text, str(path), "exec", dont_inherit=True)
                 return None
             except SyntaxError as e:     # Python's own message: "'(' was never closed", "invalid syntax. Perhaps you forgot a comma?"
-                # MeshPool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
+                # Meshpool's own Python (3.12 in the app) does not know newer syntax (3.14: `except A, B:`, t-strings).
                 # The code is judged by the newest Python that would run it: the project's venv, else the newest
                 # python3.x on this computer. Without a newer one the code cannot run here either, so the error stands.
                 if _parses_with_newer_python(path, text):
@@ -784,7 +1229,7 @@ class Workspace:
                 raise ToolError(f"read {path} before editing it (an unread file can only be edited when `old` "
                                 f"matches exactly once)" + (f" [{tag.strip(' :')}]" if tag else ""))
             if isinstance(old, AllStr) and text.count(old) > 1:        # replace_all: every occurrence, counted
-                notes.append(f"replaced {text.count(old)} occurrences")
+                notes.append(f" (replaced {text.count(old)} occurrences)")
                 text = text.replace(str(old), new)
                 continue
             try:
@@ -801,6 +1246,8 @@ class Workspace:
         p = self._path(path, write=True)
         if not p.exists():
             raise ToolError(f"file not found: {path}")
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         text, eol, bom = read_src(p)
         return str(p), text, p, (eol, bom)
 
@@ -844,6 +1291,8 @@ class Workspace:
                     self._cwrite(pth, after)
                 else:
                     write_src(p, after, *fmt)
+                    if self._hash(read_src(p)[0]) != self._hash(after):      # OSS-14: success only if the file changed
+                        raise OSError(f"{pth} does not hold the new text after writing (another program changed it?)")
         except Exception as e:  # noqa: BLE001
             for pth, p, before, fmt in done:
                 try:
@@ -917,11 +1366,16 @@ class Workspace:
             self.turn_files.add(self._cpath(path))
             return f"wrote {path} ({len(content)} chars{', appended' if append else ''}) in the container"
         p = self._path(path, write=True)
+        if p.is_dir():
+            raise ToolError(f"{path or '.'} is a directory; give a file path")
         fmt = ("\n", False)                           # a new file: plain \\n endings on every platform
+        same = False
         if not p.exists():
             self.created.add(str(p))
+            self.turn_new.add(str(p))
         elif p.is_file():
             text, eol, bom = read_src(p)                # an existing file keeps its line endings and BOM
+            same = not append and text == content.replace("\r\n", "\n")      # rewritten with the text it already had
             fmt = (eol, bom)
             if str(p) not in self.original:
                 self.original[str(p)] = self._hash(text)
@@ -932,14 +1386,17 @@ class Workspace:
             write_src(p, content.lstrip("\ufeff") if fmt[1] else content, *fmt)
         after = read_src(p)[0]
         self.seen[str(p)] = self._hash(after)
-        self.edits += 1
-        self.written.add(str(p))
-        self.turn_files.add(str(p))
+        if not self._in_scratch(p):                   # a scratch file is not project progress (or a review receipt)
+            self.edits += 1
+            self.written.add(str(p))
+            if not same:                              # F-21: an unchanged rewrite is not a change
+                self.turn_files.add(str(p))
         bad = self._syntax_error(p, after) if p.is_file() else None
         return f"wrote {path} ({len(content)} chars{', appended' if append else ''})" + (
             f"\nIt does not parse yet; fix it next:\n{bad}" if bad else "")
 
     should_stop = None          # set by the agent: a callable that says the user pressed Stop
+    get_mode = None             # set by the agent: a callable that gives the chat's access mode (Full access skips the sandbox)
 
     def _proc(self, args, env, timeout_s, shell=False, encoding=None, cwd=None):
         """Run a command the user can stop at any moment: the whole process tree is killed on Stop or timeout."""
@@ -947,10 +1404,54 @@ class Workspace:
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         p = subprocess.Popen(args, shell=shell, cwd=cwd or self.root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              stdin=subprocess.DEVNULL, text=True, errors="replace", encoding=encoding, **kw)
+        _BG_ALL.add(p)                                   # killed at exit too if this process ends mid-command
         box: dict = {}
+        bufs = {"out": _Capped(), "err": _Capped()}
+        over = threading.Event()
+
+        def drain(stream, buf):
+            import codecs
+            dec = codecs.getincrementaldecoder(getattr(stream, "encoding", None) or "utf-8")(errors="replace")
+            try:
+                while True:
+                    # read1: what is there now. stream.read(65536) waits for 65536 characters or the end of the pipe,
+                    # which a background child keeps open (H-01).
+                    raw = stream.buffer.read1(65536)
+                    chunk = dec.decode(raw, final=not raw).replace("\r\n", "\n")
+                    if not raw and not chunk:
+                        break
+                    if not chunk:
+                        continue
+                    buf.add(chunk)
+                    if bufs["out"].total + bufs["err"].total > OUTPUT_KILL_CHARS:
+                        over.set()                       # an endless producer: end it, keep head and tail
+                        break
+            except (OSError, ValueError):
+                pass
 
         def pump():
-            box["out"], box["err"] = p.communicate()
+            ts = [threading.Thread(target=drain, args=(p.stdout, bufs["out"]), daemon=True),
+                  threading.Thread(target=drain, args=(p.stderr, bufs["err"]), daemon=True)]
+            for t in ts:
+                t.start()
+            while any(t.is_alive() for t in ts) and not over.is_set():
+                for t in ts:
+                    t.join(0.1)
+                if p.poll() is not None:                 # H-01: the command is done; a background child may still
+                    for t in ts:                         # hold the pipes, so give the last output a moment, then stop
+                        t.join(0.3)
+                    if any(t.is_alive() for t in ts):
+                        box["left_running"] = True
+                        for st in (p.stdout, p.stderr):  # close our ends (in a thread: a blocked read holds the lock)
+                            threading.Thread(target=_quiet_close, args=(st,), daemon=True).start()
+                    break
+            if over.is_set():
+                _kill_tree(p)                            # the whole tree: taskkill /T /F on Windows, killpg elsewhere
+            try:
+                p.wait(10)
+            except subprocess.TimeoutExpired:
+                p.kill()
+            box["out"], box["err"] = bufs["out"].text(), bufs["err"].text()
         th = threading.Thread(target=pump, daemon=True)
         th.start()
         end = time.time() + timeout_s
@@ -972,15 +1473,45 @@ class Workspace:
                     p.kill()
                 th.join(5)
                 break
+        _BG_ALL.discard(p)                              # finished, stopped or timed out: no longer ours to kill
         out, err = box.get("out") or "", box.get("err") or ""
         if why == "timeout":
             raise subprocess.TimeoutExpired(args, timeout_s, output=out)
         rc = 130 if why == "stopped" else p.returncode
+        if over.is_set():
+            err = (err + f"\n[output stopped after {OUTPUT_KILL_CHARS // 1_000_000} million characters]").lstrip()
         if why == "stopped":
             err = (err + "\n[stopped by the user]").lstrip()
+        if box.get("left_running"):
+            err = (err + "\n[the command finished but left a background process running; its output is not captured. "
+                         "Start servers and watchers with bash_start to read their output and stop them]").lstrip()
         return subprocess.CompletedProcess(args, rc, out, err)
 
-    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None):
+    def _in_scratch(self, p) -> bool:
+        d = self.__dict__.get("_scratch_dir")
+        try:
+            return bool(d) and Path(d).resolve() in Path(p).resolve().parents
+        except (OSError, ValueError):
+            return False
+
+    def _scratch(self, env: dict) -> dict:
+        """A private temp folder per workspace for every command it runs: scratch files (check scripts, repro copies) of
+        one agent cannot be read or overwritten by another running at the same time (parallel subagents, a second
+        chat, the benchmark's parallel runs: eval traces showed agents clobbering each other's /tmp/check.py)."""
+        d = self.__dict__.get("_scratch_dir")
+        if not d or not os.path.isdir(d):
+            import tempfile
+            _prune_scratch(tempfile.gettempdir())
+            try:
+                d = self.__dict__["_scratch_dir"] = tempfile.mkdtemp(prefix="meshpool-scratch-")
+            except OSError:
+                return env
+            import weakref                              # removed with the workspace, or at exit at the latest
+            weakref.finalize(self, shutil.rmtree, d, True)
+        env["TMPDIR"] = env["TMP"] = env["TEMP"] = d
+        return env
+
+    def _run(self, command, timeout_s, kind, record=True, raw=False, ctx=True, cwd=None, login=False):
         cap = 1800 if os.environ.get("MH_MODE") == "terminal" else 900   # terminal tasks: builds, training runs
         timeout_s = max(1, min(int(timeout_s or (300 if kind == 'check' else 180)), cap))
         t0 = time.time()
@@ -989,40 +1520,47 @@ class Workspace:
             if _C.packaged():                                       # the user's own tools, not Meshpool's Python
                 env = _C.user_env()
             else:
-                env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))  # stale .pyc after same-size edits hides fixes
-                proj = str(Path(__file__).resolve().parents[2])      # engine helper libraries importable anywhere
-                env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+                env = self._py_env(_C.scrub_env(dict(os.environ)))
             if self.container and not command.lstrip().startswith("docker "):
                 cdir = self.cdir if not cwd else self._cpath(os.path.relpath(cwd, self.root).replace(os.sep, "/"))
                 r = subprocess.run(["docker", "exec", "-w", cdir, self.container, "bash", "-lc", command],
                                    capture_output=True, text=True, timeout=timeout_s, errors="replace")
             else:
                 env.setdefault("PYTHONUTF8", "1")
+                self._scratch(env)
                 bash = _bash()
+                from meshpool_harness.core import sandbox as _SB
+                mode = self.get_mode() if self.get_mode else None
                 if bash and os.name == "nt":                     # Git Bash: keep the working folder
                     env["CHERE_INVOKING"] = "1"
-                    r = self._proc([bash, "-c", command], env, timeout_s, encoding="utf-8", cwd=cwd)
+                    if _SB.requested(mode):
+                        _SB.wrap(["x"], self.root, platform="win32")     # says once that it is not available here
+                    r = self._proc([bash, "-lc" if login else "-c", fix_nul_redirect(command)], env, timeout_s,
+                                   encoding="utf-8", cwd=cwd)
                 elif bash:
-                    from meshpool_harness.core import sandbox as _SB
-                    r = self._proc(_SB.wrap([bash, "-c", command], self.root), env, timeout_s, cwd=cwd)
+                    r = self._proc(_SB.wrap([bash, "-lc" if login else "-c", command], self.root, cwd=cwd, mode=mode),
+                                   env, timeout_s, cwd=cwd)
                 elif os.name == "nt":                            # no Git Bash: PowerShell, not cmd.exe
                     r = self._proc(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
                                     "-Command", "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command],
                                    env, timeout_s, encoding="utf-8", cwd=cwd)
                 else:
                     r = self._proc(command, env, timeout_s, shell=True, cwd=cwd)
-            code, out = r.returncode, (r.stdout + ("\n" + r.stderr if r.stderr else ""))
+            code, out = r.returncode, _C.redact_secrets(r.stdout + ("\n" + r.stderr if r.stderr else ""))   # OSS-29
         except subprocess.TimeoutExpired as e:
             code = 124
             out = ((e.stdout or "") if isinstance(e.stdout, str) else "") + f"\n[timed out after {timeout_s}s]"
         if not record:
             return self._cap(out or "no matches", kind), code
+        asked = self.__dict__.get("asked_cmds") or ()
         self.commands.append({"cmd": command.strip(), "code": code, "kind": kind, "after_edit": self.edits,
-                              "secs": round(time.time() - t0, 1), "tail": out[-600:]})
+                              "secs": round(time.time() - t0, 1), "tail": out[-600:],
+                              "cwd": str(cwd) if cwd else None,            # re-check runs it in the same folder
+                              "approved_once": command.strip() in asked})  # a yes for this run is not a yes for more
         try:                                     # full outputs: evidence for number tracing; the task may have
             self.run_dir.mkdir(parents=True, exist_ok=True)   # deleted .run (git clean), so recreate it
-            with (self.run_dir / "commands.log").open("a") as f:
-                f.write(f"\n$ {command.strip()}\n[exit {code}]\n{out[:200000]}\n")
+            with (self.run_dir / "commands.log").open("a", encoding="utf-8", errors="replace") as f:
+                f.write(f"\n$ {_C.redact_secrets(command.strip())}\n[exit {code}]\n{out[:200000]}\n")
         except OSError:
             pass
         if raw:                                  # probe/trace post-process the full text themselves
@@ -1052,15 +1590,19 @@ class Workspace:
         if _C.packaged():
             env = _C.user_env()
         else:
-            env = _C.scrub_env(dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-            proj = str(Path(__file__).resolve().parents[2])
-            env["PYTHONPATH"] = proj + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            env = self._py_env(_C.scrub_env(dict(os.environ)))
         env.setdefault("PYTHONUTF8", "1")
         env["PYTHONUNBUFFERED"] = "1"
+        self._scratch(env)
         bash = _bash()
         kw = {"creationflags": 0x00000200 | 0x08000000} if os.name == "nt" else {"start_new_session": True}
         if bash:
             args, shell = [bash, "-c", command], False
+            if os.name != "nt":
+                from meshpool_harness.core import sandbox as _SB
+                args = _SB.wrap(args, self.root, mode=self.get_mode() if self.get_mode else None)
+            else:
+                args = [bash, "-c", fix_nul_redirect(command)]
         elif os.name == "nt":
             args, shell = ["powershell", "-NoProfile", "-NonInteractive", "-Command", command], False
         else:
@@ -1194,10 +1736,99 @@ class Workspace:
             if not d.is_dir() and not (self.container and not self.mounted):
                 raise ToolError(f"workdir not found: {workdir}")
             cwd = d
+        again = self._reread(script, cwd)
+        if again:
+            return again
         secs = None
         if timeout_ms is not None:
             secs = max(1, -(-int(timeout_ms) // 1000))
-        return self._run(script, secs, "bash", cwd=cwd)[0]
+        out = self._run(script, secs, "bash", cwd=cwd)[0]
+        self._remember_cat(script, cwd, out)
+        return out
+
+    def exec_command(self, cmd, workdir=None, yield_time_ms=None, max_output_tokens=None, login=None, shell=None,
+                     tty=None, justification=None, sandbox_permissions=None, prefix_rule=None):
+        """Codex 0.171's exec_command (profile "c171"): `cmd` runs with bash -lc (bash -c when login is false) in
+        workdir (default: the project folder), on the same runner as bash and shell (stop, private $TMPDIR, the
+        user's own Python, the sandbox, the command log). Not a PTY session: the command runs to the end, and
+        yield_time_ms, when given, is its time limit (default: the bash tool's). The result is Codex's format
+        (exec_result): no Meshpool notes, no saved-output pointer, no error-context excerpts. An apply_patch given
+        as a heredoc is applied as a patch, as Codex intercepts it."""
+        if not isinstance(cmd, str) or not cmd.strip():
+            raise ToolError("exec_command: `cmd` is empty")
+        cwd = None
+        if workdir:
+            d = self._path(str(workdir))
+            if not d.is_dir() and not (self.container and not self.mounted):
+                raise ToolError(f"workdir not found: {workdir}")
+            cwd = d
+        t0 = time.time()
+        hit = patch_from_shell(cmd)
+        if hit:
+            try:
+                out, code = self.apply_patch(hit[0], base=hit[1] or workdir), 0
+            except ToolError as e:
+                out, code = str(e), 1
+            return exec_result(out if out.endswith("\n") else out + "\n", code, time.time() - t0, max_output_tokens)
+        secs = None
+        if isinstance(yield_time_ms, (int, float)) and not isinstance(yield_time_ms, bool):
+            secs = max(1, -(-int(max(250, yield_time_ms)) // 1000))
+        text, code = self._run(cmd, secs, "bash", raw=True, cwd=cwd, login=login is not False)
+        out = text.split("\n", 1)[1] if text.startswith("[exit ") and "\n" in text else text
+        return exec_result(out, code, time.time() - t0, max_output_tokens)
+
+    # -- subsumed retrieval: a whole-file read of text the model already has, unchanged, is answered from memory.
+    # Measured on coding agents, re-reading code already in context occurs 2-6 times per task (arXiv 2609.30725);
+    # each such read sends the file again as new, uncached input and costs a round trip of its own.
+    _CAT = re.compile(r"^\s*(?:cat|cat -n|nl -ba)\s+(['\"]?)([^\s'\";|&<>*?]+)\1\s*$")
+
+    def _known(self) -> dict:
+        return self.__dict__.setdefault("_known_text", {})
+
+    def remember_text(self, path, text: str, where: str) -> None:
+        """Note that the model has the full current text of this file (where: how it got it)."""
+        self._known()[str(Path(path).resolve())] = (self._hash(text), where)
+
+    def _cat_target(self, script: str, cwd):
+        if os.environ.get("MH_REREAD_NOTE", "1") == "0" or (self.container and not self.mounted):
+            return None
+        m = self._CAT.match(script.strip())
+        if not m:
+            return None
+        p = Path(m.group(2))
+        p = (Path(cwd or self.root) / p) if not p.is_absolute() else p
+        return p.resolve()
+
+    def _reread(self, script: str, cwd) -> str:
+        p = self._cat_target(script, cwd)
+        if p is None or str(p) not in self._known():
+            return ""
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        h, where = self._known()[str(p)]
+        if h != self._hash(text):
+            return ""                             # changed since: a real read
+        vis = getattr(self, "visible", None)
+        if vis is not None and not vis(text):    # the history was compacted or trimmed: the text is gone, print it
+            self._known().pop(str(p), None)
+            return ""
+        rel = os.path.relpath(p, self.root)
+        return (f"[exit 0]\n[Meshpool] {rel} is unchanged since {where}; its full text is already in this "
+                "conversation above, so it was not printed again. Use it from there (or read a line range if you "
+                "need exact text for an edit).")
+
+    def _remember_cat(self, script: str, cwd, out: str) -> None:
+        p = self._cat_target(script, cwd)
+        if p is None or not str(out).startswith("[exit 0]") or "[Meshpool]" in str(out)[:200]:
+            return
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if len(text) <= self.max_tool_chars and len(str(out)) >= len(text):     # printed whole, not cut
+            self.remember_text(p, text, "you printed it")
 
     def apply_patch(self, input, base=None):
         """Codex's apply_patch: every hunk is checked and every new file built in memory first; only then are the files
@@ -1285,9 +1916,11 @@ class Workspace:
                         self._cwrite(key, after)
                 elif after is None:
                     p.unlink()
+                    _drop_pyc(p)
                 else:
                     p.parent.mkdir(parents=True, exist_ok=True)
                     p.write_bytes(after.encode("utf-8", "surrogateescape"))
+                    _drop_pyc(p)
         except Exception as e:  # noqa: BLE001
             for key in done:
                 p, before, after = files[key]
@@ -1306,6 +1939,8 @@ class Workspace:
             p, before, after = files[key]
             if before is None and after is not None:
                 self.created.add(key)
+                if not self._in_scratch(p):           # the receipt marks it "(new)", as for write_file
+                    self.turn_new.add(key)
             elif before is not None and key not in self.original:
                 self.original[key] = self._hash(before)
             if after is None:
@@ -1313,11 +1948,72 @@ class Workspace:
             else:
                 self.seen[key] = self._hash(after)
                 self.written.add(key)
-            self.turn_files.add(key)
-            self.edits += 1
+            if not self._in_scratch(p):               # a scratch file is not project progress (or a review receipt)
+                self.turn_files.add(key)
+                self.edits += 1
         lines = ["Success. Updated the following files:"]
         lines += [f"A {x}" for x in added] + [f"M {x}" for x in modified] + [f"D {x}" for x in deleted]
-        return "\n".join(lines)
+        return "\n".join(lines) + self._recheck(added + modified)
+
+    # -- re-check on edit: after a successful patch to project code, the model's most recent check command is run again
+    # and its result rides on the patch result. The edit-then-run-the-same-check loop is the largest remaining gap to
+    # Codex (2.2-2.4 check turns between edits per task against 0-0.6); SWE-agent's lint-on-edit showed feedback
+    # attached to the edit removes those rounds. Only a short check that ran in this task (under 60 s), only on code.
+    _CHECKISH = re.compile(r"\b(pytest|python3?|node|npm (?:run )?test|go test|cargo test|ruby|bash \S+\.sh|sh \S+\.sh)\b")
+    _WRITES = re.compile(r"(cat\s*>|>\s*[\w./$\"'-]+\.(?:py|js|ts|json|txt|csv)\b|tee |sed -i|rm |mv |cp |git |pip |npm i)")
+
+    # What may be re-run unasked: a test runner, an inline assertion (python -c / node -e), a test file, or a check
+    # script in the task's scratch folder. Never a project script with side effects (an importer writing rows twice),
+    # and never sudo, network or destructive commands, which the user may have approved once (review, 0.0.16).
+    _TEST_RUNNER = re.compile(r"\b(pytest|unittest|tox|nox|npm (?:run )?test|yarn test|pnpm test|go test|cargo test|jest|"
+                              r"vitest|mocha|rspec|phpunit|dotnet test|mvn test|gradle test)\b|\bpython3?\s+-c\b|"
+                              r"\bnode\s+-e\b|(?:^|[\s/])(?:test_\w+|\w+_test)\.py\b|\$TMPDIR|\$\{TMPDIR\}")
+    _UNSAFE = re.compile(r"\b(sudo|doas|su|curl|wget|ssh|scp|rsync|docker|kubectl|psql|mysql|mongo|redis-cli|dd|mkfs|"
+                         r"shutdown|reboot|kill|pkill|chmod|chown)\b|\brm\s|git\s+(?:push|reset|clean|checkout)")
+
+    def _recheckable(self, cmd: str) -> bool:
+        from .permrules import DESTRUCTIVE
+        if self._UNSAFE.search(cmd) or DESTRUCTIVE.search(cmd):
+            return False
+        scratch = str(self.__dict__.get("_scratch_dir") or "")              # the task's private $TMPDIR
+        return bool(self._TEST_RUNNER.search(cmd)) or bool(scratch and len(scratch) > 4 and scratch in cmd)
+
+    def _last_check(self):
+        for c in reversed(self.commands):
+            cmd = c.get("cmd", "")
+            if c.get("kind") != "bash" or not self._CHECKISH.search(cmd) or self._WRITES.search(cmd):
+                continue
+            if (c.get("secs") or 0) > 60 or len(cmd) > 2000 or not self._recheckable(cmd) or c.get("approved_once"):
+                return None                       # a command the user had to say yes to is never re-run unasked
+            return c
+        return None
+
+    def _recheck(self, changed: list) -> str:
+        if not getattr(self, "recheck", False) or os.environ.get("MH_RECHECK", "1") == "0":
+            return ""
+        if (self.get_mode() if self.get_mode else None) != "auto":
+            return ""                             # only where commands already run unasked: a re-run is a new run
+        if not any(str(x).endswith((".py", ".js", ".mjs", ".cjs", ".ts", ".go", ".rs", ".rb", ".java")) for x in changed):
+            return ""
+        c = self._last_check()
+        if c is None:
+            return ""
+        try:          # a slow check (a big repo's test run) is not re-run after every patch: broad2 swe_sympy, 2.3x time
+            slow = float(os.environ.get("MH_RECHECK_MAX_S", "10") or 0)
+        except ValueError:
+            slow = 10.0
+        if slow > 0 and float(c.get("secs") or 0) > slow:
+            return ""
+        limit = int(min(60, max(10, 3 * float(c.get("secs") or 0))))   # a check that got slow is cut short, not waited on
+        cwd = Path(c["cwd"]) if c.get("cwd") else None     # the shell call's workdir, not the project root
+        if cwd is not None and not (self.container and not self.mounted) and not cwd.is_dir():
+            return ""
+        out, code = self._run(c["cmd"], limit, "bash", cwd=cwd)
+        out = str(out)
+        if len(out) > 4000:
+            out = out[:1500] + "\n[...]\n" + out[-2000:]
+        return (f"\n\n[Meshpool re-ran your last check after this edit: `{c['cmd'][:200]}`]\n{out}\n"
+                "(Do not run that check again yourself unless you change it.)")
 
     def all_output(self) -> str:
         p = self.run_dir / "commands.log"

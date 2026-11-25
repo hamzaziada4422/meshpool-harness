@@ -126,7 +126,8 @@ def test_slides_added_to_a_users_deck_keep_its_slides_and_carry_charts(tmp_path)
     assert check(str(tmp_path / "out.pptx"))["ok"]                                                 # opens without repair
 
 
-def test_work_never_builds_slides_or_workbooks_by_hand(tmp_path):
+def test_work_never_builds_slides_or_workbooks_by_hand(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "0")          # the engine path (office direct lifts this guard)
     from meshpool_harness import assistant as A
     from meshpool_harness.agent.core import Agent
     assert "make_deck" in A.context_block() and "python-pptx" in A.ENGINES       # every harness is told

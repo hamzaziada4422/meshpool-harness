@@ -12,6 +12,7 @@ from meshpool_harness.core.client import LiveClient  # noqa: E402
 from meshpool_harness.core.loop import Caps, run  # noqa: E402
 from meshpool_harness.core.tools import Workspace  # noqa: E402
 from engines.data.checks import check_quotes, trace_numbers  # noqa: E402
+from engines import max_turns as _cap  # noqa: E402
 
 SYSTEM = """You are a rigorous analyst. Every claim you make is backed by code you ran or text you can quote.
 
@@ -64,22 +65,30 @@ def make_check(sources: dict[str, str]):
 
 
 def solve(task: str, *, workdir: str, task_id: str, files: list[str] | None = None, max_turns: int = 30,
-          model: str = "deepseek-v4.1-flash", client=None, phase: str = "phase_2_build") -> dict:
+          model: str | None = None, client=None, phase: str = "phase_2_build") -> dict:
+    from meshpool_harness.providers import configured_model
+    model = configured_model(model)
     ws = Workspace(workdir, os.path.join(workdir, ".run"))
     sources = {}
     for f in files or []:
-        if f.lower().endswith((".txt", ".md", ".vtt", ".srt")) and os.path.exists(f):
-            sources[os.path.basename(f)] = Path(f).read_text(errors="replace")
-        elif f.lower().endswith(".docx") and os.path.exists(f):
-            try:
-                import docx
-                sources[os.path.basename(f)] = "\n".join(p.text for p in docx.Document(f).paragraphs)
-            except Exception:
-                pass
+        if not os.path.isfile(f):
+            continue
+        name = os.path.basename(f)
+        try:
+            if f.lower().endswith((".txt", ".md", ".vtt", ".srt")):
+                sources[name] = Path(f).read_text(encoding="utf-8-sig", errors="replace")
+            else:                                  # pdf, docx, html, csv, ...: whatever the model could read and quote
+                from meshpool_harness.docread import extract, is_document
+                if is_document(Path(f)):
+                    text = extract(f, ocr="never")
+                    if not text.startswith(("Could not read", "Meshpool cannot read")):
+                        sources[name] = text
+        except Exception as e:  # noqa: BLE001 - an unreadable attachment must not stop the run, but is not silent
+            print(f"data engine: could not load {name} as a quote source ({type(e).__name__}: {e})", file=sys.stderr)
     client = client or LiveClient(phase)
     ctx = {"task_id": task_id, "model": model, "profile": "deepseek", "role": "worker"}
     system = SYSTEM + (LEAN if os.environ.get("MH_DATA_VARIANT", "v2") == "v2" else "")
     r = run(task, client=client, model=model, profile=None, ws=ws, ctx=ctx, system_text=system,
-            caps=Caps(max_turns=max_turns), temperature=0.0, finish_check=make_check(sources))
+            caps=Caps(max_turns=_cap(max_turns)), temperature=0.0, finish_check=make_check(sources))
     return {"ok": r.ok, "answer": r.answer, "artifacts": r.artifacts, "evidence": r.evidence, "turns": r.turns,
             "reason": r.reason, "usage": r.usage}

@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 from dataclasses import dataclass, field
 
+from . import usage
 from .guards import Abort, Guards, enabled, log_failure
 from .metrics import CacheMeter
 from .tools import CORE, ToolError, Workspace, schemas, validate
@@ -57,6 +58,31 @@ def _compact(messages: list, keep_recent: int) -> list:
     return messages
 
 
+def _with_effort(client, model: str, extra):
+    """The engine path takes the same reasoning effort as the app's agent: MH_REASONING_EFFORT, through the model's
+    own capabilities (nothing is sent to a model that takes none)."""
+    try:
+        from meshpool_harness import providers as PV
+        from meshpool_harness.core import modelcaps as MC
+        eff = MC.resolve(getattr(client, "base_url", "") or "", PV.split(model)[1]).effort("task")
+    except Exception:  # noqa: BLE001
+        return extra
+    if eff and "reasoning_effort" not in (extra or {}):
+        return {**(extra or {}), "reasoning_effort": eff}
+    return extra
+
+
+def _keep_reasoning(ledger, model: str) -> bool:
+    """Whether this model, on this endpoint, wants reasoning_content passed back inside a tool-call turn."""
+    try:
+        from . import modelcaps as MC
+        from meshpool_harness import providers as PV
+        base = getattr(ledger, "base_url", "") or PV.key_base()
+        return bool(MC.resolve(base, PV.split(model)[1]).keep_reasoning)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _sanitize_calls(calls: list) -> list:
     """A tool call with invalid JSON arguments (e.g. truncated output, or two calls merged by a stream) makes the next
     request invalid (gateway HTTP 400). Keep the call, with arguments the API accepts; the tool result still reports
@@ -65,12 +91,19 @@ def _sanitize_calls(calls: list) -> list:
     for i, c in enumerate(calls):
         c = json.loads(json.dumps(c))
         f = c.setdefault("function", {})
+        a = f.get("arguments")
+        if isinstance(a, dict):                      # some OpenAI-compatible servers send an object
+            f["arguments"] = json.dumps(a)
+            a = f["arguments"]
+        if a is None:
+            f["arguments"] = a = "{}"
         try:
-            ok = isinstance(json.loads(f.get("arguments") or "{}"), dict)
+            ok = isinstance(json.loads(a or "{}"), dict)
         except (ValueError, TypeError):
             ok = False
         if not ok:
-            f["arguments"] = "{}"
+            # the reply was cut off or merged: validate() tells the model so, not "missing required argument"
+            f["arguments"] = '{"__truncated__": true}' if isinstance(a, str) and a.strip().startswith("{") else "{}"
         if not c.get("id"):
             c["id"] = f"call_{i}"
         c["type"] = "function"
@@ -95,7 +128,8 @@ class _KeepWarm:
         self.prefix = [dict(m) for m in messages[:-1]]
         self.usage = {"keepwarm_calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "cached_tokens": 0}
         self.stop = threading.Event()
-        self.th = threading.Thread(target=self._loop, daemon=True)
+        import contextvars
+        self.th = threading.Thread(target=contextvars.copy_context().run, args=(self._loop,), daemon=True)   # same usage task
         self.th.start()
 
     def _loop(self):
@@ -156,7 +190,15 @@ def run(*a, **kw):
     return res
 
 
-def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dict, system_text: str,
+def _run(*a, **kw) -> LoopResult:
+    """Run the loop inside a usage task: the caller's, else a new one that carries the MH_BUDGET_USD limit."""
+    if usage.current()[0] is not None:
+        return _run_loop(*a, **kw)
+    with usage.bind(usage.start_task(label="loop"), os.environ.get("MH_USAGE_SOURCE") or "engine"):
+        return _run_loop(*a, **kw)
+
+
+def _run_loop(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dict, system_text: str,
         tool_names: list[str] | None = None, caps: Caps | None = None, allow_test_edits=False,
         require_check=True, temperature=None, extra=None, finish_check=None, turn_hook=None,
         _box=None) -> LoopResult:
@@ -172,32 +214,54 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
     if os.environ.get("MH_TODO") == "1" and "todo" not in tool_names:      # required todo list (ForgeCode)
         tool_names = [n for n in tool_names if n != "finish"] + ["todo", "finish"]
     sys_msg, tools, sha = build_prefix(system_text, tool_names, ws.skills)
+    from . import context as CTX
+    _led = getattr(client, "ledger", None)
+    win = CTX.window(model, getattr(_led, "base_url", "") or "", getattr(_led, "api_key", "") or "")
+    ws.max_tool_chars = CTX.tool_output_chars(win)
+    caps.max_output_tokens = CTX.max_output(win, caps.max_output_tokens)
+    caps.compact_chars = CTX.compact_chars(win, CTX.estimate(tools) + CTX.estimate(sys_msg), caps.compact_chars)
+    if CTX.is_small(win):                                # LiveClient tells the user once; the window shrinks the rest
+        caps.keep_recent = min(caps.keep_recent, 4 if win <= 16_384 else 6)
+        sys_msg = CTX.head_tail(sys_msg, int(win * 0.25 * CTX.CHARS_PER_TOKEN), "from the instructions to fit the window")
+        tools = CTX.compact_tools(tools, win)
     messages = [{"role": "system", "content": sys_msg}, {"role": "user", "content": task_text}]
     if _box is not None:
         _box["messages"] = messages
     guards = Guards(ctx, ws, allow_test_edits=allow_test_edits, require_check=require_check)
     res = LoopResult(ok=False, prefix_sha=sha)
     bad_format = 0
+    last_text = ""
     import os as _os
     if not caps.max_seconds and _os.environ.get("MH_MAX_SECONDS"):
         caps.max_seconds = int(_os.environ["MH_MAX_SECONDS"])
     t_start = time.time()
     meter = CacheMeter()
+    _cguard = CTX.CompactGuard()
     for turn in range(1, caps.max_turns + 1):
         res.turns = turn
         if caps.max_seconds and time.time() - t_start > caps.max_seconds:
             res.reason = f"wall-clock cap {caps.max_seconds}s reached"
             log_failure(ctx, "time_cap", False, res.reason)
             return res
-        if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars:
+        _sz = sum(len(json.dumps(m)) for m in messages)
+        if _sz > caps.compact_chars and _cguard.allow(_sz, ws.edits):
             messages = _compact(messages, caps.keep_recent)
+            if sum(len(json.dumps(m)) for m in messages) > caps.compact_chars and CTX.is_small(win):
+                from meshpool_harness.agent import compaction as _CP     # still over 70% of a small window: summarize
+                _CP.compact_history(messages, client=client, model=model, win=win)
+            _cguard.record(sum(len(json.dumps(m)) for m in messages), ws.edits, _sz)
             if _box is not None:
                 _box["messages"] = messages
         _tc = time.time()
-        resp = client.chat(model=model, messages=messages, tools=tools, task_id=ctx.get("task_id", ""),
-                           job_id=ctx.get("job_id", ""), role=ctx.get("role", "worker"),
-                           profile=ctx.get("profile", "deepseek"), max_tokens=caps.max_output_tokens,
-                           temperature=temperature, extra=extra)
+        try:                                     # the reserve inside chat refuses a call once the limit is reached
+            resp = client.chat(model=model, messages=messages, tools=tools, task_id=ctx.get("task_id", ""),
+                               job_id=ctx.get("job_id", ""), role=ctx.get("role", "worker"),
+                               profile=ctx.get("profile", "deepseek"), max_tokens=caps.max_output_tokens,
+                               temperature=temperature, extra=_with_effort(client, model, extra))
+        except usage.BudgetExceeded as e:
+            res.reason = str(e)
+            log_failure(ctx, "budget_cap", False, res.reason)
+            return res
         res.usage["model_s"] = res.usage.get("model_s", 0.0) + time.time() - _tc
         res.usage["model_calls"] = res.usage.get("model_calls", 0) + 1
         u = resp.get("usage") or {}
@@ -206,20 +270,21 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
         _cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens") or u.get("prompt_cache_hit_tokens") or 0
         res.usage["cached_tokens"] = res.usage.get("cached_tokens", 0) + _cached
         meter.observe(u, res.usage)                         # full cache misses (core/metrics.py)
-        _budget = float(_os.environ.get("MH_BUDGET_USD", "0") or 0)       # per-task spend cap (0 = off)
-        if _budget:
-            _f = float(_os.environ.get("MH_BILLING_FACTOR", "2.19"))     # measured gateway/list ratio
-            _spent = _f * ((res.usage["prompt_tokens"] - res.usage["cached_tokens"]) * 0.15
-                           + res.usage["cached_tokens"] * 0.003 + res.usage["completion_tokens"] * 0.6) / 1e6
-            if _spent > _budget:
-                res.reason = f"task budget ${_budget:.2f} reached"
-                log_failure(ctx, "budget_cap", False, res.reason)
-                return res
         msg = resp["choices"][0]["message"]
+        if not msg.get("tool_calls"):                        # a call written as text (<function=..>, [TOOL_CALLS], bare JSON)
+            from .textcalls import recover as _recover
+            _recover(msg, tool_names)
         calls = msg.get("tool_calls") or []
         keep = {"role": "assistant", "content": msg.get("content") or ""}
+        if msg.get("reasoning_content") and _keep_reasoning(_led, model):   # DeepSeek/Kimi thinking: sent back in the turn
+            keep["reasoning_content"] = msg["reasoning_content"]
         if calls and os.environ.get("MH_SANITIZE_CALLS", "1") == "1":
             calls = _sanitize_calls(calls)
+        # an accepted finish/need_context returns at once, so they must run after every other call in the reply
+        _orig = calls
+        calls = [c for c in calls if (c.get("function") or {}).get("name") not in ("finish", "need_context")] + \
+                [c for c in calls if (c.get("function") or {}).get("name") in ("finish", "need_context")]
+        reordered = calls != _orig       # finish was written before seeing the actions' results
         if calls:
             keep["tool_calls"] = calls
         messages.append(keep)
@@ -227,8 +292,11 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                                         + (msg.get("reasoning_content") or "")[-3000:])
         if not calls:
             bad_format += 1
+            if (msg.get("content") or "").strip():
+                last_text = msg["content"].strip()
             if bad_format >= 3:
                 res.reason = "model stopped calling tools"
+                res.answer = res.answer or last_text           # what the model wrote is still its answer
                 log_failure(ctx, "no_tool_call", False, (msg.get("content") or "")[:200])
                 return res
             messages.append({"role": "user", "content": "Use the tools to continue. When done, call finish with "
@@ -298,6 +366,8 @@ def _run(task_text: str, *, client, model: str, profile, ws: Workspace, ctx: dic
                         log_failure(ctx, "exploration_lock", True, name)
                     elif name in ("bash", "run_tests"):
                         out, code = ws._run(args["command"], args.get("timeout_s"), "check" if name == "run_tests" else "bash")
+                        if reordered and code != 0:
+                            turn_failed = True
                         g = guards.after_command(args["command"], code, out)
                         if g:
                             injected.append(g)

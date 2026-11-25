@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import unicodedata
 
 from meshpool_harness.agent import brand as B
 
 # ---------- colors -------------------------------------------------------------------------------------------------
 FILL = (38, 94, 23)            # tool block fill (#265e17)
-POOL = B.POOL                  # MeshPool blue (#1670E8)
+POOL = B.POOL                  # Meshpool blue (#1670E8)
 SKY = B.SKY                    # lighter blue, readable on a dark terminal (#5EA8FF)
 CODE = (198, 120, 221)         # inline code (#c678dd)
 CMD = (140, 190, 255)          # /commands
@@ -70,6 +71,16 @@ class Style:
 
 
 # ---------- width --------------------------------------------------------------------------------------------------
+
+_UNSAFE = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[PX^_][^\x1b]*(?:\x1b\\)?|\x1b\[[0-?]*[ -/]*[@-~]?|"
+                     r"\x1b[ -/]*[0-~]?|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def safe_text(s: str) -> str:
+    """Text from the model or a tool for the terminal: no escape sequences (clipboard writes, screen clears, titles,
+    links) and no control characters except new line and tab."""
+    return _UNSAFE.sub("", s) if isinstance(s, str) else s
+
 
 def strip(s: str) -> str:
     return ANSI.sub("", s)
@@ -275,11 +286,20 @@ def collapse(lines: list[str], limit: int) -> tuple[list[str], int]:
     return lines, 0
 
 
+def guard(fn, st: Style, *a, **k):
+    """OSS-12: a renderer that throws must not end the session: show a small placeholder instead."""
+    try:
+        return fn(*a, **k)
+    except Exception:  # noqa: BLE001
+        msg = ["  " + st.dim("Could not show this item.")]
+        return (msg, 0) if fn is shell_block else msg
+
+
 def shell_block(command: str, output: str, took: float | None, st: Style, width: int, meta: str = "",
                 limit: int = 10, ok: bool = True) -> tuple[list[str], int]:
     """A shell call as a full-width block: bold `$ command` (with dim metadata at the end of the last line), a blank
     line, the output (dim), a blank line, `Took 2.6s`. Returns (lines, hidden output line count)."""
-    inner = max(10, width - 2)
+    inner = max(4, width - 2)
     fill = st.on_bg(FILL) if st.on else st
     cmd_lines = []
     first = True
@@ -307,6 +327,7 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
     if took is not None:
         rows += ["", fill.dim(fmt_took(took))]
     pad_row = ""
+    rows = [clip(r, max(1, width - 2)) for r in rows]          # a very narrow window: never wider than the screen
     rows = [pad_row] + rows + [pad_row]
     if not st.on:                                 # no color: no fill, the block is set off by blank lines and indent
         return [""] + ["  " + strip(r) if r else "" for r in rows[1:-1]] + [""], hidden
@@ -317,7 +338,7 @@ def shell_block(command: str, output: str, took: float | None, st: Style, width:
 TOOL_LABEL = {"read_file": "Read", "write_file": "Write", "edit": "Edit", "grep": "Search", "glob": "Find",
               "web_search": "Web search", "web_research": "Research", "fetch_url": "Fetch", "office_task": "Office",
               "diagnostics": "Check", "use_skill": "Skill", "find_skill": "Find skill", "delegate_task": "Delegate"}
-SHELL_TOOLS = {"bash", "bash_start", "bash_many", "terminal", "shell"}
+SHELL_TOOLS = {"bash", "bash_start", "bash_many", "terminal", "shell", "exec_command"}
 
 
 def diff_counts(diff: str) -> tuple[int, int]:
@@ -370,7 +391,7 @@ def tool_line(name: str, summary: str, output: str, ok: bool, took: float | None
 # ---------- screen furniture ---------------------------------------------------------------------------------------
 
 def logo(depth: int) -> list[str]:
-    """The MeshPool mark in three terminal rows (six pixel rows, 11 columns): the blue ribbon M of brand/mark.png,
+    """The Meshpool mark in three terminal rows (six pixel rows, 11 columns): the blue ribbon M of brand/mark.png,
     sampled down and drawn with half blocks."""
     src = B.MARK
     cols, prow = 11, 6
@@ -408,7 +429,7 @@ def logo(depth: int) -> list[str]:
 
 def header(st: Style, width: int, version: str, model: str, provider: str, cwd: str) -> list[str]:
     """Mark on the left, three lines of text beside it: name and version, model and provider, folder."""
-    text = [st.bold("MeshPool") + " " + st.dim("v" + version), st.dim(f"{model} · {provider}"), st.dim(cwd)]
+    text = [st.bold("Meshpool") + " " + st.dim("v" + version), st.dim(f"{model} · {provider}"), st.dim(cwd)]
     if width < 40:
         return [clip(t, width) for t in text]
     mark = logo(st.depth)
@@ -535,3 +556,34 @@ def context_window(model: str, known: dict | None = None) -> int:
     if m:
         return int(float(m.group(1)) * (1_000_000 if m.group(2) == "m" else 1_000))
     return 128_000
+
+
+# ---- OSS-30: a console that cannot show the interface's glyphs (Windows cp1252, a redirected stdout) -------------------
+GLYPHS = "❯…─│·•✓✗↑↓✢✳✶✻✽"
+_ASCII = {"❯": ">", "…": "...", "─": "-", "│": "|", "·": "-", "•": "*", "✓": "v", "✗": "x", "↑": "^", "↓": "v",
+          "✢": "*", "✳": "*", "✶": "*", "✻": "*", "✽": "*", "—": "-", "–": "-", "“": '"', "”": '"', "’": "'"}
+ASCII = [False]                      # True: this terminal shows the plain-text look
+
+
+def prepare_streams(streams=None) -> bool:
+    """Called once at CLI start. A stream whose encoding cannot write the interface's glyphs is switched to UTF-8 with
+    errors="replace" (so nothing can crash on a character), and the interface falls back to ASCII glyphs. Returns True
+    when every stream could already show them."""
+    ok = True
+    for st in streams or (sys.stdout, sys.stderr):
+        try:
+            GLYPHS.encode(getattr(st, "encoding", None) or "ascii")
+            continue
+        except (UnicodeEncodeError, LookupError):
+            ok = False
+        try:
+            st.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+    ASCII[0] = not ok
+    return ok
+
+
+def safe(text: str) -> str:
+    """The text, with plain-ASCII stand-ins for the glyphs when this terminal cannot show them."""
+    return text.translate(str.maketrans(_ASCII)) if ASCII[0] else text

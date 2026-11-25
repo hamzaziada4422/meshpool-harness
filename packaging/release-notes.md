@@ -1,5 +1,36 @@
 The first public beta of Meshpool: one desktop agent for code, documents, spreadsheets, decks and research.
 
+**New in 0.0.16**
+- **Hundreds of bugs fixed.** A full audit of the app, the agent, the terminal and every engine found and fixed several hundred problems, each with a test. Among them: undo of a rename that only changes letter case, Stop on a helper agent no longer throws away a report it already finished, the Look question is asked again, Anthropic keys work when the saved address differs, and slides, intro pages, merger heatmaps and DCF sheets no longer overflow or point at the wrong cell.
+- **Small and local models work.** Meshpool learns a model's real context window from the server or from the first cut-off reply, and no longer shrinks to a tiny window by mistake. An unknown model gets 200k tokens instead of 128k; only a real Ollama or LM Studio server starts small. A model that keeps compacting is stopped instead of looping.
+- **Less CPU.** The PDF reader and other built-in tools start once and are shared, not started again for every chat, and they only start when a file needs them.
+- **More keys connect.** Custom auth headers (`api-key`, `x-token`, raw, basic) work again, Microsoft Entra tokens on Azure are sent the right way, and Test connection rejects a 200 reply that is not a model answer. A request that carries a key never follows a redirect; the error names the address it was sent to and what to set instead.
+- **Fewer wasted calls.** When a model keeps sending a call Meshpool already refused, or keeps sending calls that fail without changing any file, it is told to change course and then stopped with a best-effort answer, instead of running until the time limit. A patch with a missing first or last marker, or a blank line between files, is repaired instead of failing. Cleanup such as `rm -f scratch.py` or `rm -rf __pycache__` inside the project is no longer refused as destructive, and a command whose pipes were sent as separate words runs as a pipeline.
+- **Decks built on the company's own filings.** For a public company, research now reads its latest earnings release, 10-Q and 10-K for forward capex, buyback, dividend and credit-facility figures, each cited to the filing. Cash-floor slides anchor on the stated borrowing capacity. Set `MH_RESEARCH_GUIDANCE=0` to turn it off. Headline figures on the cover and two extra consistency checks are available as opt-in switches.
+- **A coding agent built on Codex's own design.** Code chats send the request Codex CLI 0.171 sends: its prompt, its single command tool and its environment context, with Meshpool's permissions, sandbox, loop guards and compaction around it. On the code suites below it solved within one task of Codex (39 vs 38, 144 vs 145, 22 vs 22) at 0.71-0.79x Codex's cost per solved task. Set `MH_SMALL_REPO_STYLE=core` to use Meshpool's own lean prompt on small repositories instead.
+- **Office files done the direct way.** In a Work chat, a change to an existing workbook, document or deck, or a new file you name ("make budget.xlsx"), is written with the file's own library, keeping formulas and styles. The deck, report and model engines are used for an open-ended deliverable ("a 10-slide pitch deck for investors"). Before answering, the agent is held to its own checks: a failed assertion, or a deck with a different number of slides than asked for, means the job is not done.
+- **Measured against Codex 0.171.** Same model (deepseek-v4.1-flash), gateway and hour, two runs per task (six for the office suites), cost per solved task as a multiple of Codex's (95% interval), time as the median of per-task time ratios. Losses are listed with the wins.
+
+  | Suite | Tasks x runs | Solved, Meshpool vs Codex | Cost per solved vs Codex (95% CI) | Median time vs Codex |
+  |---|---|---|---|---|
+  | SWE-bench Verified, SymPy (large repo) | 12 x 2 | 22 vs 22 | 0.76x (0.69-0.84) | 0.93x |
+  | v2_dev code | 21 x 2 | 39 vs 38 | 0.79x (0.69-0.90) | 0.99x |
+  | v2_eval + build, debug, deep, hard | 78 x 2 | 144 vs 145 | 0.71x (0.65-0.78) | 1.03x |
+  | Work: DABench + v2_dev data tasks | 27 x 2 | 45 vs 44 | 0.51x (0.44-0.58) | 0.81x |
+  | Office-7 (decks, documents, workbooks) | 7 x 6 | 42 vs 41 | 0.94x (0.72-1.18) | 0.76x |
+  | SpreadsheetBench (public sample) | 6 x 6 | 31 vs 35 | 0.90x (0.74-1.05) | 1.07x |
+  | OfficeBench (public sample) | 4 x 6 | 21 vs 24 | 0.83x (0.60-1.06) | 0.87x |
+
+  Where Meshpool loses: SpreadsheetBench and OfficeBench solved fewer tasks than Codex (31 vs 35, 21 vs 24), and
+  SpreadsheetBench ran 7% slower at the median and v2_eval 3% slower. The SpreadsheetBench row is the shipped build,
+  with the date and formula checks, against Codex's runs from the hour before; two earlier SpreadsheetBench runs
+  without the formula check came out at 1.04x and 1.16x Codex's cost per solved task. The office suites are small and
+  were run six times each, so their intervals are still wide. The Office-7 and OfficeBench rows were measured before
+  the last review and security fixes (permissions, the app's page token, bounded file checks). The Work row was
+  measured before the last office-file changes, which only act when a chat writes a Word, Excel or PowerPoint file.
+
+  v2_eval and v2_dev shaped Meshpool's prompts; the other suites did not.
+
 **New in 0.0.14**
 - **Azure keys connect the way Microsoft's current docs say.** A plain Azure OpenAI or Azure AI Foundry address now uses Azure's newer `/openai/v1` route, which needs no API version and serves every deployment, including DeepSeek, Llama and Grok. Before, Meshpool pinned an old version on the older route, and newer models were refused with "unsupported api version". If your resource only has the older deployment route, Test connection finds that out by itself, and Save keeps the route that worked. Paste a full portal address with `/deployments/...` or type an API version to use the older route on purpose. The API version box now says what to do with it.
 - **A key can no longer follow a redirect.** The agent's own model calls refuse to follow a redirect to another host, as the settings page and Test button already did.
@@ -88,7 +119,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Updates install themselves.** MeshPool downloads updates in the background, checks them against their published checksums, and installs when you restart or quit.
 - **A new terminal app.** `meshpool` in a terminal: a clean input box, tool steps with timings, collapsible output, Markdown answers, slash commands (/model, /login, /help and more) and Shift+Tab to change permissions.
 - **Session panel.** The repository, branch, pull request (with Mark ready), connectors used, files made and background tasks of the current chat, in one side panel. Start a session straight from a GitHub repository without cloning it yourself.
-- **Mac with Intel** now needs macOS 11 or later. Codex and OpenCode are no longer bundled, so ChatGPT sign-in is not offered in the app.
+- **Mac with Intel** now needs macOS 11 or later. Codex and OpenCode are no longer bundled; they run through npx and download the first time you pick them.
 
 **New in 0.0.6**
 - The New chat button works again. Clicking it did nothing before; Ctrl+N and /new were not affected. If an earlier version saved the click as your folder, it is ignored, so updating fixes the home screen.

@@ -274,7 +274,7 @@ def run(soffice: str, work: Path, files: dict[str, Path]) -> dict:
         msg2, err2 = M.convert_document(str(pdf), "docx")
         import zipfile
         text = ""
-        for cand in sorted((work / "proj" / "Meshpool outputs").glob("memo*.docx")):
+        for cand in sorted((work / "proj").rglob("memo*.docx")):
             try:
                 text += zipfile.ZipFile(cand).read("word/document.xml").decode("utf-8", "replace")
             except Exception:  # noqa: BLE001

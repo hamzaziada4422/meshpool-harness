@@ -1,0 +1,8 @@
+# Ledger rows owned by the "Platform-wide bug audit" session
+
+| ID | status | root cause | fix | files | test (path::name) |
+|---|---|---|---|---|---|
+| K-02 | fixed | CLI, ACP, headless `-p` and app chats created without a task never routed, so `Agent.route=None` fell back to the FULL profile (review + mutation + plan) instead of the shipped `codex` default | the first message of an unrouted chat is routed to the shipped default profile (`Agent._auto_route`, `MH_AUTO_ROUTE=0` turns it off); merged at 66654e10 | app/meshpool_harness/agent/core.py | app/tests/test_ws20_cli_route.py::test_cli_default_routes_to_codex |
+| S-12 | fixed | the 15 Meshpool Office tool schemas (~3k tokens) rode on every Code request | office schemas stay out of Code chats until a file is asked for (ab173821) | app/meshpool_harness/agent/core.py | app/tests/test_fix_tokens_agent.py::test_code_chat_leaves_office_schemas_out_until_asked_and_tools_are_capped |
+| P-01 | fixed | `mcp_assist.LazyTools` never deferred `mcp__meshpool_*` and only started past 60 other tools | lazy split by profile: `MA.LazyTools(self.profile)` / `LazyTools.wanted(ms, profile)` at all call sites; office tools eager only on the work lane (ab173821, with ws20's mcp_assist change acb515e1) | app/meshpool_harness/agent/core.py, app/meshpool_harness/agent/mcp_assist.py | app/tests/test_ws20_layer.py::test_pi_mcp_is_deferred_and_office_tools_are_direct_only_for_office_chats |
+| H-10 | fixed | no cap on the number of tools sent per request | 128-tool cap per request (ab173821) | app/meshpool_harness/agent/core.py | app/tests/test_fix_tokens_agent.py::test_code_chat_leaves_office_schemas_out_until_asked_and_tools_are_capped |

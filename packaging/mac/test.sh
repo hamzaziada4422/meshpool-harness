@@ -13,7 +13,8 @@ printf 'MESHPOOL_API_KEY=test-key-1234\nMESHPOOL_BASE_URL=http://127.0.0.1:8912/
 MESHPOOL_HOME="$T/home" PYTHONPATH="$APP/Resources/app" "$APP/MacOS/Meshpool" -m meshpool_harness ui --no-browser --port 8791 > "$T/ui.log" 2>&1 &
 UI=$!
 for i in $(seq 1 60); do curl -s -o /dev/null http://127.0.0.1:8791/healthz && break; sleep 1; done
-TOK=$(curl -s http://127.0.0.1:8791/ | sed -n 's/.*token: "\([^"]*\)".*/\1/p')
+KEY=$(sed -n 's/.*?k=\([A-Za-z0-9_-]*\).*/\1/p' "$T/ui.log" | head -1)   # the launch key the app prints at startup
+TOK=$(curl -s "http://127.0.0.1:8791/?k=$KEY" | sed -n 's/.*token: "\([^"]*\)".*/\1/p')
 H="X-Meshpool-Token: $TOK"; J="Content-Type: application/json"
 echo "harnesses: $(curl -s -H "$H" http://127.0.0.1:8791/api/harnesses | "$PY" -c 'import json,sys;print([(h["id"],h["available"]) for h in json.load(sys.stdin)["harnesses"]])')"
 echo "models: $(curl -s -H "$H" http://127.0.0.1:8791/api/models | "$PY" -c 'import json,sys;d=json.load(sys.stdin);print(len(d["models"]), d.get("error"))')"

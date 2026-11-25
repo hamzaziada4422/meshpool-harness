@@ -16,12 +16,15 @@ import re
 import unicodedata
 from pathlib import Path
 
+from meshpool_harness import fsio
+
 VERSION = "13.21.0"
 COLOUR_URL = "https://cdn.jsdelivr.net/gh/gilbarbara/logos@main/logos/{slug}.svg"      # full colour, wordmarks
 URLS = (f"https://cdn.jsdelivr.net/npm/simple-icons@{VERSION}/icons/{{slug}}.svg",
         f"https://unpkg.com/simple-icons@{VERSION}/icons/{{slug}}.svg")
 DATA_URL = f"https://cdn.jsdelivr.net/npm/simple-icons@{VERSION}/_data/simple-icons.json"
 TIMEOUT_S = 6
+MAX_SVG = 200_000                                          # a logo larger than this is no logo (never cut short)
 _MISS: set[str] = set()
 
 
@@ -59,40 +62,78 @@ def _get(url: str) -> bytes | None:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as r:
             if r.status != 200:
                 return None
-            return r.read(200_000)
+            body = r.read(MAX_SVG + 1)
+            return body if len(body) <= MAX_SVG else None
     except Exception:                                      # noqa: BLE001 - offline, 404, slow: no logo
         return None
+
+
+def valid_svg(data: bytes | None) -> bool:
+    """True when the bytes parse as XML with an <svg> root (a cut-short or non-SVG body does not)."""
+    if not data:
+        return False
+    try:
+        from xml.etree import ElementTree as ET
+        root = ET.fromstring(data)
+    except Exception:                                      # noqa: BLE001 - ParseError, entity tricks, bad bytes
+        return False
+    return root.tag.rsplit("}", 1)[-1].lower() == "svg"
+
+
+def _store(path: Path, data: bytes) -> Path | None:
+    """Write a validated SVG atomically; None if it could not be written."""
+    try:
+        fsio.atomic_write_bytes(path, data)
+    except Exception:                                      # noqa: BLE001
+        return None
+    return path
+
+
+def _cached(p: Path) -> bool:
+    """A usable cached SVG; a damaged one (killed writer, empty, not an SVG) is deleted so it gets fetched again."""
+    try:
+        if not p.is_file():
+            return False
+        if valid_svg(p.read_bytes()):
+            return True
+        p.unlink()
+    except OSError:
+        pass
+    return False
 
 
 def fetch(name: str) -> Path | None:
     """The cached SVG of the company's mark, fetching it once; None when there is none or fetching is off."""
     if not name or os.environ.get("MH_FETCH_LOGOS", "1") == "0":
         return None
-    cands = slugs(name)
+    cands = [c for c in slugs(name) if len(c) <= 64]       # a sentence is not a company: no 255+ char file names
     for s in cands:
-        p = cache_dir() / f"{s}.svg"
-        if p.is_file() and p.stat().st_size > 0:
-            return p
+        try:
+            p = cache_dir() / f"{s}.svg"
+            if _cached(p):
+                return p
+        except OSError:
+            continue
     for s in cands:                                      # 1. the full-colour logo
         if s in _MISS:
             continue
         data = _get(COLOUR_URL.format(slug=s))
-        if data and b"<svg" in data[:400]:
-            p = cache_dir() / f"{s}.svg"
-            p.write_bytes(data)
-            return p
+        if valid_svg(data):
+            p = _store(cache_dir() / f"{s}.svg", data)
+            if p:
+                return p
     for s in cands:                                      # 2. the mark, in the brand's own colour
         if s in _MISS:
             continue
         for u in URLS:
             data = _get(u.format(slug=s))
-            if data and data.lstrip().startswith(b"<svg"):
+            if data and data.lstrip().startswith(b"<svg") and valid_svg(data):
                 hexc = brand_hex(s)
                 if hexc and b"fill=" not in data[:200]:
                     data = data.replace(b"<svg ", f'<svg fill="#{hexc}" '.encode(), 1)
-                p = cache_dir() / f"{s}.svg"
-                p.write_bytes(data)
-                return p
+                p = _store(cache_dir() / f"{s}.svg", data)
+                if p:
+                    return p
         _MISS.add(s)
     return None
 
@@ -105,11 +146,25 @@ def brand_hex(slug: str) -> str | None:
     if not _HEX:
         import json as _json
         f = cache_dir() / "simple-icons.json"
-        raw = f.read_bytes() if f.is_file() else None
+        raw = None
+        try:
+            raw = f.read_bytes() if f.is_file() else None
+            if raw is not None:
+                _json.loads(raw)
+        except (OSError, ValueError):                      # damaged cache (killed writer): drop it, fetch again
+            raw = None
+            try:
+                f.unlink()
+            except OSError:
+                pass
         if raw is None:
             raw = _get_big(DATA_URL)
             if raw:
-                f.write_bytes(raw)
+                try:
+                    _json.loads(raw)
+                    fsio.atomic_write_bytes(f, raw)
+                except (OSError, ValueError):
+                    raw = None
         try:
             for ic in (_json.loads(raw).get("icons", []) if raw else []):
                 sl = ic.get("slug") or re.sub(r"[^a-z0-9]", "", ic.get("title", "").lower()
@@ -126,7 +181,10 @@ def _get_big(url: str) -> bytes | None:
     try:
         with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "meshpool-forge"}),
                                     timeout=20) as r:
-            return r.read(3_000_000) if r.status == 200 else None
+            if r.status != 200:
+                return None
+            body = r.read(3_000_001)
+            return body if len(body) <= 3_000_000 else None
     except Exception:                                      # noqa: BLE001
         return None
 

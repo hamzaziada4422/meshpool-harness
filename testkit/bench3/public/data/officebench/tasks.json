@@ -1,0 +1,72 @@
+[
+ {
+  "task_id": "1-15",
+  "subtask_id": "2",
+  "task": "Retrieve reference text from reference.txt and add it to the end of word file project_report.docx.",
+  "evaluation": [
+   {
+    "function": "evaluate_contain",
+    "args": {
+     "doc_type": "docx",
+     "file": "./data/project_report.docx",
+     "keywords": [
+      "Martin Arjovsky",
+      "Amar Shah",
+      "Yoshua Bengio",
+      "Unitary Evolution Recurrent Neural Networks"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "2-23",
+  "subtask_id": "0",
+  "task": "Extract data from PDF invoice (Invoice.pdf) and put the total due in file costs.xlsx",
+  "evaluation": [
+   {
+    "function": "evaluate_contain",
+    "args": {
+     "file": "data/costs.xlsx",
+     "doc_type": "xlsx",
+     "keywords": [
+      "total due",
+      "104.98"
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "1-11",
+  "subtask_id": "0",
+  "task": "sort students score descently by midterm1, save as a new excel file as sorted_score.xlsx",
+  "evaluation": [
+   {
+    "function": "evaluate_exact_match",
+    "args": {
+     "doc_type": "xlsx",
+     "result_file": "./data/sorted_score.xlsx",
+     "expected_file": "../../../../reference/sorted_score.xlsx"
+    }
+   }
+  ]
+ },
+ {
+  "task_id": "1-19",
+  "subtask_id": "3",
+  "task": "what is the effective date from agreement pdf file?",
+  "evaluation": [
+   {
+    "function": "evaluate_contain",
+    "args": {
+     "file": "data/answer.txt",
+     "doc_type": "txt",
+     "keywords": [
+      "2024-05-29"
+     ]
+    }
+   }
+  ]
+ }
+]

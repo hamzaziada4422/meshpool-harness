@@ -17,9 +17,14 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
+
+from meshpool_harness import fsio
+from meshpool_harness import session_store as SS
+from meshpool_harness.agent.history_repair import repair_tool_pairs
 
 MAX_MSG = 20000                     # characters kept per message
 MAX_MSGS = 400                      # messages kept per conversation (the most recent)
@@ -256,10 +261,13 @@ def scan_local() -> dict:
     have = _existing()
     cc = sorted(claude_code_dir().glob("*/*.jsonl")) if claude_code_dir().is_dir() else []
     cx = sorted(codex_dir().rglob("*.jsonl")) if codex_dir().is_dir() else []
-    return {"claude-code": {"name": "Claude Code", "found": len(cc), "path": str(claude_code_dir()),
-                            "imported": sum(1 for p in cc if _tid("claude-code", p.stem) in have)},
-            "codex": {"name": "Codex", "found": len(cx), "path": str(codex_dir()),
-                      "imported": sum(1 for p in cx if _tid("codex", p.stem) in have)}}
+    out = {"claude-code": {"name": "Claude Code", "found": len(cc), "path": str(claude_code_dir()),
+                           "imported": sum(1 for p in cc if _tid("claude-code", p.stem) in have)},
+           "codex": {"name": "Codex", "found": len(cx), "path": str(codex_dir()),
+                     "imported": sum(1 for p in cx if _tid("codex", p.stem) in have)}}
+    for v in out.values():                                   # the first-run step ticks what is there and not yet in
+        v["default"] = v["found"] > v["imported"]
+    return out
 
 
 # ---------- writing threads ----------------------------------------------------------------------------------------
@@ -273,9 +281,62 @@ def _tid(source: str, oid: str) -> str:
     return f"imp-{source}-" + hashlib.sha1(f"{source}:{oid}".encode()).hexdigest()[:12]
 
 
+def _complete(d: Path) -> bool:
+    """A conversation folder that was written whole: a readable session.json and its meta.json."""
+    try:
+        if not (d / "meta.json").is_file():
+            return False
+        data = json.loads((d / "session.json").read_text(encoding="utf-8"))
+        return isinstance(data, dict) and bool(data.get("id"))
+    except (OSError, ValueError):
+        return False
+
+
 def _existing() -> set:
+    """Imported threads already here. A folder a crash left half-written (no readable session.json or meta.json) does
+    not count: it is cleared away so the next import writes it again (M21-01)."""
     d = _sessions()
-    return {p.name for p in d.iterdir() if p.name.startswith("imp-")} if d.is_dir() else set()
+    out = set()
+    if d.is_dir():
+        for p in d.iterdir():
+            if p.name.startswith(".imp-") and p.name.endswith(".tmp"):
+                shutil.rmtree(p, ignore_errors=True)               # an import that never finished
+            elif p.name.startswith("imp-"):
+                if _complete(p):
+                    out.add(p.name)
+                else:
+                    shutil.rmtree(p, ignore_errors=True)
+    return out
+
+
+def _tomb_path() -> Path:
+    from meshpool_harness import config as C
+    return C.home() / "imported-deleted.json"
+
+
+def tombstones() -> dict:
+    """Imported chats the person deleted, by thread id (made from the source's own id): a new export that holds them
+    again does not bring them back (M21-02)."""
+    try:
+        d = fsio.read_json(_tomb_path(), default={})
+        return d if isinstance(d, dict) else {}
+    except fsio.CorruptFile:
+        return {}
+
+
+def bury(tid: str) -> None:
+    """Remember that this imported chat was deleted."""
+    if not str(tid).startswith("imp-"):
+        return
+
+    def add(cur):
+        cur = cur if isinstance(cur, dict) else {}
+        cur[tid] = time.time()
+        return cur
+    try:
+        fsio.update_json(_tomb_path(), add, default={}, private=True)
+    except (fsio.CorruptFile, OSError, TimeoutError):
+        pass
 
 
 def _default_folder() -> str:
@@ -286,32 +347,84 @@ def _default_folder() -> str:
 
 
 def write_threads(convs: list[dict]) -> dict:
-    """Save conversations as Meshpool threads. Ones already imported are skipped (their id comes from the source)."""
+    """Save conversations as Meshpool threads. Ones already imported are skipped (their id comes from the source), and
+    so are ones the person deleted. Each is written under a temporary name and renamed when whole, so a crash never
+    leaves a folder that later imports mistake for finished."""
     have = _existing()
+    gone = tombstones()
     folder = None
-    done = {"imported": 0, "skipped": 0, "messages": 0}
+    done = {"imported": 0, "skipped": 0, "removed_earlier": 0, "messages": 0, "ids": []}
     for cv in convs:
         tid = _tid(cv["source"], cv["id"])
         if tid in have:
             done["skipped"] += 1
             continue
+        if tid in gone:
+            done["removed_earlier"] += 1
+            done["skipped"] += 1
+            continue
         if not cv["workdir"]:
             folder = folder or _default_folder()
         d = _sessions() / tid
-        d.mkdir(parents=True, exist_ok=True)
+        tmp = _sessions() / f".{tid}.tmp"
+        shutil.rmtree(tmp, ignore_errors=True)
+        tmp.mkdir(parents=True, exist_ok=True)
         code = cv["kind"] == "code"
-        (d / "session.json").write_text(json.dumps({
-            "id": tid, "workdir": cv["workdir"] or folder, "title": cv["title"], "created": cv["created"],
-            "updated": cv["updated"], "model": None, "model_choice": None, "plan": False,
-            "harness": "meshpool-code" if code else "meshpool-work", "kind": "code" if code else "cowork",
-            "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "messages": cv["messages"],
-            "imported": {"source": cv["source"], "id": cv["id"]}}, ensure_ascii=False), encoding="utf-8")
-        (d / "meta.json").write_text(json.dumps({"imported": cv["source"]}), encoding="utf-8")
-        os.utime(d / "session.json", (cv["updated"], cv["updated"]))
+        try:
+            (tmp / "meta.json").write_text(json.dumps({"imported": cv["source"]}), encoding="utf-8")
+            SS.write_snapshot(tmp, {
+                "id": tid, "workdir": cv["workdir"] or folder, "title": cv["title"], "created": cv["created"],
+                "updated": cv["updated"], "model": None, "model_choice": None, "plan": False,
+                "harness": "meshpool-code" if code else "meshpool-work", "kind": "code" if code else "cowork",
+                "usage": {"in": 0, "cached": 0, "out": 0, "calls": 0}, "messages": repair_tool_pairs(cv["messages"])[0],
+                "imported": {"source": cv["source"], "id": cv["id"]}})
+            os.utime(tmp / "session.json", (cv["updated"], cv["updated"]))
+            shutil.rmtree(d, ignore_errors=True)
+            os.replace(tmp, d)
+        except BaseException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
         have.add(tid)
         done["imported"] += 1
         done["messages"] += len(cv["messages"])
+        done["ids"].append(tid)
+    done["summary"] = summary(done)
     return done
+
+
+def _status_path() -> Path:
+    from meshpool_harness import config as C
+    return C.home() / "import-status.json"
+
+
+def set_context_status(state: str, error: str = "", result: dict | None = None) -> None:
+    """How the background read of an export's context went, for the page to show (M21-04)."""
+    row = {"state": state, "error": error, "at": time.time()}
+    if result:
+        row.update({k: result[k] for k in ("memory", "instructions", "skills") if k in result})
+    try:
+        fsio.atomic_write_json(_status_path(), row, private=True)
+    except OSError:
+        pass
+
+
+def context_status() -> dict:
+    try:
+        d = fsio.read_json(_status_path(), default={})
+        return d if isinstance(d, dict) else {}
+    except fsio.CorruptFile:
+        return {}
+
+
+def summary(r: dict) -> str:
+    """What an import did, in one sentence: how many are new and how many were here already (F-33)."""
+    new, old, back = int(r.get("imported", 0)), int(r.get("skipped", 0)), int(r.get("removed_earlier", 0))
+    s = (f"{new} new chat{'s' if new != 1 else ''} imported" if new else "Nothing new to import")
+    if old - back:
+        s += f"; {old - back} {'was' if old - back == 1 else 'were'} already here"
+    if back:
+        s += f"; {back} you deleted earlier {'was' if back == 1 else 'were'} left out"
+    return s + "."
 
 
 # ---------- entry points -------------------------------------------------------------------------------------------
@@ -343,6 +456,8 @@ def import_export(path: str, chats: bool = True, context: bool = True, client=No
     out["conversations_seen"] = len(convs)
     if chats:
         out.update(write_threads(parse_chatgpt(convs) if kind == "chatgpt" else parse_claude(convs)))
+    else:
+        out["summary"] = summary(out)
     if context:
         r = importer.import_export(path, client=client)
         out.update({k: r[k] for k in ("skills", "memory", "instructions", "skipped_context") if k in r},

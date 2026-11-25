@@ -61,8 +61,10 @@ logo() {
 # ---------- python -----------------------------------------------------------------------------------------------
 find_python() {
   for c in python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$c" >/dev/null 2>&1 &&
-       "$c" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+    c_path="$(command -v "$c" 2>/dev/null)" || continue
+    # on a Mac without the Command Line Tools /usr/bin/python3 is a stub that opens an install dialog: never run it
+    if [ "$(uname -s)" = Darwin ] && [ "$c_path" = /usr/bin/python3 ] && ! xcode-select -p >/dev/null 2>&1; then continue; fi
+    if "$c" -c 'import sys, venv, ensurepip; sys.exit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
       command -v "$c"; return 0
     fi
   done
@@ -191,8 +193,18 @@ add_to_path() {
   fi
 }
 
+settings_file() {   # where the meshpool command keeps its settings: the same rule as config_path() in config.py
+  if [ -n "${MESHPOOL_CONFIG:-}" ]; then echo "$MESHPOOL_CONFIG"; return; fi
+  if [ -n "${MESHPOOL_HOME:-}" ]; then echo "$MESHPOOL_HOME/meshpool.config"; return; fi
+  if [ "$(uname -s)" = Darwin ]; then echo "$HOME/Library/Application Support/Meshpool/meshpool.config"; return; fi
+  echo "${XDG_DATA_HOME:-$HOME/.local/share}/meshpool/meshpool.config"
+}
+
 ready() {   # a key, or a signed-in subscription chosen at setup
-  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$DIR/meshpool.config" 2>/dev/null
+  f="$(settings_file)"
+  # An older install kept its settings in $DIR; the first run copies them to the data folder, so they count until then.
+  if [ ! -f "$f" ] && [ -z "${MESHPOOL_CONFIG:-}${MESHPOOL_HOME:-}" ]; then f="$DIR/meshpool.config"; fi
+  grep -Eq '^(MESHPOOL_API_KEY=.|OPENAI_API_KEY=.|MH_PROVIDER=chatgpt)' "$f" 2>/dev/null
 }
 
 # ---------- install ----------------------------------------------------------------------------------------------

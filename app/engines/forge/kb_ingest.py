@@ -171,14 +171,22 @@ def thumbnails(files: list[Path], out_dir: Path, width: int = 320, chunk: int = 
     done: dict[str, Path] = {}
 
     def convert(batch, tmp, limit):
-        cmd = [soffice, "--headless", f"-env:UserInstallation=file://{tmp}/profile", "--convert-to", "pdf",
+        cmd = [soffice, "--headless", f"-env:UserInstallation={(Path(tmp) / 'profile').as_uri()}", "--convert-to", "pdf",
                "--outdir", tmp] + [str(f) for f in batch]
-        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             **({} if os.name == "nt" else {"start_new_session": True}))
         try:
             p.wait(timeout=limit)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(p.pid, signal.SIGKILL)
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True)
+                else:
+                    os.killpg(p.pid, signal.SIGKILL)
+            except (OSError, AttributeError):
+                pass
+            try:
+                p.kill()
             except OSError:
                 pass
             p.wait()

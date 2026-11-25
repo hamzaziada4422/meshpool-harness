@@ -12,10 +12,13 @@ def test_saved_keys_are_not_in_the_environment_of_commands(monkeypatch):
     monkeypatch.setenv("MESHPOOL_API_KEY", "sk-secret")
     monkeypatch.setenv("TAVILY_API_KEY", "tvly-secret")
     C._INJECTED.add("TAVILY_API_KEY")
-    monkeypatch.setenv("GITHUB_TOKEN", "from-the-users-own-shell")          # not injected by Meshpool: stays
+    monkeypatch.setenv("GITHUB_TOKEN", "from-the-users-own-shell")          # S-06: secret-named, so dropped unless allowlisted
+    monkeypatch.setenv("MY_PLAIN_SETTING", "stays")
     env = C.scrub_env(dict(os.environ))
     assert "MESHPOOL_API_KEY" not in env and "TAVILY_API_KEY" not in env
-    assert env["GITHUB_TOKEN"] == "from-the-users-own-shell"
+    assert "GITHUB_TOKEN" not in env and env["MY_PLAIN_SETTING"] == "stays"
+    monkeypatch.setenv("MH_SHELL_ENV_ALLOW", "GITHUB_TOKEN")
+    assert C.scrub_env(dict(os.environ))["GITHUB_TOKEN"] == "from-the-users-own-shell"
     assert "env" not in T._RO_PROGS and "printenv" not in T._RO_PROGS
 
 
@@ -37,8 +40,9 @@ def test_the_session_is_written_whole_and_marked_unfinished_while_running(tmp_pa
     assert d["unfinished"] is True and not (a.dir / "session.json.tmp").exists()
     a._running = False
     a.save()
-    assert json.loads((a.dir / "session.json").read_text(encoding="utf-8"))["unfinished"] is False
-    assert a.max_steps >= 100
+    from meshpool_harness import session_store as SS
+    assert SS.read(a.dir)["unfinished"] is False   # a mid-turn save is a journal append, read through the store
+    assert a._step_cap() >= 100
 
 
 def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, monkeypatch):
@@ -54,6 +58,7 @@ def test_a_text_only_model_gets_the_files_text_when_ocr_is_missing(tmp_path, mon
 def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     from meshpool_harness.agent import core
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("MH_TRUST_PROJECT", "1")          # a project's own allow rules apply once the folder is trusted
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps(
         {"allow": ["bash:npm test*", "mcp__browser__*"], "deny": ["bash:git push*", "web_search"]}), encoding="utf-8")
@@ -63,5 +68,5 @@ def test_saved_allow_and_deny_rules(tmp_path, monkeypatch):
     ok, why = a._permit("bash", {"command": "git push origin main"})
     assert not ok and "saved rule" in why
     assert not a._permit("web_search", {})[0]
-    assert not a._permit("bash", {"command": "ls"})[0]                      # no rule: asks, and the answer here is no
+    assert not a._permit("bash", {"command": "make all"})[0]                      # no rule: asks, and the answer here is no
     assert not a._permit("bash", {"command": "npm test && rm -rf /"})[0]            # an allow rule never covers a destructive command

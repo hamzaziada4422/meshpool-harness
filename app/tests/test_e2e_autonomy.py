@@ -13,6 +13,13 @@ from meshpool_harness.agent.core import Agent, _stopped_early  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
+@pytest.fixture(autouse=True)
 def _sessions_in_tmp(tmp_path, monkeypatch):
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_sessions")
     monkeypatch.setenv("MESHPOOL_API_KEY", "test-key-1234")

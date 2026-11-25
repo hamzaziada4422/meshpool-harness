@@ -46,7 +46,7 @@ def rt(spec="code.build", **kw):
 def test_builtin_profiles():
     assert PR.settings("full") == {"plan": "auto", "review": True, "mutation": True, "compact_chars": 160000,
                                    "methods": None, "lean_tools": True, "step_methods": False, "engine": "meshpool",
-                                   "engine_style": "meshpool"}
+                                   "engine_style": "meshpool", "lean_core": False, "codex171": False}
     lean = PR.settings("lean")
     assert (lean["plan"], lean["review"], lean["mutation"], lean["compact_chars"], lean["methods"]) == (
         "off", False, False, 160000, "v2")
@@ -264,12 +264,20 @@ def test_step_methods_off_by_default(tmp_path, monkeypatch):
 
 
 def test_shipped_assignment(monkeypatch):
-    """app/defaults/profiles.json: the Codex-design engine for every route, the configuration measured on the 52 eval
-    tasks (47/52, a tie with Codex, half the previous cost). No per-route overrides: they were not part of that run."""
+    """app/defaults/profiles.json: lean core for every route, the configuration measured on the 52 eval tasks against
+    Codex (final20-21: 196/208 vs 186/208, cost 0.81x, time 0.82x). No per-route overrides: they were not part of
+    that run. The previous default stays available as "codex"."""
     monkeypatch.delenv("MH_PROFILES_DEFAULTS", raising=False)
     for text, kind in (("Fix the crash: KeyError total when an order has no lines", "code"),
                        ("Write thorough tests for slug.slugify in test_slug.py", "code"),
                        ("What was the total revenue in orders.csv?", "cowork")):
-        assert R.route(text, kind=kind).profile == "codex"
+        assert R.route(text, kind=kind).profile == "core"
+    assert PR.settings("core")["lean_core"] is True
     s = PR.settings("codex")
     assert s["plan"] == "off" and s["review"] is False and s["mutation"] is False and s.get("engine_style") == "codex"
+
+def test_codex_review_profile_keeps_codex_style_and_turns_review_on():
+    from meshpool_harness.hrouter import profiles as PR
+    s = PR.settings("codex+review")
+    assert s["engine_style"] == "codex" and s["review"] is True and s["mutation"] is False and s["plan"] == "off"
+    assert PR.settings("codex")["review"] is False                  # the default codex profile is unchanged

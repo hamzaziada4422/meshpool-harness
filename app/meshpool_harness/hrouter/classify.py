@@ -1,6 +1,6 @@
 """Task classifier for harness selection: which kind of work is this request?
 
-The categories are the route keys MeshPool already uses, at the level that matters when choosing a harness (the
+The categories are the route keys Meshpool already uses, at the level that matters when choosing a harness (the
 scorecard in defaults/harness_scorecard.json is keyed by them).
 
   Stage 1  the zero-token signals (route._decide) give a category and a confidence. Most requests end here.
@@ -129,6 +129,8 @@ def category_of(route, text: str = "") -> tuple[str, float]:
 def stage1(text: str, files=None, workdir: str | None = None, kind: str = "code"):
     """(category, confidence, Route) from the free signals."""
     from .route import _decide
+    from .signals import cap_text
+    text = cap_text(text)
     r = _decide(text, list(files or []), workdir, kind)
     cat, conf = category_of(r, text)
     return cat, conf, r

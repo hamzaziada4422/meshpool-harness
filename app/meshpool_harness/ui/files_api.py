@@ -35,10 +35,13 @@ MAX_SAVE = 4_000_000
 MAX_SEARCH = 100
 KEEP_BACKUPS = 20
 # Inside the Meshpool home only: files that hold keys, tokens or sign-in state are never shown or read here.
-_SECRET = re.compile(r"(^\.env|token|secret|credential|oauth|\.pem$|\.key$|^id_rsa|\.config$|^mcp.*\.json$|^connectors.*\.json$)", re.I)
+# Folders too: the agent browser's profile holds cookies and saved logins (security review).
+_SECRET = re.compile(r"(^\.env|token|secret|credential|oauth|\.pem$|\.key$|^id_rsa|\.config$|^mcp.*\.json$|^connectors.*\.json$|"
+                     r"^browser-profile|^window-profile|^cookies|^login data|^web data|^local state$)", re.I)
 PREVIEW_EXT = {".pdf", ".pptx", ".ppt", ".pptm", ".ppsx", ".pps", ".potx", ".odp", ".docx", ".doc", ".docm", ".dotx", ".odt",
                ".rtf", ".xls", ".xlsx", ".xlsm", ".xlsb", ".ods", ".key", ".pages", ".numbers",
-               ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+               ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico",
+               ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".mp4", ".mov", ".m4v", ".webm", ".ogv"}
 
 
 class Conflict(Exception):
@@ -258,6 +261,11 @@ def save(body: dict) -> dict:
                 tmp.unlink()
             except OSError:
                 pass
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(root), str(p), "editor")
+    except Exception:
+        pass
     st = p.stat()
     return {"ok": True, "path": _rel(root, p), "size": st.st_size, "mtime_ns": st.st_mtime_ns, "sha": _sha(new),
             "backup": Path(backup).name if backup else ""}

@@ -15,6 +15,14 @@ from meshpool_harness.agent.core import Agent, WORK_SYSTEM  # noqa: E402
 from meshpool_harness.core.tools import ToolError  # noqa: E402
 from engines.forge import brief as BR  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _full_cowork_lane(monkeypatch):
+    """These tests cover the full Cowork lane (classic tools, ask_user, grader); lean Work is the default since work1
+    and is tested in test_lean_work.py."""
+    monkeypatch.setenv("MH_LEAN_WORK", "0")
+
+
 Q = {"questions": [
     {"question": "Who is the deck for?", "header": "Audience", "options": [
         {"label": "The board", "description": "Decision deck", "recommended": True},
@@ -237,7 +245,7 @@ def test_brief_settled_request_builds():
 def test_make_deck_tool(monkeypatch):
     from meshpool_harness.agent import office_mcp_server as O
     calls = []
-    monkeypatch.setattr(O, "_engine", lambda engine, request, files: (calls.append(request) or ("built", False)))
+    monkeypatch.setattr(O, "_engine", lambda engine, request, files, save_as=None: (calls.append(request) or ("built", False)))
     text, err = O.make_deck("Make a deck about our Q3 results")
     assert not err and text.startswith("BRIEF NEEDED") and not calls          # ambiguous: does not build
     text, err = O.make_deck("Q3 results deck", audience="the board", density="present", slides=8, theme="ocean")

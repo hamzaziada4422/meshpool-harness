@@ -18,6 +18,8 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | OpenAI Whisper "base" speech model, converted to CTranslate2 format by Systran (`app/vendor/whisper/base`) | MIT | https://huggingface.co/Systran/faster-whisper-base (revision ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66) and https://github.com/openai/whisper |
 | PaddleOCR PP-OCRv5 and v6 models | Apache-2.0 | https://github.com/PaddlePaddle/PaddleOCR |
 | OpenAI Codex CLI (commit 097558c1bdfc6318cb0ce80a64816ca4d61c7814): base instructions, apply_patch format description and grammar, update_plan tool definition, and the apply_patch parser and matching rules re-implemented in Python for MeshPool's "codex" engine style (`app/defaults/engines/codex`, notice and licence in that folder), Copyright 2025 OpenAI; modified by MeshPool (see the NOTICE comment in `prompt.md`) | Apache-2.0 | https://github.com/openai/codex |
+| OpenAI Codex CLI 0.171.0 (openai/codex), Copyright 2025 OpenAI: its base instructions and its `exec_command` tool definition and result format, as captured from one of its requests (`docs/results/codex171-request`), used by MeshPool's opt-in "c171" harness profile (`app/defaults/engines/codex/prompt-171.md`, `app/meshpool_harness/core/tools.py`); modified by MeshPool (see the NOTICE comment in `prompt-171.md`) | Apache-2.0 | https://github.com/openai/codex |
+| OpenAI Codex CLI (openai/codex), Copyright 2025 OpenAI: the design of its macOS Seatbelt sandbox profile (allow default, deny file-write*, then allow listed folders, deny network*) and of its `shell_environment_policy` (drop variables named like KEY, SECRET, TOKEN unless allowed) was followed in `app/meshpool_harness/core/sandbox.py` and `config.py` (`scrub_env`); the code is written anew in Python, no Codex source is copied | Apache-2.0 | https://github.com/openai/codex |
 
 ## Bundled content (icons and skills)
 
@@ -33,11 +35,18 @@ Meshpool desktop bundles the open-source software below. Each component stays un
 | Material Symbols 0.49.0, outlined, rounded and sharp at weight 400, with fill, without product logos (`app/engines/icons/bundles/material.json.gz`, `LICENSE-material-symbols.txt`), by Google | Apache-2.0 | https://fonts.google.com/icons (npm @material-symbols/svg-400) |
 | IBM Carbon icons 11.92.0, 32 px, without the Brand category and IBM product marks (`app/engines/icons/bundles/carbon.json.gz`, `LICENSE-carbon.txt`), Copyright IBM Corp. | Apache-2.0 | https://carbondesignsystem.com (npm @carbon/icons) |
 | Selawik font, Regular and Bold, compiled unmodified from source (`app/engines/forge/fonts`): measures slides set in Segoe UI | SIL Open Font License 1.1 (`Selawik-LICENSE.txt` beside it) | https://github.com/microsoft/Selawik |
-| Mermaid 11.4.1 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
+| Mermaid 11.17.2 (`app/meshpool_harness/ui/vendor/mermaid.min.js`, `LICENSE-mermaid.txt`): diagrams in chat | MIT | https://mermaid.js.org |
 | KaTeX 0.16.11 (`app/meshpool_harness/ui/vendor/katex.min.js`, CSS and fonts, `LICENSE-katex.txt`): maths in chat | MIT | https://katex.org |
 | 7-Zip 25.01 (`7zr.exe`, inside the Windows installer: unpacks the program files appended to it) | LGPL-2.1-or-later (the unRAR code is not used) | https://www.7-zip.org |
 | Taste Skill, method for building and reviewing user interfaces (`app/defaults/skills/build-ui`, `ui-review`; adapted, not copied), Copyright (c) 2026 Leonxlnx | MIT | https://github.com/Leonxlnx/taste-skill |
 | Anthropic knowledge-work plugins: finance, legal, sales and customer-support skills (`app/defaults/skills`) | Apache-2.0 | https://github.com/anthropics/knowledge-work-plugins |
+
+## Designs followed (no code copied)
+
+| Source | License | Used for |
+|---|---|---|
+| Model Context Protocol specification, `notifications/cancelled` and initialize timeouts (modelcontextprotocol.io) | MIT | Cancelling an MCP call on Stop or timeout (`app/meshpool_harness/agent/mcp.py`) |
+| Visual Studio Code, shell environment resolution (`src/vs/platform/shell/node/shellEnv.ts`, Microsoft) | MIT | Reading the login shell's environment once for MCP servers, with a recursion guard (`login_shell_env` in `agent/mcp.py`); re-implemented, not copied |
 
 ## Python packages
 

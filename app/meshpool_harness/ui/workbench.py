@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 from meshpool_harness import config as C
+from meshpool_harness.core import http as _mhttp
 
 NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -159,7 +160,7 @@ def models(refresh: bool = False) -> dict:
     C.load_into_env(override=True)
     from meshpool_harness import providers as _PV
     from meshpool_harness.core import endpoint as _EP
-    base, key = _PV.key_base(), _PV.key()           # the saved endpoint, or the environment pair when none is saved
+    base, key, _src = _PV.endpoint_pair()           # the saved endpoint, or the environment pair when none is saved
     kind = _PV.key_kind()
     cache_key = base + "|" + key[-6:]
     vals = C.read()
@@ -167,7 +168,7 @@ def models(refresh: bool = False) -> dict:
     default = vals.get("MH_MODEL") or os.environ.get("MH_MODEL") or "deepseek-v4.1-flash"
     if not refresh and _MODELS["key"] == cache_key and time.time() - _MODELS["t"] < 300 and _MODELS["rows"]:
         rows, err = _MODELS["rows"], ""
-    elif not key and not _EP.caps(kind)["keyless"]:
+    elif not key and not (_EP.caps(kind)["keyless"] or _PV.keyless_ok(base)):
         rows, err = [], "Add your API key to see your models."
     elif not _EP.caps(kind)["lists"]:               # Azure and Perplexity have no list to read: the chosen model shows
         rows, err = [], ""
@@ -176,6 +177,7 @@ def models(refresh: bool = False) -> dict:
         try:
             auth = {k: v for k, v in _EP.auth_headers("anthropic" if _PV.key_wire() == "anthropic" else kind,
                                                       key).items() if k != "Content-Type"}
+            auth = _PV.custom_auth(auth, base, key)
             req = urllib.request.Request(base + "/models", headers={**auth, "User-Agent": "Meshpool"})
             with _EP.urlopen(req, timeout=20) as r:
                 data = json.loads(r.read().decode("utf-8"))
@@ -196,15 +198,17 @@ def models(refresh: bool = False) -> dict:
                              "provider": _provider_of(mid, meta.get("owned_by", "")),
                              "context": meta.get("context_length") or meta.get("context_window"), "caps": caps})
             rows.sort(key=lambda r: (r["provider"].lower(), r["id"].lower()))
+            if _PV.is_azure(base) and "/openai/v1" not in base:      # Azure lists base models, not your deployments
+                rows = []
             _MODELS.update(t=time.time(), key=cache_key, rows=rows, error="")
         except urllib.error.HTTPError as e:
             err = "Could not list models. " + _EP.explain(e.code, e.read(200_000), kind=kind, host=_PV.host(base), key=key)
         except Exception as e:  # noqa: BLE001
-            err = f"Could not list models: {e}"
+            err = f"Could not list models: {_mhttp.explain(e, base)}"
     from meshpool_harness import providers as PV
     dprov, dbare = PV.split(default)
     ids = {r["id"] for r in rows}
-    if dprov == "key" and dbare not in ids and key:
+    if dprov == "key" and dbare not in ids and (key or PV.keyless_ok(base)):
         rows = [{"id": dbare, "name": dbare, "provider": _provider_of(dbare, ""), "caps": [],
                  "context": None, "configured": True}] + rows
     # One section per provider (the key endpoint and ChatGPT), ready or with what to set up.
@@ -214,11 +218,18 @@ def models(refresh: bool = False) -> dict:
             "error": "" if any(g["ready"] for g in groups) else err, "base_url": base}
 
 
+def set_default_model(mid: str) -> dict:
+    C.write({"MH_MODEL": str(mid or "").strip()})   # may carry a provider prefix
+    C.load_into_env(override=True)
+    return models()
+
+
 def set_favorite(mid: str, on: bool) -> dict:
-    vals = C.read()
-    fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
-    fav = [m for m in fav if m != mid] + ([mid] if on else [])
-    C.write({"MH_FAVORITE_MODELS": ",".join(fav)})
+    def change(vals):
+        fav = [m for m in (vals.get("MH_FAVORITE_MODELS") or "").split(",") if m]
+        fav = [m for m in fav if m != mid] + ([mid] if on else [])
+        return {"MH_FAVORITE_MODELS": ",".join(fav)}
+    C.update(change)                       # read and write under one lock
     return models()
 
 
@@ -243,7 +254,7 @@ def list_dir(root: str, rel: str = "") -> dict:
                 continue
     except PermissionError:
         raise ValueError(_perm_hint(d))
-    return {"root": str(r), "path": rel, "entries": rows[:2000]}
+    return {"root": str(r), "path": rel, "entries": rows[:2000], "truncated": len(rows) > 2000, "total": len(rows)}
 
 
 def _perm_hint(p: Path) -> str:
@@ -251,6 +262,12 @@ def _perm_hint(p: Path) -> str:
         return (f"macOS did not let Meshpool read {p}. Allow it when macOS asks, or turn on Full Disk Access for "
                 "Meshpool in Settings, Permissions.")
     return f"Meshpool cannot read {p}: permission denied."
+
+
+# B4: decided by name first, so an empty or odd-looking .jpg is never opened as text with a Save button.
+BINARY_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".tif", ".tiff", ".heic", ".avif",
+              ".mp3", ".wav", ".m4a", ".ogg", ".oga", ".aac", ".flac", ".mp4", ".mov", ".m4v", ".webm", ".ogv", ".avi", ".mkv",
+              ".zip", ".gz", ".7z", ".exe", ".dll", ".so", ".dylib", ".pyc", ".sqlite", ".db"}
 
 
 def read_file(root: str, rel: str) -> dict:
@@ -263,8 +280,17 @@ def read_file(root: str, rel: str) -> dict:
     if docread.is_document(p) and p.suffix.lower() not in (".html", ".htm", ".csv", ".tsv", ".ipynb"):
         if size > 60_000_000:
             return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 60 MB."}
-        return {"path": rel, "binary": False, "readonly": True, "size": size,
-                "text": docread.extract(p, max_chars=400_000), "note": "Preview of the document's text"}
+        try:
+            text = docread.extract(p, max_chars=400_000)
+            if text.startswith("Could not read "):         # docread reports a parser failure as text: "Could not read x: PackageNotFoundError ..."
+                raise ValueError(text)
+        except Exception as e:  # noqa: BLE001 - B6: a damaged document is a plain sentence, not a parser traceback
+            from meshpool_harness.ui.previews import friendly_error
+            raise ValueError(friendly_error(p, e)) from None
+        return {"path": rel, "binary": False, "readonly": True, "size": size, "text": text,
+                "note": "Preview of the document's text"}
+    if p.suffix.lower() in BINARY_EXT:
+        return {"path": rel, "binary": True, "readonly": True, "size": size, "text": "", "note": "This is not a text file."}
     if size > 2_000_000:
         return {"path": rel, "binary": True, "size": size, "text": "", "note": "File is larger than 2 MB."}
     try:
@@ -284,6 +310,8 @@ def read_file(root: str, rel: str) -> dict:
 def write_file(root: str, rel: str, text: str) -> dict:
     r = check_root(root)
     p = _inside(r, rel)
+    if p.is_dir() or p == r:
+        raise ValueError("That is a folder, not a file.")
     p.parent.mkdir(parents=True, exist_ok=True)
     text = text.replace("\r\n", "\n")
     try:                                         # keep the file's line endings: a one-line edit is a one-line diff
@@ -292,27 +320,53 @@ def write_file(root: str, rel: str, text: str) -> dict:
     except OSError:
         pass
     p.write_bytes(text.encode("utf-8"))
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(root, str(p), "workbench")
+    except Exception:
+        pass
     return {"ok": True, "path": rel, "size": p.stat().st_size}
 
 
 # ======================================== git =====================================================================
 def attach(root: str, name: str, data: bytes) -> dict:
     """Save a file the user attached in the message box into the project, without overwriting anything."""
-    r = check_root(root)
-    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip(". ") or "file"
+    return attach_to(check_root(root), name, data)
+
+
+def attach_to(r: Path, name: str, data: bytes) -> dict:
+    """The saving itself, for a folder that is already known to be the chat's own (no check_root)."""
+    name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", Path(name or "file").name).strip().rstrip(". ") or "file"
+    if name.strip(".") == "":
+        name = "file"
+    stem, dot, suf = name.rpartition(".")
+    if dot and stem and len(suf) <= 20 and len(name) > 200:    # keep the extension, cut the rest (255-byte limit)
+        name = stem[:200 - len(suf) - 1] + "." + suf
+    name = name[:200]
+    while len(name.encode("utf-8")) > 200:
+        name = name[:-1]
     if len(data) > 150 * 1024 * 1024:
         raise ValueError("Attachments can be up to 150 MB. Put bigger files in the project folder instead.")
-    from meshpool_harness import project_store as PS
-    sub = "attachments" if PS.is_scratch(str(r)) else ""     # a chat's own folder keeps attachments apart from its work
+    sub = ""                                     # at the folder's root, so an edit in place lands where the file is
     base = r / sub if sub else r
-    base.mkdir(exist_ok=True)
-    p = base / name
-    stem, suf, i = p.stem, p.suffix, 2
-    while p.exists() or p.is_symlink():          # exists() follows a dangling link: it wrote outside the project
-        p = base / f"{stem} ({i}){suf}"
-        i += 1
-    with open(p, "xb") as f:                     # x: never through a link or over a file made meanwhile
-        f.write(data)
+    try:
+        base.mkdir(exist_ok=True)
+        p = base / name
+        stem, suf, i = p.stem, p.suffix, 2
+        while p.exists() or p.is_symlink():      # exists() follows a dangling link: it wrote outside the project
+            p = base / f"{stem} ({i}){suf}"
+            i += 1
+        with open(p, "xb") as f:                 # x: never through a link or over a file made meanwhile
+            f.write(data)
+    except PermissionError:
+        raise ValueError(f"Meshpool can't save files in {r}: it is read-only. Choose another folder or change its permissions.")
+    except OSError as e:
+        raise ValueError(f"Couldn't save {name}: {e.strerror or e}")
+    try:
+        from meshpool_harness.checkpoints import note_foreign_write
+        note_foreign_write(str(r), str(p), "attach")
+    except Exception:
+        pass
     return {"path": (sub + "/" if sub else "") + p.name}
 
 
@@ -369,14 +423,53 @@ def _git(root: Path, *args, check=True, timeout=60) -> str:
     env, extra = dict(os.environ, GIT_TERMINAL_PROMPT="0"), []
     if args and args[0] in _NET_CMDS and is_managed(root):      # a clone Meshpool made: it signs in with the saved token
         env, extra = _gh_git_env(env), _CRED_FLAGS + _no_hooks()
-    r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    try:
+        r = subprocess.run([g, *safe, *extra, *args], cwd=str(root), capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=timeout, creationflags=NO_WINDOW, env=env)
+    except subprocess.TimeoutExpired:
+        raise ValueError(f"git {args[0] if args else ''} took too long and was stopped. Check your network "
+                         "connection and try again.") from None
     if check and r.returncode != 0:
-        raise ValueError((r.stderr or r.stdout).strip()[-800:] or f"git {args[0]} failed")
+        raise ValueError((r.stderr or r.stdout).strip()[-800:]
+                         or f"git {next((a for a in args if not a.startswith('-')), 'command')} failed")
     return r.stdout
 
 
-def git_status(root: str) -> dict:
+_GS: dict = {}                      # project folder -> (time, status): the panel and PR code ask again and again
+_GS_LOCKS: dict = {}
+_GS_TTL = 1.5
+
+
+def git_status(root: str, fresh: bool = False) -> dict:
+    """Status of a project's repository. It is six git processes, so calls within a moment share one answer, and
+    callers at the same time wait for it instead of each starting their own. fresh=True after a change."""
+    key = str(root)
+    gate = _GS_LOCKS.setdefault(key, threading.Lock())
+    with gate:
+        stamp = _git_stamp(key)
+        hit = _GS.get(key)
+        if hit and not fresh and hit[2] == stamp and time.monotonic() - hit[0] < _GS_TTL:
+            return dict(hit[1])
+        res = _git_status(root)
+        if len(_GS) > 50:
+            _GS.clear()
+        _GS[key] = (time.monotonic(), res, stamp)
+        return dict(res)
+
+
+def _git_stamp(root: str) -> tuple:
+    """A change to the remote (config), the branch (HEAD) or the index shows at once, whatever the cache age."""
+    out = []
+    for n in ("config", "HEAD", "index"):
+        try:
+            st = (Path(root) / ".git" / n).stat()
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _git_status(root: str) -> dict:
     r = check_root(root)
     if not git_exe():
         return {"repo": False, "git": False}
@@ -385,8 +478,17 @@ def git_status(root: str) -> dict:
     except ValueError:
         return {"repo": False, "git": True}
     branch = _git(r, "branch", "--show-current", check=False).strip() or "(detached)"
-    porcelain = _git(r, "status", "--porcelain", check=False)
-    files = [{"status": line[:2].strip(), "path": line[3:]} for line in porcelain.splitlines() if line.strip()]
+    porcelain = _git(r, "status", "--porcelain", "-z", check=False)
+    files, parts = [], porcelain.split("\0")
+    i = 0
+    while i < len(parts):
+        ent = parts[i]
+        i += 1
+        if len(ent) < 4:
+            continue
+        if ent[0] in "RC" or ent[1] in "RC":          # a rename or copy: the old path follows as its own entry
+            i += 1
+        files.append({"status": ent[:2].strip(), "path": ent[3:]})
     ahead = behind = 0
     try:
         ab = _git(r, "rev-list", "--left-right", "--count", "@{upstream}...HEAD").split()
@@ -419,7 +521,7 @@ def git_action(root: str, body: dict) -> dict:
                 [git_exe(), "check-ref-format", "--branch", name], cwd=str(r), capture_output=True,
                 creationflags=NO_WINDOW).returncode:
             raise ValueError(f"\"{name}\" is not a valid branch name.")
-        if not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
+        if not body.get("create") and not _git(r, "symbolic-ref", "-q", "HEAD", check=False).strip() and \
                 not _git(r, "for-each-ref", "--contains", "HEAD", "--format=%(refname)", "refs/heads",
                          check=False).strip():
             # detached, with commits on no branch: switching away would leave them only in the reflog
@@ -443,6 +545,8 @@ def git_action(root: str, body: dict) -> dict:
              "commit", "-m", msg)
     elif act == "push":
         branch = _git(r, "branch", "--show-current").strip()
+        if not branch:
+            raise ValueError("Switch to a branch first. Pushing needs a branch, and this folder is on a detached commit.")
         _git(r, "push", "-u", "origin", branch, timeout=180)
     elif act == "pull":
         _git(r, "pull", "--ff-only", timeout=180)
@@ -450,14 +554,16 @@ def git_action(root: str, body: dict) -> dict:
         return _open_pr(r, body)
     else:
         raise ValueError("Unknown Git action.")
-    return git_status(str(r))
+    return git_status(str(r), fresh=True)
 
 
 def _open_pr(r: Path, body: dict) -> dict:
-    st = git_status(str(r))
+    st = git_status(str(r), fresh=True)
     slug = st.get("github")
     if not slug:
         raise ValueError("Pull requests work with GitHub remotes. This project's origin is not on GitHub.")
+    if st.get("branch") == "(detached)":
+        raise ValueError("Switch to a branch first. A pull request needs a branch, and this folder is on a detached commit.")
     title = (body.get("title") or "").strip() or _git(r, "log", "-1", "--pretty=%s").strip()
     desc = body.get("body") or ""
     if st["ahead"] or not st["upstream"]:
@@ -468,8 +574,15 @@ def _open_pr(r: Path, body: dict) -> dict:
     if token:
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}", headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json", "User-Agent": "Meshpool"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            base = json.loads(resp.read())["default_branch"]
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                base = json.loads(resp.read())["default_branch"]
+        except urllib.error.HTTPError as e:
+            raise ValueError(f"GitHub did not let Meshpool read {slug} (HTTP {e.code}). Check the GitHub "
+                             "connection in Settings.") from None
+        except (urllib.error.URLError, OSError, ValueError, KeyError):
+            raise ValueError("Could not reach GitHub to look up the default branch. Check your network "
+                             "connection and try again.") from None
         data = json.dumps({"title": title, "head": st["branch"], "base": body.get("base") or base,
                            "body": desc, "draft": bool(body.get("draft"))}).encode()
         req = urllib.request.Request(f"https://api.github.com/repos/{slug}/pulls", data=data, method="POST", headers={
@@ -534,6 +647,9 @@ def term_run(root: str, command: str, shell: str = "") -> dict:
     tid = uuid.uuid4().hex[:8]
     t = {"id": tid, "cwd": str(r), "command": command, "out": [], "base": 0, "rc": None, "start": time.time(),
          "p": None, "lock": threading.Lock()}
+    done = [k for k, v in TERMS.items() if v["rc"] is not None]
+    for k in done[:-20]:                         # finished commands keep their output, but only the last few
+        TERMS.pop(k, None)
     TERMS[tid] = t
     env = dict(C.user_env(), TERM="dumb", FORCE_COLOR="0", NO_COLOR="1")
     p = subprocess.Popen(_shell_cmd(command, shell), cwd=str(r), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -567,43 +683,115 @@ def term_view(tid: str, since: int) -> dict:
             "running": rc is None}
 
 
+def _term_kill(t: dict, wait: float = 3.0) -> None:
+    """Stop a terminal command and everything it started: SIGTERM, then SIGKILL if it is still there."""
+    p = t.get("p")
+    if not p or p.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)], capture_output=True, creationflags=NO_WINDOW)
+        else:
+            import signal
+            pg = os.getpgid(p.pid)
+            os.killpg(pg, signal.SIGTERM)
+            try:
+                p.wait(wait)
+            except subprocess.TimeoutExpired:
+                os.killpg(pg, signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def term_stop(tid: str) -> dict:
     t = TERMS.get(tid)
     if t and t["p"] and t["rc"] is None:
-        try:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(t["p"].pid)], capture_output=True,
-                               creationflags=NO_WINDOW)
-            else:
-                import signal
-                os.killpg(os.getpgid(t["p"].pid), signal.SIGTERM)
-        except Exception:  # noqa: BLE001
-            t["p"].kill()
+        _term_kill(t)
     return term_view(tid, 0) if t else {}
 
 
+def term_stop_all() -> None:
+    """The app is quitting: no terminal command (a dev server, say) keeps running and holding its port."""
+    ths = [threading.Thread(target=_term_kill, args=(t, 1.0), daemon=True) for t in list(TERMS.values())
+           if t.get("rc") is None]
+    for th in ths:                               # all at once: ten dev servers must not take ten seconds to stop
+        th.start()
+    for th in ths:
+        th.join(5)
+
+
 # ======================================== usage ===================================================================
-def usage() -> dict:
+_LEGACY_MODEL = "unknown (before usage tracking)"
+_BUCKET_KEYS = ("in", "cached", "out", "calls", "cost", "unpriced_calls", "unreported_calls", "cache_write", "reasoning")
+
+
+def usage(since: float = 0) -> dict:
+    """Usage from the call ledger: every model call, nested engine, reviewer and helper calls included, with the real
+    model of each call. Chats from before the ledger existed are added from their session file, marked "legacy"."""
+    from meshpool_harness import session_store as SS
     from meshpool_harness.agent.core import SESSIONS
-    rows, total = [], {"in": 0, "cached": 0, "out": 0, "calls": 0}
-    by_model: dict[str, dict] = {}
+    from meshpool_harness.core import gateway, usage as U
+    U.flush()
+    recs = [r for r in U.read_records(since=since) if isinstance(r, dict)]
+    s = U.summarize(recs)
+    total = {k: s[k] for k in _BUCKET_KEYS}
+    by_model = {m: {**b, "threads": 0} for m, b in s["by_model"].items()}
+    chats_of: dict[str, set] = {}
+    last: dict[str, float] = {}
+    chat_models: dict[str, dict[str, int]] = {}
+    for r in recs:
+        c = str(r.get("chat") or "")
+        if not c:
+            continue
+        m = str(r.get("model") or "?")
+        chats_of.setdefault(m, set()).add(c)
+        last[c] = max(last.get(c, 0.0), float(r.get("ts") or 0))
+        if (r.get("source") or "chat") == "chat":
+            cm = chat_models.setdefault(c, {})
+            cm[m] = cm.get(m, 0) + 1
+    for m, cs in chats_of.items():
+        by_model[m]["threads"] = len(cs)
+    sessions: dict[str, dict] = {}
     for p in SESSIONS.glob("*/session.json") if SESSIONS.exists() else []:
         try:
-            d = json.loads(p.read_text(encoding="utf-8"))
+            d = SS.read_head(p.parent)           # P-07/H-14: the small head record; a chat saved before heads held usage is read once
+            if not isinstance(d, dict) or "usage" not in d:
+                d = json.loads(p.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        if isinstance(d, dict):
+            sessions[str(d.get("id") or p.parent.name)] = d
+    rows = []
+    for c, b in s["by_chat"].items():
+        if not c:
+            continue
+        d = sessions.get(c) or {}
+        cm = chat_models.get(c)
+        model = max(cm, key=cm.get) if cm else (d.get("model") or "unknown")
+        rows.append({"id": c, "title": d.get("title") or c, "model": model, "updated": last.get(c, 0),
+                     "in": b["in"], "cached": b["cached"], "out": b["out"], "calls": b["calls"], "cost": b["cost"],
+                     "unpriced_calls": b["unpriced_calls"], "legacy": False})
+    for c, d in sessions.items():
         u = d.get("usage") or {}
-        m = d.get("model") or d.get("harness") or "unknown"
-        for k in total:
-            total[k] += int(u.get(k) or 0)
-        bm = by_model.setdefault(m, {"in": 0, "cached": 0, "out": 0, "calls": 0, "threads": 0})
-        for k in ("in", "cached", "out", "calls"):
-            bm[k] += int(u.get(k) or 0)
+        calls = int(u.get("calls") or 0)
+        if c in s["by_chat"] or not calls or float(d.get("updated") or 0) < since:
+            continue
+        r = {"id": c, "title": d.get("title") or c, "model": d.get("model") or "unknown", "updated": d.get("updated", 0),
+             "in": int(u.get("in") or 0), "cached": int(u.get("cached") or 0), "out": int(u.get("out") or 0),
+             "calls": calls, "cost": 0.0, "unpriced_calls": calls, "legacy": True}
+        rows.append(r)
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            total[k] += r[k]
+        bm = by_model.setdefault(_LEGACY_MODEL, {**U._empty_bucket(), "threads": 0})   # noqa: SLF001
+        for k in ("in", "cached", "out", "calls", "unpriced_calls"):
+            bm[k] += r[k]
         bm["threads"] += 1
-        rows.append({"id": d.get("id"), "title": d.get("title") or "New chat", "model": m,
-                     "updated": d.get("updated", 0), **{k: int(u.get(k) or 0) for k in total}})
-    rows.sort(key=lambda r: -r["updated"])
-    return {"total": total, "by_model": by_model, "threads": rows[:200]}
+    rows.sort(key=lambda r: -(r["updated"] or 0))
+    return {"total": total, "by_model": by_model, "by_source": s["by_source"], "threads": rows[:200],
+            "gateway": gateway.snapshot()}
 
 
 def open_editor(root: str) -> dict:
@@ -958,7 +1146,8 @@ def pr_action(root: str, body: dict) -> dict:
     if act == "merge":
         d = pr_detail(root, n)
         if not d["can_merge"]:
-            why = ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
+            why = "it is not open" if d.get("state") != "open" else \
+                ("its checks are " + d["verdict"]) if d["verdict"] not in ("passing", "none") else \
                 "it is a draft" if d["draft"] else "GitHub says it cannot merge yet" if d["mergeable"] is not True \
                 else "it is not open"
             raise ValueError(f"Not merged: {why}.")
