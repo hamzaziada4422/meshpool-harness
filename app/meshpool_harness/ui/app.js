@@ -2004,7 +2004,8 @@ async function renderSection(sec) {
         <div class="sform">
           <input id="tsName" placeholder="Name, for example Morning AI news" spellcheck="false">
           <textarea id="tsPrompt" rows="3" placeholder="What should it do? For example: Find the 5 most important AI infrastructure news stories from the last 24 hours and summarize each in two sentences with links."></textarea>
-          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option></select>
+          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option><option value="cron">Custom (cron)</option></select>
+          <input id="tsCron" aria-label="Cron expression" placeholder="30 8 * * 1-5" spellcheck="false" style="max-width:150px">
           <select id="tsDay" aria-label="Day">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(d => `<option value="${d}">${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select>
           <input id="tsTime" aria-label="Time" type="time" value="08:30"><input id="tsAt" aria-label="Date and time" type="datetime-local">
           <select id="tsKind" aria-label="Mode"><option value="cowork">Work</option><option value="code">Code</option></select>
@@ -2012,10 +2013,10 @@ async function renderSection(sec) {
           <label class="chk" id="tsWtRow" hidden><input type="checkbox" id="tsWt"> Each run in a new worktree (its own checkout and branch, so runs never change your working copy)</label>
           <button class="btn primary" id="tsAdd">Add task</button></div><div class="res" id="tsRes"></div>`;
       done();
-      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsWtRow").hidden = !$("#tsFolder").value; if ($("#tsWtRow").hidden) $("#tsWt").checked = false; };
+      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsCron").hidden = w !== "cron"; $("#tsWtRow").hidden = !$("#tsFolder").value; if ($("#tsWtRow").hidden) $("#tsWt").checked = false; };
       $("#tsWhen").onchange = sync; $("#tsFolder").onchange = sync; sync();
       const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
-      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, worktree: $("#tsWt").checked});
+      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, worktree: $("#tsWt").checked, cron: $("#tsCron").value.trim()});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
       $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this scheduled task?", text: "It won't run again. Chats from earlier runs stay.", ok: "Delete task", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });

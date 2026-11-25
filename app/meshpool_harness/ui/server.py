@@ -138,11 +138,11 @@ def assistant_action(b: dict) -> dict:
         AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                     b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
                     b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
-                    bool(b.get("worktree")))
+                    bool(b.get("worktree")), str(b.get("cron") or ""))
     elif act == "task_update":
         AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
                                                                    "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change", "worktree")})
+                                                                   "only_on_change", "worktree", "cron")})
     elif act == "task_delete":
         AS.delete_task(b.get("id", ""))
     elif act == "task_run":

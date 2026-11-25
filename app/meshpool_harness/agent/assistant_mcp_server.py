@@ -39,10 +39,10 @@ def memory_forget(text: str) -> str:
 
 def schedule_task(prompt: str, when: str, name: str = "", time: str = "09:00", day: str = "mon", at: str = "",
                   minutes: int = 60, folder: str = "", mode: str = "cowork", only_on_change: bool = False,
-                  worktree: bool = False) -> str:
+                  worktree: bool = False, cron: str = "") -> str:
     import os
     t = A.add_task(name, prompt, when, time, day, at, minutes, folder or os.environ.get("MESHPOOL_PROJECT", ""),
-                   "", mode, only_on_change, bool(worktree))
+                   "", mode, only_on_change, bool(worktree), cron)
     return (f"Scheduled \"{t['name']}\" {A.describe(t)}. It runs while Meshpool is open on this computer; the user "
             "can change or delete it in Settings, Scheduled tasks. To also run it while Meshpool is closed, they can turn on "
             "\"Also run tasks when Meshpool is closed\" on the Scheduled tasks page.")
@@ -88,11 +88,12 @@ TOOLS = {
     "schedule_task": Tool(_wrap(schedule_task), "Schedule work for later or on repeat, such as a daily news brief, a "
                           "weekly report or a one-time reminder. Each run starts a new chat with the prompt. "
                           "when: once (give `at` as a local date and time like 2026-11-20T09:00), hourly, daily, "
-                          "weekdays, weekly (give `day`), or every (give `minutes`, at least 15). `time` is local "
+                          "weekdays, weekly (give `day`), every (give `minutes`, at least 15), or cron (give `cron`, "
+                          "five fields in local time, like 30 8 * * 1-5). `time` is local "
                           "HH:MM. Write the prompt so it makes sense on its own later.",
                           {"prompt": {"type": "string"}, "when": {"type": "string", "enum": list(A.WHEN)},
                            "name": {"type": "string"}, "time": {"type": "string"}, "day": {"type": "string"},
-                           "at": {"type": "string"}, "minutes": {"type": "integer"},
+                           "at": {"type": "string"}, "minutes": {"type": "integer"}, "cron": {"type": "string"},
                            "mode": {"type": "string", "enum": ["cowork", "code"]},
                            "only_on_change": {"type": "boolean", "description": "Only tell the user when the result "
                                               "changed from the last run."},
