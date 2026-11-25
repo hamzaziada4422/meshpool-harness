@@ -119,20 +119,40 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
              "make_spreadsheet, make_deck or office_task.")
 
 
-def note(caps, harness: dict | None = None) -> str:
+# How the agent makes each file itself when it writes office files directly (office direct, a lean Work chat).
+DIRECT = {
+    "presentation": "python-pptx (native charts through chart_data, not pictures)",
+    "document": "python-docx",
+    "spreadsheet": "openpyxl (live formulas, not typed results)",
+    "pdf": "reportlab",
+}
+
+
+def note(caps, harness: dict | None = None, direct: bool = False) -> str:
     """The hidden note that goes with a message asking for a file: the agent can make it, with which tools, and must
-    not answer that it cannot."""
+    not answer that it cannot. direct: the agent writes the file itself (office direct), so the note names the
+    library, not an engine tool it may not have (office3 xlsx_budget: 27 calls spent looking for make_spreadsheet)."""
     if list(caps or []) == ["edit"]:
         return EDIT_NOTE
     caps = [c for c in caps if c in CAPS]
     if not caps:
         return ""
+    if direct:
+        how = "; ".join(f"{CAPS[c][0]}: {DIRECT[c]}" for c in caps)
+        return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Write "
+                + ("these files" if len(caps) > 1 else "this file")
+                + f" yourself ({how}) in the project folder under the exact name the user gave, check it once "
+                "(reopen it; recalculate through LibreOffice headless only when computed values are asked for) "
+                "and say where it is. Do not answer that "
+                "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
+                "real defects only.")
     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
     return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
             + ("these files" if len(caps) > 1 else "this file")
             + f" with the office tools ({how}), save in the project folder under the name the user gave, check it, "
             "and say where it is. Do not answer that you cannot, or hand over code to paste. For open details use "
-            "the recommended defaults (make_deck: brief_ok=true) and say which; ask at most one question, only if "
+            "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
+            "user's file name) and say which; ask at most one question, only if "
             "it changes the whole file. Fix real defects only; rebuild at most once.")
 
 

@@ -32,6 +32,15 @@ ENGINES = ("Slides and workbooks come from the Meshpool office tools: make_deck 
            "hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs; pass the user's facts and files in the request. "
            "To change a file the user already has (.docx, .xlsx, .pptx), use edit_office_file: it keeps their "
            "formatting and formulas.")
+# Office direct (a lean Work chat, core._office_direct_on): the agent writes small office files itself, as Codex does.
+# office3 trace (xlsx_budget, 2 reps): told "never write a .xlsx by hand" while the hand-build guard was off and the
+# engines were not the way, one rep read Meshpool's own source for 27 calls looking for a way (59 calls); the rep that
+# wrote it with openpyxl took 7.
+ENGINES_DIRECT = ("Office files: write a new workbook, document, deck or PDF yourself with openpyxl, python-docx, "
+                  "python-pptx or reportlab, in the project folder under the name the user gave; formulas stay live "
+                  "formulas and charts stay native charts. To change a file the user already has (.docx, .xlsx, "
+                  ".pptx), open it with the same library and change only what was asked, keeping its sheets, styles "
+                  "and formulas.")
 
 import contextlib
 import difflib
@@ -399,8 +408,11 @@ def context_block(task: str = "", root: str = "", project_id: str = "", chat_id:
     return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
 
 
-def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
-    """The "Notes from Meshpool" paragraph: only the tools the agent has are named."""
+def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
+    """The "Notes from Meshpool" paragraph: only the tools the agent has are named. office: True (the engines'
+    rules), "direct" (the agent writes office files itself, ENGINES_DIRECT) or False."""
+    if office == "direct":
+        return _notes(tools, False, mem_on, incognito).rstrip() + " " + ENGINES_DIRECT
     if tools == "none":
         return "Notes from Meshpool: cite sources with links." + ((" " + ENGINES) if office else "")
     if tools == "deferred":
@@ -420,7 +432,7 @@ def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
         t += "This chat is incognito: do not call memory_save or project_note. "
     t += ("Use schedule_task for work that should happen later or on a schedule, and delegate_task (or run_subtasks) "
           "to run independent parts of a large job in parallel. ")
-    return t + ENGINES
+    return t + (ENGINES if office else "")
 
 
 def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,

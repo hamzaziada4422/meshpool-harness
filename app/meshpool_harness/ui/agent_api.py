@@ -894,6 +894,21 @@ class Session:
             raise ValueError("This agent does not ask questions.")
         self.agent.reply(str(question_id or ""), answers)
 
+    def _office_direct(self, text: str = "") -> bool:
+        """The agent writes office files itself (core.Agent._office_direct: a lean Work chat, MH_OFFICE_DIRECT on), so
+        the notes name the libraries, not engine tools. Not once the engines are offered: a message asking for a new
+        deck, report or model (office_intent.styled_deliverable, the same test Agent.send makes for this message after
+        these notes are built), or an earlier one did. MH_OFFICE_DIRECT_NOTE=0 keeps the engine notes."""
+        if os.environ.get("MH_OFFICE_DIRECT_NOTE", "1") == "0" or self.harness.get("type") in ("acp", "pi"):
+            return False
+        try:
+            if not self.agent._office_direct() or getattr(self.agent, "office_engines", False):
+                return False
+            from meshpool_harness.office_intent import styled_deliverable
+            return not (text and styled_deliverable(text))
+        except Exception:  # noqa: BLE001
+            return False
+
     def _body(self, text: str, images: list | None) -> str:
         body = text
         try:                                         # every agent: a skill named with $ is attached now, so the
@@ -1387,7 +1402,7 @@ class Session:
                 body = self._body(text, images)
                 if caps:                                # a file the agent can make: say so, with the tools for it
                     from meshpool_harness import capabilities as CAP
-                    body += CAP.note(caps, self.harness)
+                    body += CAP.note(caps, self.harness, direct=self._office_direct(text))
                 from meshpool_harness import pace as PACE
                 quick = (not self.plan and not self.scheduled and not self.goal
                          and PACE.classify(text, bool(images)) == "quick")
@@ -1434,8 +1449,9 @@ class Session:
                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
                             # not on every chat's first message
-                            office=(tools != "none" and tools != "deferred") or (
-                                bool(getattr(self.agent, "office_on", False)) and not caps))
+                            office=("direct" if self._office_direct(text) else True) if (
+                                tools != "none" and tools != "deferred") or (
+                                bool(getattr(self.agent, "office_on", False)) and not caps) else False)
 
                         def spend_ctx(pid=pid, ex=ex):
                             self.ctx_pending = False

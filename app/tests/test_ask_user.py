@@ -245,7 +245,7 @@ def test_brief_settled_request_builds():
 def test_make_deck_tool(monkeypatch):
     from meshpool_harness.agent import office_mcp_server as O
     calls = []
-    monkeypatch.setattr(O, "_engine", lambda engine, request, files: (calls.append(request) or ("built", False)))
+    monkeypatch.setattr(O, "_engine", lambda engine, request, files, save_as=None: (calls.append(request) or ("built", False)))
     text, err = O.make_deck("Make a deck about our Q3 results")
     assert not err and text.startswith("BRIEF NEEDED") and not calls          # ambiguous: does not build
     text, err = O.make_deck("Q3 results deck", audience="the board", density="present", slides=8, theme="ocean")

@@ -78,8 +78,36 @@ def _run_job(jid: str, should_stop=None):
     OJ.run(jid, should_stop=should_stop)
 
 
-def _report(jid: str) -> tuple[str, bool]:
-    return OJ.report(jid)
+SAVE_AS: dict[str, str] = {}   # job id -> the file name the user asked for (save_as)
+
+
+def _report(jid: str, reused: str = "") -> tuple[str, bool]:
+    text, failed = OJ.report(jid, reused=reused)
+    want = SAVE_AS.get(jid)
+    if want and not failed and OJ.JOBS.get(jid, {}).get("done"):
+        text += _save_copy(jid, want)
+    return text, failed
+
+
+def _save_copy(jid: str, want: str) -> str:
+    """Copy the job's file to the name the user asked for (save_as), in the project folder. office3 trace (pptx_chart):
+    the deck stayed at "Meshpool outputs/<job>/deck.pptx", the user's ./deck.pptx never existed and the task failed.
+    An existing file is not replaced (_dest picks "name (2).ext"); the same job is copied once."""
+    import shutil
+    ext = Path(want).suffix.lower()
+    made = [m for m in OJ._made(OJ.JOBS[jid]) if m.suffix.lower() == ext]
+    if not ext or not made:
+        return f"\nNot saved as {want}: the job made no {ext or 'such'} file."
+    done = OJ.JOBS[jid].get("saved_as")
+    if not done:
+        dest = _dest(want, made[0].name, ext, named=True)
+        shutil.copy2(made[0], dest)
+        done = OJ.JOBS[jid]["saved_as"] = str(dest)
+    try:
+        shown = str(Path(done).relative_to(_project()))
+    except ValueError:
+        shown = done
+    return f"\nSaved as: {shown} (the file the user asked for; the job folder keeps the build)."
 
 
 def _scope() -> str:
@@ -87,7 +115,7 @@ def _scope() -> str:
     return os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
 
 
-def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
+def _engine(engine: str, request: str, files: list | None, save_as: str | None = None) -> tuple[str, bool]:
     paths, missing = OJ.resolve_files(_project(), files)
     if missing:
         return f"Input file not found: {missing}", True
@@ -98,8 +126,10 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
                            model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
     if reused == "refused":
         return OJ.refusal_text(jid), False
+    if save_as and str(save_as).strip():
+        SAVE_AS[jid] = str(save_as).strip()
     if reused == "done":
-        return OJ.report(jid, reused=reused)
+        return _report(jid, reused=reused)
     if reused == "running":
         OJ.JOBS[jid]["event"].wait(WAIT)
         return _report(jid)
@@ -113,7 +143,7 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
 def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
               density: str | None = None, slides: int | None = None, theme: str | None = None,
               opening: str | None = None, closing: str | None = None, sources: str | None = None,
-              brief_ok: bool = False, icon_set: str | None = None):
+              brief_ok: bool = False, icon_set: str | None = None, save_as: str | None = None):
     """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
     or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
     or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
@@ -126,11 +156,11 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
             sys.path.insert(0, str(APP))
         from engines.forge import brief as BR
     except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
-        return _engine("slides", request, files)
+        return _engine("slides", request, files, save_as)
     qs = BR.questions(request, files, fields)
     if qs and not (brief_ok or BR.wants_defaults(request) or os.environ.get("MH_ASK_AUTO") == "1"):
         return BR.needed_text(qs, "make_deck"), False
-    return _engine("slides", BR.complete(request, files, fields), files)
+    return _engine("slides", BR.complete(request, files, fields), files, save_as)
 
 
 def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
@@ -141,8 +171,8 @@ def add_slides(deck: str, request: str, slides: int = 1, files: list | None = No
                    [deck] + [f for f in files or [] if f != deck])
 
 
-def make_spreadsheet(request: str, files: list | None = None):
-    return _engine("sheets", request, files)
+def make_spreadsheet(request: str, files: list | None = None, save_as: str | None = None):
+    return _engine("sheets", request, files, save_as)
 
 
 def analyze_data(request: str, files: list | None = None):
@@ -932,11 +962,12 @@ TOOLS = {
                   {"request": S, "files": FILES, "audience": S, "purpose": S,
                    "density": {"type": "string", "enum": ["present", "balanced", "read"]},
                    "slides": {"type": "integer"}, "theme": S, "icon_set": S, "opening": S, "closing": S,
-                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"}},
+                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"},
+                   "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}},
                   ["request"]),
     "make_spreadsheet": (make_spreadsheet, "Build a new .xlsx with live formulas (model, budget, tracker). Not for "
                          "changing a file that exists: use edit_office_file. 2 to 6 minutes.",
-                         {"request": S, "files": FILES}, ["request"]),
+                         {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
     "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
                      {"request": S, "files": FILES}, ["request", "files"]),
     "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
