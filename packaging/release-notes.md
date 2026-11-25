@@ -16,7 +16,15 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **The browser follows a new tab.** When a link or a script opens a page in a new tab, the agent's browser now switches to it before it reports what it sees. Before, it still described the old tab for one step.
 - **Release builds are sturdier.** LibreOffice is downloaded from the main site when the archive site is down, still checked against its pinned checksum. The release smoke test now makes a real tool call: the v0.0.16 smoke test passed on a reply that held a tool error.
 - **The benchmark pages say what was measured.** The README and BENCHMARKS now carry the 0.0.16 office results against Codex (cheaper per solved task on every suite, fewer tasks solved on SpreadsheetBench and OfficeBench) instead of the older "not cheaper yet" line.
-- **Measured and left out.** A set of further office checks (a firmer second formula note, extracted values written as values, the unchanged named cell, a stricter re-run rule) was measured on Office-7, SpreadsheetBench and OfficeBench and did not beat 0.0.16 on cost per solved task, so it is not in this release. The agent itself is the same as in 0.0.16, and so are its results below.
+- **Office edits run on Codex's own request.** In a Work chat, an edit to an existing workbook, document or deck, or a file you name, now sends the request Codex CLI 0.171 sends: its prompt and its one command tool, with meshpool's permissions around it. A new deck, report or model and Word tracked changes still use the engines. `MH_WORK_OFFICE_STYLE=lean` brings back the 0.0.16 route. Measured with the settings of the 0.0.16 rows (raw rows in docs/results/office_c171/):
+
+  | Suite | Tasks x runs | Solved, meshpool vs Codex | Cost per solved vs Codex (95% CI) | Time vs Codex | 0.0.16 on the same suite |
+  |---|---|---|---|---|---|
+  | Office-7 | 7 x 6 | 41 vs 41 | 0.89x (0.81-0.95) | 0.53x | 42 solved at 0.94x |
+  | SpreadsheetBench (public sample), same hour as Codex | 6 x 6 | 33 vs 33 | 0.89x (0.78-1.03) | 1.22x | 31 solved at 1.04x |
+  | OfficeBench (public sample), same hour as Codex | 4 x 6 | 22 vs 24 | 0.95x (0.53-1.45) | 1.29x | 21 solved at 0.83x |
+
+  Where meshpool loses: OfficeBench solves 2 fewer tasks than Codex (task ob-1-15-2 passed 8 of 12 runs against Codex's 12 of 12), and on SpreadsheetBench and OfficeBench it takes longer than Codex in the same hour (1.22x and 1.29x). The OfficeBench cost interval is wide and includes costing more than Codex. Office-7 solves one task fewer than 0.0.16 did.
 - **A project's own servers wait for your trust too.** The MCP servers a project lists in `.mcp.json` or `.meshpool/mcp.json` start only once you trust the folder, like its hooks and allow rules. The app now shows a note at the top of the chat with Trust this folder, and `meshpool trust`, `meshpool trust --revoke` and `meshpool trust --list` manage trusted folders from the command line.
 - **Always in this folder.** An approval can now save a narrow rule for this folder (this command, file edits, or one tool) in your own settings, so the next chat there does not ask again.
 - **Rules that always ask.** Next to allow and deny, a saved rule can now always ask, even with full access or an allow rule. Add one in Settings, Permissions.
