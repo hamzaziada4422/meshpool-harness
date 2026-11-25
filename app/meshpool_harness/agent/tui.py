@@ -38,6 +38,7 @@ COMMANDS = [
     ("compact", "[what to keep]", "summarize earlier steps to free context; say what to keep in full"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
     ("status", "", "model, folder, access mode, usage"),
+    ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
     ("mcp", "", "MCP servers and their tools"),
     ("connect", "[app]", "connect Notion, Gmail, Slack... or an MCP server"),
@@ -1591,6 +1592,14 @@ class Session:
             t.ctx_tokens = int(t.ctx_tokens * after / before)
         t.p(st.dim(f"  {'Summarized earlier steps and shortened' if done else 'Shortened'} old tool output: "
                    f"{before // 1000}k to {after // 1000}k characters of context."))
+
+    def cmd_doctor(self, arg):
+        from meshpool_harness import doctor as DR
+        st = self.term.st
+        text, code = DR.report(str(self.agent.root))
+        for line in text.splitlines():
+            self.term.p("  " + (st.red(line) if line.startswith("error") else st.amber(line) if line.startswith("warning")
+                                else st.dim(line) if line.startswith("info") else line))
 
     def cmd_status(self, arg):
         t, st, a = self.term, self.term.st, self.agent

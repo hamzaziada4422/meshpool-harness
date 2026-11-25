@@ -23,6 +23,10 @@
 - `--no-session-persistence`, with `-p`, keeps nothing of the run on disk.
 - `-n NAME` names the session.
 
+## Checking your setup
+
+`meshpool doctor` (or `/doctor` in a session) reads meshpool's settings file, hooks, saved rules, MCP server lists, skills, sub-agents and instruction files, for you and for the current folder, and lists what is broken or ignored. It changes nothing. It exits with 1 when it finds an error.
+
 ## Shell completion
 
 ```bash

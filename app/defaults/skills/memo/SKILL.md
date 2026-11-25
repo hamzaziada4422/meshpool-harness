@@ -1,6 +1,6 @@
 ---
 name: memo
-description: Write a decision memo or one-pager: the question, the options, the recommendation and why. Use when the user asks for a memo, one-pager, proposal or recommendation.
+description: "Write a decision memo or one-pager: the question, the options, the recommendation and why. Use when the user asks for a memo, one-pager, proposal or recommendation."
 ---
 
 # Memo

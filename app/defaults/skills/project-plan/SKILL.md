@@ -1,6 +1,6 @@
 ---
 name: project-plan
-description: Plan a project: milestones, tasks, owners, dates, dependencies and risks. Use when the user starts a project or asks for a plan.
+description: "Plan a project: milestones, tasks, owners, dates, dependencies and risks. Use when the user starts a project or asks for a plan."
 ---
 
 # Project plan

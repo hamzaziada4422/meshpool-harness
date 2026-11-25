@@ -1,6 +1,6 @@
 ---
 name: daily-plan
-description: Plan the user's day or week from their calendar, tasks and email: what to do, in what order, and what to drop. Works well as a scheduled morning task.
+description: "Plan the user's day or week from their calendar, tasks and email: what to do, in what order, and what to drop. Works well as a scheduled morning task."
 ---
 
 # Daily plan

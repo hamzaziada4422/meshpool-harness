@@ -1,6 +1,6 @@
 ---
 name: make-diagram
-description: Draw a diagram: a flowchart, architecture, org chart, timeline or mind map. Use when the user asks for a diagram or to show how something fits together.
+description: "Draw a diagram: a flowchart, architecture, org chart, timeline or mind map. Use when the user asks for a diagram or to show how something fits together."
 ---
 
 # Make diagram

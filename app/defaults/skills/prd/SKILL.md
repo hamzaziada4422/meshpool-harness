@@ -1,6 +1,6 @@
 ---
 name: prd
-description: Write a product requirements document: problem, users, goals, scope, requirements and success metrics. Use when the user asks for a PRD, spec or feature brief.
+description: "Write a product requirements document: problem, users, goals, scope, requirements and success metrics. Use when the user asks for a PRD, spec or feature brief."
 ---
 
 # Product requirements document

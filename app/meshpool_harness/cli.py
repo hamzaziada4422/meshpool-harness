@@ -119,7 +119,7 @@ def run_request(request: str, files: list[str], out: str, engine: str | None = N
             "out_dir": str(outdir), "wall_s": round(time.time() - t0, 1), "key_spend_since_start": spent}
 
 
-COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree", "office", "completion"}
+COMMANDS = {"run-due", "scheduler", "route", "run", "work", "ui", "check", "install-browser", "agent", "mcp", "app", "acp", "login", "setup", "import", "connect", "disconnect", "trust", "worktree", "office", "completion", "doctor"}
 
 
 def _agent_parser():
@@ -132,6 +132,8 @@ def _agent_parser():
                "  import           bring your old chats and sessions (ChatGPT, Claude, Claude Code, Codex) and context\n"
                "  login            save your Meshpool API key\n"
                "  check            show settings and installed tools (--live sends one tiny model call)\n"
+               "  doctor           find problems in settings, hooks, rules, MCP servers, skills and sub-agents\n"
+               "  completion       print a shell completion script (bash, zsh or fish)\n"
                "  connect          connect apps: Notion, Gmail, Slack, HubSpot... or any MCP server by URL\n"
                "  mcp              list, test and switch MCP servers\n"
                "  acp              serve the agent over the Agent Client Protocol (Zed, JetBrains, other apps)\n"
@@ -424,6 +426,11 @@ def main(argv=None):
             print("Usage: meshpool disconnect <name>")
             return 1
         return connect_cli.disconnect(argv[1])
+    if argv[0] == "doctor":                    # meshpool doctor [folder]: problems in meshpool's own files
+        from meshpool_harness import doctor as DR
+        text, code = DR.report(argv[1] if len(argv) > 1 else ".")
+        print(text)
+        return code
     if argv[0] == "completion":                # meshpool completion bash|zsh|fish
         sh = (argv[1:2] or [""])[0]
         if sh not in ("bash", "zsh", "fish"):

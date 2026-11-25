@@ -1,6 +1,6 @@
 ---
 name: meeting-prep
-description: One-page brief before a meeting: who is coming, what they care about, history, and the questions to ask. Use when the user says prep me for, get me ready for, or brief me on a meeting.
+description: "One-page brief before a meeting: who is coming, what they care about, history, and the questions to ask. Use when the user says prep me for, get me ready for, or brief me on a meeting."
 ---
 
 # Meeting prep

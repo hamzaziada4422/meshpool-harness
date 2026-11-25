@@ -1,6 +1,6 @@
 ---
 name: power-bi-review
-description: Review a Power BI file (.pbix or .pbit): pages and visuals, tables, relationships, DAX measures and Power Query, with fixes for slow or wrong measures.
+description: "Review a Power BI file (.pbix or .pbit): pages and visuals, tables, relationships, DAX measures and Power Query, with fixes for slow or wrong measures."
 ---
 
 # Power BI review

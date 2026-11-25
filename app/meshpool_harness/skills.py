@@ -107,7 +107,7 @@ def front_matter(**kv) -> str:
 # the new one; an edited copy is left alone. {skill: SHA-256 of every earlier shipped SKILL.md}.
 REFRESHED_DEFAULTS = {
     "transcribe-audio": {"3e9a05eb613a601a3209285f2713f169b8edcd8694fee67151699df706332dfb"},
-    "convert-files": {"31921397babd7efde4b533297328b4835119c7e23820bf4f86aca81dd87bcc7d"},
+    "convert-files": {"31921397babd7efde4b533297328b4835119c7e23820bf4f86aca81dd87bcc7d", "7208b2af222dc3274042665c9004888e0af0c86e21b9204606f7541085feda3d"},
     "pdf-tools": {"6bda4b25570556d043a9654ccf0df38ec61f90723de60e4a38d3907780737ff0"},
     "image-tools": {"221c5aa55b774d466a4c6b2274655dac71b792ee7d6328ea2272fe28904ef576"},
     "notebooks": {"a15b7391182d52e2b2bf66363a2962d84f02da8bbd7c6f47df556e16c9299d29"},
@@ -116,16 +116,26 @@ REFRESHED_DEFAULTS = {
     # 0.0.13: skills that asked for more than the user did (plan files, trackers, a second document, deep research)
     "email-newsletter": {"3e006a413bbce93ac5d7fb6327fd959405c1511355dc8d99cc7cc3312ef45bc0"},
     "blog-post": {"64329c4a7a5640120049b494a874b18fedee62b836edc8357a9e54d34b02507c"},
-    "daily-plan": {"39a7889361211ccdc75b3ae0ee7b02311f1dc45038e2d93d0d0b21f087dce450"},
+    "daily-plan": {"39a7889361211ccdc75b3ae0ee7b02311f1dc45038e2d93d0d0b21f087dce450", "c85a178ba386cfe28c7d725636eb15fd64a87c0bc8a7000dfffb9a6832d9de0c"},
     "briefing-interview": {"244a32c6ff198ba8c57adf769e1edf0bb1e21def30f3633c3796e390482390c7"},
-    "project-plan": {"792a70ee3c312b61ec7344934e71af4e25701bc0b9b78c4ad42fdda5d46ed4fc"},
+    "project-plan": {"792a70ee3c312b61ec7344934e71af4e25701bc0b9b78c4ad42fdda5d46ed4fc", "c73fd6570355ba425cc6a7bebad3100ad1345da23901b4e021ecb28606f37168"},
     "competitor-analysis": {"b507ab50e61130618751871ef028a21e6f5285d1ec1fad234ba7ebdfba5eebb4"},
     "research-brief": {"cea677509224462597685db1614e8df91209ba092f5867d7210acfbae3edb5dd"},
-    "meeting-prep": {"240458f6c4f23466eebd1626f2e23180bdb3659d5fcf171cec284e36794724da"},
-    "seo-content-brief": {"9a87b2e21973afde065dad87733e2885e92e495f130c175a41fb3ee79f266f36"},
+    "meeting-prep": {"240458f6c4f23466eebd1626f2e23180bdb3659d5fcf171cec284e36794724da", "c37f5e609262cf0b3fe78d2d5e632d527ae82223f56448f3aac26142b41a2efd"},
+    "seo-content-brief": {"9a87b2e21973afde065dad87733e2885e92e495f130c175a41fb3ee79f266f36", "b34e659ca9f56eb1bb2f60ddf5c664517d0262045b1e49ef47d7541e53a10d6d"},
     "feedback-synthesis": {"15c2c58b9d1487f8da1ccd0853e1d6288012098ad8c81cb4dccc8b571b61aa53"},
-    "survey-analysis": {"406d25eb7f07630f9093481c9eae463b48c76e53788e31fd639f090c020b78d9"},
-    "interview-plan": {"5842c313a72830ea3c96f3d8624b10fb8b1671eef090e152c9c624b76475815e"},
+    "survey-analysis": {"406d25eb7f07630f9093481c9eae463b48c76e53788e31fd639f090c020b78d9", "24cc5214b6721eb05045d8d788cdd79cf554c932e99feb281348453c4edbea2e"},
+    "interview-plan": {"5842c313a72830ea3c96f3d8624b10fb8b1671eef090e152c9c624b76475815e", "3167c7573767195cc1ab40ed86d91fd9d4a49c62d138f40d51637ab55b256c86"},
+    # 0.0.15: front matter made valid YAML (descriptions with ": " quoted), so other tools can read these too
+    "build-app": {"d95588280427c5e9da6ee2d6efc8fa9aeed29b33c37b5fa99ed5153a45a98047"},
+    "chat-catch-up": {"db465c84ff15ea2f2c88bbf121dc14506fbc05524537c79004a43c4103a0c476"},
+    "finance-assumption-book": {"d5d26f7803e8691bb4eb52a297fbf7f9f0ba721078fb82232bd073d808799a60"},
+    "git-help": {"9a8b46135ee6c523e06492c9055e8314d76b7295dd3e665c1f78597c5ae2bc3c"},
+    "make-diagram": {"7439477e886f91b9853b428025ff1930554eab1c9c1bba5f609442f30bf9cc25"},
+    "memo": {"b67109067f7868b1851cb2f8adf10ada241cdfb3f5b5bbb8d9fa2bc549a6b780"},
+    "power-bi-review": {"0557b0a1139d0d3019a8efa3c3ed09763be103da1c4231e6987e0300a9af6a30"},
+    "prd": {"e4ce0c2a415a95d29239a5d5083f4483468ed307f934c44acc22193cc1363c33"},
+    "weekly-status-update": {"f0572cca30ecf83859d1de910caff1f81d63a268ed68de817b89061997477d07"},
 }
 
 
