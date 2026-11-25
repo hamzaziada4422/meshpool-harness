@@ -633,16 +633,77 @@ class Terminal:
         if self.on_mode:
             self.on_mode(self.mode)
 
+    def _search_key(self, s: dict, k) -> bool:
+        """A key while searching earlier prompts (Ctrl+R). True when the search took it."""
+        def find(q, before):
+            for i in range(before - 1, -1, -1):
+                if q.lower() in self.history[i].lower():
+                    return i
+            return None
+        if k == "ctrl_r":                               # an older match
+            start = s["found"] if s["found"] is not None else len(self.history)
+            hit = find(s["search"], start) if s["search"] else None
+            s["found"] = hit if hit is not None else s["found"]
+        elif k in ("esc", "ctrl_c", "ctrl_g"):
+            s["buf"], s["cur"], s["search"] = s["orig"], len(s["orig"]), None
+            return True
+        elif k in ("enter", "right", "left", "tab"):
+            s["search"] = None
+            s["cur"] = len(s["buf"])
+            return True
+        elif k == "backspace":
+            s["search"] = s["search"][:-1]
+            s["found"] = find(s["search"], len(self.history)) if s["search"] else None
+        elif isinstance(k, str) and len(k) == 1:
+            s["search"] += k
+            s["found"] = find(s["search"], len(self.history))
+        else:
+            return False
+        if s["found"] is not None:
+            s["buf"] = self.history[s["found"]]
+            s["cur"] = len(s["buf"])
+        s["note"] = (f"Search earlier prompts: {s['search']!r}" +
+                     ("" if s["found"] is not None or not s["search"] else " (no match)") + ". Enter to use, Esc to cancel")
+        return True
+
+    def _edit_externally(self, text: str) -> str:
+        """The prompt in the user's editor ($VISUAL, $EDITOR; else nano, vi or Notepad). The text as saved comes back."""
+        import tempfile
+        ed = os.environ.get("VISUAL") or os.environ.get("EDITOR") or (
+            "notepad" if os.name == "nt" else next((e for e in ("nano", "vim", "vi") if shutil.which(e)), ""))
+        if not ed:
+            self.notices.append("No editor found: set EDITOR to the editor you want Ctrl+G to open.")
+            return text
+        fd, path = tempfile.mkstemp(prefix="meshpool-prompt-", suffix=".md")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            import shlex
+            subprocess.run(shlex.split(ed, posix=os.name != "nt") + [path])
+            with open(path, encoding="utf-8") as f:
+                return f.read().rstrip("\n")
+        except OSError as e:
+            self.notices.append(f"Could not open the editor ({e}).")
+            return text
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
     def echo_user(self, text: str):
         rows = [seg for r in text.split("\n") for seg in R.hard_wrap(r, max(10, self.width - 4))]
         self.scroll([""] + [f" {self.st.accent('❯') if i == 0 else ' '} {r}" for i, r in enumerate(rows)])
 
-    def read_input(self) -> str | None:
+    def read_input(self, prefill: str = "") -> str | None:
         """One message or /command from the input box. None: the user is leaving (Ctrl+D, or Ctrl+C twice)."""
         self.keys_free.wait(0.5)                # the Esc watcher of the last turn lets go first
         if not self.raw_ok():
             return self._read_plain()
-        s = {"buf": "", "cur": 0, "sel": 0, "note": "", "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)]}
+        if not prefill and getattr(self, "stash", "") and getattr(self, "stash_used", False):
+            prefill, self.stash, self.stash_used = self.stash, "", False   # the stashed prompt comes back after a send
+        s = {"buf": prefill, "cur": len(prefill), "sel": 0, "note": "",
+             "hint": PLACEHOLDERS[len(self.history) % len(PLACEHOLDERS)], "search": None, "editor": False}
         h = len(self.history)
         draft = ""
         last_c = 0.0
@@ -665,6 +726,10 @@ class Terminal:
                     buf, cur = s["buf"], s["cur"]
                     menu = self.menu_rows(buf)
                     s["note"] = ""
+                    if s["search"] is not None and not isinstance(k, tuple):   # Ctrl+R: searching earlier prompts
+                        if self._search_key(s, k):
+                            self.refresh()
+                            continue
                     if isinstance(k, tuple):
                         s["buf"], s["cur"] = buf[:cur] + k[1] + buf[cur:], cur + len(k[1])
                     elif k == "enter":
@@ -740,6 +805,34 @@ class Terminal:
                         s["buf"], s["cur"] = "", 0
                     elif k == "ctrl_o":
                         self.expand_last()
+                    elif k == "ctrl_r":
+                        s["search"], s["found"], s["orig"] = "", None, buf
+                        s["note"] = "Search earlier prompts: type to search, Ctrl+R for older, Enter to use, Esc to cancel"
+                    elif k == "ctrl_g":
+                        s["editor"] = True               # the editor runs once the keys are let go (below)
+                        break
+                    elif k == "ctrl_s":
+                        if buf.strip():
+                            self.stash, self.stash_used = buf, False
+                            s["buf"], s["cur"] = "", 0
+                            s["note"] = "Prompt stashed. Ctrl+S brings it back; it also comes back after your next message."
+                        elif getattr(self, "stash", ""):
+                            s["buf"], s["cur"], self.stash = self.stash, len(self.stash), ""
+                    elif k == "word_left":
+                        j = len(buf[:cur].rstrip())
+                        s["cur"] = max(buf.rfind(" ", 0, j), buf.rfind("\n", 0, j)) + 1
+                    elif k == "word_right":
+                        j = cur + (len(buf[cur:]) - len(buf[cur:].lstrip()))
+                        nxt = [x for x in (buf.find(" ", j), buf.find("\n", j)) if x >= 0]
+                        s["cur"] = min(nxt) if nxt else len(buf)
+                    elif k == "word_delete":
+                        j = cur + (len(buf[cur:]) - len(buf[cur:].lstrip()))
+                        nxt = [x for x in (buf.find(" ", j), buf.find("\n", j)) if x >= 0]
+                        s["buf"] = buf[:cur] + buf[min(nxt) if nxt else len(buf):]
+                    elif k == "word_backspace":
+                        j = len(buf[:cur].rstrip(" "))
+                        j = buf.rfind(" ", 0, j) + 1
+                        s["buf"], s["cur"] = buf[:j] + buf[cur:], j
                     elif k == "ctrl_l":
                         self._write("\x1b[2J\x1b[H")
                         self._rows = self._cur_row = 0
@@ -759,6 +852,10 @@ class Terminal:
                     self.refresh()
         finally:
             self.set_live(None)
+        if s.get("editor"):                             # Ctrl+G: the prompt in $VISUAL or $EDITOR, then back here
+            return self.read_input(prefill=self._edit_externally(s["buf"]))
+        if result is not None and getattr(self, "stash", ""):
+            self.stash_used = True
         if result is not None:
             self.history.append(result)
             if self.keys_factory is None and self.interactive:   # a real terminal, not a scripted test
@@ -1120,7 +1217,32 @@ class Session:
                 if self.command(text) == "exit":
                     break
                 continue
+            if text.startswith("!") and text[1:].strip():   # !command: run it here; the agent sees it next message
+                self.shell(text[1:].strip())
+                continue
+            if getattr(self, "shell_notes", None):
+                text = text + "\n\n\u200b" + "\n\n".join(self.shell_notes)
+                self.shell_notes = []
             self.send(text)
+
+    def shell(self, cmd: str):
+        """A command the user runs from the prompt (!ls). Its output shows here and goes to the agent with the next
+        message, so it knows what the user saw."""
+        t, st = self.term, self.term.st
+        try:
+            r = subprocess.run(cmd, shell=True, cwd=str(getattr(self.agent, "root", os.getcwd())), capture_output=True,
+                               text=True, encoding="utf-8", errors="replace", timeout=300)
+            out, code = (r.stdout + (("\n" + r.stderr) if r.stderr else "")).rstrip(), r.returncode
+        except subprocess.TimeoutExpired:
+            out, code = "(stopped after 5 minutes)", 124
+        except OSError as e:
+            out, code = str(e), 127
+        lines = out.splitlines()
+        t.scroll([st.dim(f"  $ {cmd}")] + ["  " + x for x in lines[-60:]] +
+                 ([st.dim(f"  (exit {code}; {len(lines) - 60} earlier lines not shown)")] if len(lines) > 60 else
+                  [st.dim(f"  (exit {code})")]))
+        self.shell_notes = (getattr(self, "shell_notes", None) or []) + [
+            f"[The user ran this in the terminal: `{cmd}` (exit {code}). Output:]\n```\n{out[-8000:]}\n```"]
 
     # -- commands
     def command(self, text: str):
@@ -1599,6 +1721,14 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
             extra = office_extra(wd)                 # the same office tools the app's agents have
         except Exception:  # noqa: BLE001
             extra = None
+        if os.environ.get("MH_MCP_CONFIG"):        # --mcp-config: servers for this run only
+            try:
+                more = _mcp_for_run(os.environ["MH_MCP_CONFIG"])
+                extra = {**(extra or {}), **more}
+                if prompt is None:
+                    term.notices.append(f"MCP servers for this run: {', '.join(more) or 'none'}")
+            except ValueError as e:
+                term.notices.append(f"--mcp-config: {e}")
         mcp = Manager(roots=[wd], extra=extra).start(timeout=float(os.environ.get("MH_MCP_START_S", "60")))
         term.spin.stop()
     pm = os.environ.get("MH_PERMISSION_MODE", "")
@@ -1682,6 +1812,26 @@ def main(workdir: str | None = None, prompt: str | None = None, auto: bool = Fal
         _session_summary(term, locals().get("sess"), locals().get("t_start"))
         term.p(st.dim("  Session saved. Resume it with: meshpool --continue"))
     return 0
+
+
+def _mcp_for_run(spec: str) -> dict:
+    """--mcp-config: a path to a JSON file, or JSON text, with "mcpServers" (or "servers")."""
+    import json as _json
+    from meshpool_harness.agent import mcp as M
+    s = spec.strip()
+    try:
+        if s.startswith("{"):
+            d = _json.loads(s)
+            d = d.get("mcpServers") or d.get("servers") or {} if isinstance(d, dict) else {}
+        else:
+            if not Path(s).expanduser().is_file():
+                raise ValueError(f"no file at {s}")
+            d = M.load_config(Path(s).expanduser())
+    except (OSError, ValueError) as e:
+        raise ValueError(f"could not read it ({e})")
+    if not isinstance(d, dict):
+        raise ValueError("no mcpServers in it")
+    return {str(k): v for k, v in d.items() if isinstance(v, dict)}
 
 
 def _session_summary(term: "Terminal", sess, t_start) -> None:

@@ -1297,7 +1297,8 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         if not self.title:
-            self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
+            self.title = os.environ.get("MH_SESSION_NAME", "").strip()[:80] or (
+                text.strip().splitlines()[0][:80] if text.strip() else "Session")
         body = text
         if self.plan:
             body = ("[Plan mode] Investigate as needed with read-only tools, then reply with a clear, numbered plan "
