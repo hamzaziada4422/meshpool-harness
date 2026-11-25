@@ -104,7 +104,24 @@ def test_corrupt_zip_gives_readable_result(tmp_path):
     assert err and "BadZipFile" not in msg
 
 
-def test_null_title_keeps_slide_content():
-    from engines.forge import render
-    import inspect
-    assert 'str(s.get("title") or "")' in inspect.getsource(render)
+def test_null_title_keeps_slide_content(tmp_path, monkeypatch):
+    """PA-forge-09: a slide whose title is null (JSON null from the content model) renders with an empty title and
+    keeps its content. Before the fix the title setter raised a TypeError, the layout and its fallback both failed,
+    and the slide came out blank."""
+    pytest.importorskip("pptx")
+    from pptx import Presentation
+    from engines.forge import common as FC
+    from engines.forge import render as R
+    monkeypatch.setattr(FC, "find_soffice", lambda: None)           # no LibreOffice label pass: the render only
+    out = tmp_path / "null_title.pptx"
+    res = R.render([{"archetype": "cover", "title": "Deck"},
+                    {"archetype": "argument_only", "title": None,
+                     "blocks": [{"text": "KEEPME alpha", "bullets": [{"text": "KEEPME beta"}]}]}],
+                   str(out), fix_labels=False)
+    errs = " ".join(str(e) for e in (res.get("errors") or []))
+    assert "TypeError" not in errs and "NoneType" not in errs, errs
+    assert not res.get("errors"), res.get("errors")
+    p = Presentation(str(out))
+    assert len(p.slides) == 2
+    second = " ".join(sh.text_frame.text for sh in p.slides[1].shapes if sh.has_text_frame)
+    assert "KEEPME alpha" in second and "KEEPME beta" in second

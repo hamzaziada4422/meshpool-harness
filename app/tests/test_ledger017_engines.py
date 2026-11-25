@@ -630,3 +630,72 @@ def test_forge_caches_are_private_and_skip_a_planted_folder(tmp_path, monkeypatc
     monkeypatch.setattr(R, "ICON_CACHE", None)
     assert got in R._icon_cache().parents
     assert TP.CACHE.parent == Path(".")                                   # a name only: built inside forge_cache()
+
+
+def test_forge_brand_master_and_template_are_built_in_forge_cache(tmp_path, monkeypatch):
+    """PA-engines-31 (brand and template caches): the recoloured brand master (brand.master_template) and the built
+    forge template (template._build) are written inside engines.icons.forge_cache(), the private per-user folder,
+    and never into the shared temp folder, where another user could plant a file at the predictable name first."""
+    pytest.importorskip("pptx")
+    import tempfile as _tf
+    from pptx import Presentation
+    import engines.icons as IC
+    from engines.forge import brand as B, template as TP
+    shared, mine = tmp_path / "shared tmp", tmp_path / "mine"
+    shared.mkdir()
+    mine.mkdir(mode=0o700)
+    monkeypatch.setattr(_tf, "tempdir", str(shared))                     # the shared temp folder
+    monkeypatch.setattr(IC, "forge_cache", lambda: mine)                 # the private per-user cache
+    src = tmp_path / "company.pptx"
+    Presentation().save(src)
+    prof = {"template_mode": "master", "template": str(src),
+            "colors": {"accent1": "0B6E4F", "dk2": "123ABC"}, "fonts": {"major": "Georgia", "minor": "Arial"}}
+    got = Path(B.master_template(prof))
+    assert got.exists() and got.parent == mine and got.name.startswith("forge_brand")
+    TP._build.cache_clear()
+    try:
+        built = Path(TP.default_template({"palette": "forest", "frame": "band", "accent1": "13579B"}))
+        assert built.exists() and built.parent == mine and built.name.startswith(TP.CACHE.stem)
+    finally:
+        TP._build.cache_clear()                                           # later tests build in their own folder
+    assert not any(shared.rglob("*.pptx")), sorted(shared.rglob("*"))   # nothing written to the shared folder
+
+
+@pytest.mark.skipif(os.name == "nt", reason="a POSIX path; Windows URIs are checked by Path.as_uri itself")
+def test_kb_thumbnails_profile_uri_is_escaped_for_spaces_and_non_ascii(tmp_path, monkeypatch):
+    """PA-forge-07 (profile URI): the LibreOffice profile is passed as Path.as_uri(), so a temp folder with a space
+    or a non-ASCII letter (a user name like "José Smith") gives a valid, percent-escaped file URI. "file://" + the
+    raw path would put the space and the raw letter into the URI and LibreOffice would not use the profile."""
+    pytest.importorskip("pypdfium2")
+    import tempfile as _tf
+    from urllib.parse import unquote
+    from engines.forge import common as FC
+    from engines.forge import kb_ingest as K
+    odd = tmp_path / "José Smith tmp"
+    odd.mkdir()
+    monkeypatch.setattr(_tf, "tempdir", str(odd))
+    monkeypatch.setattr(FC, "find_soffice", lambda: "/usr/bin/soffice")
+    cmds = []
+
+    class P:
+        pid = 4321
+
+        def __init__(self, cmd, **kw):
+            cmds.append(cmd)
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(K, "subprocess", types.SimpleNamespace(Popen=P, DEVNULL=subprocess.DEVNULL,
+                                                               TimeoutExpired=subprocess.TimeoutExpired))
+    deck = tmp_path / "one.pptx"
+    deck.write_bytes(b"x")
+    assert K.thumbnails([deck], tmp_path / "thumbs", timeout=1, single_timeout=1) == {}
+    assert cmds
+    for cmd in cmds:
+        prof = next(a for a in cmd if a.startswith("-env:UserInstallation="))[len("-env:UserInstallation="):]
+        assert prof.startswith("file:///") and prof.endswith("/profile")
+        assert " " not in prof and "é" not in prof                           # escaped, not raw
+        assert "Jos%C3%A9%20Smith%20tmp/kbthumb_" in prof
+        local = Path(unquote(prof[len("file://"):]))
+        assert local.parent.parent == odd and prof == local.as_uri()
