@@ -122,3 +122,16 @@ cost per solved ratio 1.19x (95% CI 0.92-1.55)
 median per-task time ratio 1.02x (95% CI 0.58-1.22)
 BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
 ```
+
+## office_59e49c8b pooled (mp-work; codex rows from office_1c0b6df5)
+```
+tasks: mp-work 17, codex 17, paired 17
+   mp-work: solved 30/34 (88.2%)  $ 0.3782  $/solved 0.01261  median s 46.2  errors 0
+     codex: solved 33/34 (97.1%)  $ 0.2689  $/solved 0.00815  median s 37.4  errors 0
+solve-rate diff -8.8 pts (95% CI -17.6 to +0.0)
+cost per solved ratio 1.55x (95% CI 1.11-1.92)
+median per-task time ratio 1.26x (95% CI 0.91-1.75)
+BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
+```
+
+Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $6.38.
