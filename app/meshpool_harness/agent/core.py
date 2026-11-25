@@ -987,7 +987,9 @@ def _bash_segments_match(cmd: str, pattern: str, deny: bool = False) -> bool:
         return fnmatch.fnmatchcase(cmd, pattern)
     if _CHAIN.search(pattern):                     # the rule itself names a chain: part by part, same number of
         pp = [x.strip() for x in _CHAIN.split(pattern) if x.strip()]   # parts, so a trailing * never covers a
-        return len(pp) == len(parts) and all(fnmatch.fnmatchcase(x, y) for x, y in zip(parts, pp))  # part added
+        ops = lambda t: [o.strip() for o in _CHAIN.findall(t)]     # noqa: E731  part added, and the same operators
+        return len(pp) == len(parts) and ops(cmd) == ops(pattern) and \
+            all(fnmatch.fnmatchcase(x, y) for x, y in zip(parts, pp))   # in order (`a && b` never allows `a; b`)
     return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
 
 
@@ -1073,6 +1075,37 @@ def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     return ""
 
 
+_WALK_SKIP = frozenset({".git", "node_modules", ".venv", "venv", "env", "__pycache__", ".mypy_cache", ".pytest_cache",
+                        ".ruff_cache", ".tox", "dist", "build", ".next", "target", "Meshpool outputs"})
+
+
+def _recent_office(root, since: float, ext: str, cap: int = 20000) -> list:
+    """Office files (by extension) modified at or after `since` under root: one bounded walk that skips version
+    control, dependency and build folders and stops after `cap` entries, so a pre-answer check never stalls a chat
+    rooted in a large folder (code review: five full rglob walks per answer). Cached per (root, since) for a turn."""
+    key = (str(root), since)
+    cache = _recent_office.__dict__.setdefault("cache", {})
+    if key not in cache or time.time() - cache[key][0] > 2:      # one answer's checks share a walk, never the next
+        found, seen = [], 0
+        for d, dirs, files in os.walk(str(root)):
+            dirs[:] = [x for x in dirs if x not in _WALK_SKIP and not x.startswith(".")]
+            for f in files:
+                seen += 1
+                if f.startswith("~$") or not f.lower().endswith((".pptx", ".xlsx", ".docx")):
+                    continue
+                fp = Path(d) / f
+                try:
+                    if fp.stat().st_mtime >= since:
+                        found.append(fp)
+                except OSError:
+                    pass
+            if seen >= cap:
+                break
+        cache.clear()
+        cache[key] = (time.time(), found)
+    return [f for f in cache[key][1] if f.suffix.lower() == ext]
+
+
 _SLIDES = re.compile(r"\b(\d{1,2})\s*(?:to|-|–|or)\s*(\d{1,2})[\s-]+slides?\b|\b(\d{1,2})[\s-]+slides?\b", re.I)
 
 
@@ -1092,9 +1125,7 @@ def _slide_count_miss(asked: str, root, since: float) -> str:
     lo, hi = min(lo, hi), max(lo, hi)
     out = []
     try:
-        for f in Path(root).rglob("*.pptx"):
-            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
-                continue
+        for f in _recent_office(root, since, ".pptx"):
             with zipfile.ZipFile(f) as z:
                 n = sum(1 for x in z.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", x))
             if not lo <= n <= hi:
@@ -1127,9 +1158,7 @@ def _total_row_miss(asked: str, root, since: float) -> str:
         return ""
     bad = []
     try:
-        for f in Path(root).rglob("*.xlsx"):
-            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
-                continue
+        for f in _recent_office(root, since, ".xlsx"):
             wb = openpyxl.load_workbook(f)
             sums = labelled = 0
             for ws in wb.worksheets:
@@ -1183,9 +1212,8 @@ def _template_format_miss(asked: str, root, since: float) -> str:
         if not (want_b or want_i):
             return ""
         lost = []
-        for f in Path(root).rglob("*.docx"):
-            if f.resolve() == tpl.resolve() or f.name.startswith("~$") or "Meshpool outputs" in f.parts \
-                    or f.stat().st_mtime < since:
+        for f in _recent_office(root, since, ".docx"):
+            if f.resolve() == tpl.resolve():
                 continue
             b, i = marks(f)
             if (want_b and not b) or (want_i and not i):
@@ -1209,9 +1237,7 @@ def _off_slide_miss(root, since: float) -> str:
         return ""
     out = []
     try:
-        for f in Path(root).rglob("*.pptx"):
-            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
-                continue
+        for f in _recent_office(root, since, ".pptx"):
             prs = Presentation(str(f))
             W, H = prs.slide_width or 0, prs.slide_height or 0
             for i, slide in enumerate(prs.slides, 1):
@@ -1252,13 +1278,17 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
                  for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
     try:
         names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
-        inputs = [f for f in Path(root).rglob("*.xlsx") if f.name.lower() in names and f.stat().st_mtime < since]
+        outs = _recent_office(root, since, ".xlsx")
+        if not outs:
+            return ""
+        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+                  if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         if not inputs:
             return ""
         src = {f: values(f) for f in inputs}
         same = []
-        for f in Path(root).rglob("*.xlsx"):
-            if f in src or "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
+        for f in outs:
+            if f in src:
                 continue
             v = values(f)
             if any(v == sv for sv in src.values()):
@@ -1665,13 +1695,18 @@ class Agent:
             # chat from capabilities.needs): a Code chat makes those files too instead of saying it cannot. A lean Work
             # chat works the same way (office_task is always there): loading the office server for every message added
             # about 3k tokens a call and its start-up time to chats that never touch a document.
+            try:                                   # by the module it runs: a user's own server may be named browser
+                own_browser = self.mcp.builtin_tool_names("browser_mcp_server") if self.mcp else set()
+            except Exception:  # noqa: BLE001
+                own_browser = set()
+
             def keep(name: str) -> bool:
                 n = name.replace("-", "_")
                 if n.startswith("mcp__meshpool_office__"):
                     return bool(getattr(self, "office_on", False))
                 if n.startswith("mcp__meshpool_assistant__"):      # memory, schedules, chat search stay in Code chats
                     return not n.endswith("run_subtasks")
-                if n.startswith("mcp__browser__"):                 # Meshpool's own browser server: on request, as
+                if name in own_browser:                          # Meshpool's own browser server: on request, as
                     return bool(getattr(self, "browser_on", False))   # the office tools (5k tokens on every call)
                 return not n.startswith("mcp__meshpool_") and not name.endswith("run_subtasks")
             mcp = [x for x in self.mcp.schemas() if keep(x["function"]["name"])] if self.mcp else []
@@ -2345,7 +2380,7 @@ class Agent:
                         if bad and not any(c.get("code") == 0 and checks(c) for c in cmds[bad[-1] + 1:]):
                             g["office_check_nudged"] = True
                             self.messages.append({"role": "user", "content": (
-                                "[Meshpool] Your own check failed and the file has not been saved "
+                                "[Meshpool] Your own check failed and no check has passed "
                                 "since. The job is not done: change the file so it does what the request asks, save "
                                 "it and check again. If the request really cannot be met, say exactly why in one line.")})
                             continue
@@ -3150,7 +3185,10 @@ class Agent:
         if not saved:
             return ""
         after = cmds[saved[-1] + 1:]
-        if len(after) < cap or any(c.get("code") not in (0, None) for c in after):
+        # only checks count: a read or an assert, never a script that may itself write (`python make_letter.py 3`)
+        looks = [c for c in after if re.search(r"\bassert\b|\bcheck|\bverify|load_workbook|Document\(|Presentation\(|"
+                                               r"\bunzip\b|\bgrep\b|\bcat\b|\bhead\b", str(c.get("cmd", "")), re.I)]
+        if len(looks) < cap or len(looks) != len(after) or any(c.get("code") not in (0, None) for c in after):
             return ""
         g["verify_capped"] = True
         return (f"\n[Meshpool] The file is saved and your last {len(after)} checks passed. Stop checking: answer now, "

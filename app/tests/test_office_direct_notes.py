@@ -131,7 +131,7 @@ def test_office_direct_does_not_accept_done_right_after_its_own_failed_assert(tm
     file unchanged. Once per request it is told the job is not done."""
     a = _office_agent(tmp_path, monkeypatch)
     assert a.send("Delete the blank rows above Code in data.xlsx") == "Fixed and saved."
-    assert any("Your own check failed and the file has not been saved" in str(m.get("content")) for m in a.messages)
+    assert any("Your own check failed and no check has passed" in str(m.get("content")) for m in a.messages)
 
 
 def test_office_finish_check_can_be_switched_off(tmp_path, monkeypatch):
@@ -223,7 +223,7 @@ def test_verification_cap_after_a_saved_file(tmp_path, monkeypatch):
     a = Agent.__new__(Agent)
     a._office_direct = lambda: True
     save = {"cmd": "python3 -c 'wb.save(\"b.xlsx\")'", "code": 0}
-    chk = {"cmd": "python3 -c 'print(1)'", "code": 0}
+    chk = {"cmd": "python3 -c 'from openpyxl import load_workbook; assert load_workbook(\"b.xlsx\")'", "code": 0}
     a.ws = SimpleNamespace(commands=[save, chk, chk, chk])
     g = {"cmds0": 0}
     assert a._office_verify_note(g) == ""                       # three checks: not yet
@@ -388,3 +388,42 @@ def test_failed_check_note_cleared_by_a_later_passing_check(tmp_path, monkeypatc
                                                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}, True)
     assert a.send("Fix the totals in sheet.xlsx") == "Done."
     assert not any("Your own check failed" in str(m.get("content")) for m in a.messages)
+
+
+def test_review_verify_cap_does_not_count_scripts_that_may_write(tmp_path):
+    from types import SimpleNamespace
+    from meshpool_harness.agent.core import Agent
+    a = Agent.__new__(Agent)
+    a._office_direct = lambda: True
+    save = {"cmd": "python3 -c 'wb.save(\"b.xlsx\")'", "code": 0}
+    build = {"cmd": "python3 make_letter.py 3", "code": 0}
+    a.ws = SimpleNamespace(commands=[save, build, build, build, build])
+    assert a._office_verify_note({"cmds0": 0}) == ""
+
+
+def test_review_office_walk_skips_heavy_folders_and_expires(tmp_path):
+    import time as _t
+    from meshpool_harness.agent import core as C
+    (tmp_path / "node_modules" / "x").mkdir(parents=True)
+    (tmp_path / "node_modules" / "x" / "a.xlsx").write_bytes(b"x")
+    t0 = _t.time() - 1
+    (tmp_path / "out.xlsx").write_bytes(b"x")
+    assert [f.name for f in C._recent_office(tmp_path, t0, ".xlsx")] == ["out.xlsx"]
+    (tmp_path / "later.xlsx").write_bytes(b"x")
+    _t.sleep(2.1)
+    assert sorted(f.name for f in C._recent_office(tmp_path, t0, ".xlsx")) == ["later.xlsx", "out.xlsx"]
+
+
+def test_review_only_meshpools_browser_server_is_gated(tmp_path):
+    from types import SimpleNamespace
+    from meshpool_harness.agent import mcp as MCP
+    m = MCP.Manager.__new__(MCP.Manager)
+    import threading
+    m._lock = threading.Lock()
+    own = SimpleNamespace(name="browser", spec={"args": ["-m", "meshpool_harness.agent.browser_mcp_server"]},
+                          tools=[{"name": "browser_open"}])
+    user = SimpleNamespace(name="browser2", spec={"args": ["@playwright/mcp"]}, tools=[{"name": "browser_open"}])
+    m.servers = {"browser": own, "browser2": user}
+    m._names = {("browser", "browser_open"): "mcp__browser__browser_open",
+                ("browser2", "browser_open"): "mcp__browser2__browser_open"}
+    assert m.builtin_tool_names("browser_mcp_server") == {"mcp__browser__browser_open"}

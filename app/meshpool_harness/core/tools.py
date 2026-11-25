@@ -242,13 +242,33 @@ def shell_script(argv) -> str:
         return argv[2]
     if len(argv) == 1:
         return argv[0]
-    if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]):
+    if os.path.basename(argv[0]) not in ("bash", "sh", "zsh") and any(_ARGV_OP.match(a) for a in argv[1:]) \
+            and not _pattern_is_operator(argv):
         # swe6 traces (D0, 7 calls in 23 runs): ["python", "t.py", "2>&1", "|", "tail"] meant a pipeline; joined as
         # quoted words it ran python with "|" as an argument and failed. Operators standing alone stay operators. The
         # permission checks read this same script (permrules.commands_of), so they judge what really runs.
         execs = any(a in ("-exec", "-execdir", "-ok", "-okdir") for a in argv)   # find -exec ... ; ends with ";"
         return " ".join(a if _ARGV_OP.match(a) and not (execs and a == ";") else shlex.quote(a) for a in argv)
     return shlex.join(argv)
+
+
+def _pattern_is_operator(argv) -> bool:
+    """A search whose pattern is itself an operator character (["grep", "-c", "|", "notes.md"]): the "|" is the text
+    searched for, not a pipe (code review). The pattern is the first argument that is not an option (or -e's value)."""
+    if os.path.basename(argv[0]) not in ("grep", "egrep", "fgrep", "rg", "ag", "ack"):
+        return False
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a in ("-e", "--regexp"):
+            return i + 1 < len(argv) and bool(_ARGV_OP.match(argv[i + 1]))
+        if a == "--":
+            return i + 1 < len(argv) and bool(_ARGV_OP.match(argv[i + 1]))
+        if a.startswith("-") and a != "-":
+            i += 1
+            continue
+        return bool(_ARGV_OP.match(a))
+    return False
 
 
 # An argv element that is a shell operator on its own: | || && ; & > >> 2> 2>&1 &> < and a redirect to /dev/null

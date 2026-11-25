@@ -140,10 +140,10 @@ def scratch_rm(cmd: str, root, workdir: str | None = None) -> bool:
             p = Path(os.path.realpath(os.path.join(str(cwd), t)))
             if p == r or p in r.parents:
                 return False                       # the project or a folder holding it
-            if _within(p, r, strict=True):         # in the project (even one under /tmp): the project's rules
-                if rec and name not in _CACHE_DIRS:
-                    return False
-            elif not any(_within(p, tb, strict=True) for tb in temps):
+            if rec and not (_within(p, r, strict=True) and name in _CACHE_DIRS):
+                return False                       # a recursive delete: only a cache folder in the project (/tmp is
+            if not _within(p, r, strict=True) and \
+                    not any(_within(p, tb, strict=True) for tb in temps):   # shared: other projects live there)
                 return False                       # neither the project nor a temp folder
     return True
 

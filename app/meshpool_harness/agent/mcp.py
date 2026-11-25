@@ -1432,6 +1432,15 @@ class Manager:
         self._rebuild()
         return s
 
+    def builtin_tool_names(self, module: str) -> set:
+        """The model-facing names of the tools served by one of Meshpool's own servers, found by the module it runs
+        (browser_mcp_server, office_mcp_server, ...), not by the server's name, which a user's server may share."""
+        with self._lock:
+            names = dict(self._names)
+        return {fn for s in list(self.servers.values())
+                if any(module in str(a) for a in (getattr(s, "spec", {}) or {}).get("args") or [])
+                for t in s.tools for fn in [names.get((s.name, t["name"]))] if fn}
+
     def schemas(self) -> list[dict]:
         out = []
         if self._sig != tuple((s.name, t["name"]) for s in list(self.servers.values())

@@ -35,7 +35,9 @@ def test_scratch_rm_in_a_temp_folder(tmp_path, monkeypatch):
     proj = tmp_path / "proj"
     proj.mkdir()
     monkeypatch.setattr(PR, "_temp_roots", lambda: [t.resolve()])
-    assert PR.scratch_rm(f"rm -rf {t}/w", proj)
+    assert not PR.scratch_rm(f"rm -rf {t}/w", proj)              # recursive deletes in shared tmp need a yes (review)
+    (t / "w" / "f.txt").write_text("x")
+    assert PR.scratch_rm(f"rm -f {t}/w/f.txt", proj)               # a named file there is scratch
     assert not PR.scratch_rm(f"rm -rf {t}", proj)                  # the temp folder itself
     assert not PR.scratch_rm(f"rm -rf {t}/*", proj)
     monkeypatch.setattr(PR, "_temp_roots", lambda: [tmp_path.resolve()])   # the project inside the temp folder
@@ -108,3 +110,23 @@ def test_review_pipelines_git_and_globs_stay_destructive(tmp_path, cmd):
 def test_find_exec_semicolon_stays_an_argument():
     assert shell_script(["find", ".", "-name", "*.pyc", "-exec", "rm", "{}", ";"]) == \
         "find . -name '*.pyc' -exec rm '{}' ';'"
+
+
+def test_review_recursive_deletes_in_shared_tmp_need_a_yes(tmp_path):
+    proj = tmp_path / "p"
+    proj.mkdir()
+    assert not PR.scratch_rm("rm -rf /tmp/other_project_dir", proj)      # /tmp is shared: other projects live there
+    assert PR.scratch_rm("rm -rf __pycache__", proj)
+
+
+def test_review_grep_for_a_pipe_character_stays_a_search():
+    assert shell_script(["grep", "-c", "|", "notes.md"]) == "grep -c '|' notes.md"
+    assert shell_script(["rg", "-e", "&", "x.txt"]) == "rg -e '&' x.txt"
+    assert shell_script(["grep", "-n", "foo", "f", "|", "head"]) == "grep -n foo f | head"
+
+
+def test_review_chain_rule_needs_the_same_operators():
+    from meshpool_harness.agent.core import _bash_segments_match as M
+    assert M("make && make test", "make && make test*")
+    assert not M("make; make test", "make && make test*")
+    assert not M("make | make test", "make && make test*")
