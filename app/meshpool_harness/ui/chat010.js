@@ -44,7 +44,8 @@ function popAt(anchor, html, cls = "") {
   const off = ev => { if (!p.contains(ev.target) && ev.target !== anchor && !anchor.contains(ev.target)) close(); };
   const key = ev => { if (ev.key === "Escape") close(); };
   const close = () => { p.remove(); document.removeEventListener("mousedown", off, true); document.removeEventListener("keydown", key, true); };
-  setTimeout(() => { document.addEventListener("mousedown", off, true); document.addEventListener("keydown", key, true); }, 0);
+  // only while still open: a popover replaced in the same tick is closed before this runs and must add nothing
+  setTimeout(() => { if (p.isConnected) { document.addEventListener("mousedown", off, true); document.addEventListener("keydown", key, true); } }, 0);
   p.close = close; return p;
 }
 async function xray010(anchor) {
