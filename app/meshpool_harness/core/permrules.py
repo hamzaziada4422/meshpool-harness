@@ -15,7 +15,7 @@ from meshpool_harness import fsio
 _SUBCMD = frozenset("git npm npx pnpm yarn bun cargo go docker kubectl make uv pip pip3 poetry dotnet gradle mvn gh "
                     "brew terraform helm".split())
 # Programs that run another program or code given to them: a chat grant on one would cover whatever it runs
-# ("Allow timeout" then covers `timeout 5 bash -c "rm -rf ~"`; "Allow find" covers `find . -exec rm -rf {} \;`).
+# ("Allow timeout" then covers `timeout 5 bash -c "rm -rf ~"`; "Allow find" covers `find . -exec rm -rf {} ;`).
 _NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ssh perl ruby php "
                       "timeout nice nohup command time stdbuf watch find awk gawk mawk sed parallel "
                       "busybox chroot unshare nsenter setsid script strace ltrace".split())
