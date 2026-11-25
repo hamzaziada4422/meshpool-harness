@@ -57,6 +57,13 @@ HELP = {
     "check": "Usage: meshpool check [--live]\nShow settings and installed tools; --live sends one tiny model call.",
     "install-browser": "Usage: meshpool install-browser\nInstall Playwright and Chromium for the browser engine.",
     "acp": "Usage: meshpool acp [--profile code|work] [--auto]\nServe the Meshpool agent over ACP on stdio.",
+    "trust": "Usage: meshpool trust [PATH] [--revoke] [--list]\nTrust a folder so its hooks, allow rules and MCP servers "
+             "apply; --revoke takes it back, --list shows trusted folders.",
+    "office": "Usage: meshpool office install | status | uninstall | manifest\nSet up the meshpool panel in Excel, "
+              "PowerPoint and Word.",
+    "completion": "Usage: meshpool completion bash|zsh|fish\nPrint a shell completion script.",
+    "doctor": "Usage: meshpool doctor [FOLDER]\nFind problems in settings, hooks, rules, MCP server lists, skills and "
+              "sub-agents.",
 }
 TOPICS = {
     "telemetry": "OpenTelemetry export is off. Turn it on with `meshpool settings set MH_OTEL=1 MH_OTEL_ENDPOINT=URL`\n"

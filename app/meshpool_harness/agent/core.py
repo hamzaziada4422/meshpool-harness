@@ -981,8 +981,6 @@ def effort_choice(v) -> str:
     return v if v in EFFORTS else ""
 
 
-
-
 _OWN_MCP = ("mcp__meshpool_assistant__", "mcp__meshpool_tools__")
 _AUX = threading.local()                              # set while a side question (/btw) calls the model
 

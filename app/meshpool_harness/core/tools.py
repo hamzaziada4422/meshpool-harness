@@ -344,10 +344,11 @@ def git_config_safe(root) -> bool:
     if (Path(root) / ".gitmodules").exists():           # submodules have configs and hooks of their own
         return False
     try:                                                  # hooks in the repo's own .git/hooks run on some reads
-        h = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
-                           timeout=10).stdout.strip()
-        hooks = Path(h) if os.path.isabs(h) else Path(root) / h
-        if hooks.is_dir() and any(f.is_file() and not f.name.endswith(".sample") for f in hooks.iterdir()):
+        r = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
+                           timeout=10)
+        h = r.stdout.strip()
+        hooks = (Path(h) if os.path.isabs(h) else Path(root) / h) if r.returncode == 0 and h else None
+        if hooks is not None and hooks.is_dir() and any(f.is_file() and not f.name.endswith(".sample") for f in hooks.iterdir()):
             return False
     except (OSError, subprocess.SubprocessError):
         return False

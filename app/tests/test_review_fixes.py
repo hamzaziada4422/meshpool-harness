@@ -498,3 +498,10 @@ def test_codex_style_chats_get_the_data_rule_on_the_first_message(env):         
     assert core.DATA_RULE in AS.context_block(rules=False, data_rule=True, lookup=False, record=False)
     assert core.DATA_RULE not in AS.context_block(rules=False, lookup=False, record=False)   # in the system prompt
     assert core.DATA_RULE in AS.context_block(rules=True, lookup=False, record=False)       # outside agents
+
+
+def test_git_config_check_outside_a_repository_is_not_fooled_by_plain_files(env):   # 0.0.17 merge
+    d = env / "plain"
+    d.mkdir()
+    (d / "README.md").write_text("hi\n")          # rev-parse fails here; the folder itself is not a hooks folder
+    assert T.git_config_safe(d)

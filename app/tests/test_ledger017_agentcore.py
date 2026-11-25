@@ -109,11 +109,14 @@ def test_k04_benchmark_claims_match_the_raw_rows():
     assert round(per["mp-on-codex"] / per["pi"]) == float(m.group(2))
     readme = (REPO / "README.md").read_text(encoding="utf-8")
     work = next(line for line in readme.splitlines() if line.startswith("| **Meshpool Work**"))
-    w, pi, cx = now["mp-work"], now["pi"], now["codex"]
-    assert f"{w['ok']} of {w['n']} passed" in work
-    assert f"Pi: ${per['pi']:.3f} and {round(pi['secs'] / pi['n'])} s" in work
-    assert f"Codex: ${per['codex']:.3f} and {round(cx['secs'] / cx['n'])} s" in work
-    assert "Not cheaper than Codex or Pi on office work" in work
+    # the README now quotes the 0.0.16 measurements: every "N vs M ... at R" pair must be a row of that table
+    notes = (REPO / "packaging" / "release-notes.md").read_text(encoding="utf-8")
+    table = [ln for ln in notes.splitlines() if ln.strip().startswith("|") and " vs " in ln]
+    pairs = re.findall(r"(\d+) vs (\d+)(?: solved)? at (\d\.\d+)x", work)
+    assert len(pairs) >= 4, work
+    for a, b, r in pairs:
+        assert any(f"| {a} vs {b} |" in ln and f"| {r}x" in ln for ln in table), (a, b, r)
+    assert "fewer SpreadsheetBench and OfficeBench" in work      # the losses are said, not only the wins
     for page in (readme, (REPO / "docs" / "BENCHMARKS.md").read_text(encoding="utf-8")):
         assert "all 7 passed" not in page.lower() and "cheapest on every" not in page.lower()
     v2 = (REPO / "docs" / "BENCHMARKS_V2.md").read_text(encoding="utf-8")

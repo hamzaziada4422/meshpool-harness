@@ -68,7 +68,8 @@ def rules_get() -> tuple[int, dict]:
 
 
 def rules_post(b: dict) -> tuple[int, dict]:
-    """{"action": "add" | "remove", "list": "allow" | "ask" | "deny", "rule", "folder" (remove from a folder)}"""
+    """{"action": "add" | "remove", "list" (or "kind"): "allow" | "ask" | "deny", "rule", "folder" (remove from a
+    folder)}"""
     from meshpool_harness.agent import core as K
     with K.RULES_LOCK:
         return _rules_post(b)
@@ -76,11 +77,13 @@ def rules_post(b: dict) -> tuple[int, dict]:
 
 def _rules_post(b: dict) -> tuple[int, dict]:
     from meshpool_harness.agent import core as K
-    act, lst, rule = b.get("action"), b.get("list"), str(b.get("rule") or "").strip()
+    from meshpool_harness.core import permrules as PR
+    act, lst, raw = b.get("action"), b.get("list") or b.get("kind"), str(b.get("rule") or "")   # "kind": main's name
+    rule = raw.strip()
     if lst not in RULE_LISTS or act not in ("add", "remove") or not rule:
         raise ValueError("Give an action (add or remove), a list (allow, ask or deny) and a rule.")
-    if act == "add" and (len(rule) > 300 or any(c in rule for c in "\n\r")):
-        raise ValueError("A rule is one short line, like bash:git push* or edit.")
+    if act == "add" and PR.check_rule(raw):
+        raise ValueError(PR.check_rule(raw))
     d = _rules_read()
     if b.get("folder"):
         layer = ((d.get("projects") or {}).get(str(b["folder"])) or {})

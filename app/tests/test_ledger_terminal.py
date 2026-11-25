@@ -51,17 +51,7 @@ def test_context_breakdown_names_the_parts(tmp_path, monkeypatch):
     assert rows["System prompt"] > 100
 
 
-def test_effort_is_sent_saved_and_resumed(tmp_path, monkeypatch):
-    _env(tmp_path, monkeypatch)
-    assert core.effort_choice("HIGH") == "high" and core.effort_choice("max") == "auto"
-    ag = core.Agent(str(tmp_path), mode="auto")
-    assert "reasoning_effort" not in ag._body()                    # auto sends nothing
-    ag.effort = "medium"
-    assert ag._body()["reasoning_effort"] == "medium"
-    ag.save()
-    assert core.Agent.resume(str(tmp_path), ag.id).effort == "medium"
-    monkeypatch.setenv("MH_EFFORT", "low")
-    assert core.Agent(str(tmp_path)).effort == "low"
+# effort: main's levels and wiring are tested in test_ws23_effort.py
 
 
 def test_thinking_streams_as_thought_events(tmp_path, monkeypatch):

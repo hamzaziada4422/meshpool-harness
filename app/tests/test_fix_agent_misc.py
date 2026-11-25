@@ -94,14 +94,14 @@ def test_bash_allow_rule_does_not_cover_chained_commands():
 def test_permissions_json_not_a_dict_does_not_crash(tmp_path):
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text("[]", encoding="utf-8")
-    assert A._rules(tmp_path) == {"allow": [], "deny": []}
+    assert A._rules(tmp_path) == {"allow": [], "deny": [], "ask": []}      # 0.0.17: rules that always ask
 
 
 def test_untrusted_project_allow_rules_and_hooks_are_ignored(tmp_path):
     (tmp_path / ".meshpool").mkdir()
     (tmp_path / ".meshpool" / "permissions.json").write_text(json.dumps({"allow": ["bash:*"], "deny": ["x"]}), encoding="utf-8")
     (tmp_path / ".meshpool" / "hooks.json").write_text(json.dumps({"SessionStart": [{"command": "echo hi"}]}), encoding="utf-8")
-    assert A._rules(tmp_path) == {"allow": [], "deny": ["x"]}
+    assert A._rules(tmp_path) == {"allow": [], "deny": ["x"], "ask": []}
     assert EX.hooks(tmp_path)["SessionStart"] == []
     assert EX.untrusted_config(tmp_path)
     EX.trust_project(tmp_path)

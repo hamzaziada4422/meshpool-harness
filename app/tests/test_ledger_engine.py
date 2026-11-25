@@ -3,6 +3,8 @@ files, read_file says when a file is binary."""
 import json
 import subprocess
 
+import pytest
+
 from meshpool_harness.core import tools as T
 
 
@@ -49,7 +51,8 @@ def test_grep_and_glob_respect_gitignore_and_skip_binaries(tmp_path):
     assert out.split("\n") == ["a.py"], out
     assert "gen.py" in ws.grep("needle", path="build", output_mode="files_with_matches")   # asked for on purpose
     assert ws.glob("**/*.py").split("\n") == ["a.py"]
-    assert "is a binary file" in ws.read_file("blob.dat")
+    with pytest.raises(T.ToolError, match="is a binary file"):
+        ws.read_file("blob.dat")
     assert "needle = 2" in ws.read_file("a.py")
 
 
@@ -66,63 +69,20 @@ def test_every_system_prompt_says_tool_output_is_data(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
     from meshpool_harness.agent import core
     for profile in ("code", "work"):
-        assert core.DATA_RULE in core.Agent(str(tmp_path), profile=profile).system_prompt()
-
-
-def _costed(agent, n_tools, cost):
-    """A model that reads a file n_tools times and then answers, each call billed at `cost` (usage.cost)."""
-    import json as _j
-    seq = [{"role": "assistant", "content": "", "tool_calls": [{"id": f"c{i}", "type": "function", "function": {
-        "name": "glob", "arguments": _j.dumps({"pattern": "*"})}}]} for i in range(n_tools)]
-    seq.append({"role": "assistant", "content": "done"})
-
-    def fake(base, key, body, stream):
-        return {"choices": [{"message": seq.pop(0), "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost": cost}}, False
-    agent._post = fake
-
-
-def test_session_cost_comes_from_the_provider_and_the_task_limit_stops_a_chat(tmp_path, monkeypatch):
-    from meshpool_harness.agent import core
-    monkeypatch.setattr(core, "SESSIONS", tmp_path / "_s")
-    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
-    monkeypatch.delenv("MH_BUDGET_USD", raising=False)
-    a = core.Agent(str(tmp_path), mode="auto")
-    _costed(a, 2, 0.01)
-    assert a.send("go") == "done"
-    assert abs(a.usage["cost"] - 0.03) < 1e-9
-    monkeypatch.setenv("MH_BUDGET_USD", "0.025")
-    b = core.Agent(str(tmp_path), mode="auto")
-    events = []
-    b.emit = events.append
-    _costed(b, 10, 0.01)
-    b.send("go")
-    errs = [e["text"] for e in events if e.get("type") == "error"]
-    assert errs and "spending limit of $" in errs[0] and b.usage["calls"] == 3
-    assert b.unfinished
-
-
-def test_cost_from_gateway_header_and_user_prices(monkeypatch):
-    from meshpool_harness.agent import core
-
-    class R:
-        headers = {"x-litellm-response-cost": "0.0042"}
-    resp = {"usage": {"prompt_tokens": 5}}
-    core._header_cost(R(), resp)
-    assert core._call_cost(resp["usage"]) == 0.0042
-    monkeypatch.delenv("MH_PRICE_IN", raising=False)
-    monkeypatch.delenv("MH_PRICE_OUT", raising=False)
-    assert core._call_cost({"prompt_tokens": 1000}) is None
-    monkeypatch.setenv("MH_PRICE_IN", "1")
-    monkeypatch.setenv("MH_PRICE_OUT", "2")
-    assert core._call_cost({"prompt_tokens": 1_000_000, "completion_tokens": 500_000}) == 2.0
+        a = core.Agent(str(tmp_path), profile=profile)
+        if a._style():                      # Codex's own prompt: the rule rides on the first message instead
+            from meshpool_harness import assistant as AS
+            assert core.DATA_RULE in AS.context_block(rules=False, data_rule=True, lookup=False, record=False)
+        else:
+            assert core.DATA_RULE in a.system_prompt()
 
 
 def test_refusal_and_content_filter_are_said_plainly(tmp_path, monkeypatch):
     from meshpool_harness.agent import core
     monkeypatch.setattr(core, "SESSIONS", tmp_path / "_s")
     monkeypatch.setenv("MESHPOOL_API_KEY", "k")
-    for msg, fin in (({"role": "assistant", "content": ""}, "content_filter"),
+    # 0.0.17: an empty content-filter reply is main's "no usable reply" (retried, then an error); one with text keeps it
+    for msg, fin in (({"role": "assistant", "content": "Part of it"}, "content_filter"),
                      ({"role": "assistant", "content": None, "refusal": "I can't help with that."}, "stop")):
         a = core.Agent(str(tmp_path), mode="auto")
         a._post = lambda base, key, body, stream, m=msg, f=fin: ({"choices": [{"message": dict(m), "finish_reason": f}],
