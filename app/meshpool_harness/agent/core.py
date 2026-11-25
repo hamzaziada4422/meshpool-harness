@@ -1281,7 +1281,7 @@ class Agent:
         CLI 0.171 sends. Its base instructions (prompt-171.md), one tool, exec_command (core/tools.py), plus the user's
         own MCP tools, and its <environment_context> as a user message of its own (_c171_env). Like _bare_codex: no
         preload, re-check, keep or requirement notes, route card or grader. The loop guards and compaction stay.
-        Default for a lean-core code chat in a repo too large to preload (MH_LARGE_REPO_STYLE, default "c171"): swe7
+        Default for every lean-core code chat (MH_LARGE_REPO_STYLE and MH_SMALL_REPO_STYLE, default "c171"): swe7
         (swe_sympy, 12 tasks x 2, docs/results/swe7) c171 solved 22/24 vs Codex 21/24 at 0.73x its cost per solved
         task (CI 0.57-0.90), 0.93x its time; the lean core there solved 20/24 at 1.86x. MH_LARGE_REPO_STYLE=codex
         keeps the plain Codex design (_bare_codex), =core the lean core."""
@@ -1294,10 +1294,10 @@ class Agent:
                 return False
             if self._large_repo():
                 return os.environ.get("MH_LARGE_REPO_STYLE", "c171") == "c171"
-            # a smaller repo keeps the lean core (MH_SMALL_REPO_STYLE=c171 opts into Codex 0.171's request there too):
-            # final20-22 (v2_eval, 52 tasks x 2 x 3 rounds) 294/312 vs Codex 280/312 at 0.77x its cost per solved
-            # task and 0.74x its time; broad1 build/debug/deep/hard tied Codex at 0.22-0.67x. c171 is unmeasured there.
-            return os.environ.get("MH_SMALL_REPO_STYLE", "core") == "c171"
+            # a smaller repo too (MH_SMALL_REPO_STYLE, default "c171"; =core keeps the lean core). Release round,
+            # against Codex 0.171: v2_dev code c171 39/42 vs 38/42 at 0.79x its cost per solved task (lean core 34/42);
+            # final22 (v2_eval + build/debug/deep/hard) c171 144/156 vs 145/156 at 0.71x (lean core 143/156, 0.67x)
+            return os.environ.get("MH_SMALL_REPO_STYLE", "c171") == "c171"
         except Exception:  # noqa: BLE001
             return False
 
