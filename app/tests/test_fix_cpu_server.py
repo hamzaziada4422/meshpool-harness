@@ -92,3 +92,51 @@ def test_event_stream_wakes_on_emit_without_polling(tmp_path):
     s.emit({"type": "assistant", "text": "hi"})
     th.join(3)
     assert got and got[0] < 2
+
+
+def test_event_stream_sends_about_30_frames_a_second(monkeypatch):
+    # A reply streams as hundreds of text_delta a second; the stream woke for each one and slept only 10 ms, so the
+    # page got ~80 frames a second to parse and apply (CPU audit). Now about 30, every delta still delivered in order.
+    from meshpool_harness.ui import server as SV
+
+    class Out:
+        def __init__(self):
+            self.parts = []
+
+        def write(self, b):
+            self.parts.append(b)
+
+        def flush(self):
+            pass
+
+    s = type("S", (), {})()
+    s.lock = threading.RLock()
+    s.changed = threading.Condition(s.lock)
+    s.events, s.state, s.epoch = [], "working", 1
+    monkeypatch.setattr(A, "get", lambda sid, *a, **k: s)
+    monkeypatch.setattr(A, "view", lambda sid, since: {"id": sid, "state": s.state, "epoch": 1, "total": len(s.events),
+                                                       "events": s.events[since:]})
+    h = SV.Handler.__new__(SV.Handler)
+    h.wfile = Out()
+    h.send_response = h.send_header = lambda *a, **k: None
+    h.end_headers = lambda: None
+
+    def writer():
+        t_end = time.time() + 1.0
+        while time.time() < t_end:
+            with s.lock:
+                s.events.append({"i": len(s.events), "type": "text_delta", "text": "w "})
+                s.changed.notify_all()
+            time.sleep(0.002)
+        with s.lock:
+            s.state = "idle"
+            s.changed.notify_all()
+    th = threading.Thread(target=writer)
+    th.start()
+    h._event_stream("c1", 0)
+    th.join(3)
+    frames = [json.loads(p[6:]) for p in b"".join(h.wfile.parts).decode().split("\n\n") if p.startswith("data: {")]
+    got = [e["i"] for f in frames for e in f.get("events", [])]
+    print("SSE frames for 1 s of deltas:", len(frames), "deltas", len(got))
+    assert got == list(range(len(s.events)))          # nothing lost, nothing twice, in order
+    assert len(frames) <= 45, len(frames)             # was ~90
