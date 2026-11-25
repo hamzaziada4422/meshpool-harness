@@ -1349,7 +1349,25 @@ _SAYS_WRONG = (r"\b(?:incorrect|wrong|not work\w*|doesn'?t work|does not work|is
                r"not (?:giving|returning|showing|calculating)|fix(?:ed)?|error|broken)\b")
 
 
-def _recalc_formulas(path, tmp: str) -> dict | None:
+def _formulas(path) -> dict:
+    """{(sheet, cell): formula text} of a workbook, read without LibreOffice; {} when it cannot be read."""
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(path)
+    except Exception:  # noqa: BLE001
+        return {}
+    forms = {}
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for c in row:
+                v = c.value
+                t = getattr(v, "text", v)                  # an array formula keeps its text in .text
+                if isinstance(t, str) and t.startswith("="):
+                    forms[(ws.title, c.coordinate)] = t
+    return forms
+
+
+def _recalc_formulas(path, tmp: str, forms: dict | None = None, timeout: float = 30) -> dict | None:
     """{(sheet, cell): (formula text, value after a LibreOffice recalculation)} for every formula cell of a workbook;
     None when it cannot be done here (no LibreOffice, no openpyxl, a timeout)."""
     try:
@@ -1362,15 +1380,7 @@ def _recalc_formulas(path, tmp: str) -> dict | None:
     if not exe:
         return None
     try:
-        wb = openpyxl.load_workbook(path)
-        forms = {}
-        for ws in wb.worksheets:
-            for row in ws.iter_rows():
-                for c in row:
-                    v = c.value
-                    t = getattr(v, "text", v)              # an array formula keeps its text in .text
-                    if isinstance(t, str) and t.startswith("="):
-                        forms[(ws.title, c.coordinate)] = t
+        forms = _formulas(path) if forms is None else forms
         if not forms or len(forms) > 5000:
             return {} if not forms else None
         out = Path(tmp) / Path(path).parent.name
@@ -1378,7 +1388,7 @@ def _recalc_formulas(path, tmp: str) -> dict | None:
         kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
         prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
         subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
-                        "--outdir", str(out), str(path)], capture_output=True, timeout=90, **kw)
+                        "--outdir", str(out), str(path)], capture_output=True, timeout=max(1, timeout), **kw)
         made = out / Path(path).name
         if not made.is_file():
             return None
@@ -1404,20 +1414,34 @@ def _formula_result_miss(asked: str, root, since: float) -> str:
                   if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
         says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
         errors, same = [], []
+        old_forms = {}
+        for f in inputs[:2]:
+            old_forms.update(_formulas(f))
+        changed = []                                      # read the formulas first: LibreOffice runs only for a
+        for f in outs:                                    # workbook whose formulas this turn wrote or changed
+            if f in inputs:
+                continue
+            fo = _formulas(f)
+            if any(old_forms.get(k, "").replace(" ", "") != v.replace(" ", "") for k, v in fo.items()):
+                changed.append((f, fo))
+        if not changed:
+            return ""
+        deadline = time.time() + 60                       # the whole check, however many workbooks: one minute
         with tempfile.TemporaryDirectory() as tmp:
             base = {}
-            for i, f in enumerate(inputs[:2]):
-                r = _recalc_formulas(f, str(Path(tmp) / f"in{i}"))
-                if r:
-                    base.update(r)
-            for i, f in enumerate(outs):
-                if f in inputs:
-                    continue
-                got = _recalc_formulas(f, str(Path(tmp) / f"out{i}"))
+            if says_wrong:                                # the originals' results matter only for "same as wrong"
+                for i, f in enumerate(inputs[:2]):
+                    r = _recalc_formulas(f, str(Path(tmp) / f"in{i}"), timeout=deadline - time.time())
+                    if r:
+                        base.update(r)
+            for i, (f, fo) in enumerate(changed[:3]):
+                if time.time() >= deadline:
+                    break
+                got = _recalc_formulas(f, str(Path(tmp) / f"out{i}"), fo, timeout=deadline - time.time())
                 for k, (form, val) in (got or {}).items():
-                    old = base.get(k)
-                    if old is not None and old[0].replace(" ", "") == form.replace(" ", ""):
+                    if old_forms.get(k, "").replace(" ", "") == form.replace(" ", ""):
                         continue                          # a formula the turn left alone is not its doing
+                    old = base.get(k)
                     if isinstance(val, str) and val.strip() in _XL_ERRORS:
                         errors.append(f"{f.name} {k[0]}!{k[1]} = {val.strip()}")
                     elif says_wrong and old is not None and val is not None and val == old[1]:

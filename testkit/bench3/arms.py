@@ -207,8 +207,12 @@ def run_mp_cli(*, prompt, workdir, home, base_url, model, timeout, log, mp_src="
     return r
 
 
-def _client(base: str):
-    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(base + "/", timeout=30).read().decode()).group(1)
+def _client(base: str, log=None):
+    # the page carries the API token only for the app's own window: the launch key the app prints when it starts
+    # (1e954486). Without that line yet, raise: the caller retries until the server is up.
+    key = re.search(r"/\?k=([\w-]+)", _tail(log, 20000)) if log else None
+    url = base + "/" + (f"?k={key.group(1)}" if key else "")
+    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(url, timeout=30).read().decode()).group(1)
 
     def call(path, body=None, timeout=120):
         req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(),
@@ -268,7 +272,7 @@ def _run_mp_app(harness, kind, *, prompt, workdir, home, base_url, model, timeou
             if p.poll() is not None:
                 break
             try:
-                c = _client(base)
+                c = _client(base, log)
                 break
             except Exception:  # noqa: BLE001
                 time.sleep(0.5)

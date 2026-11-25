@@ -58,3 +58,10 @@ def test_a_real_fix_passes(tmp_path):
 
 def test_untouched_formulas_are_not_judged(tmp_path):
     assert _turn(tmp_path, OLD) == ""
+
+
+def test_no_libreoffice_run_when_no_formula_changed(tmp_path, monkeypatch):
+    calls = []
+    real = C._recalc_formulas
+    monkeypatch.setattr(C, "_recalc_formulas", lambda *a, **k: calls.append(a) or real(*a, **k))
+    assert _turn(tmp_path, OLD) == "" and calls == []
