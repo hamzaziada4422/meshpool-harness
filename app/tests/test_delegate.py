@@ -938,3 +938,36 @@ def test_an_untrusted_projects_agents_are_ignored_and_yours_win(monkeypatch, _en
     TR.trust(_env)
     d = SA.definitions(_env)["reviewer"]
     assert d["prompt"] == "Mine." and d["own"] and d["tools"] == ["Read"] and d["model"] is None   # yours win
+
+
+def test_a_saved_sub_agent_preloads_skills_sets_effort_and_can_leave_out_project_instructions(monkeypatch, _env):
+    home = _env.parent / "mphome"
+    monkeypatch.setenv("MESHPOOL_HOME", str(home))
+    from meshpool_harness import skills as SK
+    monkeypatch.setattr(SK, "ensure_defaults", lambda: None)
+    (home / "skills" / "house-style").mkdir(parents=True)
+    (home / "skills" / "house-style" / "SKILL.md").write_text("---\nname: house-style\ndescription: Our style.\n---\n"
+                                                             "Always use tabs in house code.\n")
+    (_env / "AGENTS.md").write_text("PROJECT RULE: never touch vendor/.")
+    (home / "agents").mkdir(parents=True)
+    (home / "agents" / "styler.md").write_text("---\nname: styler\ndescription: Applies our style\nskills:\n"
+                                               "  - house-style\n  - no-such-skill\neffort: high\n"
+                                               "omit-project-instructions: true\n---\nFix the style.\n")
+    (home / "agents" / "plain.md").write_text("---\nname: plain\ndescription: Plain\n---\nDo it.\n")
+    seen, efforts = [], []
+    orig = K.Agent._post
+
+    def post(self, base, key, body, stream):
+        if "You are a focused sub-agent" in body["messages"][0]["content"]:
+            efforts.append(getattr(self, "effort", None))
+        return orig(self, base, key, body, stream)
+    fake(monkeypatch, lambda b: _msg("styled"), seen=seen)
+    D.run_tool(_agent(_env), {"tasks": [{"goal": "Restyle calc.py please", "agent": "styler"},
+                                        {"goal": "Restyle util.py please", "agent": "plain"}]})
+    kids = {("styler" if "YOUR ROLE (styler)" in s["system"] else "plain"): s["system"] for s in seen if s["child"]}
+    assert "SKILLS LOADED FOR YOU" in kids["styler"] and "Always use tabs in house code" in kids["styler"]
+    assert "PROJECT RULE" not in kids["styler"] and "instructions above apply" not in kids["styler"]
+    assert "PROJECT RULE" in kids["plain"] and "SKILLS LOADED" not in kids["plain"]
+    from meshpool_harness.agent import subagents as SA
+    d = SA.definitions(_env)["styler"]
+    assert d["skills"] == ["house-style", "no-such-skill"] and d["effort"] == "high" and d["omit_instructions"]

@@ -75,7 +75,11 @@ def definitions(root) -> dict[str, dict]:
             if not name or not body.strip():
                 continue
             tools = _list(meta.get("tools")) if meta.get("tools") else None
+            omit = str(meta.get("omit-project-instructions") or meta.get("omitClaudeMd") or "").strip().lower()
             out[name] = {"name": name, "description": str(meta.get("description") or "").strip()[:300],
+                         "skills": SK._front_list(text, "skills"),
+                         "effort": str(meta.get("effort") or "").strip().lower(),
+                         "omit_instructions": omit in ("true", "yes", "1"),
                          "tools": tools, "model": (str(meta.get("model") or "").strip()
                                                    if str(meta.get("model") or "").strip().lower() not in _NO_MODEL
                                                    else "") or None,

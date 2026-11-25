@@ -425,6 +425,11 @@ class Delegation:
             return glob(pattern, inside_only=True)
         a.ws.glob = glob_in_project
         a.model = (defn or {}).get("model") or cfg["model"] or parent.current_model()
+        if defn and defn.get("effort"):
+            a.effort = K.effort_choice(defn["effort"])
+        if defn and defn.get("omit_instructions"):        # the project's AGENTS.md and the like stay out
+            a._no_instructions = True
+            a.messages[0]["content"] = a.system_prompt()
         row = self.rows[index]
         block = ("\n\nYou are a focused sub-agent working on one part of a larger job; other sub-agents may work on "
                  "other parts at the same time. You know nothing about the conversation that started you: your task "
@@ -432,9 +437,23 @@ class Delegation:
         if defn:
             block += (f"\n\nYOUR ROLE ({defn['name']}), " + ("saved by the user" if defn.get("own") else
                       "from this project's agents folder") + ":\n" + defn["prompt"][:20000])
+        if defn and defn.get("skills"):                   # skills the definition loads up front
+            from meshpool_harness import skills as SK
+            got, room = [], 30000
+            for sk in defn["skills"][:8]:
+                try:
+                    t = SK.instructions(sk, by_user=True)
+                except ValueError:
+                    continue
+                if len(t) <= room:
+                    got.append(t)
+                    room -= len(t)
+            if got:
+                block += "\n\nSKILLS LOADED FOR YOU (follow them):\n\n" + "\n\n---\n".join(got)
         if row["context"]:
             block += "\n\nCONTEXT:\n" + row["context"]
-        block += f"\n\nWORKSPACE: {a.root if wt else parent.root} (the project's instructions above apply to you too)"
+        block += f"\n\nWORKSPACE: {a.root if wt else parent.root}" + (
+            "" if getattr(a, "_no_instructions", False) else " (the project's instructions above apply to you too)")
         if wt:
             block += (f"\n\nYou work in your own git worktree, {wt['path']}, on the branch {wt['branch']}: a separate "
                       "checkout of the same repository, so other sub-agents and the user's checkout are never affected. "
