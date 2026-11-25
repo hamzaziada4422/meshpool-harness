@@ -323,11 +323,15 @@ B = Browser()
 
 
 def browser_open(url: str) -> str:
+    u = url.strip()
+    if "://" not in u and not u.startswith(("about:", "file:")):
+        u = "https://" + u
+    if u.lower().startswith(("http:", "https:")):          # the user's site lists (Settings) apply here too
+        from meshpool_harness import web as WEB
+        WEB.check_domain(u)
+
     def go():
         B.ensure()
-        u = url.strip()
-        if "://" not in u and not u.startswith(("about:", "file:")):
-            u = "https://" + u
         B.page.goto(u, wait_until="domcontentloaded", timeout=45000)
         return B.snapshot()
     return B.run(go)

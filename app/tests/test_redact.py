@@ -70,3 +70,11 @@ def test_web_site_lists(monkeypatch):
     monkeypatch.setenv("MH_ALLOW_PRIVATE_FETCH", "1")                     # the lists apply even then
     with pytest.raises(WEB.WebError):
         WEB.check_public("https://example.org/")
+
+
+def test_the_browser_tool_keeps_to_the_site_lists_too(monkeypatch):
+    from meshpool_harness import web as WEB
+    from meshpool_harness.agent import browser_mcp_server as BM
+    monkeypatch.setenv("MH_FETCH_DENY", "evil.example")
+    with pytest.raises(WEB.WebError):
+        BM.browser_open("evil.example/login")
