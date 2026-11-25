@@ -89,3 +89,36 @@ cost per solved ratio 2.06x (95% CI 0.89-3.70)
 median per-task time ratio 1.38x (95% CI 0.74-2.16)
 BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
 ```
+
+## v2_dev_c171 (38f57ffb, MH_SMALL_REPO_STYLE=c171; codex rows from v2_dev_core)
+```
+tasks: MP 21, codex 21, paired 21
+        MP: solved 39/42 (92.9%)  $ 0.1525  $/solved 0.00391  median s 41.0  errors 0
+     codex: solved 38/42 (90.5%)  $ 0.1889  $/solved 0.00497  median s 54.1  errors 1
+solve-rate diff +2.4 pts (95% CI -4.8 to +9.5)
+cost per solved ratio 0.79x (95% CI 0.69-0.90)
+median per-task time ratio 0.99x (95% CI 0.81-1.13)
+BAR: cost PASS, quality PASS, time PASS -> ALL PASS
+```
+
+## final22_c171 (38f57ffb, MH_SMALL_REPO_STYLE=c171; codex rows from final22_core)
+```
+tasks: MP 78, codex 78, paired 78
+        MP: solved 144/156 (92.3%)  $ 0.2899  $/solved 0.00201  median s 24.0  errors 0
+     codex: solved 145/156 (92.9%)  $ 0.4109  $/solved 0.00283  median s 22.1  errors 1
+solve-rate diff -0.6 pts (95% CI -5.1 to +3.8)
+cost per solved ratio 0.71x (95% CI 0.65-0.78)
+median per-task time ratio 1.03x (95% CI 0.96-1.20)
+BAR: cost PASS, quality FAIL, time FAIL -> NOT MET
+```
+
+## office_38f57ffb pooled (mp-work; codex rows from office_1c0b6df5)
+```
+tasks: mp-work 17, codex 17, paired 17
+   mp-work: solved 31/34 (91.2%)  $ 0.3015  $/solved 0.00973  median s 39.7  errors 0
+     codex: solved 33/34 (97.1%)  $ 0.2689  $/solved 0.00815  median s 37.4  errors 0
+solve-rate diff -5.9 pts (95% CI -17.6 to +5.9)
+cost per solved ratio 1.19x (95% CI 0.92-1.55)
+median per-task time ratio 1.02x (95% CI 0.58-1.22)
+BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
+```
