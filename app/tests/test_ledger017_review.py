@@ -101,7 +101,7 @@ class _Board:
         self.lock = threading.Lock()
 
 
-def _raw_keys(board, keys=(), on_enter=None):
+def _raw_keys(board, keys=(), on_enter=None, delay=0.0):
     class Raw:
         def __init__(self, fd=None):
             self.pending: list = []
@@ -126,6 +126,7 @@ def _raw_keys(board, keys=(), on_enter=None):
             if self.pending:                      # as RawKeys: keys read together with an earlier one come first
                 return self.pending.pop(0)
             if self.keys:
+                time.sleep(delay)                 # a person takes a moment to answer
                 return self.keys.pop(0)
             if timeout is None:
                 raise EOFError
@@ -147,7 +148,8 @@ def test_esc_watcher_and_a_question_never_read_the_keyboard_together(monkeypatch
     approver_in = threading.Event()
     monkeypatch.setattr(T.K, "RawKeys", _raw_keys(board))            # what the watcher opens
     t = _terminal()
-    t.keys_factory = lambda: _raw_keys(board, keys=["enter"], on_enter=approver_in.set)()   # the approval's keys
+    t.keys_factory = lambda: _raw_keys(board, keys=["enter"], on_enter=approver_in.set,
+                                                delay=0.3)()   # the approval's keys
     result = {}
     real_is_set = t.idle.is_set
     fired = []
