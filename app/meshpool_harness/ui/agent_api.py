@@ -897,15 +897,15 @@ class Session:
     def _office_direct(self, text: str = "") -> bool:
         """The agent writes office files itself (core.Agent._office_direct: a lean Work chat, MH_OFFICE_DIRECT on), so
         the notes name the libraries, not engine tools. Not once the engines are offered: a message asking for a new
-        deck, report or model (office_intent.styled_deliverable, the same test Agent.send makes for this message after
+        deck, report or model (office_intent.engines_wanted, the same test Agent.send makes for this message after
         these notes are built), or an earlier one did. MH_OFFICE_DIRECT_NOTE=0 keeps the engine notes."""
         if os.environ.get("MH_OFFICE_DIRECT_NOTE", "1") == "0" or self.harness.get("type") in ("acp", "pi"):
             return False
         try:
             if not self.agent._office_direct() or getattr(self.agent, "office_engines", False):
                 return False
-            from meshpool_harness.office_intent import styled_deliverable
-            return not (text and styled_deliverable(text))
+            from meshpool_harness.office_intent import engines_wanted
+            return not (text and engines_wanted(text))
         except Exception:  # noqa: BLE001
             return False
 

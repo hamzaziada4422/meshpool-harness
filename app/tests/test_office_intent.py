@@ -55,3 +55,20 @@ def test_edits_derivations_and_small_builds_do_not(text):
 
 def test_hidden_notes_after_the_separator_do_not_count():
     assert not styled_deliverable("Sort score.xlsx by name\n\n​[Meshpool] Make a deck if asked.")
+
+
+@pytest.mark.parametrize("text,want", [
+    ("Make deck.pptx, 4 to 6 slides presenting quarterly.csv to leadership. Include a real PowerPoint chart.", False),
+    ("Using assumptions.csv for our small cafe, make budget.xlsx: a 12-month budget with an Assumptions sheet", False),
+    ("Make report.pdf, a one or two page sales report from sales.csv", False),
+    ("Create a pitch deck and save it as pitch.pptx", False),
+    ("Make a 10-slide pitch deck for investors", True),
+    ("Turn notes.docx into a presentation", True),
+    ("Build a DCF model for Apple", True),
+    ("Sort score.xlsx by midterm1 into sorted_score.xlsx", False),
+])
+def test_engines_only_for_an_open_ended_deliverable(text, want):
+    """A named output file is a concrete file the agent builds itself, as Codex does (Office-7 pptx_chart and
+    xlsx_budget: the engines cost 33-84 and 18-26 calls where a hand build passed in 5-12)."""
+    from meshpool_harness.office_intent import engines_wanted
+    assert engines_wanted(text) is want

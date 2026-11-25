@@ -85,6 +85,7 @@ def test_session_notes_defer_to_the_engines_for_a_new_deliverable(monkeypatch):
     f = Session._office_direct
     assert f(s, "Sort data.xlsx by date") is True
     assert f(s, "Make a 10-slide pitch deck for investors") is False
+    assert f(s, "Make deck.pptx, 4 to 6 slides presenting quarterly.csv") is True   # named file: built by hand
     agent.office_engines = True                       # an earlier message brought the engines: they stay
     assert f(s, "Sort data.xlsx by date") is False
     agent.office_engines, agent._office_direct = False, (lambda: False)

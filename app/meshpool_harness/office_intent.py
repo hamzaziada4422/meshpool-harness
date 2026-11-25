@@ -56,6 +56,26 @@ def styled_deliverable(text: str) -> bool:
     return not (named and _OLD.search(t) and not _FRESH.search(t))
 
 
+# The output file named in the request: "make deck.pptx", "create budget.xlsx", "save it as q3.docx", "write report.pdf".
+_OUT_FILE = re.compile(r"\b(?:make|create|build|write|produce|generate|prepare|draft|output|save(?:\s+it)?\s+as|named|called)"
+                       r"\s+(?:a\s+|an\s+|the\s+|me\s+|new\s+)?[\"'`]?[\w][\w.()-]*\.(?:pptx?|docx?|xlsx|xlsm|pdf)\b", re.I)
+
+
+def names_output(text: str) -> bool:
+    """The request names the file to make ("Make deck.pptx, 4 to 6 slides ...", "make budget.xlsx: a 12-month
+    budget"): a concrete file the agent builds itself, as Codex does."""
+    return bool(_OUT_FILE.search(str(text or "").split(SEP)[0]))
+
+
+def engines_wanted(text: str) -> bool:
+    """Office direct offers the engines only for an open-ended styled deliverable: a new deck, report or model the
+    user describes without naming the file ("Make a 10-slide pitch deck for investors"). Frozen round on 1c0b6df5,
+    Office-7: pptx_chart ("Make deck.pptx, 4 to 6 slides ...") ran the slides engine for 33 and 84 calls, $0.27 of
+    the arm's $0.39, where Codex built the deck by hand for $0.02; xlsx_budget ("make budget.xlsx: a 12-month
+    budget") took 26 and 18 calls against Codex's 10 and 5. Both grade the same when built by hand."""
+    return styled_deliverable(text) and not names_output(text)
+
+
 SHEET_SOURCES = (".xlsx", ".xlsm", ".xls", ".csv")
 _SHEET_NAME = re.compile(r"[\w][\w.()-]*\.(?:xlsx|xlsm|xls|csv)\b", re.I)
 # A name the request gives to the output, not a source: "save it as x.xlsx", "into x.xlsx", "output x.xlsx".

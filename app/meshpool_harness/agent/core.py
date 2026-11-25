@@ -1748,8 +1748,8 @@ class Agent:
         except Exception:  # noqa: BLE001
             pass
         if self._office_direct() and not self.office_engines:   # decided here, before the turn: fixed for the turn
-            from meshpool_harness.office_intent import styled_deliverable
-            if styled_deliverable(asked):                    # a new deck, report or model: the engines join, and stay
+            from meshpool_harness.office_intent import engines_wanted
+            if engines_wanted(asked):                        # a new deck, report or model: the engines join, and stay
                 self.office_engines = self.office_on = True
         if not self.title:
             self.title = text.strip().splitlines()[0][:80] if text.strip() else "Session"
