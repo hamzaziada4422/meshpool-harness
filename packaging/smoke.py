@@ -162,8 +162,11 @@ def main():
     procs = [subprocess.Popen([sys.executable, str(REPO / "testkit" / "mock_llm.py"), str(mport), str(tmp / "mock.jsonl")],
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
     log = open(tmp / "ui.log", "w")
+    # The app puts its own Python first on PATH for the agent's shell (packaging/linux/meshpool, desktop
+    # _mac_environment); started directly here, the server gets the same, so `python3 hello.py` finds it in a bare system.
+    app_path = os.pathsep.join([str(Path(sys.executable).parent), env.get("PATH", os.environ.get("PATH", ""))])
     procs.append(subprocess.Popen(launch + ["-m", "meshpool_harness", "ui", "--no-browser", "--port", str(uport)],
-                                  env=dict(env, MESHPOOL_HOME=str(home), PYTHONUNBUFFERED="1"), stdout=log, stderr=subprocess.STDOUT))
+                                  env=dict(env, MESHPOOL_HOME=str(home), PYTHONUNBUFFERED="1", PATH=app_path), stdout=log, stderr=subprocess.STDOUT))
     try:
         base = f"http://127.0.0.1:{uport}"
         # The page carries the API token only for the launch key the app prints at startup (?k=...)
