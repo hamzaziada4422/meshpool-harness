@@ -45,6 +45,7 @@ READ_ONLY = {"bash_output", "bash_stop", "read_file", "grep", "glob", "fetch_url
 # MCP tools that change nothing: the only ones plan mode runs (SAFE_MCP, which skips the approval prompt, also has
 # tools that save or schedule things).
 PLAN_MCP = {"mcp__meshpool_web__web_search", "mcp__meshpool_web__web_fetch", "mcp__meshpool_web__web_research",
+            "mcp__meshpool_resources__list_resources", "mcp__meshpool_resources__read_resource",
             "mcp__meshpool_assistant__memory_view", "mcp__meshpool_assistant__list_scheduled_tasks",
             "mcp__meshpool_assistant__search_chats", "mcp__meshpool_office__read_document",
             "mcp__meshpool_office__office_job_status", "mcp__meshpool_tools__current_time",
