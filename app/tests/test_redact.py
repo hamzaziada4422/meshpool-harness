@@ -78,3 +78,12 @@ def test_the_browser_tool_keeps_to_the_site_lists_too(monkeypatch):
     monkeypatch.setenv("MH_FETCH_DENY", "evil.example")
     with pytest.raises(WEB.WebError):
         BM.browser_open("evil.example/login")
+
+
+def test_outside_content_is_marked_for_the_model_and_files_are_not():
+    from meshpool_harness.agent import core as K
+    assert K._untrusted_source("fetch_url", {"url": "https://news.example/a"}, False) == "web page news.example"
+    assert K._untrusted_source("mcp__meshpool_web__web_search", {}, True) == "web search results"
+    assert K._untrusted_source("mcp__slack__read_channel", {}, True) == "connected app slack"
+    assert K._untrusted_source("read_file", {"path": "a.py"}, False) == ""
+    assert K._untrusted_source("mcp__meshpool_assistant__memory_view", {}, True) == ""
