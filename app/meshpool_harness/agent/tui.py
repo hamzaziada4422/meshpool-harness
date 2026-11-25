@@ -53,7 +53,7 @@ COMMANDS = [
     ("export", "[file]", "save this conversation as Markdown"),
     ("copy", "[n]", "copy the last reply (or the nth from the end)"),
     ("effort", "[auto|low|medium|high]", "how hard the model thinks"),
-    ("plan", "[on|off|open]", "plan mode: read and plan, change nothing; open shows the saved plan file"),
+    ("plan", "[on|off|file]", "plan mode: read and plan, change nothing; file shows where the last plan was saved"),
     ("permissions", "", "saved allow, ask and deny rules, and folder trust"),
     ("diff", "", "uncommitted changes in this folder (git diff)"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
@@ -1488,7 +1488,7 @@ class Session:
         t, st = self.term, self.term.st
         if not hasattr(self.agent, "plan"):
             return t.p(st.dim("  /plan is not available for this agent."))
-        if arg.lower() == "open":                          # /plan open: the last plan saved as a file
+        if arg.lower() == "file":                          # /plan file: where the last plan was saved
             f = getattr(self.agent, "last_plan_file", "")
             return t.p(f"  {f}" if f else st.dim("  No plan saved in this session yet."))
         on = {"on": True, "off": False}.get(arg.lower(), not self.agent.plan) if arg else not self.agent.plan

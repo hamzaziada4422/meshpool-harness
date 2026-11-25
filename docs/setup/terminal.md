@@ -28,7 +28,7 @@
 
 ## Plans
 
-`/plan` (or `--permission-mode plan`) makes the agent read and plan without changing anything. Each plan it writes is also saved as a Markdown file in `plans/` in meshpool's data folder. `/plan open` shows the last one's path. Settings, Plans folder (`MH_PLANS_DIR`) picks another folder, and `off` saves none.
+`/plan` (or `--permission-mode plan`) makes the agent read and plan without changing anything. Each plan it writes is also saved as a Markdown file in `plans/` in meshpool's data folder. `/plan file` shows where the last one is. Settings, Plans folder (`MH_PLANS_DIR`) picks another folder, and `off` saves none.
 
 ## Reviews
 
