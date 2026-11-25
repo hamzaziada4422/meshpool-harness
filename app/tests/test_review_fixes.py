@@ -458,16 +458,106 @@ def test_a_side_question_does_not_take_over_stop(env, monkeypatch):             
     assert a._live == "the turn's stream" and a.last_request_id == "req_turn" and not core._AUX.on
 
 
+def test_a_side_question_stream_leaves_the_turns_stop_handle(env, monkeypatch):   # third review, 7 (sink)
+    """FL-V7 through the real request path: a /btw call goes through _post's connection sink and reads a reply
+    (SSE lines, as a gateway that streams anyway sends them) with its own request id. Stop's handle (_live) and
+    the turn's request id stay the turn's own while the side call runs and after it."""
+    (env / "p").mkdir()
+    a = core.Agent(str(env / "p"), mode="auto")
+    a._live = "the turn's stream"
+    a.last_request_id = "req_turn"
+    seen = []
+
+    class Resp(_SSEResp):
+        def read1(self, *x):
+            seen.append(("reading", a._live, a.last_request_id))
+            return super().read1(*x)
+
+    def urlopen(req, t, sink):
+        sink(_FakeConn())                                  # the real sink: it decides who owns the connection
+        seen.append(("connected", a._live, a.last_request_id))
+        return Resp([_chunk("in "), _chunk("core.py"), "data: [DONE]\n\n"],
+                    headers={"Content-Type": "text/event-stream", "x-request-id": "req_side"})
+    monkeypatch.setattr(core, "_urlopen", urlopen)
+    assert a.side_question("what file?") == "in core.py"
+    assert seen and all(s[1:] == ("the turn's stream", "req_turn") for s in seen), seen
+    assert a._live == "the turn's stream" and a.last_request_id == "req_turn" and not core._AUX.on
+
+
+class _SSEResp:
+    """A streamed reply as urllib gives it: SSE lines, then optionally the connection drops mid-stream."""
+
+    def __init__(self, lines, drop=False, headers=None):
+        self._lines = [ln.encode() for ln in "".join(lines).splitlines(keepends=True)]   # one line at a time
+        self._drop = drop
+        self.headers = headers or {"Content-Type": "text/event-stream"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def __iter__(self):
+        yield from self._lines
+        if self._drop:
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    def read1(self, *a):                          # a non-streamed call reads the body whole
+        data, self._lines = b"".join(self._lines), []
+        return data
+
+
+class _FakeConn:
+    def connect(self):
+        pass
+
+    def close(self):
+        pass
+
+
+class _DownHealth:
+    """The endpoint gateway as it is when the endpoint went away: one slot, the probe says down, no recovery."""
+
+    def is_down(self):
+        return False
+
+    def acquire(self, check_stop, emit=None):
+        return 1
+
+    def release(self, ok, slot=None):
+        pass
+
+    def check(self, probe, wait_s=60, check_stop=None):
+        return "down"
+
+    def wait_until_up(self, probe, sleep, emit, budget_s, check_stop):
+        return False
+
+
+def _chunk(text):
+    return f"data: {json.dumps({'choices': [{'delta': {'content': text}}]})}\n\n"
+
+
 def test_old_partial_text_never_joins_a_new_turn(env, monkeypatch):               # third review, 8
+    """FL-V8: a turn whose stream drops keeps what arrived ("cut off" reply). A new turn that also loses its
+    connection mid-stream keeps only its own text: never the partial reply or request id of an earlier turn."""
+    from meshpool_harness.core import gateway as GW
     (env / "p").mkdir()
     events = []
     a = core.Agent(str(env / "p"), mode="auto", emit=events.append)
-    a._partial_text = "left over from a stopped turn"
-    def post(self, base, key, body, stream):
-        return {"choices": [{"message": {"content": "fresh"}, "finish_reason": "stop"}], "usage": {}}, False
-    monkeypatch.setattr(core.Agent, "_post", post)
+    a._partial_text = "left over from a stopped turn, longer than the new text"   # an earlier turn's cut reply
+    a.last_request_id = "req_old_turn"
+    monkeypatch.setattr(GW, "health", lambda *x, **k: _DownHealth())
+    monkeypatch.setattr(core, "_urlopen", lambda req, t, sink: (
+        sink(_FakeConn()), _SSEResp([_chunk("fresh "), _chunk("words")], drop=True))[1])
     a.send("hi")
+    kept = [m["content"] for m in a.messages if m.get("role") == "assistant"]
+    assert kept and "fresh words" in kept[-1] and "cut off" in kept[-1]         # the connection-lost path ran
     assert not any("left over" in str(m.get("content")) for m in a.messages)
+    assert not any("left over" in str(e.get("text")) for e in events)
+    errs = [e["text"] for e in events if e.get("type") == "error"]
+    assert errs and not any("req_old_turn" in t for t in errs)
 
 
 def test_a_next_run_is_never_in_the_past(monkeypatch):                            # third review, 12
