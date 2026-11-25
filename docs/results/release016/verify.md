@@ -268,3 +268,45 @@ BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
 ```
 
 Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $7.37.
+
+## office_final6 — decisive run (f133d912): mp-work 6 reps; codex 6 reps = reps 1-2 from office_1c0b6df5 + reps 3-6 run in this window
+
+Pre-registered gate: cost per solved < 1.0x vs Codex on both O7 and SB.
+### O7
+```
+   mp-work: solved 42/42 (100.0%)  $ 0.4193  $/solved 0.00998  median s 35.7  errors 0
+     codex: solved 41/42 (97.6%)  $ 0.4345  $/solved 0.01060  median s 48.5  errors 0
+solve-rate diff +2.4 pts (95% CI +0.0 to +7.1)
+cost per solved ratio 0.94x (95% CI 0.72-1.18)
+median per-task time ratio 0.76x (95% CI 0.61-1.08)
+BAR: cost FAIL, quality PASS, time PASS -> NOT MET
+```
+### spreadsheetbench
+```
+   mp-work: solved 31/36 (86.1%)  $ 0.2335  $/solved 0.00753  median s 23.6  errors 0
+     codex: solved 35/36 (97.2%)  $ 0.2524  $/solved 0.00721  median s 26.8  errors 0
+solve-rate diff -11.1 pts (95% CI -27.8 to +5.6)
+cost per solved ratio 1.04x (95% CI 0.68-1.54)
+median per-task time ratio 0.96x (95% CI 0.71-1.25)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+### officebench
+```
+   mp-work: solved 21/24 (87.5%)  $ 0.0930  $/solved 0.00443  median s 14.6  errors 0
+     codex: solved 24/24 (100.0%)  $ 0.1285  $/solved 0.00535  median s 17.5  errors 0
+solve-rate diff -12.5 pts (95% CI -25.0 to +0.0)
+cost per solved ratio 0.83x (95% CI 0.60-1.06)
+median per-task time ratio 0.87x (95% CI 0.67-1.16)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+### pooled
+```
+   mp-work: solved 94/102 (92.2%)  $ 0.7458  $/solved 0.00793  median s 25.1  errors 0
+     codex: solved 100/102 (98.0%)  $ 0.8153  $/solved 0.00815  median s 36.6  errors 0
+solve-rate diff -5.9 pts (95% CI -13.7 to +1.0)
+cost per solved ratio 0.97x (95% CI 0.77-1.19)
+median per-task time ratio 0.89x (95% CI 0.69-1.08)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+
+Gate: O7 0.94x (met), SB 1.04x (not met). Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $8.55.
