@@ -20,6 +20,8 @@ import sys
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+from meshpool_harness import config as C
+
 MAX_FILE = 400_000                 # bytes read from any one file
 MAX_FACTS_PER_FILE = 60
 MAX_INSTRUCTIONS = 3000            # characters taken from one instruction file
@@ -132,7 +134,7 @@ def strip_secrets(spec: dict) -> tuple[dict, list[str]]:
 AGENTS = {
     "claude": {"name": "Claude Code", "dir": ".claude", "creds": [".credentials.json"],
                "skills": ["skills"], "instructions": ["CLAUDE.md"], "memories": ["memory", "projects/*/memory"],
-               "mcp_json": [(".claude.json", "mcpServers")]},
+               "mcp_json": [(".claude.json", "mcpServers")], "hooks": ["settings.json"]},
     "codex": {"name": "Codex", "dir": ".codex", "creds": ["auth.json"],
               "skills": ["skills"], "instructions": ["AGENTS.md"], "memories": ["memories"], "mcp_toml": ["config.toml"]},
     "cursor": {"name": "Cursor", "dir": ".cursor", "creds": [],
@@ -292,11 +294,94 @@ def scan(only: list[str] | None = None) -> dict:
             for i, fact in enumerate(_facts(_read(f))):
                 items.append({"key": f"memory:{aid}:{f.name}:{i}", "kind": "memory", "name": fact[:60],
                               "path": str(f), "text": fact, "preview": fact, "exists": _fold(fact) in have_f})
+        have_h = _existing_hooks()
+        for i, (ev, hook, _) in enumerate(_hooks(a, base)):
+            items.append({"key": f"hook:{aid}:{ev}:{i}", "kind": "hook", "name": f"{ev}: {hook['command'][:50]}",
+                          "event": ev, "hook": hook, "exists": (ev, hook["command"]) in have_h,
+                          "preview": f"Runs {hook['command'][:120]}" + (f" (for {hook['matcher']})" if hook.get("matcher")
+                                                                         else "")})
         creds = [str(base / c) for c in a["creds"] if _present(base / c)]
         agents.append({"id": aid, "name": a["name"], "path": str(base), "items": items,
-                       "counts": {k: sum(1 for i in items if i["kind"] == k) for k in ("skill", "mcp", "memory", "instructions")},
+                       "counts": {k: n for k in ("skill", "mcp", "memory", "instructions", "hook")
+                                  for n in [sum(1 for i in items if i["kind"] == k)] if n or k != "hook"},
                        "credentials_not_read": creds})
     return {"agents": agents, "refused": sorted(set(_REFUSED))}
+
+
+# Claude Code tool names in hook matchers -> meshpool's
+_TOOL_NAMES = {"bash": "bash", "edit": "edit", "multiedit": "edit", "write": "write_file", "read": "read_file",
+               "glob": "glob", "grep": "grep", "webfetch": "fetch_url", "websearch": "web_search",
+               "task": "delegate_task", "notebookedit": "notebook_edit", "todowrite": "todo_write"}
+
+
+def _matcher(m) -> str:
+    """A Claude Code matcher (a tool name, Edit|Write, .* or mcp__x__.*) in meshpool's form."""
+    out = []
+    for part in str(m or "").split("|"):
+        p = part.strip()
+        if not p or p in (".*", "*"):
+            return "*"
+        p = p.replace(".*", "*")
+        out.append(_TOOL_NAMES.get(p.lower(), p))
+    return "|".join(dict.fromkeys(out))
+
+
+def _hooks(agent: dict, base: Path) -> list[tuple[str, dict, str]]:
+    """[(event, meshpool hook, note)] from the agent's settings files: command hooks only."""
+    from meshpool_harness.agent import extras as EX
+    out = []
+    for rel in agent.get("hooks") or []:
+        d = _json(base / rel)
+        hooks = d.get("hooks") if isinstance(d, dict) else None
+        if not isinstance(hooks, dict):
+            continue
+        for ev, groups in hooks.items():
+            if ev not in EX.EVENTS or not isinstance(groups, list):
+                continue
+            for g in groups:
+                if not isinstance(g, dict):
+                    continue
+                for h in g.get("hooks") or []:
+                    if not isinstance(h, dict) or h.get("type", "command") != "command" or \
+                            not isinstance(h.get("command"), str) or not h["command"].strip():
+                        continue
+                    hook = {"command": h["command"].strip()}
+                    if g.get("matcher"):
+                        hook["matcher"] = _matcher(g["matcher"])
+                    if isinstance(h.get("timeout"), (int, float)):
+                        hook["timeout"] = int(h["timeout"])
+                    out.append((ev, hook, ""))
+    return out
+
+
+def _existing_hooks() -> set:
+    try:
+        d = json.loads((C.home() / "hooks.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return {(ev, h.get("command")) for ev, hs in (d.items() if isinstance(d, dict) else [])
+            for h in (hs if isinstance(hs, list) else []) if isinstance(h, dict)}
+
+
+def _add_hook(event: str, hook: dict) -> bool:
+    """Append one hook to the user's hooks.json. False when the same command is already there for the event."""
+    f = C.home() / "hooks.json"
+    try:
+        d = json.loads(f.read_text(encoding="utf-8")) if f.exists() else {}
+    except ValueError:
+        raise ValueError("hooks.json is not valid JSON; fix it first (meshpool doctor shows where)")
+    if not isinstance(d, dict):
+        raise ValueError("hooks.json must hold a JSON object")
+    lst = d.setdefault(event, [])
+    if any(isinstance(h, dict) and h.get("command") == hook["command"] and h.get("matcher") == hook.get("matcher")
+           for h in lst):
+        return False
+    lst.append(hook)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d, indent=2) + "\n", encoding="utf-8")
+    tmp.replace(f)
+    return True
 
 
 def _slug(name: str) -> str:
@@ -315,7 +400,7 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
     from meshpool_harness import importer as IM
     want = set(keys or [])
     found = scan(only)
-    rep = {"dry_run": bool(dry_run), "skills": [], "mcp": [], "memory": 0, "instructions": 0, "skipped": [],
+    rep = {"dry_run": bool(dry_run), "skills": [], "mcp": [], "memory": 0, "instructions": 0, "hooks": [], "skipped": [],
            "stripped": [], "credentials_not_read": [c for a in found["agents"] for c in a["credentials_not_read"]],
            "errors": []}
     for a in found["agents"]:
@@ -342,6 +427,11 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
                             rep["skipped"].append(f"{it['name']}: already known")
                             continue
                     rep["memory"] += 1
+                elif it["kind"] == "hook":                   # a command that runs by itself: only when chosen
+                    if dry_run or _add_hook(it["event"], it["hook"]):
+                        rep["hooks"].append(it["name"])
+                    else:
+                        rep["skipped"].append(f"{it['name']}: already in hooks.json")
                 elif it["kind"] == "instructions":
                     if not dry_run:
                         from meshpool_harness import assistant as AS
@@ -361,6 +451,7 @@ def apply(keys: list[str], dry_run: bool = False, only: list[str] | None = None)
 def cli(args: list[str]) -> int:
     dry = "--dry-run" in args
     yes = "--yes" in args or "-y" in args
+    with_hooks = "--hooks" in args                     # hooks run commands by themselves: only when asked for
     only = None
     for i, a in enumerate(args):
         if a == "--from" and i + 1 < len(args):
@@ -377,8 +468,10 @@ def cli(args: list[str]) -> int:
         for it in a["items"]:
             mark = "already here" if it["exists"] else "new"
             extra = f"  (leaves out: {', '.join(it['stripped'])})" if it.get("stripped") else ""
+            if it["kind"] == "hook" and not with_hooks and not it["exists"]:
+                mark = "add --hooks to import it"
             print(f"  [{it['kind']}] {it['name'][:60]}: {mark}{extra}")
-            if not it["exists"]:
+            if not it["exists"] and (it["kind"] != "hook" or with_hooks):
                 keys.append(it["key"])
         for cred in a["credentials_not_read"]:
             print(f"  not read: {Path(cred).name}")
@@ -388,7 +481,7 @@ def cli(args: list[str]) -> int:
     if dry:
         r = apply(keys, dry_run=True, only=only)
         print(f"\nDry run: would import {len(r['skills'])} skills, {len(r['mcp'])} tools, {r['memory']} memories "
-              f"(to review), {r['instructions']} instruction files. Nothing was written.")
+              f"(to review), {r['instructions']} instruction files, {len(r['hooks'])} hooks. Nothing was written.")
         return 0
     if not yes:
         if not sys.stdin.isatty() or input(f"\nImport these {len(keys)} items? [y/N] ").strip().lower() != "y":
@@ -396,7 +489,7 @@ def cli(args: list[str]) -> int:
             return 0
     r = apply(keys, only=only)
     print(f"\nImported {len(r['skills'])} skills, {len(r['mcp'])} tools, {r['memory']} memories (to review in Memory), "
-          f"{r['instructions']} instruction files.")
+          f"{r['instructions']} instruction files, {len(r['hooks'])} hooks.")
     for s in r["stripped"]:
         print(f"  {s['server']} came over without: {', '.join(s['names'])}. Add them in Settings.")
     for e in r["errors"]:

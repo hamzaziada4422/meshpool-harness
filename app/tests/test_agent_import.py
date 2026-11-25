@@ -185,3 +185,31 @@ def test_no_agents_is_not_an_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "mp"))
     assert AI.cli([]) == 0 and "No other agents" in capsys.readouterr().out
+
+
+def test_claude_code_hooks_are_offered_but_imported_only_when_chosen(world, tmp_path, capsys):
+    from meshpool_harness import agent_import as AI
+    h = tmp_path / "user"
+    (h / ".claude" / "settings.json").write_text(json.dumps({"hooks": {
+        "PreToolUse": [{"matcher": "Edit|Write", "hooks": [{"type": "command", "command": "npm run lint", "timeout": 20}]}],
+        "Stop": [{"hooks": [{"type": "prompt", "prompt": "check"}, {"type": "command", "command": "say done"}]}],
+        "MadeUpEvent": [{"hooks": [{"type": "command", "command": "x"}]}]}}), encoding="utf-8")
+    found = AI.scan(["claude"])
+    hooks = [i for a in found["agents"] for i in a["items"] if i["kind"] == "hook"]
+    assert {i["event"] for i in hooks} == {"PreToolUse", "Stop"} and len(hooks) == 2
+    pre = next(i for i in hooks if i["event"] == "PreToolUse")
+    assert pre["hook"] == {"command": "npm run lint", "matcher": "edit|write_file", "timeout": 20}
+    # the command line leaves hooks out unless --hooks is given
+    assert AI.cli(["--from", "claude", "--yes"]) == 0
+    assert not (tmp_path / "mp" / "hooks.json").exists()
+    assert AI.cli(["--from", "claude", "--yes", "--hooks"]) == 0
+    d = json.loads((tmp_path / "mp" / "hooks.json").read_text())
+    assert d["PreToolUse"][0]["command"] == "npm run lint" and d["Stop"][0]["command"] == "say done"
+    again = AI.apply([pre["key"]], only=["claude"])                  # already there: skipped, not doubled
+    assert not again["hooks"] and len(json.loads((tmp_path / "mp" / "hooks.json").read_text())["PreToolUse"]) == 1
+
+
+def test_matcher_translation():
+    from meshpool_harness import agent_import as AI
+    assert AI._matcher("Bash") == "bash" and AI._matcher(".*") == "*" and AI._matcher("mcp__github__.*") == "mcp__github__*"
+    assert AI._matcher("Edit|MultiEdit|Write") == "edit|write_file"

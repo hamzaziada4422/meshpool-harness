@@ -52,3 +52,7 @@ Each hook gets the event as JSON on its standard input: `event`, `tool`, `args`,
   - `{"additionalContext": "..."}` adds a note the agent sees.
   - `{"updatedInput": {...}}` (`PreToolUse` only) changes the call's arguments. Your saved rules then judge the changed call, so a hook cannot use this to get around a deny rule.
 - Any other text on standard output is passed to the agent as a note.
+
+## Bringing hooks from Claude Code
+
+The agent import (Settings, or `meshpool import agents`) lists the command hooks in `~/.claude/settings.json`, with tool names in their matchers changed to meshpool's (`Edit|Write` becomes `edit|write_file`). They are not picked by default, because a hook runs by itself: tick the ones you want in the app, or add `--hooks` on the command line. They go into your own `hooks.json`.
