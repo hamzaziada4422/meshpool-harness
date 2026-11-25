@@ -842,3 +842,20 @@ def test_stop_right_after_a_sub_agent_finished_keeps_its_report(monkeypatch, _en
     data = json.loads(out.rsplit("```json\n", 1)[1].rstrip("`\n"))
     assert data["results"][0]["status"] == "completed"
     assert '{"x": 1}' in out
+
+
+def test_concurrent_sub_agents_share_the_chats_usage_task(_env):
+    """CI flake: two sub-agents started outside a turn each made the chat a usage task of its own."""
+    import threading as _th
+    a = _agent(_env)
+    got, barrier = [], _th.Barrier(8)
+
+    def go():
+        barrier.wait()
+        got.append(a._ensure_task())
+    ts = [_th.Thread(target=go) for _ in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert len({id(t) for t in got}) == 1

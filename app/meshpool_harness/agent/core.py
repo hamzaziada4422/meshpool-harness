@@ -1866,10 +1866,15 @@ class Agent:
     def _src(self) -> str:
         return "grader" if getattr(self, "_is_grader", False) else self.usage_source
 
+    _ensure_lock = threading.Lock()
+
     def _ensure_task(self):
-        """The usage task calls are recorded in: the turn's, or one made now (a call outside a turn)."""
+        """The usage task calls are recorded in: the turn's, or one made now (a call outside a turn). Locked: two
+        sub-agents started at once each made a task of their own, and the chat then counted only one of them (CI)."""
         if self._task is None:
-            self._task = self.usage_task or usage.start_task(chat=self.id, label="turn")
+            with Agent._ensure_lock:
+                if self._task is None:
+                    self._task = self.usage_task or usage.start_task(chat=self.id, label="turn")
         return self._task
 
     def _begin_usage(self) -> None:

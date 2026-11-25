@@ -745,6 +745,8 @@ def run_tool(parent, args: dict) -> tuple[str, bool]:
     reg = parent.__dict__.setdefault("_delegations", {})
     reg[d.id] = d
     gen = getattr(parent, "_gen", 0)
+    if hasattr(parent, "_ensure_task"):
+        parent._ensure_task()                             # one usage task for every sub-agent, made before they start
     try:
         res = d.run(cancelled=lambda: parent._stop or getattr(parent, "_gen", 0) != gen)
     except KeyboardInterrupt:                             # Ctrl+C: the turn ends, but what finished is kept as the
