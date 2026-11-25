@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from openpyxl import load_workbook
@@ -20,7 +21,7 @@ RECALC_TIMEOUT_S = 180
 def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
     """Round-trip through LibreOffice headless so every formula gets a computed cached value. Without out_dir the copy
     goes to a scratch folder the caller removes (recalc_values does it for you); it is also removed at exit."""
-    from engines.forge.common import _run_tree
+    from engines.forge.common import _run_tree, convert_cached, convert_keep, convert_key
     from meshpool_harness.office_runtime import Unavailable, find_soffice
     soffice = find_soffice()
     if not soffice:
@@ -31,6 +32,12 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
         out = Path(tempfile.mkdtemp(prefix="recalc_"))
         atexit.register(shutil.rmtree, str(out), True)      # the converted copy is scratch: do not leave it in /tmp
     out.mkdir(parents=True, exist_ok=True)
+    dest = out / (Path(xlsx_path).stem + ".xlsx")             # converted to .xlsx, whatever it came in as (.xlsm)
+    # the finish gate and the review digest recalculate the same unchanged file: the same bytes are not run again
+    key = convert_key(xlsx_path, "xlsx:Calc MS Excel 2007 XML", soffice, "calc")
+    if convert_cached(key, dest):
+        return str(dest)
+    t0 = time.time()
     with tempfile.TemporaryDirectory() as profile:
         # its own process group, killed whole on a timeout: soffice.bin outlives a plain kill of soffice
         r = _run_tree([soffice, f"-env:UserInstallation={Path(profile).as_uri()}", "--headless", "--calc",
@@ -38,7 +45,9 @@ def recalc(xlsx_path: str, out_dir: str | None = None) -> str:
                       RECALC_TIMEOUT_S)
     if r.returncode:
         raise subprocess.CalledProcessError(r.returncode, r.args, r.stdout, r.stderr)
-    return str(out / (Path(xlsx_path).stem + ".xlsx"))       # converted to .xlsx, whatever it came in as (.xlsm)
+    if dest.exists() and dest.stat().st_mtime >= t0 - 2:     # this run wrote it
+        convert_keep(key, dest)
+    return str(dest)
 
 
 def recalc_values(xlsx_path: str):

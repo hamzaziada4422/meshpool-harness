@@ -202,6 +202,12 @@ def test_render_without_libreoffice_adds_no_label_check_error(tmp_path, monkeypa
     assert not [e for e in res["errors"] if "label check" in e], res["errors"]
     monkeypatch.setattr(FC, "find_soffice", lambda: "/usr/bin/soffice")        # with soffice the check does run
     res = R.render([{"archetype": "cover", "title": "Quarterly review"}], str(tmp_path / "b.pptx"))
+    assert not [e for e in res["errors"] if "label check" in e]   # no bubble labels: nothing to check (no soffice)
+    bubble = {"archetype": "chart_takeaway", "title": "Bigger markets grow faster", "source": "Company accounts",
+              "chart": {"kind": "bubble", "points": [{"x": 1, "y": 2, "size": 3, "label": "North"},
+                                                     {"x": 2, "y": 3, "size": 4, "label": "South"}]},
+              "takeaways": ["North leads"]}
+    res = R.render([{"archetype": "cover", "title": "Quarterly review"}, bubble], str(tmp_path / "c.pptx"))
     assert "label check skipped: RuntimeError" in res["errors"]
 
 
