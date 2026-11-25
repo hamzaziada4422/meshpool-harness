@@ -25,11 +25,13 @@ rm -rf "$OUT/proj"; cp -r "$Q/proj-src" "$OUT/proj"
 for d in /tmp/proj1 /tmp/proj2; do rm -rf "$d"; mkdir -p "$d"; printf 'def add(a, b):\n    return a + b\n' > "$d/calc.py"
   (cd "$d" && git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init); done
 cd "$R/testkit"
+export MESHPOOL_UI_LOGS="$OUT"   # ui_token.py reads each app's launch key from app-PORT.log
 "$PY" e2e_full.py "$OUT/proj" "$Q/fakehome" > "$OUT/e2e_full.txt" 2>&1
 "$PY" journeys.py "$OUT/proj" 8797 > "$OUT/journeys.txt" 2>&1
 "$PY" - <<PYEOF
 import json, re, urllib.request
-B = "http://127.0.0.1:8799"; tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(B + "/").read().decode()).group(1)
+from ui_token import token
+B = "http://127.0.0.1:8799"; tok = token(B)
 for p in ("/tmp/proj1", "/tmp/proj2"):
     urllib.request.urlopen(urllib.request.Request(B + "/api/projects", data=json.dumps({"action": "add", "path": p}).encode(),
                            headers={"X-Meshpool-Token": tok, "Content-Type": "application/json"}))

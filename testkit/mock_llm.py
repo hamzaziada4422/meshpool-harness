@@ -96,6 +96,8 @@ def plan(messages, tools):
             return ("tool", "bash", {"command": "sleep 25; echo slept"})
         if step == 0 and "terminal" in names:
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
+        if step == 0 and "exec_command" in names:        # Codex 0.171 replica: every code chat since 0.0.16
+            return ("tool", "exec_command", {"cmd": "sleep 25; echo slept"})
         return ("text", "Long task finished.")
     if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
         return ("text", "Bonjour! (the claude-skill instructions were applied)")
@@ -148,6 +150,8 @@ def plan(messages, tools):
     if "finish" in u or "harness" in u:                 # one-shot harness engines: call finish
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "echo 42"})
+        if step == 0 and "exec_command" in names and "finish" not in names:
+            return ("tool", "exec_command", {"cmd": "echo 42"})
         if "finish" in names:
             return ("tool", "finish", {"answer": "The answer is 42.", "evidence": ["echo 42"]})
         return ("text", "The answer is 42.")

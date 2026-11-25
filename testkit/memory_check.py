@@ -3,8 +3,9 @@ each one schedules a task through the shared meshpool-assistant tools. Mock mode
 Usage: python memory_check.py PORT AGENT[,AGENT...]   e.g. 8799 meshpool-code,meshpool-work,pi,hermes,opencode
 The app at PORT must have /tmp/memproj as a folder it can open (this script adds it as a project)."""
 import json, re, sys, time, urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 B = "http://127.0.0.1:" + sys.argv[1]
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(B + "/").read().decode()).group(1)
+TOK = _ui_token(B)
 def call(p, body=None, t=300):
     r = urllib.request.Request(B + p, data=None if body is None else json.dumps(body).encode(), headers={"X-Meshpool-Token": TOK, "Content-Type": "application/json"})
     return json.loads(urllib.request.urlopen(r, timeout=t).read() or b"{}")
