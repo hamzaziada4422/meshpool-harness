@@ -327,6 +327,17 @@ _GIT_SAFE_KEY = re.compile(
     re.I)                                                  # anything else in a repo's own config: the shortcut is off
 
 
+# What meshpool passes to every git call that only looks at a repository (status, log, diff): the repository's own
+# config must not run programs then (fsmonitor, an external diff, a pager, hooks). ui/workbench.py does the same.
+SAFE_GIT_OPTS = ["-c", "core.fsmonitor=false", "-c", "core.pager=cat", "-c", "diff.external=", "-c",
+                 f"core.hooksPath={os.devnull}", "--no-pager"]
+
+
+def safe_git(*args: str) -> list:
+    """argv for a read-only git call that never runs the repository's own programs."""
+    return ["git", *SAFE_GIT_OPTS, *args]
+
+
 def git_config_runs_programs(root) -> bool:
     """True when the repository's own config names a program that a checkout, a diff or a merge would run (a filter,
     an external diff or textconv, an include, an ssh command). Narrower than git_config_safe: submodules and unknown

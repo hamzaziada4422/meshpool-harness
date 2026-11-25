@@ -232,7 +232,8 @@ def changed_files(ws) -> list[str]:
         if not rel.startswith("..") and (ws.root / rel).is_file():
             out.append(rel)
     try:
-        r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all"], cwd=ws.root, capture_output=True,
+        from meshpool_harness.core.tools import safe_git
+        r = subprocess.run(safe_git("status", "--porcelain", "--untracked-files=all"), cwd=ws.root, capture_output=True,
                            text=True, timeout=10)
         for line in r.stdout.splitlines():
             rel = line[3:].split(" -> ")[-1].strip().strip('"')

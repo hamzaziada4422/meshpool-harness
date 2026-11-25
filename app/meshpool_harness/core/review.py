@@ -37,7 +37,8 @@ def clean_request(text: str) -> str:
 
 def _git(root: str, *args: str) -> str | None:
     try:
-        r = subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, timeout=20)
+        from meshpool_harness.core.tools import safe_git
+        r = subprocess.run(safe_git("-C", root, *args), capture_output=True, text=True, timeout=20)
     except Exception:  # noqa: BLE001
         return None
     return r.stdout if r.returncode == 0 else None

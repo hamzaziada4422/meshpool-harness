@@ -985,19 +985,16 @@ def _cache_file() -> Path:
 
 
 def _cache_key(name: str, spec: dict) -> str:
+    # MH_CHAT_ID only tells a built-in server which chat it serves (live view, task mode, build counts); its tool list
+    # is the same for every chat, so a new chat (every `meshpool -p`) finds the saved list instead of starting servers
     env = spec.get("env")
-    if isinstance(env, dict) and "MH_CHAT_ID" in env:   # the tool list is the same for every chat
+    if isinstance(env, dict) and "MH_CHAT_ID" in env:
         spec = {**spec, "env": {k: v for k, v in env.items() if k != "MH_CHAT_ID"} or None}
     stamp = ""
     try:
         stamp = str(int(max(f.stat().st_mtime for f in Path(__file__).parent.glob("*_mcp_server.py"))))
     except (OSError, ValueError):
         pass
-    # MH_CHAT_ID only tells a built-in server which chat it serves (live view, task mode, build counts); its tool list
-    # is the same for every chat, so a new chat (every `meshpool -p`) finds the saved list instead of starting servers
-    env = spec.get("env")
-    if isinstance(env, dict) and "MH_CHAT_ID" in env:
-        spec = {**spec, "env": {k: v for k, v in env.items() if k != "MH_CHAT_ID"}}
     sig = json.dumps([name, _pool_key(spec, []), stamp, _VERSION, sys.executable], sort_keys=True, default=str)
     return _short_hash(sig)
 

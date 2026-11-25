@@ -601,3 +601,22 @@ def test_git_config_check_outside_a_repository_is_not_fooled_by_plain_files(env)
     d.mkdir()
     (d / "README.md").write_text("hi\n")          # rev-parse fails here; the folder itself is not a hooks folder
     assert T.git_config_safe(d)
+
+
+def test_first_message_and_receipt_git_never_run_the_repos_own_programs(env):        # 0.0.17 CPU audit find
+    from meshpool_harness.agent import preload as PL
+    r = env / "repo"
+    r.mkdir()
+    subprocess.run("git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m i", shell=True,
+                   cwd=r, check=True)
+    (r / "a.txt").write_text("x\n")
+    marker = env / "pwned"
+    subprocess.run(["git", "-C", str(r), "config", "core.fsmonitor", f"touch {marker}"], check=True)
+    subprocess.run(["git", "-C", str(r), "config", "diff.external", f"touch {marker}"], check=True)
+    assert "uncommitted changes" in PL._git(r)                          # git status still works
+    assert not marker.exists()                                          # but fsmonitor never ran
+    out = subprocess.run(T.safe_git("diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD"), cwd=r,
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and not marker.exists()
+    subprocess.run(["git", "status", "--short"], cwd=r, capture_output=True)   # plain git does run it: the test is real
+    assert marker.exists()

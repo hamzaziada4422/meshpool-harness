@@ -71,9 +71,10 @@ def _git(root: Path) -> str:
     if not (root / ".git").exists() or not shutil.which("git"):
         return "not a git repository"
     try:
-        r = subprocess.run(["git", "log", "--oneline", "-5"], cwd=root, capture_output=True, text=True, timeout=5)
+        from meshpool_harness.core.tools import safe_git    # the repo's own config runs no program here
+        r = subprocess.run(safe_git("log", "--oneline", "--no-textconv", "-5"), cwd=root, capture_output=True, text=True, timeout=5)
         log = r.stdout.strip() if r.returncode == 0 else ""
-        s = subprocess.run(["git", "status", "--short"], cwd=root, capture_output=True, text=True, timeout=5)
+        s = subprocess.run(safe_git("status", "--short"), cwd=root, capture_output=True, text=True, timeout=5)
         st = s.stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return ""

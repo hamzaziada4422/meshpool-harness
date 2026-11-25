@@ -4323,7 +4323,8 @@ class Agent:
         missing = [r for r in rel if r not in stats]     # changed outside the edit tools (a script): git fills them in
         if missing:
             try:                                         # against HEAD (counts uncommitted work too)
-                r = subprocess.run(["git", "diff", "--numstat", "HEAD", "--", *missing], cwd=self.root,
+                r = subprocess.run(T.safe_git("diff", "--numstat", "--no-ext-diff", "--no-textconv", "HEAD", "--",
+                                              *missing), cwd=self.root,
                                    capture_output=True, text=True, timeout=10)
                 for line in r.stdout.splitlines():
                     a, d, name = line.split("\t", 2)
