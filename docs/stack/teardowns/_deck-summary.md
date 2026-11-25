@@ -57,7 +57,7 @@ Bottom line [inference]: none of the eight is a drop-in replacement for forge. L
 
 ## Artefacts
 
-All under `/tmp/claude-0/-home-user-meshpool-harness/24bc71e4-4861-5705-9681-86c31317da60/scratchpad/td/`:
+All under `<scratch>
 - `out/<repo>/` holds each PPTX, its `*.forge.json` validator output, and the `*_png/` renders.
 - `work/` holds the pinned repo copies, with the generated content (prompts, responses, content.json, HTML, build scripts).
 - `venvs/` holds the isolated environments.

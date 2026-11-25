@@ -1,7 +1,7 @@
 """Run each bench3 arm on one office task against the fake capture upstream (no model calls).
 
     /root/.venvs/mp/bin/python testkit/bench3/profile/run_profile.py [--arms codex,pi,...] [--task xlsx_edit]
-        [--mp-src /tmp/claude-0/base/app] [--out testkit/bench3/profile/captures]
+        [--mp-src <scratch> [--out testkit/bench3/profile/captures]
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arms", default="codex,pi,mp-cli,mp-work,mp-on-pi,mp-on-codex")
     ap.add_argument("--task", default="xlsx_edit")
-    ap.add_argument("--mp-src", default="/tmp/claude-0/base/app")
+    ap.add_argument("--mp-src", default="<scratch>")
     ap.add_argument("--python", default=A.DEFAULT_PYTHON)
     ap.add_argument("--out", default=str(HERE / "captures"))
     ap.add_argument("--model", default="deepseek-v4.1-flash", help="the model id of the baseline run (docs/results/v4/baseline-0.0.12-flash/run.json)")

@@ -9,7 +9,7 @@ a note) made the gate report 'the header is in row 2; remove the title rows' on 
 agent spent turns on a non-problem. The header is now the first wide row of text labels.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+Claude-Session: <redacted>
 ---
  app/engines/sheets/engine.py    |  8 +++++++-
  app/tests/test_sheets_derive.py | 11 +++++++++++

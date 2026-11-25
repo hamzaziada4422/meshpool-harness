@@ -1,7 +1,7 @@
 
   Meshpool is running.
   Open http://127.0.0.1:43253/ in your browser if it did not open by itself.
-  Settings file: /tmp/prof-mp-work-7pljx9ct/home/meshpool.config
-  Task outputs:  /tmp/prof-mp-work-7pljx9ct/home/runs
+  Settings file: <scratch>/home/meshpool.config
+  Task outputs:  <scratch>/home/runs
   Close this window (or press Ctrl+C) to stop Meshpool.
 

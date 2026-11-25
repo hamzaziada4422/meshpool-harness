@@ -3,7 +3,7 @@
 Date 2026-11-15. Notes per repo in this folder: `assafelovic__gpt-researcher.md`, `virattt__dexter.md`,
 `AI4Finance-Foundation__FinRobot.md`, `usefolio__folio.md`, `docling-project__docling.md`, `datalab-to__marker.md`,
 `opendatalab__MinerU.md`. Labels: [observation] measured or seen in code; [inference] my reading; [unknown].
-Working files, scripts and outputs: `/tmp/claude-0/-home-user-meshpool-harness/24bc71e4-4861-5705-9681-86c31317da60/scratchpad/td/`.
+Working files, scripts and outputs: `<scratch>
 
 ## What was tested
 

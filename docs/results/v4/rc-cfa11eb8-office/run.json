@@ -39,7 +39,7 @@
  "versions": {
   "codex": "codex-cli 0.171.0",
   "pi": "0.73.1",
-  "meshpool_src": "/tmp/claude-0/rc/app",
+  "meshpool_src": "<scratch>",
   "meshpool_git": "cfa11eb8ddfb7e9f4d876b2dfee7beb57821884f",
   "python": "/root/.venvs/mp/bin/python"
  },

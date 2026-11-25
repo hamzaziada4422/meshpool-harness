@@ -1,6 +1,6 @@
 # Real-world benchmark: Meshpool vs Codex CLI vs Pi
 
-20 tasks x 2 run(s) per arm; same model (deepseek-v4.1-flash) through llm.meshpool.ai, same metering proxy (testkit/loop/small_meter.py), concurrency 3, arms interleaved task by task in the same hour. Cost = metered tokens at testkit/bench3/prices.json ({'in': 0.33, 'cached': 0.0066, 'out': 1.32}). Versions: {'codex': 'codex-cli 0.171.0', 'pi': '1.5.2', 'meshpool_app': '/tmp/claude-0/rw/mp-head/app', 'meshpool_git': 'bf04014694c0b2efea492f14dc37724c5dc509b8', 'meshpool_version': 'meshpool 0.0.12', 'python': '/usr/local/bin/python3'}.
+20 tasks x 2 run(s) per arm; same model (deepseek-v4.1-flash) through llm.meshpool.ai, same metering proxy (testkit/loop/small_meter.py), concurrency 3, arms interleaved task by task in the same hour. Cost = metered tokens at testkit/bench3/prices.json ({'in': 0.33, 'cached': 0.0066, 'out': 1.32}). Versions: {'codex': 'codex-cli 0.171.0', 'pi': '1.5.2', 'meshpool_app': '<scratch>', 'meshpool_git': 'bf04014694c0b2efea492f14dc37724c5dc509b8', 'meshpool_version': 'meshpool 0.0.12', 'python': '/usr/local/bin/python3'}.
 
 ## Suite (testkit/realworld/)
 
@@ -23,7 +23,7 @@ from the kept workspaces (testkit/realworld/regrade.py; rows carry `regraded_fro
 Berg" as naming the wrong CEO (hit all three arms), and csv_sales q1 is an exact half-cent tie (511253.075), so .07 and
 .08 are both accepted. The runner process died once during office run 1; Meshpool's pdf_report run 1 was still looping
 (418 calls) and was stopped by hand, recorded as a 900 s timeout with its metered cost (a lower bound). Raw data:
-results.jsonl, meter.jsonl, run.json next to this file; traces in /tmp/claude-0/rw/run/logs.
+results.jsonl, meter.jsonl, run.json next to this file; traces in <scratch>
 
 ## Headline
 

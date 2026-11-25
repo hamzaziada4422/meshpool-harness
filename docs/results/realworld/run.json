@@ -32,12 +32,12 @@
    "versions": {
     "codex": "codex-cli 0.171.0",
     "pi": "1.5.2",
-    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_app": "<scratch>",
     "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
     "meshpool_version": "meshpool 0.0.12",
     "python": "/usr/local/bin/python3"
    },
-   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+   "task_python": "<scratch>"
   },
   {
    "date": "2026-11-23T21:48:52+00:00",
@@ -70,12 +70,12 @@
    "versions": {
     "codex": "codex-cli 0.171.0",
     "pi": "1.5.2",
-    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_app": "<scratch>",
     "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
     "meshpool_version": "meshpool 0.0.12",
     "python": "/usr/local/bin/python3"
    },
-   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+   "task_python": "<scratch>"
   },
   {
    "date": "2026-11-23T22:10:13+00:00",
@@ -112,12 +112,12 @@
    "versions": {
     "codex": "codex-cli 0.171.0",
     "pi": "1.5.2",
-    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_app": "<scratch>",
     "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
     "meshpool_version": "meshpool 0.0.12",
     "python": "/usr/local/bin/python3"
    },
-   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+   "task_python": "<scratch>"
   },
   {
    "date": "2026-11-23T22:15:11+00:00",
@@ -165,12 +165,12 @@
    "versions": {
     "codex": "codex-cli 0.171.0",
     "pi": "1.5.2",
-    "meshpool_app": "/tmp/claude-0/rw/mp-head/app",
+    "meshpool_app": "<scratch>",
     "meshpool_git": "bf04014694c0b2efea492f14dc37724c5dc509b8",
     "meshpool_version": "meshpool 0.0.12",
     "python": "/usr/local/bin/python3"
    },
-   "task_python": "/tmp/claude-0/rw/taskvenv/bin/python"
+   "task_python": "<scratch>"
   }
  ]
 }

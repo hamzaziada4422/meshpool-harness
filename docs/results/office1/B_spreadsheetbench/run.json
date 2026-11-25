@@ -35,7 +35,7 @@
  "versions": {
   "codex": "codex-cli 0.171.0",
   "pi": "unavailable ([Errno 2] No such file or directory: 'pi')",
-  "meshpool_src": "/root/hid/ro1/wt/app",
+  "meshpool_src": "<worktree>/app",
   "meshpool_git": "2d8f670fefac753b18440ff265272f9b678b32d3",
   "python": "/usr/local/bin/python3"
  },

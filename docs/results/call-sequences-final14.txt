@@ -24,13 +24,13 @@
   3. cat -A importer.py | head -60; echo ---; git log --oneline -20
   4. python -c "import sys; print(sys.version)" && python -c "import pandas; print(pandas.__ver
   5. find / -name 'contacts.csv' -not -path '*/proc/*' 2>/dev/null | head -20; echo ---; grep -
-  6. ls /root/hid/r11/wt/testkit/loop/v2/ && sed -n 1,200p /root/hid/r11/wt/testkit/loop/v2/t_d
-  7. cd /root/hid/r11/wt/testkit/loop/v2 && grep -n 'csv' -i *.py | head -40
-  8. cd /root/hid/r11/wt/testkit/loop/v2 && sed -n 1,120p t_dev2.py
-  9. cd /root/hid/r11/wt/testkit/loop/v2 && sed -n 50,80p t_debug.py && echo '=== common.py ===
-  10. cd /root/hid/r11/wt/testkit/loop/v2 && sed -n 55,70p t_debug.py | cat -v | sed -n 1,20p > 
-  11. cd /root/hid/r11/wt/testkit/loop/v2 && ls .. && sed -n 1,80p ../bench.py
-  12. cd /root/hid/r11/wt/testkit/loop && sed -n 80,140p bench.py
+  6. ls <worktree>/testkit/loop/v2/ && sed -n 1,200p <worktree>/testkit/loop/v2/t_d
+  7. cd <worktree>/testkit/loop/v2 && grep -n 'csv' -i *.py | head -40
+  8. cd <worktree>/testkit/loop/v2 && sed -n 1,120p t_dev2.py
+  9. cd <worktree>/testkit/loop/v2 && sed -n 50,80p t_debug.py && echo '=== common.py ===
+  10. cd <worktree>/testkit/loop/v2 && sed -n 55,70p t_debug.py | cat -v | sed -n 1,20p > 
+  11. cd <worktree>/testkit/loop/v2 && ls .. && sed -n 1,80p ../bench.py
+  12. cd <worktree>/testkit/loop && sed -n 80,140p bench.py
   13. mkdir -p "$TMPDIR/repro" && printf 'name,email,company\r\n"Doe, Jane",JANE@X.COM,"Acme, In
   14. python3 -c " ⏎ from importer import load_contacts ⏎ print(load_contacts('$TMPDIR/repro/con
   15. git status --short && python3 -c "print(open('importer.py').read())"
@@ -132,7 +132,7 @@
   1. ls -la && rg -n 'def medians' -S . 2>/dev/null | head -50
   2. rg --files | head -100
   3. cat -n stats.py && git log --oneline -10
-  4. cat > "$TMPDIR/check.py" <<'EOF' ⏎ import random, sys ⏎ sys.path.insert(0, '/root/work/mhl
+  4. cat > "$TMPDIR/check.py" <<'EOF' ⏎ import random, sys ⏎ sys.path.insert(0, '<workdir>
   5. cd "$TMPDIR" && python check.py "$TMPDIR/before.txt" && cat "$TMPDIR/before.txt" | head -8
   6. python -c " ⏎ import random, time ⏎ from stats import medians ⏎ random.seed(7) ⏎ xs=[rando
   7. PATCH U:stats.py (1503c)

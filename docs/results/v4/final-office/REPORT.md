@@ -1,6 +1,6 @@
 # Benchmark report
 
-Model `deepseek-v4.1-flash`, 2026-11-23T22:04:06+00:00, codex `codex-cli 0.171.0`, pi `0.73.1`, Meshpool source `/tmp/claude-0/final/app` @ `ab17382102`. Every model call of every arm went through one metering proxy; cost = uncached input + cached input + output at the price table in `prices.json` (unknown model: no cost).
+Model `deepseek-v4.1-flash`, 2026-11-23T22:04:06+00:00, codex `codex-cli 0.171.0`, pi `0.73.1`, Meshpool source `<scratch> @ `ab17382102`. Every model call of every arm went through one metering proxy; cost = uncached input + cached input + output at the price table in `prices.json` (unknown model: no cost).
 
 ## Per task and arm
 

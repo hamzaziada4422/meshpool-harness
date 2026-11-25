@@ -9,7 +9,7 @@ office1-3 transcripts: 200+ failed edit_office_file calls on ops the tool did no
 set_value 30, clear_cell 28, delete_sheet 10, replace 8), each a retry round trip. The description listed no Excel ops.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01Pf4xaMqQSJYs9jXfPpQcsK
+Claude-Session: <redacted>
 ---
  .../agent/office_mcp_server.py                | 70 ++++++++++++++++---
  app/tests/test_edit_office_xlsx_ops.py        | 35 ++++++++++

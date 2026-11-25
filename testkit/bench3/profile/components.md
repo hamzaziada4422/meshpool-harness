@@ -105,7 +105,7 @@
 |---|---:|---:|---|
 | in0.developer (You are a coding agent running in the Codex CLI, a terminal-...) | 16,979 | 4,244 | Codex's own base instructions (model-family prompt) |
 | in1.developer (<skills_instructions> ## Skills A skill is a set of local in...) | 2,513 | 628 | Codex skills list (system skills) |
-| in2.user (<environment_context>   <cwd>/tmp/prof-codex-wiq0frko/work</...) | 379 | 94 | Codex <environment_context> |
+| in2.user (<environment_context>   <cwd><scratch>/work</...) | 379 | 94 | Codex <environment_context> |
 | in3.user (In inventory.xlsx, add a Value column (qty times unit cost) ...) | 251 | 62 | task |
 | tools: built-in tools (13) | 18,068 | 4,517 | Codex built-ins (exec_command, write_stdin, multi_agent_v1, goal tools, view_image, ...) |
 | **sum of components** | **38,190** | **9,547** | request body 40,855 bytes = ~10,213 tokens |
@@ -118,7 +118,7 @@
 |---|---:|---:|---|
 | in0.developer (You are a coding agent running in the Codex CLI, a terminal-...) | 16,979 | 4,244 | Codex's own base instructions (model-family prompt) |
 | in1.developer (<skills_instructions> ## Skills A skill is a set of local in...) | 2,342 | 585 | Codex skills list (system skills) |
-| in2.user (<environment_context>   <cwd>/tmp/prof-mp-on-codex-5zdnofsj/...) | 391 | 97 | Codex <environment_context> |
+| in2.user (<environment_context>   <cwd><scratch>/...) | 391 | 97 | Codex <environment_context> |
 | user msg: user task | 254 | 63 | testkit/bench3/tasks.py xlsx_edit |
 | user msg: capability note [Meshpool] This message asks... | 703 | 175 | capabilities.py:100 note(), added at ui/agent_api.py:837 |
 | user msg: Today line | 65 | 16 | assistant.py:367 context_block (first message) |
@@ -141,7 +141,7 @@
 |---|---:|---:|---|
 | in1.developer (You are Codex, an agent based on GPT-5. You and the user sha...) | 17,730 | 4,432 | second Codex session (title writer), model gpt-5.6-luna |
 | in2.developer (<skills_instructions> ## Skills A skill is a set of local in...) | 5,862 | 1,465 | second Codex session (title writer), model gpt-5.6-luna |
-| in3.user (<environment_context>   <cwd>/tmp/prof-mp-on-codex-5zdnofsj/...) | 453 | 113 | second Codex session (title writer), model gpt-5.6-luna |
+| in3.user (<environment_context>   <cwd><scratch>/...) | 453 | 113 | second Codex session (title writer), model gpt-5.6-luna |
 | user msg: (start) | 541 | 135 |  |
 | user msg: user task | 254 | 63 | testkit/bench3/tasks.py xlsx_edit |
 | user msg: capability note [Meshpool] This message asks... | 703 | 175 | capabilities.py:100 note(), added at ui/agent_api.py:837 |

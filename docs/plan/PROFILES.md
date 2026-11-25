@@ -68,14 +68,14 @@ general routes are ignored. Measure it as its own profile (`"step_methods": true
 
 ```bash
 # 1. bench profile arms on the DEV suites (arm "profile:<name>" runs routed MeshPool with MH_HARNESS_PROFILE=<name>)
-python testkit/loop/bench.py --suites debug,build,hard --repeats 2 --out /tmp/prof-dev \
+python testkit/loop/bench.py --suites debug,build,hard --repeats 2 --out <scratch> \
     --arms profile:full,profile:lean,profile:lean+plan,profile:lean+review
 
 # 2. choose per group (dev results only); prints the decision table
-python testkit/loop/select_profiles.py /tmp/prof-dev --out app/defaults/profiles.json --md /tmp/prof-dev/decisions.md
+python testkit/loop/select_profiles.py <scratch> --out app/defaults/profiles.json --md <scratch>/decisions.md
 
 # 3. measure the committed assignment on EVAL against full (routed arm with no forced profile uses profiles.json)
-python testkit/loop/bench.py --suites v2_eval --arms profile:full,routed --out /tmp/prof-eval
+python testkit/loop/bench.py --suites v2_eval --arms profile:full,routed --out <scratch>
 ```
 
 Selection rule (`select_profiles.py`): for each group with at least `--min-tasks` tasks (default 3), the profile with
