@@ -574,7 +574,33 @@ class Terminal:
                                 self.effort, self.cost)
 
     def footer_line(self) -> str:
-        return R.mode_hint(self.st, self.mode, self.agents)
+        base = R.mode_hint(self.st, self.mode, self.agents)
+        cmd = os.environ.get("MH_STATUSLINE", "").strip()
+        if not cmd:
+            return base
+        now = time.time()
+        if now - getattr(self, "_sl_at", 0) > 2 and not getattr(self, "_sl_busy", False):
+            self._sl_at, self._sl_busy = now, True
+            threading.Thread(target=self._statusline, args=(cmd,), daemon=True).start()
+        text = getattr(self, "_sl_text", "")
+        return base + ("  " + self.st.dim(text) if text else "")
+
+    def _statusline(self, cmd: str) -> None:
+        """Settings, Status line command: the user's own script prints one line for the footer. It gets the
+        session's state as JSON on standard input (folder, model, mode, tokens, cost)."""
+        import json as _json
+        try:
+            info = {"cwd": str(getattr(self, "cwd", "") or os.getcwd()), "model": getattr(self, "model", ""),
+                    "mode": self.mode, "tokens": {k: (self.usage or {}).get(k, 0) for k in ("in", "out", "calls")},
+                    "cost": self.cost, "context_tokens": getattr(self, "ctx_tokens", 0)}
+            r = subprocess.run(cmd, shell=True, input=_json.dumps(info, default=str), capture_output=True, text=True,
+                               timeout=2, cwd=info["cwd"] if os.path.isdir(info["cwd"]) else None)
+            line = (r.stdout or "").strip().splitlines()[:1]
+            self._sl_text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x1f]", "", line[0])[:120] if line else ""
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            self._sl_text = ""
+        finally:
+            self._sl_busy = False
 
     def rule_line(self) -> str:
         return R.rule(self.st, self.width, R.POOL if self.started else None)

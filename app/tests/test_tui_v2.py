@@ -356,3 +356,18 @@ def test_ctrl_g_edits_the_prompt_in_an_editor(tmp_path, monkeypatch):
     keys = iter([FakeKeys("draft", "\x07"), FakeKeys("\r")])
     t.keys_factory = lambda: next(keys)
     assert t.read_input() == "from the editor\nsecond line"
+
+
+def test_a_status_line_command_shows_in_the_footer(tmp_path, monkeypatch):
+    import time as _t
+    script = tmp_path / "sl.sh"
+    script.write_text("#!/bin/sh\npython3 -c \"import json,sys; d=json.load(sys.stdin); print('branch main | mode', d['mode'])\"\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("MH_STATUSLINE", str(script))
+    t, out, clk = S.make_terminal()
+    t.footer_line()
+    for _ in range(40):
+        if getattr(t, "_sl_text", ""):
+            break
+        _t.sleep(0.05)
+    assert "branch main | mode" in t.footer_line()
