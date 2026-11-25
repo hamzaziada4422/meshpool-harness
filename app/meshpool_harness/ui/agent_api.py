@@ -744,6 +744,11 @@ class Session:
         self.cp = Checkpoints(self.workdir, SESSIONS / self.id / cp_dir, base=done)
         write_meta(self.id, cp_dir=cp_dir, cp_base=done)
         self.emit({"type": "status", "text": f"This chat now works in {what} ({self.workdir}).{note}"})
+        try:
+            from meshpool_harness.agent import extras as EX
+            EX.run_hooks(Path(self.workdir), "CwdChanged", {"from": old, "to": self.workdir}, timeout=15)
+        except Exception:  # noqa: BLE001
+            pass
         if hasattr(self.agent, "messages"):           # the agent knows where it is now
             self.agent.messages.append({"role": "user", "content": f"\u200b[Meshpool] The user moved this chat from "
                                         f"{old} to {self.workdir} ({what}). Work only there from now on.{note}"})

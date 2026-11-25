@@ -1566,7 +1566,7 @@ class Agent:
             self.emit({"type": "error", "text": "A hook stopped this message: " + note})
             return ""
         if len(self.messages) <= 2:
-            _, started = EX.run_hooks(self.root, "SessionStart", {})
+            _, started = EX.run_hooks(self.root, "SessionStart", {"source": "startup", "session": self.id})
             if started:
                 text += "\n\n[Session start hook]\n" + started
         if note:
@@ -1868,6 +1868,11 @@ class Agent:
                 self.messages.append({"role": "assistant", "content": kept})
                 self.emit({"type": "assistant", "text": kept, "streamed": False, "has_tools": False})
             self.emit({"type": "error", "text": msg})
+            try:
+                from meshpool_harness.agent import extras as EXF
+                EXF.run_hooks(self.root, "StopFailure", {"error": msg[:2000]}, timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
         finally:
             self._last_final = final
             self._prev_plan = bool(self.plan)
@@ -2313,6 +2318,10 @@ class Agent:
         if r:
             try:
                 EX.run_hooks(self.root, "PostCompact", {"removed": r.get("removed"), "messages": len(self.messages)})
+                _, again = EX.run_hooks(self.root, "SessionStart", {"source": "compact", "session": self.id})
+                if again:                              # context a SessionStart hook gives, given again after a summary
+                    self.messages.append({"role": "user", "content": "\u200b[Session start hook]\n" + again})
+                    self.messages.append({"role": "assistant", "content": "Understood."})
             except Exception:  # noqa: BLE001
                 pass
             self.emit({"type": "status", "text": f"Summarized {r['removed']} earlier messages so the task can keep "
@@ -2659,6 +2668,11 @@ class Agent:
                 self.messages.append({"role": "user", "content": "\u200b[Meshpool] " + note})
                 self.messages.append({"role": "assistant", "content": "Understood."})
                 self.save()
+            try:
+                from meshpool_harness.agent import extras as EXA
+                EXA.run_hooks(self.root, "DirectoryAdded", {"path": str(p)}, timeout=15)
+            except Exception:  # noqa: BLE001
+                pass
         return str(p)
 
     def side_question(self, question: str) -> str:
@@ -3028,6 +3042,7 @@ class Agent:
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
+        own_name, own_args = name, args
         if name == "shell":
             hit = T.patch_from_shell(args.get("command"))
             if hit:                            # apply_patch through the shell is an edit like any other
@@ -3038,6 +3053,8 @@ class Agent:
         hk = EX.run_hooks_full(self.root, "PreToolUse", {}, tool=name, args=args)
         if hk["blocked"]:
             return False, f"Blocked by a hook: {hk['message']}"
+        if hk.get("updated") and name == own_name and isinstance(own_args, dict):
+            own_args.update(hk["updated"])     # a hook changed the call; the rules below judge the changed one
         rules = _rules(self.root)
         # Order matters: the user's deny rules refuse first, whatever a hook, a guard or an answer says. Then each
         # question that applies is asked (an ask rule, a command reaching the main checkout, a change to a file that
@@ -3394,6 +3411,14 @@ class Agent:
                 denied, ok = True, False
                 out = "The user denied this action." + (f" Their note: {note}" if note else "") + \
                     " Do not retry it. Take another approach or ask the user."
+                try:
+                    from meshpool_harness.agent import extras as EXD
+                    _, hn = EXD.run_hooks(self.root, "PermissionDenied", {"reason": str(note or "")[:2000]},
+                                          tool=name, args=args, timeout=15)
+                    if hn:
+                        out += "\n[Hook]\n" + hn
+                except Exception:  # noqa: BLE001
+                    pass
             elif name == "delegate_task":
                 from meshpool_harness.agent import delegate as DL
                 out, ok = DL.run_tool(self, args)      # not _wait: on Stop it returns the finished reports
@@ -3518,6 +3543,10 @@ class Agent:
                                                 EXN.scoped_rules(self.root, args["path"], seen)) if x)
                 if more:
                     out = out + "\n\n" + more
+                    _, hn = EXN.run_hooks(self.root, "InstructionsLoaded", {"path": args["path"],
+                                                                           "instructions": more[:4000]}, timeout=15)
+                    if hn:
+                        out += "\n[Hook]\n" + hn
             except Exception:  # noqa: BLE001
                 pass
         from meshpool_harness.redact import redact

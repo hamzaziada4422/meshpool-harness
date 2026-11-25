@@ -18,7 +18,9 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from meshpool_harness import config as C
@@ -30,7 +32,9 @@ OTHER = (".cursorrules", ".windsurfrules", ".github/copilot-instructions.md", ".
 MAX_FILE, MAX_ALL = 20000, 40000
 EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SessionStart", "SessionEnd",
           "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Notification", "WorktreeCreate",
-          "WorktreeRemove")
+          "WorktreeRemove", "PermissionDenied", "StopFailure", "DirectoryAdded", "CwdChanged", "InstructionsLoaded")
+_ONCE: set = set()                                       # hooks marked "once" that already ran (per session)
+_ONCE_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------- instructions
@@ -212,9 +216,35 @@ def hooks(root: Path) -> dict:
             continue
         for e in EVENTS:
             for h in (d.get(e) or []):
-                if isinstance(h, dict) and isinstance(h.get("command"), str):
+                if isinstance(h, dict) and isinstance(h.get("command"), str) and \
+                        (h.get("args") is None or isinstance(h.get("args"), list)):
                     out[e].append(h)
     return out
+
+
+def _hook_cmd(h: dict):
+    """(what to run, shell?) for a hook. "args" (a list) runs the program directly with those arguments, never
+    through a shell. "shell": "bash" or "powershell" picks the shell; "windows" replaces the command on Windows."""
+    cmd = str(h.get("windows") or h["command"]) if os.name == "nt" and isinstance(h.get("windows"), str) \
+        else h["command"]
+    if isinstance(h.get("args"), list):
+        return [cmd, *[str(a) for a in h["args"]]], False
+    sh = str(h.get("shell") or "").lower()
+    if sh == "powershell":
+        exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
+        return [exe, "-NoProfile", "-NonInteractive", "-Command", cmd], False
+    if sh == "bash" and os.name != "nt" and shutil.which("bash"):
+        return [shutil.which("bash"), "-c", cmd], False
+    return cmd, True
+
+
+def _matches(event: str, h: dict, tool: str, args: dict, payload: dict) -> bool:
+    if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionDenied"):
+        return _tool_matches(h.get("matcher", ""), tool, args)
+    if event == "SessionStart" and h.get("matcher"):     # startup or compact
+        src = str(payload.get("source") or "startup")
+        return any(fnmatch.fnmatchcase(src, m.strip()) for m in str(h["matcher"]).split("|"))
+    return True
 
 
 def _tool_matches(matcher: str, name: str, args: dict) -> bool:
@@ -232,23 +262,40 @@ def _tool_matches(matcher: str, name: str, args: dict) -> bool:
 
 
 def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: dict | None = None, timeout: int = 30) -> dict:
-    """Run the hooks for an event. Returns {"blocked", "allow", "message"}. A hook blocks with exit code 2 (stderr is
-    the reason) or by printing JSON {"decision": "block", "reason": "..."}; it can also print {"decision": "allow"} to
-    skip the question for this call (never for destructive commands), or {"additionalContext": "..."} to add a note
-    the agent sees. Only PreToolUse and UserPromptSubmit can block."""
-    out = {"blocked": False, "allow": False, "message": ""}
+    """Run the hooks for an event. Returns {"blocked", "allow", "message", "updated"}. A hook blocks with exit code 2
+    (stderr is the reason) or by printing JSON {"decision": "block", "reason": "..."}; it can also print
+    {"decision": "allow"} to skip the question for this call (never for destructive commands), {"additionalContext":
+    "..."} to add a note the agent sees, or, for PreToolUse, {"updatedInput": {...}} to change the call's arguments
+    (the saved rules then judge the changed call). Only PreToolUse and UserPromptSubmit can block. A hook with
+    "async": true runs in the background and its output is not read; one with "once": true runs once a session."""
+    out = {"blocked": False, "allow": False, "message": "", "updated": None}
     hs = hooks(root)[event]
     if not hs:
         return out
     data = json.dumps(dict(payload, event=event, tool=tool, args=args or {}, cwd=str(root)), ensure_ascii=False, default=str)
     notes = []
     for h in hs:
-        if event in ("PreToolUse", "PostToolUse", "PostToolUseFailure") and \
-                not _tool_matches(h.get("matcher", ""), tool, args or {}):
+        if not _matches(event, h, tool, args or {}, payload):
+            continue
+        if h.get("once"):
+            key = (str(payload.get("session") or os.getpid()), event, h["command"], str(h.get("args")))
+            with _ONCE_LOCK:
+                if key in _ONCE:
+                    continue
+                _ONCE.add(key)
+        cmd, use_shell = _hook_cmd(h)
+        run = dict(shell=use_shell, cwd=str(root), input=data, capture_output=True, text=True,
+                   timeout=int(h.get("timeout") or timeout), env=C.scrub_env(dict(os.environ)))
+        if h.get("async"):                               # fire and forget: never waits, never blocks
+            def _bg(cmd=cmd, run=run):
+                try:
+                    subprocess.run(cmd, **run)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+            threading.Thread(target=_bg, daemon=True).start()
             continue
         try:
-            r = subprocess.run(h["command"], shell=True, cwd=str(root), input=data, capture_output=True, text=True,
-                               timeout=int(h.get("timeout") or timeout), env=C.scrub_env(dict(os.environ)))
+            r = subprocess.run(cmd, **run)
         except (subprocess.TimeoutExpired, OSError) as e:
             notes.append(f"[hook {h['command'][:40]} failed: {e}]")
             continue
@@ -269,6 +316,8 @@ def run_hooks_full(root: Path, event: str, payload: dict, tool: str = "", args: 
                     return out
                 if dec == "allow" and event == "PreToolUse":
                     out["allow"] = True
+                if event == "PreToolUse" and isinstance(d.get("updatedInput"), dict):
+                    out["updated"] = dict(out["updated"] or {}, **d["updatedInput"])
                 if d.get("additionalContext"):
                     notes.append(str(d["additionalContext"])[:2000])
                 continue
