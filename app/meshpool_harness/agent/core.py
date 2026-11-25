@@ -1193,6 +1193,75 @@ def _template_format_miss(asked: str, root, since: float) -> str:
             "again.")
 
 
+def _off_slide_miss(root, since: float) -> str:
+    """Shapes outside the slide in a deck written this turn, as a note; else "". Office-7 on 9cd021c0: pptx_chart r1
+    failed with 2 shapes past the slide's edge after 3-5 check_deck runs."""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return ""
+    out = []
+    try:
+        for f in Path(root).rglob("*.pptx"):
+            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
+                continue
+            prs = Presentation(str(f))
+            W, H = prs.slide_width or 0, prs.slide_height or 0
+            for i, slide in enumerate(prs.slides, 1):
+                for sh in slide.shapes:
+                    x, y, w, h = sh.left, sh.top, sh.width, sh.height
+                    if None in (x, y, w, h) or not W or not H:
+                        continue
+                    if x < 0 or y < 0 or x + w > W * 1.01 or y + h > H * 1.01:
+                        out.append(f"{f.name} slide {i}: \"{sh.name}\"")
+    except Exception:  # noqa: BLE001 - a deck that cannot be read is not judged here
+        return ""
+    if not out:
+        return ""
+    return ("These shapes reach past the edge of the slide: " + "; ".join(out[:6]) + ". The job is not done: move or "
+            "resize them inside the slide (left + width <= slide width, top + height <= slide height), save and "
+            "check again.")
+
+
+def _unchanged_output_miss(asked: str, root, since: float) -> str:
+    """An edit request whose workbook output, written this turn, holds the same cell values as the input it names:
+    as a note; else "". SpreadsheetBench sb-374-31 (4 runs, 0 passes): it read "blank rows above Code" as rows blank
+    in every column, deleted nothing and saved an identical copy."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    text = str(asked or "").split(_SEP)[0]
+    if not re.search(r"\b(?:delete|remove|drop|clear|sort|filter|fill|replace|change|fix|correct|update|add|insert|"
+                     r"merge|split|move|rename|highlight|format)\b", text, re.I):
+        return ""
+    try:
+        import openpyxl
+    except ImportError:
+        return ""
+
+    def values(path):
+        wb = openpyxl.load_workbook(path)
+        return [[c.value for c in row] for ws in wb.worksheets for row in ws.iter_rows()]
+    try:
+        names = {n.lower() for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)}
+        inputs = [f for f in Path(root).rglob("*.xlsx") if f.name.lower() in names and f.stat().st_mtime < since]
+        if not inputs:
+            return ""
+        src = {f: values(f) for f in inputs}
+        same = []
+        for f in Path(root).rglob("*.xlsx"):
+            if f in src or "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
+                continue
+            v = values(f)
+            if any(v == sv for sv in src.values()):
+                same.append(f.name)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not same:
+        return ""
+    return (", ".join(same[:3]) + " holds exactly the same cells as the input, so nothing the request asked for was "
+            "done. Re-read the request the way the user evidently means it (a row is \"blank\" when the column that "
+            "identifies it is empty, not only when every cell is), change the file, save and check again.")
+
+
 def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
     shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
@@ -2252,14 +2321,22 @@ class Agent:
                                 "since. The job is not done: change the file so it does what the request asks, save "
                                 "it and check again. If the request really cannot be met, say exactly why in one line.")})
                             continue
-                    if self._office_direct() and not g.get("office_count_nudged") \
-                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
-                        ask = getattr(self, "_asked_text", "")
-                        miss = _slide_count_miss(ask, self.root, g.get("t0", 0)) or \
-                            _total_row_miss(ask, self.root, g.get("t0", 0)) or \
-                            _template_format_miss(ask, self.root, g.get("t0", 0))
+                    if self._office_direct() and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
+                        # the request's own terms, checked on the files written this turn; each check speaks once
+                        ask, t0 = getattr(self, "_asked_text", ""), g.get("t0", 0)
+                        done = g.setdefault("office_checks", set())
+                        miss = ""
+                        for key, check in (("slides", lambda: _slide_count_miss(ask, self.root, t0)),
+                                           ("total", lambda: _total_row_miss(ask, self.root, t0)),
+                                           ("template", lambda: _template_format_miss(ask, self.root, t0)),
+                                           ("offslide", lambda: _off_slide_miss(self.root, t0)),
+                                           ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0))):
+                            if key not in done:
+                                miss = check()
+                                if miss:
+                                    done.add(key)
+                                    break
                         if miss:
-                            g["office_count_nudged"] = True  # once per request: a stated count is part of the job
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
                             continue
                     route = getattr(self, "route", None)
@@ -2715,7 +2792,23 @@ class Agent:
     _FAILED = re.compile(r"(?:ERROR: |\[exit [1-9]\d*\]"
                          r"|Chunk ID: \w+\nWall time: [^\n]*\nProcess exited with code (?!0\n))")   # exec_command
 
+    _OFFICE_LOOKS = ("check_deck", "check_workbook", "check_document", "view_output", "measure_office_file")
+
     def _guarded_tool(self, c: dict, g: dict, cut: bool = False) -> str:
+        name = (c.get("function") or {}).get("name") or ""
+        short = name.rsplit("__", 1)[-1]
+        if short in self._OFFICE_LOOKS and self._office_direct():
+            # Office-7 on 9cd021c0: pptx_chart ran check_deck 3-5 times a run (43 calls vs Codex's 28). Two looks at
+            # the same kind of check per request; after that the agent answers or fixes what they found.
+            seen = g.setdefault("office_looks", {})
+            seen[short] = seen.get(short, 0) + 1
+            try:
+                cap = int(os.environ.get("MH_OFFICE_LOOK_CAP", "2") or 0)
+            except ValueError:
+                cap = 2
+            if cap and seen[short] > cap:
+                return (f"[Meshpool] Not run: {short} already ran {cap} times for this request. Fix what it reported "
+                        "and answer, or answer now if it found nothing to fix.")
         out = self._guarded_tool_inner(c, g, cut)
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
@@ -4392,12 +4485,18 @@ class Agent:
         by hand is not run; the reply says which tool to use instead. "" when the call is fine."""
         if self.profile != "work" or name not in ("bash", "bash_many", "write_file", "edit", "shell", "apply_patch"):
             return ""
-        if _office_direct_on() and self._lean():     # MH_OFFICE_DIRECT=1: small office jobs are done by hand
-            return ""
         cmd = args.get("command")                    # shell (Codex style, MH_LEAN_WORK=1) takes an argv list
         text = " ".join(str(v or "") for v in (" ".join(map(str, cmd)) if isinstance(cmd, list) else cmd,
                                                 args.get("content"), args.get("new"), args.get("input"))) + \
             " ".join(str(c) for c in args.get("commands") or [])
+        if _office_direct_on() and self._lean():     # MH_OFFICE_DIRECT=1: small office jobs are done by hand
+            if getattr(self, "office_revisions", False) and re.search(r"<w:(?:ins|del)\b|w:ins\b|w:del\b", text):
+                # Office-7 on 9cd021c0: docx_tracked written as raw revision XML took 71 calls where
+                # edit_office_file's tracked_replace took 8
+                return ("Not run: Word tracked changes are not written as XML by hand here. Use edit_office_file "
+                        "with tracked_replace (find, replace), tracked_delete or tracked_insert_after: it writes real "
+                        "revisions Word can accept or reject, in one call.")
+            return ""
         m = self._HANDMADE.search(text)
         if not m:
             return ""

@@ -233,3 +233,72 @@ def test_verification_cap_after_a_saved_file(tmp_path, monkeypatch):
     g2 = {"cmds0": 0}
     a.ws.commands = [save, chk, {"cmd": "x", "code": 1}, chk, chk]
     assert a._office_verify_note(g2) == ""                      # a failing check since the save: keep working
+
+
+def test_off_slide_shapes_are_caught(tmp_path):
+    import time as _t
+    from pptx import Presentation
+    from pptx.util import Emu
+    from meshpool_harness.agent.core import _off_slide_miss
+    t0 = _t.time() - 1
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    s.shapes.add_textbox(Emu(prs.slide_width - 100), Emu(0), Emu(500000), Emu(100000))
+    prs.save(str(tmp_path / "deck.pptx"))
+    assert "past the edge" in _off_slide_miss(tmp_path, t0)
+    prs2 = Presentation()
+    s2 = prs2.slides.add_slide(prs2.slide_layouts[6])
+    s2.shapes.add_textbox(Emu(0), Emu(0), Emu(500000), Emu(100000))
+    prs2.save(str(tmp_path / "deck.pptx"))
+    assert _off_slide_miss(tmp_path, t0) == ""
+
+
+def test_unchanged_output_is_caught(tmp_path):
+    import os
+    import time as _t
+    import openpyxl
+    from meshpool_harness.agent.core import _unchanged_output_miss
+    wb = openpyxl.Workbook()
+    wb.active.append([None, "x"])
+    wb.active.append(["Code", "y"])
+    wb.save(tmp_path / "data.xlsx")
+    old = _t.time() - 100
+    os.utime(tmp_path / "data.xlsx", (old, old))
+    t0 = _t.time() - 1
+    wb.save(tmp_path / "out.xlsx")
+    ask = "In data.xlsx, delete the blank rows above Code and save to out.xlsx"
+    assert "exactly the same cells" in _unchanged_output_miss(ask, tmp_path, t0)
+    wb.active.delete_rows(1)
+    wb.save(tmp_path / "out.xlsx")
+    assert _unchanged_output_miss(ask, tmp_path, t0) == ""
+
+
+def test_hand_written_revision_xml_is_refused_when_tracked_changes_were_asked(tmp_path, monkeypatch):
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.hrouter import profiles as PROF
+    from meshpool_harness.hrouter.route import Route
+    monkeypatch.setenv("MH_LEAN_WORK", "1")
+    monkeypatch.setenv("MH_OFFICE_DIRECT", "1")
+    a = Agent(str(tmp_path), mode="auto", profile="work", emit=lambda e: None)
+    a.set_route(Route(spec="data", family="data", base="work", profile="core", settings=PROF.settings("core")), "x")
+    patch = {"input": "*** Begin Patch\n*** Add File: x.xml\n+<w:ins w:id=\"1\"><w:r/></w:ins>\n*** End Patch"}
+    assert a._engine_only("apply_patch", patch) == ""                 # not asked for tracked changes
+    a.office_revisions = True
+    assert "edit_office_file" in a._engine_only("apply_patch", patch)
+
+
+def test_office_looks_are_capped_per_request(tmp_path):
+    from meshpool_harness.agent.core import Agent
+    a = Agent.__new__(Agent)
+    a._office_direct = lambda: True
+    a._guarded_tool_inner = lambda c, g, cut=False: "ok"
+    for name in ("_scratch_rewrite_note", "_shape_run_note", "_cycle_note"):
+        setattr(a, name, lambda *x, **k: "")
+    a._office_verify_note = lambda g: ""
+    from types import SimpleNamespace
+    a.ws = SimpleNamespace(edits=0, commands=[])
+    a.root = tmp_path
+    g = {}
+    call = {"function": {"name": "mcp__meshpool_office__check_deck", "arguments": "{}"}}
+    assert a._guarded_tool(call, g).startswith("ok") and a._guarded_tool(call, g).startswith("ok")
+    assert "already ran 2 times" in a._guarded_tool(call, g)
