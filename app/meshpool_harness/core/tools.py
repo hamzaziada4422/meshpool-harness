@@ -348,30 +348,121 @@ def git_config_runs_programs(root) -> bool:
 
 def git_config_safe(root) -> bool:
     """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
-    git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias."""
+    git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias.
+
+    It ran two git processes on every git command the agent wanted to run without asking. A "safe" answer is now kept
+    for the folder while nothing it read has changed: the folders from here up to the .git it found, the .git entry,
+    the git dir and its config files, the hooks folder and the user's own git config files (each by modification time,
+    size and inode), and the GIT_* environment. Only a "safe" answer is kept, never for files changed in the last few
+    seconds (a change in the same clock tick would not show), and for two minutes at most. Anything else asks git."""
+    key = os.path.abspath(str(root))
+    envk = _git_env_key()
+    with _GCS_LOCK:
+        hit = _GCS.get(key)
+    if hit is not None:
+        paths, stamp, env0, at = hit
+        if env0 == envk and 0 <= time.time() - at < _GCS_MAX_AGE and _git_stamp(paths) == stamp:
+            return True
+    t0 = time.time()
+    ok, hooks = _git_config_check(root)
+    with _GCS_LOCK:
+        _GCS.pop(key, None)
+    if ok and hooks is not None:
+        paths = _git_safe_paths(key, hooks)
+        stamp = _git_stamp(paths) if paths else None
+        if stamp and all(s[1] is None or s[1] < (t0 - _GCS_RACY_S) * 1e9 for s in stamp):
+            with _GCS_LOCK:
+                _GCS[key] = (paths, stamp, envk, t0)
+    return ok
+
+
+_GCS: dict = {}                      # folder -> (paths read, their stamps, GIT_* environment, when): "safe" answers
+_GCS_LOCK = threading.Lock()
+_GCS_MAX_AGE = 120.0
+_GCS_RACY_S = 3.0                    # FAT keeps times in 2 s steps: a newer file may change again unseen
+
+
+def _git_env_key() -> tuple:
+    return tuple(sorted((k, v) for k, v in os.environ.items()
+                        if k.startswith("GIT_") or k in ("HOME", "XDG_CONFIG_HOME", "PREFIX", "PATH")))
+
+
+def _git_safe_paths(root: str, hooks: Path) -> list | None:
+    """What a git_config_safe answer for root depends on, as files and folders to stat; None when the .git cannot be
+    found the way git finds it (the answer is then not kept)."""
+    here = Path(root)
+    dirs, dotgit = [], None
+    for d in (here, *here.parents):                  # git looks up from the folder: a new .git on the way is a new
+        dirs.append(d)                               # repo, and it changes that folder's modification time
+        if os.path.lexists(d / ".git"):
+            dotgit = d / ".git"
+            break
+    if dotgit is None:
+        return None
+    gitdir = dotgit
+    try:
+        if dotgit.is_file():                         # a worktree or submodule: "gitdir: <path>"
+            txt = dotgit.read_text(encoding="utf-8", errors="replace").strip()
+            if not txt.startswith("gitdir:"):
+                return None
+            g = Path(txt[7:].strip())
+            gitdir = g if g.is_absolute() else dotgit.parent / g
+        common = gitdir
+        cf = gitdir / "commondir"
+        if cf.is_file():
+            c = Path(cf.read_text(encoding="utf-8", errors="replace").strip())
+            common = c if c.is_absolute() else gitdir / c
+    except OSError:
+        return None
+    home = Path(os.path.expanduser("~"))
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config")
+    files = [gitdir / "config", gitdir / "config.worktree", gitdir / "commondir", common / "config",
+             common / "config.worktree", here / ".gitmodules", home / ".gitconfig", xdg / "git" / "config",
+             Path("/etc/gitconfig")]
+    files += [Path(os.environ[k]) for k in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM") if os.environ.get(k)]
+    # the git dir itself only by identity: git status rewrites the index in it, which changes its time every call
+    out = [(d, False) for d in dirs] + [(dotgit, True), (gitdir, True), (common, True)] + [(f, False) for f in files]
+    out.append((Path(hooks), False))                 # adding or renaming a hook changes the folder's time
+    return out
+
+
+def _git_stamp(paths) -> tuple:
+    out = []
+    for p, ident in paths:
+        try:
+            st = os.stat(p)
+            out.append((str(p), None if ident else st.st_mtime_ns, None if ident else st.st_size, st.st_ino,
+                        st.st_mode))
+        except OSError:
+            out.append((str(p), None))
+    return tuple(out)
+
+
+def _git_config_check(root) -> tuple[bool, Path | None]:
+    """(safe, the hooks folder git uses): git_config_safe without the kept answer."""
     try:
         r = subprocess.run(["git", "-C", str(root), "config", "--name-only", "--list", "--show-scope"],
                            capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.SubprocessError):
-        return False
+        return False, None
     if r.returncode not in (0, 1):
-        return False
+        return False, None
     for line in r.stdout.splitlines():   # global, system and command (-c, GIT_CONFIG_PARAMETERS) scopes are the user's
         scope, _, key = line.partition("\t")
         if scope in ("local", "worktree") and (_GIT_RISKY_CONFIG.search(key) or not _GIT_SAFE_KEY.match(key)):
-            return False
+            return False, None
     if (Path(root) / ".gitmodules").exists():           # submodules have configs and hooks of their own
-        return False
+        return False, None
     try:                                                  # hooks in the repo's own .git/hooks run on some reads
         r = subprocess.run(["git", "-C", str(root), "rev-parse", "--git-path", "hooks"], capture_output=True, text=True,
                            timeout=10)
         h = r.stdout.strip()
         hooks = (Path(h) if os.path.isabs(h) else Path(root) / h) if r.returncode == 0 and h else None
         if hooks is not None and hooks.is_dir() and any(f.is_file() and not f.name.endswith(".sample") for f in hooks.iterdir()):
-            return False
+            return False, None
     except (OSError, subprocess.SubprocessError):
-        return False
-    return True
+        return False, None
+    return True, hooks
 
 
 _PATCH_CMDS = ("apply_patch", "applypatch")
@@ -1065,17 +1156,15 @@ class Workspace:
         folder being searched is itself ignored (the user pointed at it on purpose)."""
         if not files or os.environ.get("MH_SEARCH_IGNORED") == "1" or not shutil.which("git"):
             return set()
-        try:
-            top = subprocess.run(["git", "-C", str(self.root), "rev-parse", "--show-toplevel"], capture_output=True,
-                                 text=True, timeout=10)
-            if top.returncode:
-                return set()
+        try:                     # no "is this a repo" call first: outside one, check-ignore itself fails (128)
             if base is not None and base != self.root and subprocess.run(
                     ["git", "-C", str(self.root), "check-ignore", "-q", str(base)], capture_output=True,
-                    timeout=10).returncode == 0:
-                return set()
+                    timeout=10).returncode != 1:
+                return set()     # 0: the folder searched is itself ignored; 128: not a repo
             r = subprocess.run(["git", "-C", str(self.root), "check-ignore", "--stdin", "-z"],
                                input="\0".join(str(f) for f in files) + "\0", capture_output=True, text=True, timeout=30)
+            if r.returncode not in (0, 1):
+                return set()
             return {Path(x) for x in r.stdout.split("\0") if x}
         except (OSError, subprocess.SubprocessError):
             return set()

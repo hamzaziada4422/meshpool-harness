@@ -56,8 +56,19 @@ def test_scheduled_task_takes_the_chats_kind(home, monkeypatch):
 def test_manager_passes_chat_to_the_assistant_server():
     m = M.Manager(roots=["."], chat="abc-1")
     spec = {"command": sys.executable, "args": ["-m", "meshpool_harness.agent.assistant_mcp_server"]}
-    assert m._with_chat(spec)["env"]["MH_CHAT_ID"] == "abc-1"
+    got = m._with_chat(spec)       # with each call (_chat, _project): one assistant process serves every chat
+    assert got["chat_id"] == "abc-1" and got["per_call_project"] and "MH_CHAT_ID" not in (got.get("env") or {})
     assert "env" not in m._with_chat({"command": "x", "args": ["other"]})
+
+
+def test_scheduled_task_takes_the_calling_chats_kind_and_folder(home, monkeypatch, tmp_path):
+    from meshpool_harness.agent import mcp_stdio
+    API.write_meta("chat-c", kind="code")
+    monkeypatch.delenv("MH_CHAT_ID", raising=False)
+    monkeypatch.setattr(mcp_stdio._CALL, "private", {"_chat": "chat-c", "_project": str(tmp_path)}, raising=False)
+    S.schedule_task("per call", "daily")
+    t = next(t for t in A.tasks() if t["prompt"] == "per call")
+    assert t["kind"] == "code" and t.get("folder") == str(tmp_path)
 
 
 def test_outside_code_agents_schedule_in_code_mode(home, monkeypatch, tmp_path):

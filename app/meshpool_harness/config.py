@@ -614,6 +614,38 @@ def find_soffice() -> str | None:
     return office_runtime.find_soffice()
 
 
+_VERSIONS: dict = {}
+_VERSIONS_LOCK = __import__("threading").Lock()
+
+
+def program_version(exe: str, arg: str = "--version", timeout: float = 3) -> tuple[int, str] | None:
+    """(exit code, first line of the output) of `exe arg`, or None when it cannot run. Kept per program file (its
+    path, size and modification time): every new chat used to run python, node, git, go, cargo, java and docker again
+    for a line that only changes when the program is reinstalled."""
+    import subprocess
+    try:
+        real = os.path.realpath(exe)
+        st = os.stat(real)
+        key = (real, arg, st.st_size, st.st_mtime_ns, st.st_ino)
+    except OSError:
+        return None
+    with _VERSIONS_LOCK:
+        if key in _VERSIONS:
+            return _VERSIONS[key]
+    try:
+        r = subprocess.run([exe, arg], capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL,
+                           creationflags=0x08000000 if os.name == "nt" else 0)
+        lines = (r.stdout or r.stderr or "").strip().splitlines()
+        got = (r.returncode, lines[0] if lines else "")
+    except subprocess.TimeoutExpired:
+        return None                                    # a slow start (a cold disk) is asked again next time
+    except (OSError, ValueError, subprocess.SubprocessError):
+        got = None
+    with _VERSIONS_LOCK:
+        _VERSIONS[key] = got
+    return got
+
+
 def find_bash() -> str | None:
     """A real bash for the agent's shell commands. On Windows: Git Bash, never WSL's System32 bash."""
     if os.environ.get("MH_BASH"):

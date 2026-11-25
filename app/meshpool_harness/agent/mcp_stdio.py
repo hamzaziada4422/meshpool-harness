@@ -40,8 +40,8 @@ def cancelled() -> bool:
 
 
 def private_args() -> dict:
-    """Arguments Meshpool's own client adds to a call (_project: the chat's folder, _model: its model), which are not
-    part of any tool's schema."""
+    """Arguments Meshpool's own client adds to a call (_project: the chat's folder, _model: its model, _chat: its id),
+    which are not part of any tool's schema."""
     return getattr(_CALL, "private", None) or {}
 
 
@@ -91,7 +91,7 @@ def serve(name: str, tools: dict[str, Tool], serial: bool = False, instructions:
                 args = p.get("arguments") or {}
                 if not isinstance(args, dict):
                     args = {}
-                _CALL.private = {k: args[k] for k in ("_project", "_model") if k in args}
+                _CALL.private = {k: args[k] for k in ("_project", "_model", "_chat") if k in args}
                 props = t.schema.get("properties") or {}
                 extra = sorted(k for k in args if k not in props and k not in _CALL.private) if props else []
                 args = {k: v for k, v in args.items() if k not in _CALL.private or k in props}

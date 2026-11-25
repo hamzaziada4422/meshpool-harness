@@ -222,6 +222,8 @@ def run(jid: str, timeout: float | None = None, should_stop=None, env_extra: dic
     if not extra:                           # a usage task is current (the Office MCP server of a chat): bill under it
         from meshpool_harness.core import usage
         cur = usage.current()[0]
+        if cur is None and not str(j.get("scope") or "").startswith("pid"):
+            cur = usage.chat_task(str(j.get("scope") or ""))    # one office process serves every chat: the job's own
         if cur is not None:
             extra = usage.child_env(usage.start_task(chat=cur.chat, parent=cur, label="office:" + j["engine"]),
                                     "engine:" + j["engine"])

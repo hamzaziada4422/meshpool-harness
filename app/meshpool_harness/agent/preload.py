@@ -88,11 +88,9 @@ def _python() -> str:
     exe = shutil.which("python3") or shutil.which("python")
     if not exe:
         return ""
-    try:
-        r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=3)
-        return (r.stdout or r.stderr).strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
+    from meshpool_harness import config as C
+    got = C.program_version(exe)                   # once per program file, not once per chat
+    return got[1] if got else ""
 
 
 def is_large(root, budget: int | None = None) -> bool:
