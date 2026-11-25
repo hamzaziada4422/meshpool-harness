@@ -12,9 +12,10 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 BASE = os.environ.get("MP_BASE", "http://127.0.0.1:8799")
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(BASE + "/").read().decode()).group(1)
+TOK = _ui_token(BASE)
 P, FX = sys.argv[1], sys.argv[2]
 RESULTS = []
 

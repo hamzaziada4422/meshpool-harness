@@ -101,6 +101,8 @@ def plan(messages, tools):
         cmd = "for i in 1 2 3 4 5 6; do echo tick $i; sleep 1; done"
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": cmd})
+        if step == 0 and "exec_command" in names:          # a Code chat since 0.0.16
+            return ("tool", "exec_command", {"cmd": cmd})
         if step == 0 and "shell" in names:                 # a Code chat: Codex's shell tool
             return ("tool", "shell", {"command": ["bash", "-lc", cmd]})
         return ("text", "Counted.")
@@ -111,6 +113,8 @@ def plan(messages, tools):
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
         if step == 0 and "shell" in names:
             return ("tool", "shell", {"command": ["bash", "-lc", "sleep 25; echo slept"]})
+        if step == 0 and "exec_command" in names:        # Codex 0.171 replica: every code chat since 0.0.16
+            return ("tool", "exec_command", {"cmd": "sleep 25; echo slept"})
         return ("text", "Long task finished.")
     if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
         return ("text", "Bonjour! (the claude-skill instructions were applied)")
@@ -153,6 +157,12 @@ def plan(messages, tools):
     if "think out loud" in u:                             # streamed reasoning_content before the answer
         return ("text", "THINK:I should answer briefly.|Done thinking.")
     if "hello" in u:
+        if "exec_command" in names and not names & {"apply_patch", "write_file", "write", "bash"}:
+            # Codex 0.171 replica (every code chat since 0.0.16): one command tool writes and runs the file
+            if step == 0:
+                return ("tool", "exec_command", {"cmd": "printf \"print('hello from meshpool')\\n\" > hello.py && "
+                                                        "(python3 hello.py || python hello.py)"})
+            return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
         codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
         if step == 0:
             if codex:
@@ -167,6 +177,8 @@ def plan(messages, tools):
     if "finish" in u or "harness" in u:                 # one-shot harness engines: call finish
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "echo 42"})
+        if step == 0 and "exec_command" in names and "finish" not in names:
+            return ("tool", "exec_command", {"cmd": "echo 42"})
         if "finish" in names:
             return ("tool", "finish", {"answer": "The answer is 42.", "evidence": ["echo 42"]})
         return ("text", "The answer is 42.")

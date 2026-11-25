@@ -2,11 +2,12 @@
 Usage: python build_page_e2e.py AGENT_PORT - [MAX_SECONDS] [WORKDIR]: asks the real model to build a landing page.
 The agent app must be configured for the real model (DeepSeek V4.1 Flash only); the target can run on the mock."""
 import json, re, sys, time, urllib.request
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 A = "http://127.0.0.1:" + sys.argv[1]
 T = sys.argv[2]
 MAX = int(sys.argv[3]) if len(sys.argv) > 3 else 840
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(A + "/").read().decode()).group(1)
+TOK = _ui_token(A)
 
 
 def call(p, body=None, t=120):

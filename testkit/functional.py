@@ -15,6 +15,7 @@ import subprocess
 import time
 import urllib.request
 from pathlib import Path
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 ap = argparse.ArgumentParser()
 ap.add_argument("base")
@@ -22,7 +23,7 @@ ap.add_argument("work")
 ap.add_argument("--harness", default="meshpool-code,meshpool-work,pi,hermes,codex,meshpool-auto")
 ap.add_argument("--only", default="")
 A = ap.parse_args()
-TOK = re.search(r'token: "([^"]+)"', urllib.request.urlopen(A.base + "/").read().decode()).group(1)
+TOK = _ui_token(A.base)
 KIND = {"meshpool-work": "cowork", "hermes": "cowork"}
 ROWS = []
 

@@ -104,11 +104,16 @@ def test_pins_are_complete_and_consistent_with_the_app():
     assert re.fullmatch(r"[0-9a-f]{64}", BT.GIT_SOURCE_SHA256)
 
 
-def test_libreoffice_is_pinned_to_the_permanent_archive_only():
-    for key in ("mac-arm64", "mac-x64", "win-x64"):
+def test_libreoffice_comes_from_the_permanent_archive_first():
+    """The archive is the source; the main site's copy of the same version is only a fallback for when the archive
+    host is down. Either way the bytes are checked against the pinned sha256 and size."""
+    for key in ("mac-arm64", "mac-x64", "win-x64", "linux-x64"):
         urls = BT.lo_urls(key)
-        assert len(urls) == 1 and urls[0].startswith("https://downloadarchive.documentfoundation.org/libreoffice/old/")
+        assert urls[0].startswith("https://downloadarchive.documentfoundation.org/libreoffice/old/")
         assert f"/old/{BT.LO_BUILD}/" in urls[0] and BT.LO_BUILD in urls[0].rsplit("/", 1)[1]
+        assert len(urls) == 2 and urls[1].startswith(f"https://download.documentfoundation.org/libreoffice/stable/"
+                                                     f"{BT.LO_VERSION}/")
+        assert urls[1].rsplit("/", 1)[1] == urls[0].rsplit("/", 1)[1].replace(BT.LO_BUILD, BT.LO_VERSION)
     assert BT.LO_BUILD.startswith(BT.LO_VERSION)
 
 

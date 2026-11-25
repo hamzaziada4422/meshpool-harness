@@ -371,6 +371,19 @@ def _serve(outdir: str | None = None):
             page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
+        if sess is not None and cmd in ("click", "click_text", "press", "batch_done"):
+            # a target=_blank link or window.open: the "page" event lands during the next Playwright call, so the tab
+            # it opened is picked up here, before the snapshot (M32-05: the snapshot still showed the old tab)
+            try:
+                page.wait_for_timeout(250)
+            except Exception:
+                pass
+            if sess["page"] is not page:
+                page = sess["page"]
+                try:
+                    page.wait_for_load_state("domcontentloaded", timeout=5000)
+                except Exception:
+                    pass
         if os.environ.get("MH_BROWSER_SETTLE") == "1" and cmd not in ("snapshot", "goto"):
             try:                                  # pop-ups (autocomplete, menus) appear a few hundred ms later
                 page.evaluate(SETTLE_JS, 1500)  # same as webfix.settle()

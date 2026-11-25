@@ -13,6 +13,8 @@ import time
 import urllib.request
 from pathlib import Path
 
+from ui_token import token as _ui_token  # the launch key, testkit/ui_token.py
+
 PY, MOCK, W = sys.argv[1], sys.argv[2], Path(sys.argv[3])
 APP = Path(__file__).resolve().parents[1] / "app"
 PORT = 8789
@@ -29,15 +31,16 @@ def check(n, ok, d=""):
 def start():
     env = {k: v for k, v in os.environ.items() if not re.match(r"(CLAUDE|ANTHROPIC|OPENAI|CODEX|AWS|GH|GITHUB|GOOGLE|AZURE|GEMINI)_", k)}
     env.update(MESHPOOL_HOME=str(HOME), MH_BROWSER_HEADLESS="1")
+    log = W / f"app-{PORT}.log"
     p = subprocess.Popen([PY, "-m", "meshpool_harness", "ui", "--port", str(PORT), "--no-browser"], cwd=APP, env=env,
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                         stdout=open(log, "w"), stderr=subprocess.STDOUT, start_new_session=True)
     for _ in range(60):
         try:
             urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=1)
             break
         except OSError:
             time.sleep(0.5)
-    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(f"http://127.0.0.1:{PORT}/").read().decode()).group(1)
+    tok = _ui_token(f"http://127.0.0.1:{PORT}", log=log)   # the launch key the app printed
 
     def c(path, body=None):
         r = urllib.request.Request(f"http://127.0.0.1:{PORT}{path}", data=None if body is None else json.dumps(body).encode(),

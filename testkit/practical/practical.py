@@ -13,10 +13,13 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # noqa: E402
+from ui_token import token as _ui_token  # noqa: E402  (the launch key, testkit/ui_token.py)
 
 HERE = Path(__file__).resolve().parent
 FIX = HERE / "fixtures"
@@ -40,7 +43,7 @@ def spend() -> float | None:
 
 
 def client(base):
-    tok = re.search(r'token: "([^"]+)"', urllib.request.urlopen(base + "/").read().decode()).group(1)
+    tok = _ui_token(base)
 
     def call(path, body=None, timeout=120):
         req = urllib.request.Request(base + path, data=None if body is None else json.dumps(body).encode(),
