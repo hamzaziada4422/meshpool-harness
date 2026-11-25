@@ -1145,6 +1145,54 @@ def _total_row_miss(asked: str, root, since: float) -> str:
             "with a live =SUM formula and a \"Total\" label in that row, save it and check again.")
 
 
+_TEMPLATE = re.compile(r"[\w][\w.()-]*template[\w.()-]*\.docx\b|\btemplate\b", re.I)
+
+
+def _template_format_miss(asked: str, root, since: float) -> str:
+    """Documents made this turn from a .docx template that keep none of its bold or italic: as a note, else "".
+    Office-7 on 59e49c8b: docx_mailmerge replaced placeholders paragraph by paragraph and the template's bold amount
+    run was lost in every letter."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    text = str(asked or "").split(_SEP)[0]
+    if not _TEMPLATE.search(text):
+        return ""
+    names = re.findall(r"[\w][\w.()-]*\.docx\b", text)
+    tpl = next((Path(root) / n for n in names if "template" in n.lower() and (Path(root) / n).is_file()), None)
+    if tpl is None:
+        return ""
+    try:
+        import docx
+    except ImportError:
+        return ""
+
+    def marks(path):
+        d = docx.Document(str(path))
+        runs = [r for p in d.paragraphs for r in p.runs if r.text.strip()]
+        runs += [r for t in d.tables for row in t.rows for cell in row.cells for p in cell.paragraphs for r in p.runs
+                 if r.text.strip()]
+        return any(r.bold for r in runs), any(r.italic for r in runs)
+    try:
+        want_b, want_i = marks(tpl)
+        if not (want_b or want_i):
+            return ""
+        lost = []
+        for f in Path(root).rglob("*.docx"):
+            if f.resolve() == tpl.resolve() or f.name.startswith("~$") or "Meshpool outputs" in f.parts \
+                    or f.stat().st_mtime < since:
+                continue
+            b, i = marks(f)
+            if (want_b and not b) or (want_i and not i):
+                lost.append(f.name)
+    except Exception:  # noqa: BLE001 - a file that cannot be read is not judged here
+        return ""
+    if not lost:
+        return ""
+    shown = ", ".join(lost[:5]) + (f" and {len(lost) - 5} more" if len(lost) > 5 else "")
+    return (f"{shown} lost the template's {'bold' if want_b else 'italic'} formatting. The job is not done: fill the "
+            "placeholders run by run (replace the text inside each run, keeping its bold and italic), save and check "
+            "again.")
+
+
 def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
     shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
@@ -2194,12 +2242,13 @@ class Agent:
                         # save is not a finished job: say so once.
                         cmds = self.ws.commands[g.get("cmds0", 0):]
                         bad = [i for i, c in enumerate(cmds) if c.get("code") not in (0, None)
-                               and "AssertionError" in str(c.get("tail", ""))]
+                               and ("AssertionError" in str(c.get("tail", ""))
+                                    or re.search(r"\bassert\b", str(c.get("cmd", ""))))]
                         if bad and not any(re.search(r"\.save\(|\.save_as\(|to_excel\(", str(c.get("cmd", "")))
                                            and c.get("code") == 0 for c in cmds[bad[-1] + 1:]):
                             g["office_check_nudged"] = True
                             self.messages.append({"role": "user", "content": (
-                                "[Meshpool] Your own check failed (AssertionError) and the file has not been saved "
+                                "[Meshpool] Your own check failed and the file has not been saved "
                                 "since. The job is not done: change the file so it does what the request asks, save "
                                 "it and check again. If the request really cannot be met, say exactly why in one line.")})
                             continue
@@ -2207,7 +2256,8 @@ class Agent:
                             and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
                         ask = getattr(self, "_asked_text", "")
                         miss = _slide_count_miss(ask, self.root, g.get("t0", 0)) or \
-                            _total_row_miss(ask, self.root, g.get("t0", 0))
+                            _total_row_miss(ask, self.root, g.get("t0", 0)) or \
+                            _template_format_miss(ask, self.root, g.get("t0", 0))
                         if miss:
                             g["office_count_nudged"] = True  # once per request: a stated count is part of the job
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
@@ -2670,7 +2720,8 @@ class Agent:
         # consecutive refused calls (a model re-sending a call the guards just refused); any call that runs resets it
         refused = str(out).startswith(self._REFUSED)
         if not refused:
-            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out) + self._cycle_note(c, g)
+            out = str(out) + self._scratch_rewrite_note(c, g) + self._shape_run_note(c, g, out) + self._cycle_note(c, g) \
+                + self._office_verify_note(g)
         g["rseq"] = g.get("rseq", 0) + 1 if refused else 0
         # consecutive failed calls (exit != 0, a rejected edit, a tool error) with no file changed since: distinct calls
         # that each fail slip past the repeat guards (eval trace: 10 broken probes, then 6 rejected patches, then timeout)
@@ -2957,6 +3008,31 @@ class Agent:
         except OSError:
             pass
         return h
+
+    _SAVES = re.compile(r"\.save\(|\.save_as\(|to_excel\(|\.write_bytes\(|soffice\b.*--convert-to")
+
+    def _office_verify_note(self, g: dict) -> str:
+        """Office direct: once the file is saved and MH_OFFICE_VERIFY_CAP (4) checks in a row have passed since, the
+        result says once to stop checking and answer. Office-7 on 59e49c8b: pptx_chart 38 calls and xlsx_budget 41
+        where Codex used 10-12, most of them re-checks of a file that was already right."""
+        if g.get("verify_capped") or not self._office_direct():
+            return ""
+        try:
+            cap = int(os.environ.get("MH_OFFICE_VERIFY_CAP", "4") or 0)
+        except ValueError:
+            cap = 4
+        if cap <= 0:
+            return ""
+        cmds = (getattr(self.ws, "commands", None) or [])[g.get("cmds0", 0):]
+        saved = [i for i, c in enumerate(cmds) if c.get("code") == 0 and self._SAVES.search(str(c.get("cmd", "")))]
+        if not saved:
+            return ""
+        after = cmds[saved[-1] + 1:]
+        if len(after) < cap or any(c.get("code") not in (0, None) for c in after):
+            return ""
+        g["verify_capped"] = True
+        return (f"\n[Meshpool] The file is saved and your last {len(after)} checks passed. Stop checking: answer now, "
+                "unless a check showed a real defect in the file.")
 
     def _cycle_note(self, c: dict, g: dict) -> str:
         """broad2 (swe_sympy): core looped patch -> test -> patch (4.8 edits and 9.3 checks a run, 5 runs at the step

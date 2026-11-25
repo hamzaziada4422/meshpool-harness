@@ -131,7 +131,7 @@ def test_office_direct_does_not_accept_done_right_after_its_own_failed_assert(tm
     file unchanged. Once per request it is told the job is not done."""
     a = _office_agent(tmp_path, monkeypatch)
     assert a.send("Delete the blank rows above Code in data.xlsx") == "Fixed and saved."
-    assert any("Your own check failed (AssertionError)" in str(m.get("content")) for m in a.messages)
+    assert any("Your own check failed and the file has not been saved" in str(m.get("content")) for m in a.messages)
 
 
 def test_office_finish_check_can_be_switched_off(tmp_path, monkeypatch):
@@ -189,3 +189,47 @@ def test_revision_requests_bring_the_office_editor(tmp_path, monkeypatch):
     assert wants_revisions("Add a comment on paragraph 2 of memo.docx")
     assert not wants_revisions("Make the dates in report.docx bold")
     assert "tracked_replace" in CAP.note(["edit"], direct=True)
+
+
+def test_template_formatting_check(tmp_path):
+    import time as _t
+    import docx
+    from meshpool_harness.agent.core import _template_format_miss
+    t0 = _t.time() - 1
+    tpl = docx.Document()
+    p = tpl.add_paragraph("Dear {name}, you owe ")
+    p.add_run("{amount}").bold = True
+    tpl.save(tmp_path / "letter_template.docx")
+    _t.sleep(0.01)
+    (tmp_path / "letters").mkdir()
+    flat = docx.Document()
+    flat.add_paragraph("Dear Ann, you owe $5")
+    flat.save(tmp_path / "letters" / "ann.docx")
+    ask = "Use letter_template.docx and customers.csv to make one letter per customer. Keep the template's formatting."
+    since = (tmp_path / "letter_template.docx").stat().st_mtime + 0.001
+    miss = _template_format_miss(ask, tmp_path, since)
+    assert "ann.docx" in miss and "bold" in miss
+    good = docx.Document()
+    q = good.add_paragraph("Dear Ann, you owe ")
+    q.add_run("$5").bold = True
+    good.save(tmp_path / "letters" / "ann.docx")
+    assert _template_format_miss(ask, tmp_path, since) == ""
+    assert _template_format_miss("Sort data.xlsx", tmp_path, t0) == ""
+
+
+def test_verification_cap_after_a_saved_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from meshpool_harness.agent.core import Agent
+    a = Agent.__new__(Agent)
+    a._office_direct = lambda: True
+    save = {"cmd": "python3 -c 'wb.save(\"b.xlsx\")'", "code": 0}
+    chk = {"cmd": "python3 -c 'print(1)'", "code": 0}
+    a.ws = SimpleNamespace(commands=[save, chk, chk, chk])
+    g = {"cmds0": 0}
+    assert a._office_verify_note(g) == ""                       # three checks: not yet
+    a.ws.commands.append(chk)
+    note = a._office_verify_note(g)
+    assert "Stop checking" in note and a._office_verify_note(g) == ""      # once
+    g2 = {"cmds0": 0}
+    a.ws.commands = [save, chk, {"cmd": "x", "code": 1}, chk, chk]
+    assert a._office_verify_note(g2) == ""                      # a failing check since the save: keep working
