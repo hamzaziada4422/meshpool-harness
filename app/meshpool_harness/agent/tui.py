@@ -84,6 +84,7 @@ COMMANDS = [
 ]
 ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "cost": "usage", "tokens": "usage"}
 MODES = ["ask", "edits", "auto"]
+SL_REFRESH_S = 10           # the status line command runs again this often while typing when its input is unchanged
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
 
@@ -103,6 +104,53 @@ def _git_branch(cwd: str) -> str:
         return r.stdout.strip() if r.returncode == 0 else ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _git_dirs(cwd: str) -> tuple[str, str] | None:
+    """(git dir, common dir) of the repository holding cwd, found by looking for .git upward, without running git.
+    A worktree's .git is a file naming its git dir; its config lives in the common dir. None outside a repository,
+    or when GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR say where git looks (then only git itself knows)."""
+    if any(os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")):
+        return None
+    try:
+        d = os.path.abspath(cwd)
+        while True:
+            g = os.path.join(d, ".git")
+            if os.path.isdir(g):
+                return g, g
+            if os.path.isfile(g):
+                with open(g, encoding="utf-8", errors="replace") as fh:
+                    line = fh.read(4096).strip()
+                if not line.startswith("gitdir:"):
+                    return None
+                gd = line[7:].strip()
+                gd = gd if os.path.isabs(gd) else os.path.normpath(os.path.join(d, gd))
+                common = gd
+                try:
+                    with open(os.path.join(gd, "commondir"), encoding="utf-8", errors="replace") as fh:
+                        c = fh.read(4096).strip()
+                    common = c if os.path.isabs(c) else os.path.normpath(os.path.join(gd, c))
+                except OSError:
+                    pass
+                return gd, common
+            up = os.path.dirname(d)
+            if up == d:
+                return None
+            d = up
+    except OSError:
+        return None
+
+
+def _stamp(*paths: str) -> tuple:
+    """(mtime_ns, size) of each path, None for one that is missing: a cheap "did any of these change?" key."""
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append(None)
+    return tuple(out)
 
 
 def _tilde(path: str) -> str:
@@ -246,8 +294,14 @@ class Terminal:
     def _turn_live(self):
         lines = []
         if self._partial:
-            tail = self._partial.replace("\t", "    ")
+            # Redrawn on every streamed token: measure only the end of a long line. A model writes a paragraph as one
+            # line, and measuring all of it each token made a long paragraph cost O(n^2). The last 2w+8 characters
+            # already being wider than w means the whole line is (no character is narrower than 0 columns).
             w = self.width - 4
+            p, k = self._partial, 2 * max(w, 1) + 8
+            tail = p[-k:].replace("\t", "    ")
+            if not (len(p) > k and R.vlen(tail) > w):
+                tail = p.replace("\t", "    ")
             lines.append("  " + (tail if R.vlen(tail) <= w else "…" + tail[-(w - 1):]))
         secs = int(self.clock() - self._busy_t0) if self._busy_t0 is not None else 0
         lines.append(" " + R.spinner_line(self.st, self._frame, self._label or "Working", secs))
@@ -598,10 +652,21 @@ class Terminal:
             self.usage = {k: int(u.get(k, 0)) for k in ("in", "cached", "out", "calls")}
 
     def _branch(self) -> str:
+        """The folder's git branch for the project line. The prompt redraws on every key, so git runs only when the
+        repository's HEAD file changed (a checkout, a new commit on a detached HEAD, another folder); outside a
+        repository it never runs. Where HEAD cannot be found without git (GIT_DIR set), it asks git every 5 s."""
         if self.branch is not None:
             return self.branch
-        if self.clock() - self._branch_t > 5 or not self._branch_v:
-            self._branch_v, self._branch_t = _git_branch(self.cwd), self.clock()
+        dirs = _git_dirs(self.cwd)
+        if dirs is None and any(os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")):
+            if self.clock() - self._branch_t > 5 or not self._branch_v:
+                self._branch_v, self._branch_t = _git_branch(self.cwd), self.clock()
+            return self._branch_v
+        key = (self.cwd, dirs, _stamp(os.path.join(dirs[0], "HEAD")) if dirs else None)
+        retry = dirs and not self._branch_v and self.clock() - self._branch_t > 5    # a repo with no commit yet
+        if key != getattr(self, "_branch_key", None) or retry:
+            self._branch_v = _git_branch(self.cwd) if dirs else ""
+            self._branch_key, self._branch_t = key, self.clock()
         return self._branch_v
 
     def status_items(self) -> list:
@@ -662,39 +727,66 @@ class Terminal:
         cmd = os.environ.get("MH_STATUSLINE", "").strip()
         if not cmd:
             return base
+        # The footer is drawn on every key. The command runs when what it is given changed (a turn ended, the mode
+        # or model changed), at most every 2 s, and otherwise every SL_REFRESH_S while the prompt is in use, never
+        # once per key; nothing runs while the prompt sits idle (it is not redrawn).
         now = time.time()
-        if now - getattr(self, "_sl_at", 0) > 2 and not getattr(self, "_sl_busy", False) and self._statusline_ok():
-            self._sl_at, self._sl_busy = now, True
-            threading.Thread(target=self._statusline, args=(cmd,), daemon=True).start()
+        info = self._statusline_info()
+        last = getattr(self, "_sl_at", 0)
+        due = now - last > (2 if info != getattr(self, "_sl_info", None) else SL_REFRESH_S)
+        if due and not getattr(self, "_sl_busy", False) and self._statusline_ok():
+            self._sl_at, self._sl_busy, self._sl_info = now, True, info
+            threading.Thread(target=self._statusline, args=(cmd, info), daemon=True).start()
         text = getattr(self, "_sl_text", "")
         return base + ("  " + self.st.dim(text) if text else "")
 
+    def _statusline_info(self) -> str:
+        """What the status line command gets on standard input (folder, model, mode, tokens, cost), as JSON."""
+        import json as _json
+        return _json.dumps({"cwd": str(getattr(self, "cwd", "") or os.getcwd()), "model": getattr(self, "model", ""),
+                            "mode": self.mode, "tokens": {k: (self.usage or {}).get(k, 0) for k in ("in", "out", "calls")},
+                            "cost": self.cost, "context_tokens": getattr(self, "ctx_tokens", 0)}, default=str)
+
     def _statusline_ok(self) -> bool:
         """A status line usually runs git. In a folder whose own git settings could run programs (core.fsmonitor),
-        it runs only once the user trusts the folder."""
-        if getattr(self, "_sl_ok", None) is None:
+        it runs only once the user trusts the folder. The answer is kept while the repository's config, hooks and
+        .gitmodules are unchanged (their mtimes and sizes); a change asks again, so an edit that makes the folder
+        unsafe is noticed before the next run."""
+        cwd = str(getattr(self, "cwd", "") or os.getcwd())
+        dirs = _git_dirs(cwd)
+        stamp = (cwd, dirs, _stamp(*([os.path.join(dirs[1], "config"), os.path.join(dirs[0], "config.worktree"),
+                                      os.path.join(dirs[1], "hooks"), os.path.join(os.path.dirname(dirs[0]), ".gitmodules")]
+                                     if dirs else [])))
+        if dirs is None and any(os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR")):
+            stamp = None                                       # only git knows where its config is: ask each time
+        if getattr(self, "_sl_ok", None) is None or stamp is None or stamp != getattr(self, "_sl_stamp", None):
             from meshpool_harness import trust as TR
             from meshpool_harness.core import tools as TT
-            cwd = str(getattr(self, "cwd", "") or os.getcwd())
             self._sl_ok = bool(TR.is_trusted(cwd) or TT.git_config_safe(cwd))
+            self._sl_stamp = stamp
         return self._sl_ok
 
-    def _statusline(self, cmd: str) -> None:
+    def _statusline(self, cmd: str, info: str | None = None) -> None:
         """Settings, Status line command: the user's own script prints one line for the footer. It gets the
         session's state as JSON on standard input (folder, model, mode, tokens, cost)."""
         import json as _json
+        old = getattr(self, "_sl_text", "")
         try:
-            info = {"cwd": str(getattr(self, "cwd", "") or os.getcwd()), "model": getattr(self, "model", ""),
-                    "mode": self.mode, "tokens": {k: (self.usage or {}).get(k, 0) for k in ("in", "out", "calls")},
-                    "cost": self.cost, "context_tokens": getattr(self, "ctx_tokens", 0)}
-            r = subprocess.run(cmd, shell=True, input=_json.dumps(info, default=str), capture_output=True, text=True,
-                               timeout=2, cwd=info["cwd"] if os.path.isdir(info["cwd"]) else None)
+            info = info or self._statusline_info()
+            cwd = _json.loads(info).get("cwd") or ""
+            r = subprocess.run(cmd, shell=True, input=info, capture_output=True, text=True,
+                               timeout=2, cwd=cwd if os.path.isdir(cwd) else None)
             line = (r.stdout or "").strip().splitlines()[:1]
             self._sl_text = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x1f]", "", line[0])[:120] if line else ""
         except (OSError, subprocess.TimeoutExpired, ValueError):
             self._sl_text = ""
         finally:
             self._sl_busy = False
+        if self._sl_text != old and not getattr(self, "_turn", False) and getattr(self, "_live_fn", None):
+            try:                                      # a new line shows now, not on the next key
+                self.refresh()
+            except Exception:  # noqa: BLE001
+                pass
 
     def rule_line(self) -> str:
         return R.rule(self.st, self.width, R.POOL if self.started else None)

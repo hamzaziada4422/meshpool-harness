@@ -4494,6 +4494,9 @@ def render(slides: list[dict], out_path: str, template: str | None = None, fix_l
     res = _render(slides, out_path, template, carry)
     if not fix_labels:
         return res
+    if not _has_bubble_labels(slides):                       # only bubble labels move: no LibreOffice run without them
+        set_density(DENSITY["deck"])                         # the state the label check leaves behind
+        return res
     from .common import find_soffice
     if not find_soffice():                                   # no LibreOffice: nothing to measure labels with
         return res
@@ -4578,6 +4581,17 @@ def _logo(sl, x_right: float, y: float, h: float, max_w: float, name: str, x_lef
 
 
 _CYCLE = ["right", "left", "above", "below"]
+
+
+def _has_bubble_labels(slides) -> bool:
+    """True when some slide has a bubble chart with a labelled point: the only labels _relabel moves. Without one,
+    its LibreOffice render (a fresh soffice per deck) could never change anything."""
+    for s in slides or []:
+        c = (s.get("chart") or {}) if isinstance(s, dict) else {}
+        if isinstance(c, dict) and c.get("kind") == "bubble" and any(
+                isinstance(p, dict) and p.get("label") for p in c.get("points") or []):
+            return True
+    return False
 
 
 def _relabel(slides, out_path) -> int:
