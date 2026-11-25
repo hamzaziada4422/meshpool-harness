@@ -95,12 +95,18 @@ def _office_direct_on() -> bool:
     return os.environ.get("MH_OFFICE_DIRECT", "1") != "0"
 
 
+# SpreadsheetBench, frozen round on 1c0b6df5: all three losses had a last check that showed the defect (the same
+# SUMPRODUCT total for two criteria, a totals row the delete rule matched left in, its own failed assertion), and the
+# agent explained the check away; Codex applied the rule to every matching row.
 OFFICE_DIRECT_RULE = ("- For an office-file job (edit or derive from an existing .docx, .xlsx or .pptx: sort, filter, "
                       "fill, add a column, a chart or a slide, convert, extract; or a small new file), write it "
                       "yourself in one Python script with python-docx, openpyxl or python-pptx, keeping the source's "
                       "sheets, layout and styles unless asked otherwise; save it, then reopen the file to check what "
                       "the request asks for (re-read formulas as written; recalculate through LibreOffice only when the "
-                      "request asks for computed values). office_task is listed only when a request asks for a new deck, "
+                      "request asks for computed values). When that check disagrees with the request (a failed "
+                      "assertion, the same result for different inputs, a row the rule matches still there), the file "
+                      "is wrong: fix the file, not the check, and apply the user's rule to every row it matches. "
+                      "office_task is listed only when a request asks for a new deck, "
                       "report or financial model; use it then for that deliverable.")
 
 LEAN_WORK_TOOLS = ["office_task", "web_research", "fetch_url"]   # a lean Work chat's tools beyond Codex's three
