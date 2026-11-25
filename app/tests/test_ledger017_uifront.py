@@ -237,10 +237,10 @@ def test_tool_row_stops_saying_needs_approval_after_allow(page):
         applyEv({type: "tool_start", id: "tl1", name: "bash", args: {command: "make all"}});
         applyEv({type: "approval", id: "ap1", i: 3, kind: "bash", title: "Run this command?", detail: "make all"});
     }""")
-    st = "() => document.querySelector('#tool-tl1 .st').textContent"
-    assert page.evaluate(st) == "Needs your approval"
+    st = "() => document.querySelector('#tool-tl1 .st')?.textContent"   # the row may render a frame later
+    page.wait_for_function(f"({st})() === 'Needs your approval'", timeout=5000)
     page.evaluate("""() => applyEv({type: "approval_done", id: "ap1", decision: "yes"})""")
-    assert page.evaluate(st) == ""
+    page.wait_for_function(f"({st})() === ''", timeout=5000)
     assert page.evaluate("() => document.querySelector('#appr-ap1').classList.contains('done')")
     assert page.errors == [], page.errors
 
