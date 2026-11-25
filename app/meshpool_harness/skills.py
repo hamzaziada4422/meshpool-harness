@@ -68,6 +68,31 @@ def parse(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+def _front_list(text: str, *keys: str) -> list[str]:
+    """A front-matter value that may be a list: a YAML list, [a, b], or a comma or space separated line."""
+    if not text.startswith("---"):
+        return []
+    end = text.find("\n---", 3)
+    raw = None
+    try:
+        import yaml
+        doc = yaml.safe_load(text[3:end])
+        if isinstance(doc, dict):
+            raw = next((doc[k] for k in keys if doc.get(k) not in (None, "")), None)
+    except Exception:  # noqa: BLE001
+        raw = None
+    if raw is None:
+        meta, _ = parse(text)
+        raw = next((meta[k] for k in keys if meta.get(k)), "")
+    items = raw if isinstance(raw, list) else re.split(r"[,\s]+", str(raw).strip("[]"))
+    return [str(x).strip().strip("'\"") for x in items if str(x).strip().strip("'\"")]
+
+
+def _flag(meta: dict, key: str, default: bool) -> bool:
+    v = str(meta.get(key, meta.get(key.replace("-", "_"), ""))).strip().lower()
+    return default if v == "" else v in ("true", "yes", "1", "on")
+
+
 def front_matter(**kv) -> str:
     """A SKILL.md front matter block. Values are written as YAML (quoted when needed), so a description with a colon,
     a '#', quotes or a leading '-' still parses in Codex, Hermes and here. Empty values are left out."""
@@ -144,13 +169,15 @@ def ensure_defaults():
 def expand_mentions(text: str) -> str:
     """For harnesses with their own skill systems (Pi, Hermes): when the message names $skill, attach that skill's
     instructions so it is followed the same way in every harness."""
-    import re
-    out = []
-    for m in dict.fromkeys(re.findall(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})", text)):
-        sk = get(m)
-        if sk and sk.get("enabled", True):
+    out, done = [], set()
+    for m in re.finditer(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})([^\n]*)", text):
+        if m.group(1).lower() in done:
+            continue
+        done.add(m.group(1).lower())
+        sk = get(m.group(1))
+        if sk and sk.get("enabled", True) and sk.get("user_ok", True):
             try:
-                out.append(instructions(m))
+                out.append(instructions(m.group(1), m.group(2).strip(), by_user=True))
             except ValueError:
                 pass
     if not out:
@@ -167,11 +194,18 @@ def load_all(include_disabled: bool = True) -> list[dict]:
         if not d.is_dir() or not f.is_file():
             continue
         try:
-            meta, body = parse(f.read_text(encoding="utf-8", errors="replace"))
+            raw = f.read_text(encoding="utf-8", errors="replace")
+            meta, body = parse(raw)
         except OSError:
             continue
         sid = d.name
         row = {"id": sid, "name": meta.get("name") or sid, "description": meta.get("description", ""),
+               "when": meta.get("when_to_use") or meta.get("when-to-use") or "",
+               "model_ok": not _flag(meta, "disable-model-invocation", False),   # only when the user asks for it
+               "user_ok": _flag(meta, "user-invocable", True),                   # only the model loads it
+               "disallowed": _front_list(raw, "disallowed-tools", "disallowed_tools"),
+               "paths": _front_list(raw, "paths"),
+               "argument_hint": meta.get("argument-hint") or meta.get("argument_hint") or "",
                "enabled": sid not in off, "path": str(f),
                "files": sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file() and p.name != "SKILL.md")[:50]}
         if include_disabled or row["enabled"]:
@@ -183,6 +217,29 @@ def enabled() -> list[dict]:
     return load_all(include_disabled=False)
 
 
+def for_model() -> list[dict]:
+    """The enabled skills the agent may pick by itself (not the ones marked disable-model-invocation)."""
+    return [s for s in enabled() if s.get("model_ok", True)]
+
+
+def _desc(s: dict, n: int = 0) -> str:
+    d = s["description"] + (f" Use when: {s['when']}" if s.get("when") else "")
+    return d[:n] if n else d
+
+
+def for_path(rel: str, seen: set) -> str:
+    """A note naming skills whose paths: patterns match a file the agent is working on, once per skill."""
+    from meshpool_harness.agent import extras as EX
+    hits = []
+    for s in for_model():
+        key = "skill:" + s["id"]
+        if s.get("paths") and key not in seen and any(EX._glob_match(rel, g) for g in s["paths"]):
+            seen.add(key)
+            hits.append(f"- {s['name']}: {_desc(s, 300)}")
+    return ("[Skills made for files like this one (load one with use_skill if it fits the task):]\n" + "\n".join(hits)
+            ) if hits else ""
+
+
 def get(name: str) -> dict | None:
     key = slug(name)
     for s in load_all():
@@ -191,12 +248,32 @@ def get(name: str) -> dict | None:
     return None
 
 
-def instructions(name: str) -> str:
+def _with_arguments(text: str, arguments: str) -> str:
+    """$ARGUMENTS (or ${ARGUMENTS}) is everything given; $1 to $9 are its words. A skill with none of these and
+    some arguments gets them at the end."""
+    import shlex
+    arguments = str(arguments or "").strip()
+    try:
+        words = shlex.split(arguments)
+    except ValueError:
+        words = arguments.split()
+    used = bool(re.search(r"\$(\{ARGUMENTS\}|ARGUMENTS\b|[1-9]\b)", text))
+    text = re.sub(r"\$\{ARGUMENTS\}|\$ARGUMENTS\b", lambda m: arguments, text)
+    text = re.sub(r"\$([1-9])\b", lambda m: words[int(m.group(1)) - 1] if int(m.group(1)) <= len(words) else "", text)
+    if arguments and not used:
+        text += f"\n\nArguments: {arguments}"
+    return text
+
+
+def instructions(name: str, arguments: str = "", by_user: bool = False) -> str:
     s = get(name)
-    if not s:
-        names = ", ".join(x["name"] for x in enabled()) or "none"
+    if not s or (not by_user and not s.get("model_ok", True)):
+        names = ", ".join(x["name"] for x in enabled() if x.get("model_ok", True)) or "none"
+        if s:
+            raise ValueError(f"The skill {s['name']} runs only when the user asks for it (${s['id']}). "
+                             f"Other skills: {names}")
         raise ValueError(f"No skill named {name}. Available: {names}")
-    text = Path(s["path"]).read_text(encoding="utf-8", errors="replace")
+    text = _with_arguments(Path(s["path"]).read_text(encoding="utf-8", errors="replace"), arguments)
     extra = ""
     if s["files"]:
         extra = (f"\n\nFiles that come with this skill (read them with read_file using these full paths):\n"
@@ -233,10 +310,10 @@ def search(query: str, k: int = 8, rows: list | None = None) -> list[dict]:
     q = set(_terms(query))
     if not q:
         return []
-    rows = enabled() if rows is None else rows
+    rows = for_model() if rows is None else rows
     scored = []
     for s in rows:
-        name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(s["description"]))
+        name, desc = set(_terms(s["name"].replace("-", " "))), set(_terms(_desc(s)))
         score = 3 * len(q & name) + len(q & desc)
         if score:
             scored.append((score, s))
@@ -249,23 +326,23 @@ def search_text(query: str) -> str:
     if not hits:
         return "No skill matches. Try other words, or go ahead without a skill."
     return "Best matching skills (load one with use_skill):\n" + "\n".join(
-        f"- {s['name']}: {s['description'][:300]}" for s in hits)
+        f"- {s['name']}: {_desc(s, 300)}" for s in hits)
 
 
 def catalog_text(task: str = "", searchable: bool = True) -> str:
     """The skills list for an agent's system prompt: in full for a few skills, otherwise names only plus the
     ones that match the task the chat started with."""
-    rows = enabled()
+    rows = for_model()
     if not rows:
         return ""
     if not on_demand():
-        lines = [f"- {s['name']}: {s['description']}" for s in rows]
+        lines = [f"- {s['name']}: {_desc(s)}" for s in rows]
         return ("\n\nSkills you can use (call use_skill with the name to load full instructions before doing a task "
                 "that matches one; when the user writes $name, load that skill first):\n" + "\n".join(lines))
     if not searchable:                            # a lean harness: only the skills that match its task
         hits = search(task, k=3, rows=rows) if task else []
         return ("\n\nSkills that may fit this task (load one with use_skill):\n" + "\n".join(
-            f"- {s['name']}: {s['description'][:200]}" for s in hits)) if hits else ""
+            f"- {s['name']}: {_desc(s, 200)}" for s in hits)) if hits else ""
     text = (f"\n\nSkills: {len(rows)} saved instruction sets for specific jobs. Before a task that may match one, "
             "call find_skill with a few words; load a match with use_skill. A skill the user names with $name is "
             "attached to their message already.")
@@ -273,7 +350,7 @@ def catalog_text(task: str = "", searchable: bool = True) -> str:
         text += " Names: " + ", ".join(s["name"] for s in rows) + "."
     hits = search(task, k=5, rows=rows) if task else []
     if hits:
-        text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {s['description'][:240]}" for s in hits)
+        text += "\nLikely relevant to this chat:\n" + "\n".join(f"- {s['name']}: {_desc(s, 240)}" for s in hits)
     return text
 
 

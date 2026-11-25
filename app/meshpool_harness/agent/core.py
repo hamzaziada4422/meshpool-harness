@@ -17,6 +17,7 @@ import itertools
 import json
 import os
 import platform
+import fnmatch
 import re
 import threading
 import time
@@ -86,7 +87,9 @@ T.SCHEMAS.setdefault("find_skill", T._fn(
     "Returns the best matches with their descriptions; load one with use_skill.", {"query": T.S}, ["query"]))
 T.SCHEMAS.setdefault("use_skill", T._fn(
     "use_skill", "Load a skill's full instructions by name (from the skills list in your instructions). Do this before "
-    "a task that matches a skill, and whenever the user writes $skill-name.", {"name": T.S}, ["name"]))
+    "a task that matches a skill, and whenever the user writes $skill-name.",
+    {"name": T.S, "arguments": {"type": "string", "description": "Optional: what to run the skill on, for skills "
+                                                                  "that take arguments"}}, ["name"]))
 _REC = {"type": "string", "enum": ["", "day", "week", "month", "year"], "description": "Only recent results"}
 T.SCHEMAS["fetch_url"] = T._fn(
     "fetch_url", "Read a web page, PDF or Office file from a URL as clean text (title, date, main content). Long pages "
@@ -1555,6 +1558,9 @@ class Agent:
         images: [{"mime": "image/png", "data": base64, "name": ...}] attached by the user."""
         self._stop = False
         self._partial_text, self.last_request_id = "", ""     # nothing from an earlier turn's failures
+        self._skill_block = {}                                # skill tool limits last one turn
+        for m in re.findall(r"(?<![\w$])\$([A-Za-z0-9][\w-]{1,63})", str(text or "")):
+            self._skill_limits(m)                             # a skill the user named with $
         if not hasattr(self, "_inbox"):
             self._inbox, self._inbox_lock = [], threading.Lock()
         from meshpool_harness.agent import extras as EX
@@ -3039,9 +3045,34 @@ class Agent:
                 "workbook or model; describe the sheets, inputs and outputs in the request. To read or change a few "
                 "values in an existing workbook, openpyxl.load_workbook is fine.")
 
+    def _skill_limits(self, name: str):
+        """A skill's disallowed-tools: tools the agent must not use while it follows that skill (this turn)."""
+        try:
+            from meshpool_harness import skills as SK
+            s = SK.get(name)
+        except Exception:  # noqa: BLE001
+            s = None
+        if s and s.get("disallowed"):
+            lim = self.__dict__.setdefault("_skill_block", {})
+            for t in s["disallowed"]:
+                lim[t] = s["name"]
+
+    def _skill_blocked(self, name: str) -> str:
+        lim = getattr(self, "_skill_block", None) or {}
+        for pat, skill in lim.items():
+            low = pat.lower()
+            if fnmatch.fnmatchcase(name.lower(), low) or (low == "bash" and name in ("bash", "bash_many", "bash_start",
+                                                                                     "shell")) or \
+                    (low in ("edit", "write") and name in ("edit", "write_file", "apply_patch", "notebook_edit")):
+                return skill
+        return ""
+
     def _permit(self, name: str, args: dict) -> tuple[bool, str]:
         if name == "delegate_task":
             return True, ""                    # its sub-agents' own actions are checked against this chat's mode
+        sk = self._skill_blocked(name)
+        if sk:
+            return False, f"The skill {sk} says not to use {name} while following it. Do it another way."
         own_name, own_args = name, args
         if name == "shell":
             hit = T.patch_from_shell(args.get("command"))
@@ -3464,7 +3495,8 @@ class Agent:
                 out = self._ask_user(args)
             elif name == "use_skill":
                 from meshpool_harness import skills as SK
-                out = SK.instructions(str(args.get("name", "")).lstrip("$"))
+                out = SK.instructions(str(args.get("name", "")).lstrip("$"), str(args.get("arguments") or ""))
+                self._skill_limits(str(args.get("name", "")).lstrip("$"))
                 if E2E and not str(out).startswith("ERROR"):    # a skill's "ask the user" is not a reason to stop
                     out += ("\n\n[Meshpool] Where this skill says to ask the user: ask (ask_user) only if you cannot "
                             "go on without the answer. Otherwise assume a sensible default, do the work, and list the "
@@ -3541,6 +3573,15 @@ class Agent:
                 seen = self.__dict__.setdefault("_nested_seen", set())
                 more = "\n\n".join(x for x in (EXN.nested_instructions(self.root, args["path"], seen),
                                                 EXN.scoped_rules(self.root, args["path"], seen)) if x)
+                try:
+                    from meshpool_harness import skills as SKP
+                    pp = Path(args["path"]).expanduser()
+                    rel = (pp if pp.is_absolute() else self.root / pp).resolve().relative_to(self.root.resolve())
+                    hint = SKP.for_path(rel.as_posix(), seen)
+                except (ValueError, OSError):
+                    hint = ""
+                if hint:
+                    out = out + "\n\n" + hint
                 if more:
                     out = out + "\n\n" + more
                     _, hn = EXN.run_hooks(self.root, "InstructionsLoaded", {"path": args["path"],
