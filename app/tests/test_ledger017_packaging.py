@@ -397,7 +397,11 @@ def test_ci_counts_skips_and_fails_on_a_missing_installed_tool(tmp_path):
     code, text = ci_skips.check(_junit(tmp_path, fine))
     assert code == 0 and text.startswith("4 skipped test(s); 0 because")
     for bad in ("LibreOffice not installed", "LibreOffice needed for recalculation", "no Chromium on this computer",
-                "no Chromium for Playwright here: boom", "could not import 'playwright': No module named 'playwright'"):
+                "no Chromium for Playwright here: boom", "could not import 'playwright': No module named 'playwright'",
+                # the other ways the tests word it (found by the independent check)
+                "no LibreOffice here", "no usable LibreOffice here", "no system LibreOffice",
+                "LibreOffice is not available here (no soffice)", "needs a system LibreOffice on PATH",
+                "LibreOffice not available", "playwright is not installed"):
         code, text = ci_skips.check(_junit(tmp_path, fine + [bad]))
         assert code == 1 and "1 because a tool this job installs is missing" in text and bad[:30] in text, bad
     y = _text(".github/workflows/tests.yml")

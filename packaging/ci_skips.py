@@ -18,10 +18,12 @@ from collections import Counter
 
 # Skip reasons that mean a tool the CI job installs is missing. Worded on the "not there" phrases only: a skip that
 # merely notes which browser launches ("Playwright's own Chromium is not what launches here") is not one of them.
+# LibreOffice: the job installs it, so any skip that names it is one (the tests word it many ways: "no usable
+# LibreOffice here", "needs a system LibreOffice on PATH", "LibreOffice is not available").
 MUST_NOT_SKIP = re.compile(
-    r"LibreOffice (is )?not installed|LibreOffice needed|needs LibreOffice"
-    r"|no Chromium|browser did not start|PLAYWRIGHT_BROWSERS_PATH is not set"
-    r"|could not import '(playwright|jsonschema)", re.I)
+    r"LibreOffice"
+    r"|no Chromium|browser did not start|PLAYWRIGHT_BROWSERS_PATH is not set|playwright is not installed"
+    r"|(could not import|no module named) '?(playwright|jsonschema)", re.I)
 
 
 def skips(xml_path: str) -> list[tuple[str, str]]:
