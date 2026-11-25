@@ -36,3 +36,15 @@ Model replies that hit the 4,096-token output cap (runaway generation):
 - Meshpool default: 0
 - default + large-repo Codex style: 0
 - Codex CLI 0.171.0: 0
+
+## Where the solve gap comes from (added later)
+
+The whole solve gap against Codex (D0 and EL at 19/22, Codex at 20/22) is one task, sympy-23950:
+
+| Arm | Rep 0 | Rep 1 |
+|---|---|---|
+| D0 | fail | pass |
+| EL | pass | fail |
+| Codex | pass | pass |
+
+Both failures hit the same test (test_as_set, 1 of 5 required tests). Every other task has the same outcome on all three arms. One flip in 22 pairs is within noise. It is not a structural loss, so there is nothing to patch. swe7 (2 reps per task) is what can settle it. The failing runs' request bodies were not kept; only D0-r1 and EL-r0, both passes, are under bodies/.
