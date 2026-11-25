@@ -54,3 +54,19 @@ def test_the_model_still_reads_the_real_output(tmp_path, monkeypatch):
                                                                     "arguments": json.dumps({"path": ".env"})}})
     shown = [e for e in events if e.get("type") == "tool_end"]
     assert "abcdef123456" in out and "abcdef123456" not in shown[-1]["output"]
+
+
+def test_web_site_lists(monkeypatch):
+    from meshpool_harness import web as WEB
+    monkeypatch.setenv("MH_FETCH_DENY", "evil.example, *.tracker.io")
+    for u in ("https://evil.example/x", "https://a.evil.example/", "http://cdn.tracker.io/p"):
+        with pytest.raises(WEB.WebError, match="never read"):
+            WEB.check_domain(u)
+    WEB.check_domain("https://docs.python.org/3/")
+    monkeypatch.setenv("MH_FETCH_ALLOW", "python.org,github.com")
+    WEB.check_domain("https://docs.python.org/3/")
+    with pytest.raises(WEB.WebError, match="read only"):
+        WEB.check_domain("https://notgithub.com/")
+    monkeypatch.setenv("MH_ALLOW_PRIVATE_FETCH", "1")                     # the lists apply even then
+    with pytest.raises(WEB.WebError):
+        WEB.check_public("https://example.org/")

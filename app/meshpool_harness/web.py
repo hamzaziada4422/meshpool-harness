@@ -64,12 +64,32 @@ def _check_ip(url: str, host: str, ip) -> None:
         _refuse(url, host, ip)
 
 
+def _domains(key: str) -> list[str]:
+    return [d.strip().lower().lstrip(".").removeprefix("*.") for d in os.environ.get(key, "").split(",") if d.strip()]
+
+
+def _covers(host: str, domain: str) -> bool:
+    return host == domain or host.endswith("." + domain)
+
+
+def check_domain(url: str) -> None:
+    """The user's site lists: never the blocked sites; only the allowed ones when there are any."""
+    host = (urllib.parse.urlparse(url).hostname or "").rstrip(".").lower()
+    deny, allow = _domains("MH_FETCH_DENY"), _domains("MH_FETCH_ALLOW")
+    if any(_covers(host, d) for d in deny):
+        raise WebError(f"refused {url}: {host} is on your list of sites agents never read (Settings, MH_FETCH_DENY).")
+    if allow and not any(_covers(host, d) for d in allow):
+        raise WebError(f"refused {url}: agents read only {', '.join(allow)} (Settings, MH_FETCH_ALLOW). Ask the user "
+                       "to add the site if it is needed.")
+
+
 def check_public(url: str) -> None:
     """Refuse URLs that point at this computer or a private network (loopback, RFC 1918, link-local such as the
     169.254.169.254 cloud metadata address, reserved ranges). Agents call fetch() without asking, so a page or a prompt
     must not be able to make them read local services. Behind a system proxy (common on company Macs and PCs) the
     proxy resolves the name, so only literal addresses and local names are checked. MH_ALLOW_PRIVATE_FETCH=1 turns the
-    check off."""
+    check off. The site lists in Settings (MH_FETCH_ALLOW, MH_FETCH_DENY) apply always."""
+    check_domain(url)
     if _private_allowed():
         return
     u = urllib.parse.urlparse(url)

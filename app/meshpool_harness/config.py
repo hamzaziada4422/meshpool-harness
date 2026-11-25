@@ -22,6 +22,9 @@ FIELDS = [
     ("MH_AGENT_PERMISSIONS", "What agents may do without asking", "ask",
      "Supervised asks before every change and command. Auto-accept edits changes files without asking but asks "
      "before commands. Full access never asks."),
+    ("MH_FETCH_ALLOW", "Web pages: only these sites", "", "Comma-separated domains (example.com covers its subdomains). "
+     "When set, agents read web pages only from these sites. Empty: any public site."),
+    ("MH_FETCH_DENY", "Web pages: never these sites", "", "Comma-separated domains agents never read, even when allowed above."),
     ("MH_BUDGET_USD", "Spending limit per task (USD)", "0", "A task stops when it reaches this. 0 means no limit. It "
      "needs a cost: the endpoint's own figure per request, or your prices (MH_PRICE_IN and MH_PRICE_OUT)."),
     ("MH_HOOKS", "Run hooks", "1", "On: commands in hooks.json run at set moments (yours, and a trusted folder's). "
