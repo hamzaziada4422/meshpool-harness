@@ -137,3 +137,27 @@ def test_office_finish_check_can_be_switched_off(tmp_path, monkeypatch):
     a = _office_agent(tmp_path, monkeypatch)
     monkeypatch.setenv("MH_OFFICE_FINISH_CHECK", "0")
     assert a.send("Delete the blank rows above Code in data.xlsx") == "Done."
+
+
+def _deck(path, n):
+    from pptx import Presentation
+    prs = Presentation()
+    for _ in range(n):
+        prs.slides.add_slide(prs.slide_layouts[5])
+    prs.save(str(path))
+
+
+def test_slide_count_check(tmp_path):
+    import time as _t
+    from meshpool_harness.agent.core import _slide_count_miss
+    t0 = _t.time() - 1
+    _deck(tmp_path / "deck.pptx", 3)
+    ask = "Make deck.pptx, 4 to 6 slides presenting quarterly.csv to leadership."
+    miss = _slide_count_miss(ask, tmp_path, t0)
+    assert "4 to 6 slides" in miss and "deck.pptx has 3 slides" in miss
+    _deck(tmp_path / "deck.pptx", 5)
+    assert _slide_count_miss(ask, tmp_path, t0) == ""
+    assert _slide_count_miss("Make a 5-slide deck", tmp_path, t0) == ""
+    assert "deck.pptx has 5 slides" in _slide_count_miss("Make a 3-slide deck", tmp_path, t0)
+    assert _slide_count_miss("Make a deck about sales", tmp_path, t0) == ""            # no stated count
+    assert _slide_count_miss(ask, tmp_path, _t.time() + 60) == ""                       # not written this turn

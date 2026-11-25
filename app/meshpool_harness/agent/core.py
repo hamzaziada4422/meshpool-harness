@@ -1072,6 +1072,38 @@ def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     return ""
 
 
+_SLIDES = re.compile(r"\b(\d{1,2})\s*(?:to|-|–|or)\s*(\d{1,2})[\s-]+slides?\b|\b(\d{1,2})[\s-]+slides?\b", re.I)
+
+
+def _slide_count_miss(asked: str, root, since: float) -> str:
+    """A deck written this turn whose slide count is outside the count the request states ("4 to 6 slides", "a
+    10-slide deck"), as a note for the agent; "" when there is no stated count or it is met. Office-7 on 59e49c8b:
+    pptx_chart built 3 slides for "Make deck.pptx, 4 to 6 slides ..." and answered done."""
+    import zipfile
+    from meshpool_harness.capabilities import SEP as _SEP
+    m = _SLIDES.search(str(asked or "").split(_SEP)[0])
+    if not m:
+        return ""
+    lo, hi = (int(m.group(1)), int(m.group(2))) if m.group(1) else (int(m.group(3)), int(m.group(3)))
+    lo, hi = min(lo, hi), max(lo, hi)
+    out = []
+    try:
+        for f in Path(root).rglob("*.pptx"):
+            if "Meshpool outputs" in f.parts or f.name.startswith("~$") or f.stat().st_mtime < since:
+                continue
+            with zipfile.ZipFile(f) as z:
+                n = sum(1 for x in z.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", x))
+            if not lo <= n <= hi:
+                out.append(f"{f.name} has {n} slides")
+    except (OSError, zipfile.BadZipFile):
+        return ""
+    if not out:
+        return ""
+    want = f"{lo} to {hi}" if lo != hi else str(lo)
+    return (f"The request asks for {want} slides, but " + "; ".join(out) + ". The job is not done: change the deck "
+            "so it has the number of slides asked for, save it and check again.")
+
+
 def _destructive(args: dict, root=None) -> bool:
     """A shell command that deletes recursively, rewrites history, wipes a disk, pipes the web into a shell or uses sudo.
     shell's argv list (["rm", "-rf", "build"], ["bash", "-lc", "git reset --hard"]) is read as the script it runs.
@@ -1730,6 +1762,7 @@ class Agent:
             text = cmd
         self._auto_route(text)
         asked = text                                      # what the user asked, before hook notes and @file contents
+        self._asked_text = text
         ignored = EX.untrusted_config(self.root)
         if ignored and not getattr(self, "_trust_noted", False):
             self._trust_noted = True
@@ -1924,7 +1957,7 @@ class Agent:
         self.ws.turn_files = set()
         self.ws.turn_new = set()
         g = {"hist": [], "doom_at": -10, "seen": set(), "edits": self.ws.edits, "edits0": self.ws.edits, "last": 0,
-             "cmds0": len(self.ws.commands),
+             "cmds0": len(self.ws.commands), "t0": time.time(),
              "todo_nudged": False}
         route = getattr(self, "route", None)
         g["req"] = self.messages[-1].get("content") if self.messages else ""
@@ -2121,6 +2154,13 @@ class Agent:
                                 "[Meshpool] Your own check failed (AssertionError) and the file has not been saved "
                                 "since. The job is not done: change the file so it does what the request asks, save "
                                 "it and check again. If the request really cannot be met, say exactly why in one line.")})
+                            continue
+                    if self._office_direct() and not g.get("office_count_nudged") \
+                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0":
+                        miss = _slide_count_miss(getattr(self, "_asked_text", ""), self.root, g.get("t0", 0))
+                        if miss:
+                            g["office_count_nudged"] = True  # once per request: a stated count is part of the job
+                            self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
                             continue
                     route = getattr(self, "route", None)
                     after = [c for c in self.ws.commands if c.get("after_edit", -1) >= self.ws.edits]
