@@ -194,6 +194,8 @@ def main():
                 break
         replies = [e.get("text", "") for e in v.get("events", []) if e.get("type") == "assistant" and e.get("text")]
         errors = [e.get("text", "") for e in v.get("events", []) if e.get("type") == "error"]
+        if replies and ("unknown tool" in replies[-1] or "hello from meshpool" not in replies[-1]):
+            raise SystemExit(f"smoke: FAILED, the chat's tool call did not run: {replies[-1][:160]!r}")
         if not replies or errors:
             raise SystemExit(f"smoke: FAILED, the chat did not answer (state {v.get('state')}, errors {errors[:2]})")
         step(f"chat answered: {replies[-1][:80]!r}")

@@ -136,6 +136,12 @@ def plan(messages, tools):
                 return ("tool", rd, {"path": "model.pbix"})
         return ("text", "Read: " + " || ".join(m["content"][:120].replace("\n", " ") for m in done))
     if "hello" in u:
+        if "exec_command" in names and not names & {"apply_patch", "write_file", "write", "bash"}:
+            # Codex 0.171 replica (every code chat since 0.0.16): one command tool writes and runs the file
+            if step == 0:
+                return ("tool", "exec_command", {"cmd": "printf \"print('hello from meshpool')\\n\" > hello.py && "
+                                                        "(python3 hello.py || python hello.py)"})
+            return ("text", "I created **hello.py** and ran it. Output:\n```\n" + done[-1]["content"][-60:] + "\n```")
         codex = "apply_patch" in names and "write_file" not in names      # Codex-style lane: apply_patch + shell
         if step == 0:
             if codex:
