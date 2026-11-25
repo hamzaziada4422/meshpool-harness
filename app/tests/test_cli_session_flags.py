@@ -92,10 +92,10 @@ def test_fork_leaves_the_old_session_alone(env, tmp_path):
     r.fork_id("forked-1")
     r.messages.append({"role": "user", "content": "second"})
     r.save()
-    o = json.loads((tmp_path / "sessions" / old / "session.json").read_text())
-    f = json.loads((tmp_path / "sessions" / "forked-1" / "session.json").read_text())
-    assert [m["content"] for m in o["messages"]] == ["first"]
-    assert [m["content"] for m in f["messages"]] == ["first", "second"] and f["id"] == "forked-1"
+    o = Agent.resume(str(tmp_path), old)                    # read back the way meshpool reads a session
+    f = Agent.resume(str(tmp_path), "forked-1")
+    assert [m["content"] for m in o.messages[1:]] == ["first"]
+    assert [m["content"] for m in f.messages[1:]] == ["first", "second"] and f.id == "forked-1"
 
 
 @pytest.mark.parametrize("shell", ["bash", "zsh", "fish"])
@@ -173,7 +173,7 @@ def test_agent_flag_takes_on_a_saved_agent(env, tmp_path):
     assert "read_file" in names and "grep" in names and "bash" not in names and "write_file" not in names
     assert a._permit("bash", {"command": "ls"})[0] is False
     assert a._permit("read_file", {"path": "x"})[0] is True
-    assert cli.main(["-p", "hi", "--agent", "reader"]) == 0 and os.environ.pop("MH_START_AGENT") == "reader"
+    assert cli.main(["-p", "hi", "--subagent", "reader"]) == 0 and os.environ.pop("MH_START_AGENT") == "reader"
 
 
 def test_disable_slash_commands(env, tmp_path, monkeypatch):

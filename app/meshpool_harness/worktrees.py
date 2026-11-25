@@ -428,7 +428,19 @@ def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = 
             _cleanup(rec)
             _drop(wid)
             raise
+    _hook("WorktreeCreate", rec)
     return rec
+
+
+def _hook(event: str, rec: dict) -> None:
+    """The user's WorktreeCreate / WorktreeRemove hooks (hooks.json, and a trusted folder's own). Never raises."""
+    try:
+        from meshpool_harness.agent import extras as EX
+        EX.run_hooks(Path(rec.get("source") or "."), event, {
+            "worktree": {k: rec.get(k) for k in ("id", "kind", "workdir", "path", "branch", "source", "title")}},
+            timeout=300)
+    except Exception:  # noqa: BLE001 - a hook never breaks making or removing a copy
+        pass
 
 
 def _create_git(rec: dict, top: str, src: Path, base: str) -> None:
@@ -896,6 +908,7 @@ def discard(wid: str, keep_work: bool = False) -> dict:
             if not kept_dir:
                 _rmtree(rec["path"])
         _drop(rec["id"])
+    _hook("WorktreeRemove", rec)
     if kept_dir:
         note = (f"Its changed files were kept in {kept_dir} (the base folder beside it holds the files as they were "
                 "when the copy was made). Delete that folder when you do not need them.")

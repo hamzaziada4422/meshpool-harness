@@ -96,3 +96,23 @@ def test_directory_added_hook(tmp_path, monkeypatch):
     a = Agent(str(proj), mode="auto")
     a.add_dir(str(other))
     assert json.loads((proj / "added.json").read_text())["path"] == str(other.resolve())
+
+
+def test_worktree_hooks_fire_on_create_and_discard(tmp_path, monkeypatch):
+    import subprocess
+    from meshpool_harness import worktrees as WT
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "a.txt").write_text("x\n")
+    subprocess.run("git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init", shell=True,
+                   cwd=proj, check=True)
+    monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    log = tmp_path / "hooks.log"
+    (tmp_path / "home" / "hooks.json").write_text(json.dumps({
+        "WorktreeCreate": [{"command": f"cat >> {log}; echo >> {log}"}],
+        "WorktreeRemove": [{"command": f"cat >> {log}; echo >> {log}"}]}), encoding="utf-8")
+    rec = WT.create(proj, owner_kind="cli", owner_id="t")
+    WT.discard(rec["id"])
+    events = [json.loads(x)["event"] for x in log.read_text().splitlines() if x.strip()]
+    assert events == ["WorktreeCreate", "WorktreeRemove"]

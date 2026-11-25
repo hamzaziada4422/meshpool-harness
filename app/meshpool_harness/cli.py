@@ -592,6 +592,8 @@ def _main(argv=None):
                               **({"worktree_id": wt["id"]} if wt else {}))
         finally:
             _worktree_done(wt)
+    if argv[:2] == ["mcp", "add-json"]:          # meshpool mcp add-json NAME '{"command": ...}'  (or - for stdin)
+        return _mcp_add_json(argv[2:])
     if argv[0] in _APP_COMMANDS and not (argv[0] == "mcp" and len(argv) == 1):   # the app's features as commands
         from meshpool_harness import cli_app
         return cli_app.main(argv)
@@ -694,8 +696,6 @@ def _main(argv=None):
             return 0
         from meshpool_harness.agent.tui import ask_key
         return 0 if ask_key(force=True) else 1
-    if argv[:2] == ["mcp", "add-json"]:          # meshpool mcp add-json NAME '{"command": ...}'  (or - for stdin)
-        return _mcp_add_json(argv[2:])
     if argv[0] == "mcp" and len(argv) > 1:
         from meshpool_harness import cli_app
         return cli_app.main(argv)
