@@ -74,7 +74,7 @@ sandbox, loop guards (a call refused or failing repeatedly with nothing changed 
 | `MH_LEAN_WORK` | on | Work chats use the lean core (short prompt, files preloaded) instead of the full Work agent. | Work: 45/54 vs 44/54 at 0.51x; 3.8k vs 10.1k input per call, 3.3 vs 4.0 calls per task |
 | `MH_OFFICE_DIRECT` | on | Edits of existing files, and new files the user names ("make budget.xlsx"), are written with openpyxl, python-docx or python-pptx, the way Codex does. The deck, report and model engines are offered only for an open-ended deliverable ("a pitch deck for investors"). | pptx_chart: the slides engine took 33 and 84 calls in two runs; Codex built the deck by hand for $0.02 |
 | Tracked changes | on request | A request for Word tracked changes or comments brings `edit_office_file`, which writes real revisions; revision XML written by hand is refused. | docx_tracked: 8 calls instead of 71 |
-| Pre-answer checks (`MH_OFFICE_FINISH_CHECK`) | on | Before answering, the files written this turn are checked against the request's own terms: a stated slide count, a requested total row, a template's formatting, shapes inside the slide, and an edit that changed nothing. Each speaks once. | sb-374-31 went from 0 of 4 runs to 2 of 2 |
+| Pre-answer checks (`MH_OFFICE_FINISH_CHECK`) | on | Before answering, the files written this turn are checked against the request's own terms: a stated slide count, a requested total row, a template's formatting, shapes inside the slide, an edit that changed nothing, TODAY() or NOW() in place of a year the request names, and (with LibreOffice) a formula the turn wrote that recalculates to an error. Each speaks once. | sb-374-31 went from 0 of 4 runs to 2 of 2 |
 | Failed-check note | on | If the agent's own assert failed and no check passed after it, it is told the job is not done. | catches "my assertion was wrong" on a wrong file; no longer sends back a finished job |
 | `MH_OFFICE_LOOK_CAP` | 2 | check_deck, check_workbook, check_document and view_output run at most twice per request. | pptx_chart ran check_deck 3-5 times a run |
 | `MH_OFFICE_VERIFY_CAP` | 4 | Once the file is saved and 4 checks in a row pass, the agent is told to answer. | xlsx_budget took 41 calls in one run where Codex took 5-10 |
@@ -118,5 +118,7 @@ Measured and dropped or kept off:
 - The gateway bills about 2x the list price for this model. The ratios above do not depend on the price level,
   because both agents pay the same prices.
 - Office suites are small (7, 6 and 4 tasks, six runs each), so their intervals are wide.
+- The benchmark ran Meshpool from source, where it did not find LibreOffice; the app bundles it. The formula
+  recalculation check and other LibreOffice-based checks were therefore not part of the measured office runs.
 - The office run was measured before the last review and security fixes (permissions, the app's page token,
   bounded file checks).
