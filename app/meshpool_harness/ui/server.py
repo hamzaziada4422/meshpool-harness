@@ -1220,6 +1220,8 @@ class OfficeHandler(Handler):
             self._send(403, {"error": "forbidden"})
             return False
         m = re.fullmatch(r"/api/agent/([\w-]+)(/.*)?", path)
+        if m and m.group(1) in A.DELETED:             # a deleted chat: forgotten here too
+            OFFICE_CHATS.discard(m.group(1))
         if m and m.group(1) not in OFFICE_CHATS:      # a chat of the app's own: never through the panel's token
             self._send(403, {"error": "forbidden"})
             return False

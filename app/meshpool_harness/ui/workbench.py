@@ -393,7 +393,7 @@ def git_status(root: str) -> dict:
         if len(line) < 4:
             continue
         xy, path = line[:2], line[3:]
-        if xy[0] in "RC":
+        if xy[0] in "RC" or xy[1] in "RC":           # " R new\0old\0": a rename in the worktree only, too
             i += 1
         rel = os.path.relpath(Path(top) / path, r).replace(os.sep, "/")   # git gives repository paths
         files.append({"status": xy.strip(), "path": rel, "xy": xy, "staged": xy[0] not in (" ", "?"),

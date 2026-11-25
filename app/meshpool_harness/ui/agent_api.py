@@ -1767,6 +1767,10 @@ def thread_action(sid: str, body: dict) -> dict:
         with LOCK:
             DELETED.add(sid)
             s = LIVE.pop(sid, None)
+        import sys as _sys                            # the Office panel's token no longer reaches it
+        _sv = _sys.modules.get("meshpool_harness.ui.server")
+        if _sv is not None and hasattr(_sv, "OFFICE_CHATS"):
+            _sv.OFFICE_CHATS.discard(sid)
         if s:
             s.deleted = True
             s.agent.deleted = True                    # its last save after stopping must not recreate the thread

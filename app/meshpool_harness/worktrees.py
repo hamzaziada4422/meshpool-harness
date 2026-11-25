@@ -130,7 +130,7 @@ def owner(path) -> tuple[Path, str] | None:
 # them. In this process a count per worktree; for other processes a marker file per process id in the worktree's own
 # git folder (.git/worktrees/<name>/meshpool-in-use-<pid>), honoured while that process is alive.
 _HELD: dict = {}
-_HELD_LOCK = threading.Lock()
+_HELD_LOCK = threading.RLock()                  # reentrant: a GC finalizer may release while held
 _MARK = "meshpool-in-use-"
 
 
@@ -185,15 +185,14 @@ def hold(path, obj=None) -> bool:
     top = _top(path)
     if top is None:
         return False
-    key = str(top)
-    with _HELD_LOCK:
+    key, adm = str(top), _admin(top)
+    with _HELD_LOCK:                                      # count and marker change together (see release)
         _HELD[key] = _HELD.get(key, 0) + 1
-    adm = _admin(top)
-    if adm is not None:
-        try:
-            (adm / f"{_MARK}{os.getpid()}").write_text(str(time.time()), encoding="utf-8")
-        except OSError:
-            pass
+        if adm is not None:
+            try:
+                (adm / f"{_MARK}{os.getpid()}").write_text(str(time.time()), encoding="utf-8")
+            except OSError:
+                pass
     if obj is not None:
         weakref.finalize(obj, release, key)
     return True
@@ -203,19 +202,18 @@ def release(path) -> None:
     top = _top(path)
     if top is None:
         return
-    key = str(top)
-    with _HELD_LOCK:
+    key, adm = str(top), _admin(top)
+    with _HELD_LOCK:                                      # a hold racing this release keeps its marker
         n = _HELD.get(key, 0) - 1
         if n > 0:
             _HELD[key] = n
             return
         _HELD.pop(key, None)
-    adm = _admin(top)
-    if adm is not None:
-        try:
-            (adm / f"{_MARK}{os.getpid()}").unlink()
-        except OSError:
-            pass
+        if adm is not None:
+            try:
+                (adm / f"{_MARK}{os.getpid()}").unlink()
+            except OSError:
+                pass
 
 
 def in_use(path) -> bool:
@@ -223,30 +221,30 @@ def in_use(path) -> bool:
     top = _top(path)
     if top is None:
         return False
-    with _HELD_LOCK:
+    adm = _admin(top)
+    with _HELD_LOCK:                                      # this process's marker is only removed with no holder
         if _HELD.get(str(top), 0) > 0:
             return True
-    adm = _admin(top)
-    if adm is None:
-        return False
-    busy = False
-    try:
-        marks = list(adm.glob(_MARK + "*"))
-    except OSError:
-        return False
-    for m in marks:
+        if adm is None:
+            return False
+        busy = False
         try:
-            pid = int(m.name[len(_MARK):])
-        except ValueError:
-            continue
-        if pid != os.getpid() and _alive(pid):
-            busy = True
-        else:                                             # a process that ended, or this one with no holder left
+            marks = list(adm.glob(_MARK + "*"))
+        except OSError:
+            return False
+        for m in marks:
             try:
-                m.unlink()
-            except OSError:
-                pass
-    return busy
+                pid = int(m.name[len(_MARK):])
+            except ValueError:
+                continue
+            if pid != os.getpid() and _alive(pid):
+                busy = True
+            else:                                         # a process that ended, or this one with no holder left
+                try:
+                    m.unlink()
+                except OSError:
+                    pass
+        return busy
 
 
 def prune(path, keep: int = 5) -> list[str]:

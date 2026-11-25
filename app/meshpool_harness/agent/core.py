@@ -954,11 +954,21 @@ _WRAPPERS: dict = {
     "exec": ({"-a"}, set("cl")), "command": (set(), set("pvV")), "builtin": (set(), set()),
     "nohup": (set(), set()), "eval": (set(), set()), "chronic": (set(), set("ev")),
 }
-_SHELLS = "sh|bash|zsh|dash|ksh|mksh|ash"
-# sh -c '...', bash -lc "...", env -S "...": the script in it is a command line of its own
-_INNER = re.compile(r"(?:^|[\s;&|(`])(?:\S*/)?(?:(?:%s)(?:\s+-[A-Za-z]+)*\s+-[A-Za-z]*c[A-Za-z]*"
-                    r"|env(?:\s+-\S+)*\s+(?:-S|--split-string))"
-                    r"""(?:\s+|=)(?:'([^']*)'|"((?:\\.|[^"\\])*)"|(\S+))""" % _SHELLS)
+# Wrappers read loosely: their options are many or take optional values, so every later word may start the command.
+_LOOSE = {"watch", "strace", "ltrace", "flock", "chroot", "unshare", "nsenter", "setsid", "script", "parallel"}
+_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "mksh", "ash", "fish", "busybox"}
+# Programs that run a command line given to them as one argument (sh -c '...', su -c, flock -c, script -c, watch
+# '...', env -S, ssh host '...'): every multi-word argument after one, and the argument after -c or -S, is read as a
+# command line of its own.
+_RUNNERS = _SHELLS | {"env", "su", "runuser", "flock", "script", "watch", "ssh", "sudo", "doas", "eval", "parallel",
+                      "xargs", "timeout", "nohup", "nice", "strace", "ltrace", "setsid", "unshare", "nsenter", "chroot",
+                      "time", "stdbuf", "ionice", "exec", "command", "chronic"}
+_SHELL_VALUE = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
+
+
+def _word0(word: str) -> str:
+    """A command word as it runs: no leading backslash (alias bypass), no quotes, no folder (/usr/bin/git -> git)."""
+    return word.strip("'\"").lstrip("\\").rsplit("/", 1)[-1]
 
 
 def _unwrap(w: list) -> list:
@@ -969,7 +979,19 @@ def _unwrap(w: list) -> list:
         if _ENV_SET.fullmatch(w[0]):
             w = w[1:]
             continue
-        name = w[0].rsplit("/", 1)[-1].strip("'\"")
+        name = _word0(w[0])
+        if name == "find":                                              # find . -exec cmd {} \;
+            for i, x in enumerate(w):
+                if x in ("-exec", "-execdir", "-ok", "-okdir") and i + 1 < len(w):
+                    tail = w[i + 1:]
+                    cut = next((j for j, y in enumerate(tail) if y in ("\\", ";", "+", "\\;")), len(tail))
+                    if tail[:cut]:
+                        starts += _unwrap(tail[:cut])
+            break
+        if name in _LOOSE:
+            w = w[1:]
+            starts += [w[i:] for i in range(1, len(w))]
+            continue
         if name not in _WRAPPERS:
             break
         takes, flags = _WRAPPERS[name]
@@ -1009,36 +1031,98 @@ _GIT_VALUE = ("-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-pr
 
 
 def _git_bare(w: list) -> list:
-    """git with its global options taken off (git -C dir -c k=v --no-pager push -> git push), or [] when there are
-    none, so a rule about "git push" also sees "git -C ../main push"."""
-    if not w or w[0].rsplit("/", 1)[-1] not in ("git", "git.exe"):
+    """git with its global options taken off (git -C dir -c k=v --no-pager push -> git push), or [] when w is not a
+    git command, so a rule about "git push" also sees "git -C ../main push" and "/usr/bin/git push"."""
+    if not w or _word0(w[0]) not in ("git", "git.exe"):
         return []
     rest, i = w[1:], 0
     while i < len(rest) and rest[i].startswith("-"):
         opt = rest[i]
         i += 2 if opt in _GIT_VALUE else 1
-    return ["git"] + rest[i:] if i else []
+    return ["git"] + rest[i:]
+
+
+def _git_globals(w: list) -> list:
+    """The global options of a git command (the words between git and its subcommand), or [] if w is not git."""
+    if not w or _word0(w[0]) not in ("git", "git.exe"):
+        return []
+    out, i = [], 1
+    while i < len(w) and w[i].startswith("-"):
+        out.append(w[i])
+        if w[i] in _GIT_VALUE and i + 1 < len(w):
+            out.append(w[i + 1])
+            i += 1
+        i += 1
+    return out
+
+
+def _tokens(text: str) -> list:
+    """Shell words with quotes removed ($'...' decoded too); a plain split when the quoting does not parse."""
+    import shlex
+
+    def ansi_c(m):
+        body = m.group(1)
+        try:
+            body = body.encode("latin-1", "backslashreplace").decode("unicode_escape")
+        except (UnicodeDecodeError, ValueError):
+            pass
+        return shlex.quote(body)
+    text = re.sub(r"\$'((?:\\.|[^'\\])*)'", ansi_c, text)
+    try:
+        lx = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>")
+        lx.whitespace_split = True
+        return list(lx)
+    except ValueError:
+        return [x.strip("'\"") for x in text.split()]
+
+
+def _inner_scripts(text: str) -> list:
+    """The command lines handed to a shell or another runner as one argument: bash -c '...', bash --norc -o pipefail
+    -lc "...", bash -c $'...', env -S '...', su -c, flock -c, script -c, watch '...', ssh host '...'."""
+    toks, out, i = _tokens(text), [], 0
+    while i < len(toks):
+        name = _word0(toks[i])
+        i += 1
+        if name not in _RUNNERS:
+            continue
+        j, after_c = i, False
+        while j < len(toks) and toks[j] not in (";", "&&", "||", "|", "&", "(", ")", ";;"):
+            t = toks[j]
+            if after_c or (" " in t.strip() or "\n" in t or "\t" in t):
+                out.append(t)
+                after_c = False
+            elif name in _SHELLS and t in _SHELL_VALUE:
+                j += 1                                                  # bash -o pipefail -c ...
+            elif t.startswith("--split-string="):
+                out.append(t.split("=", 1)[1])
+            elif t in ("-S", "--split-string") or (t.startswith("-") and not t.startswith("--") and "c" in t[1:]
+                                                     and name in _SHELLS | {"su", "runuser", "flock", "script"}):
+                after_c = True
+            elif t.startswith("-S") and name == "env" and len(t) > 2:
+                out.append(t[2:])
+            j += 1
+    return out
 
 
 def _command_parts(cmd: str, _depth: int = 0) -> list[str]:
     """The commands in a shell line, each with its spacing normalised and leading VAR=value, sudo, env, nohup and
     similar wrappers (with their options and the options' values) taken off, so a rule about "git push" also sees
-    "cd x && sudo -u root git push". The script of sh -c, bash -lc and env -S is read as a command line too."""
+    "cd x && sudo -u root git push" and "/usr/bin/git push". The script of sh -c, bash -lc, env -S and similar is read
+    as a command line too."""
     out: list[str] = []
     text = str(cmd or "")
     for part in _SEGMENT.split(text):
         for w in _unwrap(part.replace("\\\n", " ").split()):
-            forms = [w, [x.strip("'\"") for x in w]]                         # 'git' push runs git push
-            g = _git_bare(forms[1])
+            plain = [x.strip("'\"") for x in w]                         # 'git' push runs git push
+            forms = [w, plain, [_word0(plain[0])] + plain[1:]]          # \git, /usr/bin/git: git
+            g = _git_bare(plain)
             if g:
                 forms.append(g)
             for s in (" ".join(f) for f in forms):
                 if s and s not in out:
                     out.append(s)
     if _depth < 4:
-        for m in _INNER.finditer(text):
-            inner = m.group(1) if m.group(1) is not None else \
-                re.sub(r"\\(.)", r"\1", m.group(2)) if m.group(2) is not None else m.group(3)
+        for inner in _inner_scripts(text):
             for s in _command_parts(inner, _depth + 1):
                 if s not in out:
                     out.append(s)
@@ -1064,6 +1148,17 @@ def _deny_hit(rules: list, name: str, args: dict) -> str:
             if h:
                 return h
     return ""
+
+
+def _command_detail(name: str, args: dict) -> str:
+    """The command a shell-like call runs, as the approval prompt shows it: the shell tool's argv as its script, its
+    workdir as a leading cd, and every command of a bash_many."""
+    if name not in ("bash", "shell", "bash_start", "bash_many"):
+        return ""
+    cmd = args.get("command")
+    text = T.shell_script(cmd) if isinstance(cmd, list) or name == "shell" else str(cmd or "")
+    text = "\n".join([text] * bool(text) + [str(c) for c in args.get("commands") or []])
+    return (f"cd {args['workdir']} && " if args.get("workdir") else "") + text
 
 
 def _destructive(args: dict) -> bool:
@@ -2800,8 +2895,8 @@ class Agent:
                                "Leave this to the user.")
             decision, note = self.approve("bash" if name.startswith("bash") or name == "shell" else "edit",
                                           f"Your rule \u201c{hit}\u201d says to ask before this. Go ahead?",
-                                          str(args.get("command") or args.get("commands") or args.get("path") or
-                                              json.dumps(args, ensure_ascii=False)[:2000]))
+                                          _command_detail(name, args) or str(args.get("path") or
+                                                                             json.dumps(args, ensure_ascii=False)[:2000]))
             if decision not in ("yes", "always", "save"):
                 return False, note or ""
             answered = True
@@ -2810,7 +2905,7 @@ class Agent:
         if main:
             if not self.approve:
                 return False, main + " Work in this worktree only, or ask the user."
-            decision, note = self.approve("bash", main, str(args.get("command") or args.get("commands") or ""))
+            decision, note = self.approve("bash", main, _command_detail(name, args))
             if decision not in ("yes", "always", "save"):
                 return False, note or ""
             answered = True
@@ -2921,12 +3016,50 @@ class Agent:
         if not own:
             return ""
         main, wname = own
-        text = " ".join(str(x) for x in ([args.get("command")] if not isinstance(args.get("command"), list)
-                                         else args.get("command")) + list(args.get("commands") or []))
-        mine = str(main / ".meshpool" / "worktrees" / wname)
-        if re.search(r"(^|\s)git\s+(-C\b|--git-dir|--work-tree)|GIT_DIR=|GIT_WORK_TREE=", text) or \
-                str(main) in text.replace(mine, "") or re.search(r"(^|[\s;&|])cd\s+(\.\./){3,}", text):
-            return "This command reaches the main checkout, outside this task's worktree. Run it?"
+        top = (main / ".meshpool" / "worktrees" / wname).resolve()
+        why = "This command reaches the main checkout, outside this task's worktree. Run it?"
+
+        def outside(base: Path, target: str) -> Path | None:
+            """target resolved from base when it lands in the main checkout (outside this worktree) or in a folder
+            above it, else None."""
+            t = os.path.expanduser(str(target).strip("'\""))
+            if not t or "$" in t or "`" in t or "%" in t:
+                return base if t else None                   # a variable or substitution: cannot tell, so ask
+            try:
+                q = (Path(t) if os.path.isabs(t) else base / t).resolve()
+                m = main.resolve()
+            except (OSError, ValueError, RuntimeError):
+                return base
+            if q == top or top in q.parents:
+                return None
+            return q if q == m or q in m.parents or m in q.parents else None
+        cwd = self.root
+        wd = args.get("workdir")
+        if wd:                                               # the shell tool's working folder
+            if outside(self.root, str(wd)) is not None:
+                return why
+            cwd = (self.root / os.path.expanduser(str(wd))).resolve()
+        cmd = args.get("command")
+        scripts = [T.shell_script(cmd) if isinstance(cmd, list) else str(cmd or "")] + \
+            [str(c) for c in args.get("commands") or []]
+        mine = str(top)
+        for text in scripts:
+            if re.search(r"GIT_DIR=|GIT_WORK_TREE=|GIT_COMMON_DIR=", text) or \
+                    str(main) in text.replace(mine, "").replace(str(main / ".meshpool" / "worktrees" / wname), ""):
+                return why
+            here = cwd
+            for seg in _SEGMENT.split(text):
+                words = [x.strip("'\"") for x in seg.replace("\\\n", " ").split()]
+                if words and _word0(words[0]) in ("cd", "pushd", "chdir", "Set-Location", "sl"):
+                    dest = next((x for x in words[1:] if not x.startswith("-")), "~")
+                    if outside(here, dest) is not None:
+                        return why
+                    here = (here / os.path.expanduser(dest)).resolve()
+            for part in [" ".join(text.split())] + _command_parts(text):
+                w = part.split()
+                for opt in _git_globals(w) or _git_globals([_word0(w[0])] + w[1:] if w else []):
+                    if re.match(r"(-C|--git-dir|--work-tree)(=|$)|-C.", opt):
+                        return why
         return ""
 
     _POWER_FILES = (".meshpool/hooks.json", ".meshpool/permissions.json", ".meshpool/mcp.json", ".mcp.json")

@@ -200,3 +200,143 @@ def test_a_branch_keeps_the_chats_mode(monkeypatch):
     with pytest.raises(Done):
         A.fork("x")
     assert got[0]["mode"] == "ask"
+
+
+# ---------------------------------------------------------------- second review (code-review of pr20-fixes)
+# R1. options before -c (long ones, -o/-O values, --rcfile) and $'...' quoting
+@pytest.mark.parametrize("cmd", [
+    f'bash --norc -c "{PUSH} --force"', f"bash --login -c '{PUSH}'", f'bash -o pipefail -c "{PUSH}"',
+    f"bash -O extglob -c '{PUSH}'", f"bash --rcfile F -c '{PUSH}'", f"bash -lc $'{PUSH}'",
+    f"bash --noprofile --norc -o errexit -lc $'cd x\\n{PUSH}'",
+])
+def test_deny_rules_read_shell_scripts_after_any_options(env, monkeypatch, cmd):
+    monkeypatch.setenv("MH_DENY", f"bash:{PUSH}*")
+    a = _yes_agent(env / "proj", mode="auto")
+    assert not a._permit("bash", {"command": cmd})[0], cmd
+    assert not a._permit("shell", {"command": ["bash", "--norc", "-c", PUSH]})[0]
+
+
+# R2. a path or backslash on the command word, and more wrappers
+@pytest.mark.parametrize("cmd", [
+    f"/usr/bin/{PUSH} --force", "\\" + PUSH, f"watch {PUSH}", f"strace -f -o x {PUSH}", f"ltrace {PUSH}",
+    f"flock /tmp/l {PUSH}", f"flock /tmp/l -c '{PUSH}'", f"chroot / {PUSH}", f"unshare -r {PUSH}",
+    f"nsenter -t 1 -m {PUSH}", f"setsid {PUSH}", f"script -q -c '{PUSH}' /dev/null", f"parallel {PUSH} ::: a",
+    f"find . -exec {PUSH} \\;", f"find . -execdir {PUSH} {{}} +",
+])
+def test_deny_rules_see_command_paths_and_more_wrappers(env, monkeypatch, cmd):
+    monkeypatch.setenv("MH_DENY", f"bash:{PUSH}*")
+    a = _yes_agent(env / "proj", mode="auto")
+    assert not a._permit("bash", {"command": cmd})[0], cmd
+
+
+def _wt_agent(env, asked):
+    main = env / "repo"
+    wt = main / ".meshpool" / "worktrees" / "w1"
+    (wt / "src").mkdir(parents=True)
+    a = core.Agent(str(wt), approve=lambda *x: (asked.append(x), ("no", ""))[1], mode="auto")
+    return a, main, wt
+
+
+# R3. the shell tool's workdir counts: outside the worktree it reaches the main checkout
+def test_shell_workdir_outside_the_worktree_asks(env):
+    asked = []
+    a, main, wt = _wt_agent(env, asked)
+    assert not a._permit("shell", {"command": ["git", "reset", "--hard"], "workdir": "../../.."})[0] and asked
+    assert not a._permit("shell", {"command": ["ls"], "workdir": str(main)})[0]
+    assert a._permit("shell", {"command": ["ls"], "workdir": "src"})[0]           # inside the worktree: fine
+
+
+# R4. git -C after other global options, and cd ../../.. without a trailing slash
+@pytest.mark.parametrize("cmd", [
+    "git --no-pager -C ../../.. reset --hard", "git -c x=y -C ../../.. reset --hard",
+    "git -c x=y --git-dir=../../../.git log", "cd ../../.. && git reset --hard", "cd ../../..; ls",
+    "cd ..; cd ..; cd ..; git reset --hard", "cd ../.. && cd .. && rm -rf a.txt", "sudo git -p -C .. status",
+])
+def test_main_checkout_guard_sees_every_spelling(env, cmd):
+    asked = []
+    a, main, wt = _wt_agent(env, asked)
+    assert not a._permit("bash", {"command": cmd})[0] and asked, cmd
+
+
+def test_main_checkout_guard_leaves_the_worktree_alone(env):
+    asked = []
+    a, main, wt = _wt_agent(env, asked)
+    (env / "elsewhere").mkdir()
+    for cmd in ("cd src && ls", "cd src; cd .. && ls", f"cd {env / 'elsewhere'} && ls", "git status", "git log -1"):
+        assert a._permit("bash", {"command": cmd})[0], cmd
+
+
+# R5. a GC release racing a new hold never deletes the new holder's marker
+def test_a_release_racing_a_hold_keeps_the_new_holders_marker(env, repo, monkeypatch):
+    w = WT.create(repo, "race")
+    top = Path(w["path"]).resolve()
+    marker = WT._admin(top) / f"meshpool-in-use-{os.getpid()}"
+    WT.hold(top)
+    real, fired = WT._admin, []
+
+    def admin(t):                                     # while the release runs, another thread starts a chat there
+        if not fired:
+            fired.append(1)
+            th = threading.Thread(target=WT.hold, args=(top,))
+            th.start()
+            th.join(2)
+        return real(t)
+    monkeypatch.setattr(WT, "_admin", admin)
+    WT.release(top)
+    monkeypatch.setattr(WT, "_admin", real)
+    assert WT._HELD.get(str(top)) == 1 and marker.exists()                  # a CLI prune still sees it in use
+    WT.release(top)
+    assert not marker.exists()
+
+
+# R6. the approval prompt shows the shell tool's script and workdir, not a list
+def test_approval_prompts_show_the_shell_script_and_workdir(env, monkeypatch):
+    monkeypatch.setenv("MH_ASK", f"bash:{PUSH}*")
+    asked = []
+    a = core.Agent(str(env / "proj"), approve=lambda *x: (asked.append(x), ("no", ""))[1], mode="auto")
+    a._permit("shell", {"command": ["bash", "-lc", PUSH], "workdir": "sub"})
+    assert asked[-1][2] == f"cd sub && {PUSH}"
+    monkeypatch.delenv("MH_ASK")
+    asked2 = []
+    b, main, wt = _wt_agent(env, asked2)
+    b._permit("shell", {"command": ["git", "reset", "--hard"], "workdir": "../../.."})
+    assert asked2[-1][2] == "cd ../../.. && git reset --hard"
+
+
+# R7. a rename only in the worktree (" R new\0old\0") is one file, not two
+def test_git_status_reads_worktree_renames(env, monkeypatch):
+    from meshpool_harness.ui import workbench as W
+    r = env / "gs"
+    r.mkdir()
+    _git("init", "-q", cwd=r)
+    (r / "old.txt").write_text("same content here\n" * 5)
+    _git("add", "-A", cwd=r)
+    _git("commit", "-qm", "i", cwd=r)
+    (r / "old.txt").rename(r / "new.txt")
+    _git("add", "-N", "new.txt", cwd=r)
+    raw = subprocess.run(["git", "status", "--porcelain", "-z"], cwd=r, capture_output=True, text=True).stdout
+    if not raw.startswith(" R"):
+        pytest.skip("this git does not report worktree renames")
+    monkeypatch.setattr(W, "check_root", lambda x: Path(x))
+    st = W.git_status(str(r))
+    assert [f["path"] for f in st["files"]] == ["new.txt"]
+
+
+# R8. a deleted chat is no longer reachable with the panel's token
+def test_a_deleted_chat_drops_out_of_the_office_list(monkeypatch, tmp_path):
+    from meshpool_harness.ui import agent_api as A
+    from meshpool_harness.ui import server as S
+    monkeypatch.setattr(S, "OFFICE_CHATS", {"gone"})
+    monkeypatch.setattr(A, "DELETED", set())
+    monkeypatch.setattr(A, "read_meta", lambda sid: {"x": 1})
+    monkeypatch.setattr(A, "LIVE", {})
+    monkeypatch.setattr(A, "SESSIONS", tmp_path / "sessions")
+    A.thread_action("gone", {"action": "delete"})
+    assert "gone" not in S.OFFICE_CHATS
+    S.OFFICE_CHATS.add("gone")                         # a stale entry is refused at the gate too
+    sent = []
+    h = S.OfficeHandler.__new__(S.OfficeHandler)
+    h.command, h.path = "GET", "/api/agent/gone"
+    h.headers = _Headers({"Host": "localhost", "X-Meshpool-Token": S.OFFICE_TOKEN})
+    h._send = lambda code, body, *a, **k: sent.append(code)
+    assert not h._gate() and sent[-1] == 403 and "gone" not in S.OFFICE_CHATS
