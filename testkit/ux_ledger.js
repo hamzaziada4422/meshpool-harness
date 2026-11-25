@@ -129,6 +129,23 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.click("#rulesBox [data-rule='bash:git push*']"); await p.waitForTimeout(600);
   check("and removed again", !(await p.$("#rulesBox [data-rule='bash:git push*']")));
   await p.keyboard.press("Escape");
+  // a long paste becomes a chip; it goes with the message as a block
+  const chip = await p.evaluate(() => {
+    const inp = document.querySelector("#input"); inp.value = "";
+    const dt = new DataTransfer(); dt.setData("text/plain", Array.from({length: 80}, (_, i) => "line " + i).join("\n"));
+    inp.dispatchEvent(new ClipboardEvent("paste", {clipboardData: dt, bubbles: true, cancelable: true}));
+    return [inp.value, document.querySelector("#attachRow")?.textContent || "", S.attachments.length];
+  });
+  check("a long paste becomes a chip, not a wall of text", chip[0] === "" && /Pasted text 1 \(80 lines\)/.test(chip[1]) && chip[2] === 1, chip.join(" | "));
+  await p.evaluate(() => { S.attachments = []; renderAttach(); });
+  // side by side: removed on the left, added on the right, unchanged on both
+  const sbs = await p.evaluate(() => {
+    const d = document.createElement("div");
+    d.innerHTML = splitHTML("diff --meshpool a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n keep\n-old line\n+new line\n tail");
+    const rows = [...d.querySelectorAll("tr")].map(r => [...r.querySelectorAll("td.tx")].map(c => c.className.replace("tx", "").trim() + ":" + c.textContent));
+    return JSON.stringify(rows.filter(r => r.length));
+  });
+  check("side by side pairs old and new lines", sbs === JSON.stringify([[":keep", ":keep"], ["d:old line", "a:new line"], [":tail", ":tail"]]), sbs);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

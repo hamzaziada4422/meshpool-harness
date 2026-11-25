@@ -468,7 +468,14 @@ function setupComposer() {
     if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim")) { e.preventDefault(); stopNow(); }
   });
   inp.addEventListener("paste", e => {
-    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); }
+    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); return; }
+    const t = e.clipboardData?.getData("text") || "", lines = t.split("\n").length;
+    if (t.length > 3000 || lines > 60) {                // a long paste: a chip that goes with the message, not a wall of text
+      e.preventDefault();
+      const n = S.attachments.filter(a => a.pasted).length + 1;
+      S.attachments.push({name: `Pasted text ${n} (${lines} line${lines === 1 ? "" : "s"})`, pasted: true, text: t});
+      renderAttach();
+    }
   });
   const c = $("#composer");
   c.addEventListener("dragover", e => { e.preventDefault(); c.classList.add("drag"); });
@@ -516,7 +523,11 @@ async function addAttachments(files) {
   renderAttach();
 }
 function renderAttach() {
-  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip">${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip"${a.pasted ? ` title="${esc(a.text.slice(0, 600))}" data-paste="${i}"` : ""}>${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $$("#attachRow [data-paste] > span").forEach(x => x.onclick = () => {     // put a pasted block back in the box
+    const i = +x.parentElement.dataset.paste, a = S.attachments[i], inp = $("#input");
+    S.attachments.splice(i, 1); inp.value += (inp.value ? "\n" : "") + a.text; inp.dispatchEvent(new Event("input")); renderAttach();
+  });
   $$("#attachRow button").forEach(b => b.onclick = () => { S.attachments.splice(+b.dataset.i, 1); renderAttach(); });
 }
 async function stopNow() {
@@ -551,7 +562,8 @@ async function sendNow(interrupt) {
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image);
+    for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;
+    const files = atts.filter(a => !a.image && !a.pasted);
     if (files.length) {
       const saved = [];
       for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
@@ -1609,9 +1621,10 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this chat</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
+  $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
@@ -1619,9 +1632,39 @@ async function panelDiff(body) {
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
-      <pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`;
+      ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
   } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+}
+/* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
+   order within each run of changes; unchanged lines on both sides. */
+function splitHTML(p) {
+  const rows = []; let o = 0, n = 0, dels = [], adds = [];
+  const cell = (num, text, cls) => `<td class="ln">${num ?? ""}</td><td class="tx ${cls}">${text === null ? "" : esc(text) || " "}</td>`;
+  const flush = () => {
+    for (let i = 0; i < Math.max(dels.length, adds.length); i++) {
+      const d = dels[i], a = adds[i];
+      rows.push(`<tr>${d ? cell(d[0], d[1], "d") : cell(null, null, "e")}${a ? cell(a[0], a[1], "a") : cell(null, null, "e")}</tr>`);
+    }
+    dels = []; adds = [];
+  };
+  for (const l of String(p || "").split("\n")) {
+    if (l.startsWith("--- a/") || l.startsWith("--- /dev/null")) continue;
+    if (l.startsWith("+++ ") || l.startsWith("diff --meshpool")) {
+      flush();
+      const f = l.startsWith("+++ ") ? l.slice(4).replace(/^b\//, "") : (l.split(" b/")[1] || l);
+      rows.push(`<tr class="f" data-file="${esc(f)}"><td colspan="4">${esc(f)}</td></tr>`); continue;
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { flush(); o = +h[1]; n = +h[2]; rows.push(`<tr class="h"><td colspan="4">${esc(l)}</td></tr>`); continue; }
+    if (l.startsWith("-")) { dels.push([o++, l.slice(1)]); continue; }
+    if (l.startsWith("+")) { adds.push([n++, l.slice(1)]); continue; }
+    flush();
+    if (l.startsWith("\\") || !l) continue;
+    const t = l.slice(1); rows.push(`<tr>${cell(o++, t, "")}${cell(n++, t, "")}</tr>`);
+  }
+  flush();
+  return `<table class="sbs">${rows.join("")}</table>`;
 }
 function patchHTML(p) {
   return String(p || "").split("\n").map(l => {

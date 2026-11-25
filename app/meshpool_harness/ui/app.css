@@ -369,6 +369,7 @@ button.chip:hover{background:var(--hover);color:var(--ink)}
 .patch .l.d{background:var(--del-bg);color:var(--del)}
 .patch .l.h{color:var(--ink-3);background:var(--fill)}
 .patch .l.f{color:var(--ink);font-weight:500;background:none;border-top:1px solid var(--line-2);padding-top:8px;padding-bottom:8px}
+.sbs-wrap{overflow:auto}.sbs{width:100%;border-collapse:collapse;table-layout:fixed;font:var(--fs-xs)/1.6 var(--mono)}.sbs td{padding:0 6px;vertical-align:top;white-space:pre-wrap;word-break:break-all}.sbs td.ln{width:3.2em;text-align:right;color:var(--ink-3);user-select:none}.sbs td.tx.d{background:var(--del-bg);color:var(--del)}.sbs td.tx.a{background:var(--add-bg);color:var(--add)}.sbs td.tx.e{background:var(--fill)}.sbs tr.h td{color:var(--ink-3);background:var(--fill)}.sbs tr.f td{color:var(--ink);font-weight:500;border-top:1px solid var(--line-2);padding:8px 6px}
 .tree{list-style:none;margin:0;padding:4px 0;font-size:var(--fs-s)}
 .tree li>div{display:flex;align-items:center;gap:6px;padding:3px 8px;cursor:pointer;white-space:nowrap}
 .tree li>div:hover{background:var(--hover)}
