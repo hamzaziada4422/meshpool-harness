@@ -26,6 +26,10 @@
 - `--no-session-persistence`, with `-p`, keeps nothing of the run on disk.
 - `-n NAME` names the session.
 
+## Plans
+
+`/plan` (or `--permission-mode plan`) makes the agent read and plan without changing anything. Each plan it writes is also saved as a Markdown file in `plans/` in meshpool's data folder. `/plan open` shows the last one's path. Settings, Plans folder (`MH_PLANS_DIR`) picks another folder, and `off` saves none.
+
 ## Checking your setup
 
 `meshpool doctor` (or `/doctor` in a session) reads meshpool's settings file, hooks, saved rules, MCP server lists, skills, sub-agents and instruction files, for you and for the current folder, and lists what is broken or ignored. It changes nothing. It exits with 1 when it finds an error.

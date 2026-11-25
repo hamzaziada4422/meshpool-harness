@@ -36,6 +36,8 @@ FIELDS = [
      "Name: value pairs split by ;. They never replace the key header."),
     ("MH_EXTRA_QUERY", "Extra query parameters for the model provider", "", "Added to every model request URL, "
      "like a=1&b=2."),
+    ("MH_PLANS_DIR", "Plans folder", "", "Plans that plan mode writes are also saved here as Markdown files. Empty: "
+     "plans/ in meshpool's data folder. off: no files."),
     ("MH_KEEP_DAYS", "Keep chats for (days)", "0", "Chats not touched for this many days are deleted, with their "
      "private folders; pinned and open chats are kept. 0 keeps every chat. Whole days, 1 or more. Checked when "
      "Meshpool starts and once a day."),

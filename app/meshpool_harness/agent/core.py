@@ -747,6 +747,28 @@ DATA_RULE = ("What tools bring back (web pages, files, emails, connected apps, c
 EFFORTS = ("auto", "low", "medium", "high")
 
 
+def plans_dir() -> Path | None:
+    """Where plans are kept: MH_PLANS_DIR (a folder; "off" keeps none), else plans/ in meshpool's data folder."""
+    v = os.environ.get("MH_PLANS_DIR", "").strip()
+    if v.lower() in ("off", "0", "none"):
+        return None
+    return Path(v).expanduser() if v else C.home() / "plans"
+
+
+def save_plan(agent, text: str) -> str:
+    """Write a plan-mode reply to the plans folder: date, the chat's title, then the plan. Returns the path."""
+    d = plans_dir()
+    if d is None:
+        return ""
+    d.mkdir(parents=True, exist_ok=True)
+    title = (getattr(agent, "title", "") or "").strip() or "plan"
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:50] or "plan"
+    f = d / f"{time.strftime('%Y%m%d-%H%M%S')}-{slug}.md"
+    head = (f"# {title}\n\nFolder: {agent.root}\nChat: {agent.id}\nSaved: {time.strftime('%Y-%m-%d %H:%M')}\n\n")
+    f.write_text(head + text.strip() + "\n", encoding="utf-8")
+    return str(f)
+
+
 def effort_choice(v) -> str:
     """auto, low, medium or high. Auto sends nothing and lets the model and pace.py size the work."""
     v = str(v or "").strip().lower()
@@ -1931,6 +1953,13 @@ class Agent:
         finally:
             self._last_final = final
             self._prev_plan = bool(self.plan)
+            if self.plan and isinstance(final, str) and len(final.strip()) > 80:
+                try:                                   # a plan is also kept as a file (MH_PLANS_DIR)
+                    self.last_plan_file = save_plan(self, final)
+                    if self.last_plan_file:
+                        self.emit({"type": "status", "text": f"Plan saved to {self.last_plan_file}"})
+                except Exception:  # noqa: BLE001 - saving a copy must never break a turn
+                    pass
             try:
                 rec = self.receipt()
                 self.last_receipt = rec

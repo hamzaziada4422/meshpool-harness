@@ -51,7 +51,7 @@ COMMANDS = [
     ("export", "[file]", "save this conversation as Markdown"),
     ("copy", "[n]", "copy the last reply (or the nth from the end)"),
     ("effort", "[auto|low|medium|high]", "how hard the model thinks"),
-    ("plan", "[on|off]", "plan mode: read and plan, change nothing"),
+    ("plan", "[on|off|open]", "plan mode: read and plan, change nothing; open shows the saved plan file"),
     ("permissions", "", "saved allow, ask and deny rules, and folder trust"),
     ("diff", "", "uncommitted changes in this folder (git diff)"),
     ("init", "", "have the agent write MESHPOOL.md (project notes)"),
@@ -1486,6 +1486,9 @@ class Session:
         t, st = self.term, self.term.st
         if not hasattr(self.agent, "plan"):
             return t.p(st.dim("  /plan is not available for this agent."))
+        if arg.lower() == "open":                          # /plan open: the last plan saved as a file
+            f = getattr(self.agent, "last_plan_file", "")
+            return t.p(f"  {f}" if f else st.dim("  No plan saved in this session yet."))
         on = {"on": True, "off": False}.get(arg.lower(), not self.agent.plan) if arg else not self.agent.plan
         self.agent.plan = on
         t.p(st.dim("  Plan mode is on: Meshpool reads and plans, and changes nothing until you say go." if on
