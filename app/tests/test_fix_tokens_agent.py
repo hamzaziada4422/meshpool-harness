@@ -891,7 +891,8 @@ def test_sigterm_ends_commands_still_running_in_their_own_process_group(tmp_path
     script = tmp_path / "run.py"
     marker = tmp_path / "child.pid"
     script.write_text(textwrap.dedent(f"""
-        import sys; sys.path.insert(0, {str(os.getcwd())!r})
+        import os, sys; sys.path.insert(0, {str(os.getcwd())!r})
+        os.environ["MH_SANDBOX"] = "0"   # bwrap's --unshare-pid makes $$ a PID inside the sandbox, not the host's
         from meshpool_harness.core import tools as T
         T.exit_cleanly_on_sigterm()
         ws = T.Workspace({str(tmp_path)!r}, {str(tmp_path / "run")!r})
