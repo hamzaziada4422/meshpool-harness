@@ -163,7 +163,7 @@ def main():
                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)]
     log = open(tmp / "ui.log", "w")
     procs.append(subprocess.Popen(launch + ["-m", "meshpool_harness", "ui", "--no-browser", "--port", str(uport)],
-                                  env=dict(env, MESHPOOL_HOME=str(home)), stdout=log, stderr=subprocess.STDOUT))
+                                  env=dict(env, MESHPOOL_HOME=str(home), PYTHONUNBUFFERED="1"), stdout=log, stderr=subprocess.STDOUT))
     try:
         base = f"http://127.0.0.1:{uport}"
         # The page carries the API token only for the launch key the app prints at startup (?k=...)

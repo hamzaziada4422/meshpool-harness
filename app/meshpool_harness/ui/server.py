@@ -1321,7 +1321,7 @@ def serve(port: int = 8765, open_browser: bool = True, desktop: bool = False, on
     print(f"  Settings file: {C.config_path()}")
     print(f"  Task outputs:  {RUNS}")
     print("  Use Quit in the app to stop Meshpool." if desktop else "  Close this window (or press Ctrl+C) to stop Meshpool.")
-    print("")
+    print("", flush=True)                           # a log file gets the address now, not when its buffer fills
     if open_browser:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()   # the app itself, in a browser tab (not the desktop app)
     try:
