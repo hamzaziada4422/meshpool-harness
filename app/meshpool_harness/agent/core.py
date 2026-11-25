@@ -1346,6 +1346,97 @@ def _unchanged_output_miss(asked: str, root, since: float) -> str:
             "identifies it is empty, not only when every cell is), change the file, save and check again.")
 
 
+_XL_ERRORS = ("#VALUE!", "#REF!", "#NAME?", "#DIV/0!", "#N/A", "#NUM!", "#NULL!")
+_SAYS_WRONG = (r"\b(?:incorrect|wrong|not work\w*|doesn'?t work|does not work|isn'?t working|is not working|"
+               r"not (?:giving|returning|showing|calculating)|fix(?:ed)?|error|broken)\b")
+
+
+def _recalc_formulas(path, tmp: str) -> dict | None:
+    """{(sheet, cell): (formula text, value after a LibreOffice recalculation)} for every formula cell of a workbook;
+    None when it cannot be done here (no LibreOffice, no openpyxl, a timeout)."""
+    try:
+        import subprocess
+        import openpyxl
+        from meshpool_harness import office_runtime
+    except ImportError:
+        return None
+    exe = office_runtime.find_soffice()
+    if not exe:
+        return None
+    try:
+        wb = openpyxl.load_workbook(path)
+        forms = {}
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                for c in row:
+                    v = c.value
+                    t = getattr(v, "text", v)              # an array formula keeps its text in .text
+                    if isinstance(t, str) and t.startswith("="):
+                        forms[(ws.title, c.coordinate)] = t
+        if not forms or len(forms) > 5000:
+            return {} if not forms else None
+        out = Path(tmp) / Path(path).parent.name
+        out.mkdir(parents=True, exist_ok=True)
+        kw = {"creationflags": 0x08000000} if os.name == "nt" else {}
+        prof = Path(tmp) / "lo-profile"                   # its own profile: never blocked by a LibreOffice already open
+        subprocess.run([exe, f"-env:UserInstallation={prof.as_uri()}", "--headless", "--calc", "--convert-to", "xlsx",
+                        "--outdir", str(out), str(path)], capture_output=True, timeout=90, **kw)
+        made = out / Path(path).name
+        if not made.is_file():
+            return None
+        vals = openpyxl.load_workbook(made, data_only=True)
+        return {k: (f, vals[k[0]][k[1]].value if k[0] in vals.sheetnames else None) for k, f in forms.items()}
+    except Exception:  # noqa: BLE001 - a check that cannot run says nothing
+        return None
+
+
+def _formula_result_miss(asked: str, root, since: float) -> str:
+    """Workbooks written this turn, recalculated through LibreOffice: a formula the turn wrote or changed that comes
+    out as an Excel error, or (when the request says its formula is wrong) a changed formula whose result is the same
+    as the original's; as a note, else "". SpreadsheetBench sb-56921: the direct route checks formulas by their text,
+    and 3 of 6 runs handed back a fix that gave #VALUE! or the same 511 the user called wrong."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    import tempfile
+    text = str(asked or "").split(_SEP)[0]
+    try:
+        outs = _recent_office(root, since, ".xlsx")[:4]
+        if not outs:
+            return ""
+        inputs = [Path(root) / n for n in re.findall(r"[\w][\w.()-]*\.xlsx\b", text)
+                  if (Path(root) / n).is_file() and (Path(root) / n).stat().st_mtime < since]
+        says_wrong = bool(re.search(_SAYS_WRONG, text, re.I))
+        errors, same = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            base = {}
+            for i, f in enumerate(inputs[:2]):
+                r = _recalc_formulas(f, str(Path(tmp) / f"in{i}"))
+                if r:
+                    base.update(r)
+            for i, f in enumerate(outs):
+                if f in inputs:
+                    continue
+                got = _recalc_formulas(f, str(Path(tmp) / f"out{i}"))
+                for k, (form, val) in (got or {}).items():
+                    old = base.get(k)
+                    if old is not None and old[0].replace(" ", "") == form.replace(" ", ""):
+                        continue                          # a formula the turn left alone is not its doing
+                    if isinstance(val, str) and val.strip() in _XL_ERRORS:
+                        errors.append(f"{f.name} {k[0]}!{k[1]} = {val.strip()}")
+                    elif says_wrong and old is not None and val is not None and val == old[1]:
+                        same.append(f"{f.name} {k[0]}!{k[1]} = {val!r}")
+    except Exception:  # noqa: BLE001
+        return ""
+    if errors:
+        return ("The job is not done: recalculated, formulas you wrote come out as errors (" + "; ".join(errors[:4]) +
+                "). Fix them so they compute what the request asks (check range sizes and anchoring with $), save and "
+                "check the recalculated values.")
+    if same:
+        return ("The job is not done: recalculated, your changed formulas give the same results as the ones the user "
+                "says are wrong (" + "; ".join(same[:4]) + "). Work out the value the request expects for one row by "
+                "hand, write a formula that gives it, save and check the recalculated value.")
+    return ""
+
+
 # A message about a web page or an app's interface: the browser tools (open, click, screenshot, ui_audit) join the chat.
 _WEB_ASK = (r"\b(?:browser|web ?page|website|web app|webapp|landing page|front[- ]?end|frontend|html|css|ui|ux|"
             r"screenshot|localhost|https?://|click|button|form|layout|responsive|dark mode|playwright|selenium)\b")
@@ -2443,7 +2534,8 @@ class Agent:
                                            ("template", lambda: _template_format_miss(ask, self.root, t0)),
                                            ("offslide", lambda: _off_slide_miss(self.root, t0)),
                                            ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0)),
-                                           ("volatile", lambda: _volatile_date_miss(ask, self.root, t0))):
+                                           ("volatile", lambda: _volatile_date_miss(ask, self.root, t0)),
+                                           ("formula", lambda: _formula_result_miss(ask, self.root, t0))):
                             if key not in done:
                                 miss = check()
                                 if miss:

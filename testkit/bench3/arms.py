@@ -186,6 +186,7 @@ def write_mp_config(home: Path, base_url: str, model: str) -> dict:
 def _mp_env(mp_src, home, base_url, model) -> dict:
     e = write_mp_config(Path(home), base_url, model)
     e["PYTHONPATH"] = str(mp_src) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else "")
+    e.setdefault("MH_ALLOW_SYSTEM_SOFFICE", "1")       # the shipped app bundles LibreOffice; a source run uses the system's
     return _env(e)
 
 
