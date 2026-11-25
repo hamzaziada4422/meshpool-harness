@@ -635,6 +635,25 @@ def _sse_spec(spec: dict) -> bool:
 
 # ---------- one server ---------------------------------------------------------------------------------------------
 
+_WRITE_WORDS = re.compile(r"(^|[_\-.])(create|update|delete|remove|send|post|write|add|set|put|patch|edit|move|merge|"
+                          r"archive|close|reopen|assign|invite|upload|publish|cancel|approve|reply|comment|insert|"
+                          r"modify|rename|transfer|trigger|run|execute|start|stop|pause|resume|mark|label|draft|"
+                          r"schedule|share|duplicate|enable|disable|batch|bulk|forward|trash|untrash)([_\-.]|$)", re.I)
+
+
+def read_only_tools(tools: list[dict]) -> list[dict]:
+    """The tools of a connector in read-only mode: those the server marks readOnlyHint, and, when it marks none,
+    those whose names do not say they change something (create, update, delete, send...)."""
+    def ok(t):
+        ann = t.get("annotations") or {}
+        if ann.get("readOnlyHint") is True:
+            return True
+        if ann.get("readOnlyHint") is False or ann.get("destructiveHint") is True:
+            return False
+        return not _WRITE_WORDS.search(str(t.get("name") or ""))
+    return [t for t in tools if ok(t)]
+
+
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         self.name, self.spec = name, _expand(spec)
@@ -745,6 +764,8 @@ class Server:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
                 self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                if self.spec.get("read_only"):     # Settings, Connectors: read only
+                    self.tools = read_only_tools(self.tools)
                 self.status = "connected"
         except Exception as e:
             with self._lock:

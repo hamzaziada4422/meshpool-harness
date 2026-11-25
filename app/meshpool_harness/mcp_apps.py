@@ -626,6 +626,7 @@ def listing() -> list[dict]:
                      "needs_client": bool(c.get("needs_client")), "client_help": c.get("client_help", ""),
                      "category": c.get("category", ""),
                      "enabled": connected and st.get(c["id"], True),
+                     "read_only": bool(_read(_state_file()).get("read_only", {}).get(c["id"])),
                      "expired": bool((store.get(c["id"]) or {}).get("expired"))})
     return rows
 
@@ -635,6 +636,15 @@ def set_enabled(cid: str, on: bool):
     with _LOCK:
         st = _read(_state_file())
         st.setdefault("enabled", {})[cid] = bool(on)
+        _write(_state_file(), st)
+
+
+def set_read_only(cid: str, on: bool):
+    """Chats use only the connector's read tools (mcp.read_only_tools)."""
+    get(cid)
+    with _LOCK:
+        st = _read(_state_file())
+        st.setdefault("read_only", {})[cid] = bool(on)
         _write(_state_file(), st)
 
 
@@ -669,13 +679,15 @@ def servers() -> dict:
     """Connected, enabled connectors as MCP server specs with a fresh Authorization header."""
     out = {}
     st = _read(_state_file()).get("enabled", {})
+    st_ro = _read(_state_file()).get("read_only", {})
     for c in _all():
         on = st.get(c["id"]) if c["auth"] == "none" else st.get(c["id"], True)   # open servers: only once turned on
         if not on:
             continue
         spec = spec_for(c["id"])
         if spec:
-            out[c["id"]] = dict(spec, description=f"{c['name']}: {c['description']}", timeout=120, connector=True)
+            out[c["id"]] = dict(spec, description=f"{c['name']}: {c['description']}", timeout=120, connector=True,
+                                **({"read_only": True} if st_ro.get(c["id"]) else {}))
     return out
 
 

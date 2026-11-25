@@ -2099,7 +2099,7 @@ async function renderSection(sec) {
     const row = c => {
       const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
       const own = c.needs_client && !c.own_client && !c.connected;
-      const btn = c.connected ? `<label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
+      const btn = c.connected ? `<label class="chk" title="Chats can read from it but not change anything: its create, update, delete and send tools are left out"><input type="checkbox" data-ro="${esc(c.id)}" ${c.read_only ? "checked" : ""}> Read only</label><label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
         : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
         : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
       return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
@@ -2188,6 +2188,7 @@ async function renderSection(sec) {
       });
       $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); const t = await act({action: "check", id: x.dataset.save}); if (t) say(t.ok ? `Connected: ${t.tools.length} tools.` : t.error, t.ok ? "ok" : "bad"); } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
+      $$("[data-ro]", b).forEach(x => x.onchange = async () => { const r = await act({action: "read_only", id: x.dataset.ro, on: x.checked}); if (r) { draw(r.connectors); say(x.checked ? "Read only: new chats get only its read tools." : "New chats get all its tools again.", "ok"); } });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Chats stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
     draw((await api("/api/connectors")).connectors);

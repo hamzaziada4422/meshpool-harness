@@ -977,6 +977,8 @@ class Handler(BaseHTTPRequestHandler):
                     CN.set_token(cid, tok)
                 elif act == "enable":
                     CN.set_enabled(cid, bool(b.get("on")))
+                elif act == "read_only":
+                    CN.set_read_only(cid, bool(b.get("on")))
                 elif act == "disconnect":
                     CN.disconnect(cid)
                 C.load_into_env(override=True)
