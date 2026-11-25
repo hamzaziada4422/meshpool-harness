@@ -871,7 +871,11 @@ def _sse_spec(spec: dict) -> bool:
 # start its own: five chats, five processes, each importing its libraries at once. Now chats on the same folder share
 # one process; it starts on the first tool call (the tool list comes from a cache on disk), a chat that closes lets
 # go of it, and one nobody has used for MH_MCP_IDLE_S seconds (60) is stopped and starts again on the next call.
-# Browser and computer servers keep per-chat state (pages, the screen), so they stay one process per chat.
+# Browser and computer servers keep per-chat state (pages, the screen), so they stay one process per chat. An app
+# chat's browser (MH_CHAT_ID in its env, so its key is its own) is pooled too, only to start on its first call instead
+# of when the chat opens; it is never stopped for being idle (it would lose the pages and sign-ins), only when the chat
+# closes. The app's office and assistant servers serve every chat from one process: the chat's folder and id go with
+# each call (_project, _chat), not in the process's environment, which would make one process per chat again.
 
 _STATEFUL = ("browser", "computer")
 _POOL: dict[str, "_Entry"] = {}
@@ -890,6 +894,7 @@ class _Entry:
         self.refs: set = set()           # the Server objects (chats) using it
         self.inflight = 0
         self.last = time.time()
+        self.keep = False                # a stateful server (a chat's browser): never stopped for being idle
         self._n = 0
 
     def next_id(self) -> int:
@@ -924,7 +929,7 @@ def _reap_loop():
             entries = list(_POOL.values())
         for e in entries:
             with e.lock:
-                if limit > 0 and e.t is not None and not e.inflight and time.time() - e.last > limit:
+                if limit > 0 and e.t is not None and not e.inflight and not e.keep and time.time() - e.last > limit:
                     e.stop()                          # idle: no process, no CPU; the next call starts it again
 
 
@@ -980,6 +985,9 @@ def _cache_file() -> Path:
 
 
 def _cache_key(name: str, spec: dict) -> str:
+    env = spec.get("env")
+    if isinstance(env, dict) and "MH_CHAT_ID" in env:   # the tool list is the same for every chat
+        spec = {**spec, "env": {k: v for k, v in env.items() if k != "MH_CHAT_ID"} or None}
     stamp = ""
     try:
         stamp = str(int(max(f.stat().st_mtime for f in Path(__file__).parent.glob("*_mcp_server.py"))))
@@ -1089,9 +1097,15 @@ class Server:
         self._inflight: dict[int, object] = {}   # request id -> transport, for Stop (notifications/cancelled)
         self.timed_out = False                 # the start only ran out of time: not a verdict on the server
 
+    def _stateful(self) -> bool:
+        return any(w in self.name.lower() for w in _STATEFUL)
+
     def _poolable(self) -> bool:
-        return (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
-                and not any(w in self.name.lower() for w in _STATEFUL) and os.environ.get("MH_MCP_POOL", "1") != "0")
+        if not (bool(self.spec.get("command")) and not self.spec.get("url") and self.spec.get("shared", True) is not False
+                and os.environ.get("MH_MCP_POOL", "1") != "0"):
+            return False
+        env = self.spec.get("env")                 # a stateful server only with a chat of its own (its own pool key)
+        return not self._stateful() or (isinstance(env, dict) and bool(env.get("MH_CHAT_ID")))
 
     def _join_pool(self):
         key = _pool_key(self.spec, self.roots)
@@ -1099,6 +1113,7 @@ class Server:
             e = _POOL.setdefault(key, _Entry())
         with e.lock:
             e.refs.add(id(self))
+            e.keep = e.keep or self._stateful()
         self._entry, self._key = e, key
         _ensure_reaper()
 
@@ -1313,7 +1328,7 @@ class Server:
                 if self.spec.get("read_only"):     # Settings, Connectors: read only
                     self.tools = read_only_tools(self.tools)
                 self.status = "connected"
-            if self._entry is not None and self.tools:
+            if self.spec.get("command") and self.tools:   # a private one too: a chat's browser then starts lazily
                 save_tools(self.name, self.spec, self.tools, self.info)
         except Exception as e:
             with self._lock:
@@ -1365,6 +1380,8 @@ class Server:
                 model = ""
             if model:
                 args["_model"] = str(model)                  # the chat's model, for engines that call one
+            if self.spec.get("chat_id"):
+                args["_chat"] = str(self.spec["chat_id"])    # the chat it serves (one process serves every chat)
         r = self._rpc("tools/call", {"name": tool, "arguments": args}, float(self.spec.get("timeout", 120)))
         images: list[dict] = []
         parts = []
@@ -1487,10 +1504,16 @@ class Manager:
 
     def _with_chat(self, spec: dict) -> dict:
         """The browser server learns which chat it serves, so the app can find its live view; the assistant server
-        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat."""
-        if self.chat and any(x in str(a) for a in spec.get("args") or []
-                             for x in ("browser_mcp_server", "assistant_mcp_server", "office_mcp_server")):
+        learns it to schedule tasks in the chat's own mode; the office server, so its builds are counted per chat.
+        The office and assistant servers get it with each call (_chat, as they get the folder): an id in their
+        environment made one process per chat, each started when the chat opened."""
+        args = [str(a) for a in spec.get("args") or []]
+        if not self.chat:
+            return spec
+        if any("browser_mcp_server" in a for a in args):
             return {**spec, "env": {**(spec.get("env") or {}), "MH_CHAT_ID": self.chat}}
+        if any(x in a for a in args for x in ("assistant_mcp_server", "office_mcp_server")):
+            return {**spec, "per_call_project": True, "chat_id": self.chat}
         return spec
 
     def _rebuild(self):

@@ -700,7 +700,6 @@ def _env_snapshot(root: Path) -> str:
     """Harness v3: a short look at the project and the tools on this computer, so the first steps are not spent
     finding them. Cross-platform, a few seconds at most."""
     import shutil
-    import subprocess
     lines = []
     try:
         names = sorted(p.name + ("/" if p.is_dir() else "") for p in root.iterdir() if not p.name.startswith(".git"))
@@ -720,14 +719,9 @@ def _env_snapshot(root: Path) -> str:
         exe = shutil.which(tool)
         if not exe or (tool == "python" and any(v.startswith("python3") for v in vers)):
             continue
-        try:
-            r = subprocess.run([exe, arg], capture_output=True, text=True, timeout=3,
-                               creationflags=0x08000000 if os.name == "nt" else 0)
-            v = (r.stdout or r.stderr).strip().splitlines()
-            if v and r.returncode == 0:
-                vers.append(f"{tool}: {v[0][:80]}")
-        except Exception:  # noqa: BLE001
-            pass
+        got = C.program_version(exe, arg)               # asked once per program file, not once per chat
+        if got and got[0] == 0 and got[1]:
+            vers.append(f"{tool}: {got[1][:80]}")
     if vers:
         lines.append("Tools: " + "; ".join(vers))
     return "\n".join(lines)

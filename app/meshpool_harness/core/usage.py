@@ -530,6 +530,8 @@ def budget_cost(model: str, norm: dict, base: str = "") -> float:
 _TASKS: dict[tuple[str, str], "Task"] = {}
 _TASKS_LOCK = threading.Lock()
 _CUR: contextvars.ContextVar = contextvars.ContextVar("meshpool_usage_task", default=None)
+# the chat a call of a shared server serves (one office or assistant process serves every chat): MH_CHAT_ID per call
+_CHAT: contextvars.ContextVar = contextvars.ContextVar("meshpool_usage_chat", default="")
 
 
 def _safe(s: str, n: int = 60) -> str:
@@ -784,7 +786,7 @@ def current() -> tuple[Task | None, str]:
     if tid:
         task, src = get_task(tid), os.environ.get("MH_USAGE_SOURCE") or "chat"
     if task is None:
-        chat = os.environ.get("MH_CHAT_ID")
+        chat = _CHAT.get() or os.environ.get("MH_CHAT_ID")
         if chat:
             task = _pointer_task(chat)
             if task is not None:
@@ -803,6 +805,21 @@ def bind(task: Task | None, source: str = "chat") -> Iterator[None]:
         yield
     finally:
         _CUR.reset(tok)
+
+
+@contextlib.contextmanager
+def bind_chat(chat: str | None) -> Iterator[None]:
+    """Usage recorded inside counts for this chat, as MH_CHAT_ID does for a server process of its own."""
+    tok = _CHAT.set(str(chat or ""))
+    try:
+        yield
+    finally:
+        _CHAT.reset(tok)
+
+
+def chat_task(chat: str) -> Task | None:
+    """The usage task a chat's current turn records into (the app's pointer file), or None."""
+    return _pointer_task(chat) if chat else None
 
 
 def over_budget(task) -> "BudgetExceeded | None":
@@ -966,7 +983,7 @@ def record(model: str, raw_usage: dict | None, *, base: str = "", source: str | 
             from urllib.parse import urlparse
             host = urlparse(base).netloc
         rec = {"v": 1, "id": uuid.uuid4().hex, "ts": ts,
-               "chat": task.chat if task else os.environ.get("MH_CHAT_ID", ""),
+               "chat": task.chat if task else (_CHAT.get() or os.environ.get("MH_CHAT_ID", "")),
                "task": task.id if task else "", "source": source or cur_src, "model": _bare(model), "host": host,
                "in": norm["in"], "cached": norm["cached"], "cache_write": norm["cache_write"], "out": norm["out"],
                "reasoning": norm["reasoning"], "reported": bool(norm["reported"]), "est": est, "cost": cost,

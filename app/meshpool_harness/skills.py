@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import zipfile
 from pathlib import Path
 
@@ -254,28 +255,84 @@ def load_all(include_disabled: bool = True) -> list[dict]:
     ensure_defaults()
     off = _disabled()
     out = []
-    for d in sorted(folder().iterdir()) if folder().exists() else []:
-        f = d / "SKILL.md"
-        if not d.is_dir() or d.name.startswith(".") or not f.is_file():
-            continue
+    base = folder()
+    try:
+        names = sorted((e.name for e in os.scandir(base) if e.is_dir() and not e.name.startswith(".")),
+                       key=os.path.normcase)              # the order sorted(Path) gave (no case on Windows)
+    except OSError:
+        names = []
+    for name in names:
+        d = os.path.join(base, name)
+        f = os.path.join(d, "SKILL.md")
         try:
-            raw = f.read_text(encoding="utf-8", errors="replace")
-            meta, body = parse(raw)
-        except OSError:
+            row = _skill_row(d, f)
+        except OSError:                               # no SKILL.md (or not a file): not a skill
             continue
-        sid = d.name
-        row = {"id": sid, "name": meta.get("name") or sid, "description": meta.get("description", ""),
-               "when": meta.get("when_to_use") or meta.get("when-to-use") or "",
-               "model_ok": not _flag(meta, "disable-model-invocation", False),   # only when the user asks for it
-               "user_ok": _flag(meta, "user-invocable", True),                   # only the model loads it
-               "disallowed": _front_list(raw, "disallowed-tools", "disallowed_tools"),
-               "paths": _front_list(raw, "paths"),
-               "argument_hint": meta.get("argument-hint") or meta.get("argument_hint") or "",
-               "enabled": sid not in off, "path": str(f),
-               "files": sorted(str(p.relative_to(d)) for p in d.rglob("*") if p.is_file() and p.name != "SKILL.md")[:50]}
+        row["enabled"] = row["id"] not in off
         if include_disabled or row["enabled"]:
             out.append(row)
     return out
+
+
+# A skill's row, kept while its folder, its SKILL.md and every folder inside it are unchanged (modification time, size,
+# inode). The agent asks for the skills list several times per step (tool list, on-demand check, file hints): with 130
+# skills each time read and YAML-parsed every SKILL.md and walked every folder, 40 ms a time, about 1.6 s of CPU in a
+# ten-step turn.
+_ROWS: dict = {}
+_RACY_NS = 3_000_000_000             # a file changed this recently may change again in the same clock tick: not kept
+
+
+def _stamp(paths) -> tuple:
+    out = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            out.append((st.st_mtime_ns, st.st_size, st.st_ino, stat.S_ISREG(st.st_mode)))
+        except OSError:
+            out.append(None)
+    return tuple(out)
+
+
+def _copy(row: dict) -> dict:
+    return {k: (list(v) if isinstance(v, list) else v) for k, v in row.items()}
+
+
+def _skill_row(d: str, f: str) -> dict:
+    """A skill folder's row (enabled not set). OSError when it has no SKILL.md file."""
+    import time
+    hit = _ROWS.get(d)
+    if hit is not None and _stamp([d, f, *hit[2]]) == hit[0]:
+        return _copy(hit[1])
+    now = time.time_ns()
+    before = _stamp([d, f])
+    if before[1] is None or not before[1][3]:
+        _ROWS.pop(d, None)
+        raise OSError(f"no SKILL.md in {d}")
+    d, f = Path(d), Path(f)
+    raw = f.read_text(encoding="utf-8", errors="replace")
+    meta, _body = parse(raw)
+    files, subdirs = [], []
+    for p in d.rglob("*"):
+        if p.is_dir():
+            subdirs.append(p)                        # a file added in there changes that folder's time
+        elif p.is_file() and p.name != "SKILL.md":
+            files.append(str(p.relative_to(d)))
+    sid = d.name
+    row = {"id": sid, "name": meta.get("name") or sid, "description": meta.get("description", ""),
+           "when": meta.get("when_to_use") or meta.get("when-to-use") or "",
+           "model_ok": not _flag(meta, "disable-model-invocation", False),   # only when the user asks for it
+           "user_ok": _flag(meta, "user-invocable", True),                   # only the model loads it
+           "disallowed": _front_list(raw, "disallowed-tools", "disallowed_tools"),
+           "paths": _front_list(raw, "paths"),
+           "argument_hint": meta.get("argument-hint") or meta.get("argument_hint") or "",
+           "enabled": True, "path": str(f), "files": sorted(files)[:50]}
+    subdirs = [str(p) for p in subdirs]
+    stamp = _stamp([str(d), str(f), *subdirs])
+    if stamp[:2] == before and all(s is not None and s[0] < now - _RACY_NS for s in stamp):
+        _ROWS[str(d)] = (stamp, _copy(row), subdirs)
+    else:
+        _ROWS.pop(str(d), None)
+    return row
 
 
 def enabled() -> list[dict]:
