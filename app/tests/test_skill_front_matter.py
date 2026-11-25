@@ -88,3 +88,28 @@ def test_disallowed_tools_hold_for_the_turn(home, tmp_path, monkeypatch):
     assert a._permit("read_file", {"path": "a.txt"})[0] is True
     a._skill_block = {}                                   # a new turn starts clear
     assert a._permit("bash", {"command": "ls"})[0] is True
+
+
+def test_review_and_simplify_commands(home, tmp_path, monkeypatch):
+    from meshpool_harness.agent import extras as EX
+    from meshpool_harness.agent.core import Agent
+    from meshpool_harness.agent import core as K
+    assert "at most 5 findings" in EX.review_prompt("quick")
+    assert "at most 25 findings" in EX.review_prompt("deep") and "callers" not in EX.review_prompt("quick")
+    p = EX.review_prompt("deep --max 3 src/app.py")
+    assert p.startswith("Review src/app.py.") and "at most 3 findings" in p and "Do not edit" in p
+    assert "at most 10 findings" in EX.review_prompt("") and "git diff" in EX.review_prompt("")
+    assert "without changing what it does" in EX.simplify_prompt("calc.py")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    monkeypatch.setattr(K, "SESSIONS", tmp_path / "sessions")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    sent = []
+    monkeypatch.setattr(Agent, "_turn", lambda self: sent.append(self.messages[-1]["content"]) or "ok")
+    a = Agent(str(proj), mode="auto")
+    a.send("/review quick")
+    assert "at most 5 findings" in sent[-1]
+    (proj / ".meshpool" / "commands").mkdir(parents=True)
+    (proj / ".meshpool" / "commands" / "review.md").write_text("Our own review checklist.")
+    a.send("/review")
+    assert "Our own review checklist" in sent[-1]                 # a command file of yours wins

@@ -1640,6 +1640,9 @@ class Agent:
             text = cmd
         elif os.environ.get("MH_NO_COMMANDS") == "1":
             pass
+        elif isinstance(text, str) and re.match(r"^/(review|simplify)(\s|$)", text):
+            name, _, rest = text[1:].partition(" ")       # built in: /review [quick|deep] [--max N], /simplify
+            text = EX.review_prompt(rest) if name == "review" else EX.simplify_prompt(rest)
         elif isinstance(text, str) and text.startswith("/mcp__") and getattr(self, "mcp", None) is not None \
                 and hasattr(self.mcp, "expand_prompt"):
             try:                                          # /mcp__server__prompt: a connected app's ready-made request

@@ -37,6 +37,8 @@ COMMANDS = [
     ("clear", "", "start a new conversation in this folder"),
     ("compact", "[what to keep]", "summarize earlier steps to free context; say what to keep in full"),
     ("grade", "", "have an independent reviewer check the last piece of work"),
+    ("review", "[quick|deep] [--max N] [what]", "review the current changes for bugs, ranked by severity"),
+    ("simplify", "[what]", "make the changed code simpler without changing what it does"),
     ("status", "", "model, folder, access mode, usage"),
     ("doctor", "", "find problems in settings, hooks, rules, MCP servers, skills and sub-agents"),
     ("auto", "[ask|edits|auto]", "set what the agent may do without asking"),
@@ -1541,6 +1543,12 @@ class Session:
 
     def cmd_mcp(self, arg):
         _mcp_status(self.term, self.mcp)
+
+    def cmd_review(self, arg):
+        self.send(("/review " + arg).strip())           # the agent expands it (a command file of yours wins)
+
+    def cmd_simplify(self, arg):
+        self.send(("/simplify " + arg).strip())
 
     def cmd_init(self, arg):
         self.send("Look at this project (layout, languages, how to install, build, run and test it, and its "

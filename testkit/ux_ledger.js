@@ -199,6 +199,9 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
     store("thinking", "show"); store("codecolor", "on"); applyAppearance(); col.remove(); return r;
   });
   check("reasoning can be hidden and code colours turned off", ap[0] && ap[1], JSON.stringify(ap));
+  const rv = await p.evaluate(() => [reviewPrompt("deep --max 3 the parser"), reviewPrompt(""), simplifyPrompt("")]);
+  check("/review takes a depth and a findings cap; /simplify exists", /At most 3 findings/.test(rv[0]) && /tests/.test(rv[0]) &&
+        /Focus on: the parser/.test(rv[0]) && /At most 10 findings/.test(rv[1]) && /without changing what it does/.test(rv[2]), rv[0]);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

@@ -601,7 +601,8 @@ const SLASH = [
   ["/plan", "Turn plan mode on or off", () => setPlan(!cfg().plan)],
   ["/goal", "Set a goal: the agent keeps going until it is done (/goal clear ends it)", arg => goalCmd(arg)],
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
-  ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
+  ["/review", "Review this branch's changes for bugs (/review quick or deep, --max N, what to focus on)", arg => sendCmd(reviewPrompt(arg))],
+  ["/simplify", "Make the changed code simpler without changing what it does (/simplify what)", arg => sendCmd(simplifyPrompt(arg))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
   ["/add-dir", "Let the agent read and edit in another folder too (/add-dir path)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
@@ -638,6 +639,20 @@ async function runSlash(text) {
   if (!hit) return false; hit[2](text.slice(cmd.length).trim()); return true;
 }
 const REVIEW_PROMPT = "Review the changes on this branch against the branch it merges into: find the base with git, read `git diff <base>...HEAD` and the changed files in full. Look for correctness bugs, security problems, missing tests and anything that would break on Mac or Windows. Report findings most severe first, each with file:line, what goes wrong and the fix. Do not change any files.";
+const REVIEW_LEVELS = {quick: [5, "Look at the changed lines and the lines right around them. Report only findings you are sure of."],
+  standard: [10, ""], deep: [25, "Also read the code that calls what changed and its tests, run the tests if there is an obvious command, and think through empty, large and failing inputs and concurrent use."]};
+function reviewPrompt(arg) {                              // /review [quick|deep] [--max N] [focus], like the terminal's
+  const w = String(arg || "").split(/\s+/).filter(Boolean);
+  const level = REVIEW_LEVELS[(w[0] || "").toLowerCase()] ? w.shift().toLowerCase() : "standard";
+  let cap = REVIEW_LEVELS[level][0];
+  const i = w.indexOf("--max");
+  if (i >= 0) { const n = parseInt(w[i + 1], 10); if (n > 0) { cap = Math.min(100, n); w.splice(i, 2); } else w.splice(i, 1); }
+  const focus = w.join(" ");
+  return REVIEW_PROMPT + (REVIEW_LEVELS[level][1] ? " " + REVIEW_LEVELS[level][1] : "") + ` At most ${cap} findings.` + (focus ? ` Focus on: ${focus}.` : "");
+}
+function simplifyPrompt(what) {
+  return `Look at ${what || "the current changes (git diff and git diff --staged)"}. Make the changed code simpler without changing what it does: reuse helpers the project already has instead of new copies, remove dead code and needless layers, and fix plain inefficiencies. Leave public names and formats as they are. Do not hunt for bugs. Make the edits, run the tests if there is an obvious command, and list what you changed.`;
+}
 function qaPrompt(where) {
   return `Do a UI and UX pass of ${where || "the app in this project"}. If it is not running, start it the way its README or package.json says. Open it with the browser tools and click through every page and control at desktop width (1280x800) and phone width (390x844), in light and dark mode if it has both. Take a screenshot of each problem. Report issues most severe first: what you saw, the screenshot, the likely cause (file:line) and the fix. Look for broken flows, console errors, overlapping or cut-off elements, poor contrast, small tap targets, missing empty, loading and error states, and unclear wording. Do not change any files.`;
 }

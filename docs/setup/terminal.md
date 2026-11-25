@@ -30,6 +30,10 @@
 
 `/plan` (or `--permission-mode plan`) makes the agent read and plan without changing anything. Each plan it writes is also saved as a Markdown file in `plans/` in meshpool's data folder. `/plan open` shows the last one's path. Settings, Plans folder (`MH_PLANS_DIR`) picks another folder, and `off` saves none.
 
+## Reviews
+
+`/review` reviews the current changes and reports findings, most severe first, without editing anything. `/review quick` looks only at the changed lines and reports at most 5 findings; `/review deep` also reads the callers and tests and reports up to 25; the default reports up to 10. `--max N` sets the cap, and anything after it says what to review. `/simplify` makes the changed code simpler without changing what it does. A command file of your own with the same name wins. Both work in the app too.
+
 ## Checking your setup
 
 `meshpool doctor` (or `/doctor` in a session) reads meshpool's settings file, hooks, saved rules, MCP server lists, skills, sub-agents and instruction files, for you and for the current folder, and lists what is broken or ignored. It changes nothing. It exits with 1 when it finds an error.

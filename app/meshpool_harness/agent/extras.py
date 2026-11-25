@@ -346,6 +346,49 @@ def run_hooks(root: Path, event: str, payload: dict, tool: str = "", args: dict 
     return r["blocked"], r["message"]
 
 
+# ---------------------------------------------------------------- built-in review commands
+REVIEW_LEVELS = {
+    "quick": (5, "Look at the changed lines and the lines right around them. Report only findings you are sure of."),
+    "standard": (10, "Read each changed file around the edits, not only the diff lines."),
+    "deep": (25, "Read each changed file, the code that calls what changed, and its tests. Run the tests if there is an "
+                 "obvious command. Think through empty, large and failing inputs and concurrent use."),
+}
+
+
+def review_prompt(arg: str = "") -> str:
+    """/review [quick|standard|deep] [--max N] [what]: the request for a code review at that depth, with a cap on
+    the number of findings (5, 10 and 25 by default)."""
+    words = str(arg or "").split()
+    level = "standard"
+    if words and words[0].lower() in REVIEW_LEVELS:
+        level = words.pop(0).lower()
+    cap = REVIEW_LEVELS[level][0]
+    if "--max" in words:
+        i = words.index("--max")
+        try:
+            cap = max(1, min(100, int(words[i + 1])))
+            del words[i:i + 2]
+        except (IndexError, ValueError):
+            del words[i]
+    target = " ".join(words).strip()
+    what = f"Review {target}." if target else ("Review the current changes: git status, git diff and git diff --staged "
+                                               "(or, with no changes, the last commit).")
+    return (f"{what} {REVIEW_LEVELS[level][1]} Look for wrong logic, unhandled errors and edge cases, security problems "
+            "(secrets, injection, unsafe file or shell use), breaking changes and behaviour that changed without a "
+            f"test. Report at most {cap} findings, most severe first, each with the file and line, what goes wrong "
+            "and when, and a concrete fix. Say plainly if you found nothing serious. Do not edit any file.")
+
+
+def simplify_prompt(arg: str = "") -> str:
+    """/simplify [what]: make changed code simpler, with the same behaviour."""
+    target = str(arg or "").strip()
+    what = f"Look at {target}." if target else "Look at the current changes (git diff and git diff --staged)."
+    return (f"{what} Make the changed code simpler without changing what it does: reuse helpers the project already "
+            "has instead of new copies, remove dead code and needless layers, and fix plain inefficiencies. Leave "
+            "public names and formats as they are. Do not hunt for bugs. Make the edits, run the tests if there is an "
+            "obvious command, and list what you changed.")
+
+
 # ---------------------------------------------------------------- custom commands
 def command_dirs(root: Path) -> list[Path]:
     return [Path(root) / ".meshpool" / "commands", C.home() / "commands"]
