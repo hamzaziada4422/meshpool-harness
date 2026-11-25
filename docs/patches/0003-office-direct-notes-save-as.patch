@@ -1,4 +1,4 @@
-From 7e4c961ee09b5c7c83e68de1265537ef84ee0817 Mon Sep 17 00:00:00 2001
+From 0055e54687df7ac8ab2cdd54568ce9ee91e97c0b Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Wed, 25 Nov 2026 03:27:59 +0000
 Subject: [PATCH] Office direct: notes name the libraries, not engine tools;
@@ -9,8 +9,9 @@ Subject: [PATCH] Office direct: notes name the libraries, not engine tools;
  app/meshpool_harness/assistant.py             | 17 ++++-
  app/meshpool_harness/capabilities.py          | 25 ++++++-
  app/meshpool_harness/ui/agent_api.py          | 17 ++++-
+ app/tests/test_ask_user.py                    |  2 +-
  app/tests/test_office_direct_notes.py         | 73 +++++++++++++++++++
- 5 files changed, 165 insertions(+), 20 deletions(-)
+ 6 files changed, 166 insertions(+), 21 deletions(-)
  create mode 100644 app/tests/test_office_direct_notes.py
 
 diff --git a/app/meshpool_harness/agent/office_mcp_server.py b/app/meshpool_harness/agent/office_mcp_server.py
@@ -257,6 +258,19 @@ index 55e35db6..d240eff0 100644
  
                          def spend_ctx(pid=pid, ex=ex):
                              self.ctx_pending = False
+diff --git a/app/tests/test_ask_user.py b/app/tests/test_ask_user.py
+index 17143496..97aefb00 100644
+--- a/app/tests/test_ask_user.py
++++ b/app/tests/test_ask_user.py
+@@ -245,7 +245,7 @@ def test_brief_settled_request_builds():
+ def test_make_deck_tool(monkeypatch):
+     from meshpool_harness.agent import office_mcp_server as O
+     calls = []
+-    monkeypatch.setattr(O, "_engine", lambda engine, request, files: (calls.append(request) or ("built", False)))
++    monkeypatch.setattr(O, "_engine", lambda engine, request, files, save_as=None: (calls.append(request) or ("built", False)))
+     text, err = O.make_deck("Make a deck about our Q3 results")
+     assert not err and text.startswith("BRIEF NEEDED") and not calls          # ambiguous: does not build
+     text, err = O.make_deck("Q3 results deck", audience="the board", density="present", slides=8, theme="ocean")
 diff --git a/app/tests/test_office_direct_notes.py b/app/tests/test_office_direct_notes.py
 new file mode 100644
 index 00000000..ef7c45de
