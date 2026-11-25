@@ -17,8 +17,9 @@ def _trusted(monkeypatch, tmp_path, hooks: dict):
 
 
 def test_new_events_are_known():
-    for e in ("PermissionDenied", "StopFailure", "DirectoryAdded", "CwdChanged", "InstructionsLoaded"):
+    for e in ("PermissionDenied", "StopFailure", "DirectoryAdded", "InstructionsLoaded", "WorktreeCreate", "WorktreeRemove"):
         assert e in EX.EVENTS
+    assert "CwdChanged" not in EX.EVENTS              # never fired, so not offered
 
 
 def test_exec_form_runs_without_a_shell(tmp_path, monkeypatch):

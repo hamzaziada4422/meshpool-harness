@@ -33,7 +33,7 @@ OTHER = (".cursorrules", ".windsurfrules", ".github/copilot-instructions.md", ".
 MAX_FILE, MAX_ALL = 20000, 40000
 EVENTS = ("PreToolUse", "PostToolUse", "PostToolUseFailure", "UserPromptSubmit", "Stop", "SessionStart", "SessionEnd",
           "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Notification", "WorktreeCreate",
-          "WorktreeRemove", "PermissionDenied", "StopFailure", "DirectoryAdded", "CwdChanged", "InstructionsLoaded")
+          "WorktreeRemove", "PermissionDenied", "StopFailure", "DirectoryAdded", "InstructionsLoaded")
 _ONCE: set = set()                                       # hooks marked "once" that already ran (per session)
 _ONCE_LOCK = threading.Lock()
 

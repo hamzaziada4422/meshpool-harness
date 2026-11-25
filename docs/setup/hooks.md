@@ -30,8 +30,7 @@ Each hook gets the event as JSON on its standard input: `event`, `tool`, `args`,
 | `Notification` | When meshpool shows a desktop notification. | `message`, `kind` |
 | `InstructionsLoaded` | When a subfolder's instructions or scoped rules load. Its output is passed to the agent. | `path`, `instructions` |
 | `DirectoryAdded` | After `/add-dir` adds a folder. | `path` |
-| `CwdChanged` | After a chat moves to a worktree or back. | `from`, `to` |
-| `WorktreeCreate`, `WorktreeRemove` | After meshpool makes or removes a worktree. | |
+| `WorktreeCreate`, `WorktreeRemove` | After meshpool makes or removes an isolated copy for a chat, a sub-agent, a scheduled run or `meshpool -w` ([worktrees](worktrees.md)). They run in the folder the copy came from. | `worktree` (`id`, `kind`, `workdir`, `path`, `branch`, `source`, `title`) |
 
 ## Options
 

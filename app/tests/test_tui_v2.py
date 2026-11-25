@@ -292,6 +292,9 @@ def test_slash_commands(monkeypatch, tmp_path):
     assert a.mode == "edits"
     sess.command("/access ask")                     # the old /mode name is now /access (and /permissions)
     assert a.mode == "ask"
+    sess.command("/permissions edits")              # with a mode it sets it; bare, it lists the saved rules
+    assert a.mode == "edits"
+    sess.command("/permissions ask")
     sess.command("/auto edits")
     sess.command("/model gpt-x")
     assert a.model == "gpt-x"

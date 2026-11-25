@@ -9,7 +9,8 @@
 - `--max-turns` stops after that many tool steps.
 - `--mcp-config` adds MCP servers for this run only. With `--strict-mcp-config`, only those servers start, not your saved ones or the project's.
 - `--settings FILE` applies meshpool settings for this run, from a JSON object or `KEY=VALUE` lines. Other flags still win.
-- `--agent NAME` works as one of your [saved sub-agents](sub-agents.md): its instructions, tools and model.
+- `--subagent NAME` works as one of your [saved sub-agents](sub-agents.md): its instructions, tools and model.
+- `--agent ID` picks the agent that runs the session, an id from `meshpool agents` such as `meshpool-code`, `meshpool-work` or `codex`.
 - `--disable-slash-commands` turns off custom commands, server prompts and skills for the run.
 - Piped input is added to the request: `cat notes.txt | meshpool -p "summarise this"`.
 
@@ -25,6 +26,7 @@
 - `--session-id ID` gives a new session the id you choose (letters, digits, `-` and `_`). With `--fork-session` it names the new session.
 - `--no-session-persistence`, with `-p`, keeps nothing of the run on disk.
 - `-n NAME` names the session.
+- `-w` (or `--worktree`) starts a new session in an isolated copy of the folder, so it does not change files other chats are using. See [worktrees](worktrees.md).
 
 ## Plans
 

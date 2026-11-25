@@ -1309,6 +1309,25 @@ def _rule_hit(rules: list, name: str, args: dict, deny: bool = False) -> str:
     return ""
 
 
+def _allow_hit(rules: list, name: str, args: dict) -> str:
+    """An allow rule that covers this call. A command rule covers one plain command only: never one chained or
+    redirected (; && || | < > ( ) { } $ and backquotes), never one with a control or non-ASCII character (a carriage
+    return separates statements in PowerShell), never one with a glob on a path. bash_many is allowed only when
+    every command is covered on its own."""
+    cmds = [str(c) for c in (args.get("commands") or [])] if name == "bash_many" else []
+    if cmds:
+        hits = [_allow_hit(rules, "bash", {"command": c}) for c in cmds]
+        return hits[0] if all(hits) else ""
+    hit = _rule_hit(rules, name, args)
+    if hit.startswith("bash:"):
+        from meshpool_harness.core import permrules as PR
+        for cmd in PR.commands_of(name, args) or [str(args.get("command") or args.get("cmd") or "")]:
+            if (_CHAINED.search(cmd) and not _CHAINED.search(hit[5:])) or re.search(r"[^\x20-\x7e]", cmd) or \
+                    (re.search(r"[*?\[]", cmd) and re.search(r"/|(^|\s)\.", cmd)):
+                return ""
+    return hit
+
+
 _SEGMENT = re.compile(r"&&|\|\||[;|&\n\r`]|\$\(|\)|\{|\}")
 # Wrappers that run the command after them: (options that take a value, plain flags). A value is the next word
 # unless joined (-uroot, --user=root). An option a wrapper does not list makes the reading uncertain, and then every
@@ -2508,10 +2527,12 @@ class Agent:
         model calls are recorded in the turn's usage task."""
         box: dict = {}
         cid = getattr(T._LIVE, "cid", "")                 # the step a command's live output belongs to
+        aux = getattr(_AUX, "on", False)                  # a /btw call stays a side call in the worker thread
         cx = contextvars.copy_context()
 
         def run():
             T._LIVE.cid = cid
+            _AUX.on = aux
             try:
                 box["v"] = cx.run(fn, *a, **kw)
             except BaseException as e:  # noqa: BLE001  re-raised in the caller's thread
@@ -5517,12 +5538,12 @@ class Agent:
             return True, " ".join(n for n in notes if n)
         if hk["allow"] and not _destructive(args, self.root):
             return True, ""
-        if _rule_hit(rules["allow"], name, args) and not _destructive(args, self.root):
+        if _allow_hit(rules["allow"], name, args) and not _destructive(args, self.root):
             return True, ""
         risky = self._outside(name, args) if self.mode != "auto" else ""
         destr = self._mcp_destructive(name)       # the connector itself says this deletes or overwrites
         if self.mode == "auto" and _destructive(args, self.root):        # OSS-18: Full access still asks about these ...
-            if _rule_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
+            if _allow_hit([r for r in rules["allow"] if r.startswith("bash:")], name, args):
                 return True, ""          # ... unless the user allowlisted this command ("bash:rm -rf build*"; a bare
             risky = risky or "destructive"                    # "bash" or --allowed-tools bash allows the tool, not this)
         if name == "diagnostics" and self.mode != "auto" and not risky:

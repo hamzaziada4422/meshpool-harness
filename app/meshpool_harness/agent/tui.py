@@ -82,7 +82,7 @@ COMMANDS = [
     ("setup", "", "first-run walkthrough: key, folder, skills"),
     ("exit", "", "quit"),
 ]
-ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "permissions": "auto", "cost": "usage", "tokens": "usage"}
+ALIASES = {"quit": "exit", "q": "exit", "access": "auto", "cost": "usage", "tokens": "usage"}
 MODES = ["ask", "edits", "auto"]
 PLACEHOLDERS = ["fix the failing test in tests/", "explain how this project is organised",
                 "add a --verbose flag to the CLI", "find where errors are logged", "write tests for <filepath>"]
@@ -849,15 +849,6 @@ class Terminal:
                         j = len(buf[:cur].rstrip(" "))
                         j = buf.rfind(" ", 0, j) + 1
                         s["buf"], s["cur"] = buf[:j] + buf[cur:], j
-                    elif k == "word_left":
-                        j = len(buf[:cur].rstrip(" "))
-                        s["cur"] = buf.rfind(" ", 0, j) + 1
-                    elif k == "word_right":
-                        j = buf.find(" ", cur)
-                        j = len(buf) if j < 0 else j
-                        while j < len(buf) and buf[j] == " ":
-                            j += 1
-                        s["cur"] = j
                     elif k in ("up", "ctrl_p"):
                         recalled = h < len(self.history) and buf == self.history[h]   # walking history, not the menu
                         if menu and not recalled:
@@ -1535,12 +1526,14 @@ class Session(SharedCommands):
                    else "  Plan mode is off."))
 
     def cmd_permissions(self, arg):
+        if arg.strip():                            # /permissions ask|edits|auto still sets the mode, as /access does
+            return self.cmd_auto(arg)
         from meshpool_harness import trust as TR
         from meshpool_harness.agent import core as A
         t, st = self.term, self.term.st
         root = str(getattr(self.agent, "root", os.getcwd()))
         rules = A._rules(root)
-        rows = [""]
+        rows = ["", f"  {st.bold('Mode')}: {getattr(self.agent, 'mode', 'ask')} " + st.dim("(change it with /auto)")]
         for k, label in (("allow", "Allow"), ("ask", "Always ask"), ("deny", "Deny")):
             rows.append(f"  {st.bold(label)}: " + (", ".join(rules[k]) if rules[k] else st.dim("none")))
         rows.append(f"  {st.bold('This session')}: " + (", ".join(sorted(getattr(self.agent, 'always', set()) or []))

@@ -110,7 +110,7 @@ irm https://raw.githubusercontent.com/hamzaziada4422/meshpool-harness/main/insta
 - **Quiet suggestions.** At most one short nudge at a time, only when a chat ends or you open the app, and always with what Meshpool saw. Switch it off in Settings.
 - **Receipts.** Time, cost where known, the agent chosen and the checks that ran, under each reply.
 - **Scheduled tasks and parallel sub-agents.**
-- **Worktrees:** a task, a sub-agent or each scheduled run can work in its own checkout and branch, so it never edits your working copy ([worktrees](docs/setup/worktrees.md)).
+- **Isolated copies:** a Code chat, a terminal session (`meshpool -w`), sub-agents that edit at the same time and each scheduled run on a git folder can work in a copy of their own (a git worktree, or a plain copy without git), so they never edit your working copy. You review the diff, then merge or discard ([worktrees](docs/setup/worktrees.md)).
 - **meshpool in Excel, PowerPoint and Word** (new, not yet checked in real Office): a panel on the Home tab that answers about your selection and inserts the answer ([setup](docs/setup/office-add-in.md)).
 - **You stay in control:** Enter adds to the task, Interrupt redirects it, Esc stops, and Undo reverses any reply.
 - **For scripts and your own setup:** one-shot runs with JSON output ([terminal](docs/setup/terminal.md)), [hooks](docs/setup/hooks.md), [skills](docs/setup/skills.md) and [sub-agents](docs/setup/sub-agents.md).

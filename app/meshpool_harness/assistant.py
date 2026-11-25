@@ -639,6 +639,8 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
         from meshpool_harness import cron as CR
         try:
             nxt = CR.next_after(t.get("cron") or "", now)
+            if nxt and nxt.timestamp() <= datetime.now().timestamp():   # a slow call or a clock change: never the past
+                nxt = CR.next_after(t.get("cron") or "", datetime.now().replace(second=0, microsecond=0))
         except CR.CronError:
             return None
         return nxt.timestamp() if nxt else None

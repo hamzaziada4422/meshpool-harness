@@ -1,15 +1,11 @@
-"""Fixes for the reviews of PR 20: the order of the permission checks, wrapped commands, worktrees in use, the Office
-panel's reach, unknown saved sub-agents and the mode of a branched chat. Each test is one finding, with its attack."""
-import json
-import os
+"""Fixes for the reviews of PR 20: the order of the permission checks, wrapped commands, the Office panel's reach and
+unknown saved sub-agents. Each test is one finding, with its attack. (0.0.17: the tests for the branch's own worktree
+design went with it; main's worktrees have their own tests in test_worktrees.py.)"""
 import subprocess
-import threading
-import time
 from pathlib import Path
 
 import pytest
 
-from meshpool_harness import worktrees as WT
 from meshpool_harness.agent import core
 
 PUSH = "git " + "push"                       # spelled apart: some tools refuse a literal push in a command line
@@ -104,35 +100,6 @@ def repo(env):
     return r
 
 
-def test_prune_never_removes_a_worktree_in_use(env, repo, monkeypatch):
-    import gc
-    monkeypatch.setenv("MH_WORKTREE_KEEP", "1")
-    sa = WT.create(repo, "sa")
-    os.utime(sa["path"], (time.time() - 100, time.time() - 100))
-    agent = core.Agent(sa["path"], approve=lambda *x: ("no", ""), mode="ask")   # a chat works in sa
-    assert WT.in_use(sa["path"])
-    sb = WT.create(repo, "sb")
-    assert Path(sa["path"]).is_dir() and "sa" not in sb["pruned"]
-    del agent
-    gc.collect()                                                          # the chat is gone: sa may go now
-    assert not WT.in_use(sa["path"])
-    assert WT.prune(repo, 1) == ["sa"]
-
-
-def test_a_worktree_held_by_another_live_process_is_kept(env, repo):
-    w = WT.create(repo, "other")
-    adm = WT._admin(Path(w["path"]).resolve())
-    p = subprocess.Popen(["sleep", "30"])
-    try:
-        (adm / f"meshpool-in-use-{p.pid}").write_text("x")
-        assert WT.in_use(w["path"])
-    finally:
-        p.kill()
-        p.wait()
-    assert not WT.in_use(w["path"])                                       # it ended: the marker is stale
-    assert not list(adm.glob("meshpool-in-use-*"))
-
-
 # 6. the Office panel's token reaches only the chats the panel started
 def test_the_office_token_reaches_only_the_panels_own_chats(monkeypatch):
     import io
@@ -176,32 +143,6 @@ def test_an_unknown_saved_sub_agent_never_gets_the_full_tool_set(env, monkeypatc
         d._child("sub-1", 0, {"trace": [], "errors": [], "usage": {}})
 
 
-# 7b. a branch of a chat keeps the chat's permission mode
-def test_a_branch_keeps_the_chats_mode(monkeypatch):
-    from meshpool_harness.ui import agent_api as A
-
-    class Src:
-        lock = threading.Lock()
-        events = [{"type": "user", "text": "hi"}, {"type": "assistant", "text": "hello"}]
-        state, workdir, kind, mode = "idle", "/tmp", "code", "ask"
-        harness = {"id": "meshpool-code"}
-        agent = type("Ag", (), {"mode": "ask"})()
-    got = []
-
-    class Done(Exception):
-        pass
-
-    def create(body):
-        got.append(body)
-        raise Done
-    monkeypatch.setattr(A, "get", lambda sid: Src())
-    monkeypatch.setattr(A, "read_meta", lambda sid: {})
-    monkeypatch.setattr(A, "create", create)
-    with pytest.raises(Done):
-        A.fork("x")
-    assert got[0]["mode"] == "ask"
-
-
 # ---------------------------------------------------------------- second review (code-review of pr20-fixes)
 # R1. options before -c (long ones, -o/-O values, --rcfile) and $'...' quoting
 @pytest.mark.parametrize("cmd", [
@@ -229,66 +170,6 @@ def test_deny_rules_see_command_paths_and_more_wrappers(env, monkeypatch, cmd):
     assert not a._permit("bash", {"command": cmd})[0], cmd
 
 
-def _wt_agent(env, asked):
-    main = env / "repo"
-    wt = main / ".meshpool" / "worktrees" / "w1"
-    (wt / "src").mkdir(parents=True)
-    a = core.Agent(str(wt), approve=lambda *x: (asked.append(x), ("no", ""))[1], mode="auto")
-    return a, main, wt
-
-
-# R3. the shell tool's workdir counts: outside the worktree it reaches the main checkout
-def test_shell_workdir_outside_the_worktree_asks(env):
-    asked = []
-    a, main, wt = _wt_agent(env, asked)
-    assert not a._permit("shell", {"command": ["git", "reset", "--hard"], "workdir": "../../.."})[0] and asked
-    assert not a._permit("shell", {"command": ["ls"], "workdir": str(main)})[0]
-    assert a._permit("shell", {"command": ["ls"], "workdir": "src"})[0]           # inside the worktree: fine
-
-
-# R4. git -C after other global options, and cd ../../.. without a trailing slash
-@pytest.mark.parametrize("cmd", [
-    "git --no-pager -C ../../.. reset --hard", "git -c x=y -C ../../.. reset --hard",
-    "git -c x=y --git-dir=../../../.git log", "cd ../../.. && git reset --hard", "cd ../../..; ls",
-    "cd ..; cd ..; cd ..; git reset --hard", "cd ../.. && cd .. && rm -rf a.txt", "sudo git -p -C .. status",
-])
-def test_main_checkout_guard_sees_every_spelling(env, cmd):
-    asked = []
-    a, main, wt = _wt_agent(env, asked)
-    assert not a._permit("bash", {"command": cmd})[0] and asked, cmd
-
-
-def test_main_checkout_guard_leaves_the_worktree_alone(env):
-    asked = []
-    a, main, wt = _wt_agent(env, asked)
-    (env / "elsewhere").mkdir()
-    for cmd in ("cd src && ls", "cd src; cd .. && ls", f"cd {env / 'elsewhere'} && ls", "git status", "git log -1"):
-        assert a._permit("bash", {"command": cmd})[0], cmd
-
-
-# R5. a GC release racing a new hold never deletes the new holder's marker
-def test_a_release_racing_a_hold_keeps_the_new_holders_marker(env, repo, monkeypatch):
-    w = WT.create(repo, "race")
-    top = Path(w["path"]).resolve()
-    marker = WT._admin(top) / f"meshpool-in-use-{os.getpid()}"
-    WT.hold(top)
-    real, fired = WT._admin, []
-
-    def admin(t):                                     # while the release runs, another thread starts a chat there
-        if not fired:
-            fired.append(1)
-            th = threading.Thread(target=WT.hold, args=(top,))
-            th.start()
-            th.join(2)
-        return real(t)
-    monkeypatch.setattr(WT, "_admin", admin)
-    WT.release(top)
-    monkeypatch.setattr(WT, "_admin", real)
-    assert WT._HELD.get(str(top)) == 1 and marker.exists()                  # a CLI prune still sees it in use
-    WT.release(top)
-    assert not marker.exists()
-
-
 # R6. the approval prompt shows the shell tool's script and workdir, not a list
 def test_approval_prompts_show_the_shell_script_and_workdir(env, monkeypatch):
     monkeypatch.setenv("MH_ASK", f"bash:{PUSH}*")
@@ -298,7 +179,7 @@ def test_approval_prompts_show_the_shell_script_and_workdir(env, monkeypatch):
     assert asked[-1][2] == f"cd sub && {PUSH}"
     monkeypatch.delenv("MH_ASK")
     asked2 = []
-    b, main, wt = _wt_agent(env, asked2)
+    b = core.Agent(str(env / "proj"), approve=lambda *x: (asked2.append(x), ("no", ""))[1], mode="auto")
     b._permit("shell", {"command": ["git", "reset", "--hard"], "workdir": "../../.."})
     assert asked2[-1][2] == "cd ../../.. && git reset --hard"
 
@@ -328,9 +209,10 @@ def test_a_deleted_chat_drops_out_of_the_office_list(monkeypatch, tmp_path):
     from meshpool_harness.ui import server as S
     monkeypatch.setattr(S, "OFFICE_CHATS", {"gone"})
     monkeypatch.setattr(A, "DELETED", set())
-    monkeypatch.setattr(A, "read_meta", lambda sid: {"x": 1})
     monkeypatch.setattr(A, "LIVE", {})
     monkeypatch.setattr(A, "SESSIONS", tmp_path / "sessions")
+    (tmp_path / "sessions" / "gone").mkdir(parents=True)    # the chat exists (0.0.16 refuses unknown ids)
+    monkeypatch.setattr(A, "_grace", lambda: 0)             # no undo window: gone at once
     A.thread_action("gone", {"action": "delete"})
     assert "gone" not in S.OFFICE_CHATS
     S.OFFICE_CHATS.add("gone")                         # a stale entry is refused at the gate too

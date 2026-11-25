@@ -1113,12 +1113,14 @@ class Server:
                                 e.stop()
                         raise MCPError(f"{er.get('message', 'error')} (code {er.get('code')})")
                     e.info = (msg.get("result") or {}).get("serverInfo") or {}
+                    e.caps = (msg.get("result") or {}).get("capabilities") or {}   # resources, prompts
                     t.notify("notifications/initialized")
                     e.ready = True
         with e.lock:
             if self.closed or e.t is not t or not e.ready:
                 raise MCPError("closed" if self.closed else t._exit_reason())
             self.t, self.info = e.t, e.info
+            self.caps = getattr(e, "caps", None) or {}
             e.last = time.time()
 
     def _rpc(self, method, params, timeout):

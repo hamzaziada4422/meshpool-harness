@@ -37,6 +37,9 @@ def trust_post(b: dict) -> tuple[int, dict]:
     return 200, TR.status(root)
 
 
+RULE_LISTS = ("allow", "ask", "deny")
+
+
 def _rules_file() -> Path:
     from meshpool_harness import config as C
     return C.home() / "permissions.json"

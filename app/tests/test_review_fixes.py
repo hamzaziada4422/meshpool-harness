@@ -63,7 +63,7 @@ def test_save_with_nothing_narrow_is_allowed_once_only(env):                  # 
     a = core.Agent(str(env), approve=lambda *x: ("save", ""), mode="ask")
     assert a._permit("bash", {"command": "make && make install"}) == (True, "")
     a.approve = lambda *x: ("no", "")
-    assert not a._permit("bash", {"command": "ls -la"})[0]                 # nothing wider was allowed
+    assert not a._permit("bash", {"command": "make"})[0]                   # nothing wider was allowed
 
 
 def test_power_files_always_ask(env):                                         # M6
@@ -101,9 +101,13 @@ def test_chat_only_undo_trims_what_the_model_sees(env, monkeypatch):           #
             import time
             time.sleep(0.05)
     assert any("second answer" == m.get("content") for m in s.agent.messages)
-    s.revert(2, "chat")
+    with A.LOCK:
+        A.LIVE[s.id] = s                                                     # the chat as the app holds it
+    A.session_action(s.id, "revert", {"turn": 2, "what": "chat"})            # 0.0.17: through the app's action
     assert not any("second answer" == m.get("content") for m in s.agent.messages)
     assert any("first answer" == m.get("content") for m in s.agent.messages)
+    with A.LOCK:
+        A.LIVE.pop(s.id, None)
     s.close()
 
 
@@ -337,7 +341,7 @@ def test_no_worktrees_in_a_repo_whose_git_runs_programs(env):                   
                    cwd=r, check=True)
     subprocess.run(["git", "-C", str(r), "config", "core.fsmonitor", "touch pwned"], check=True)
     with pytest.raises(WT.WorktreeError, match="run programs"):
-        WT.create(r, "x")
+        WT.create(r, owner_kind="cli")                  # 0.0.17: main's worktrees, the same refusal
 
 
 
@@ -463,11 +467,13 @@ def test_old_partial_text_never_joins_a_new_turn(env, monkeypatch):             
 def test_a_next_run_is_never_in_the_past(monkeypatch):                            # third review, 12
     from meshpool_harness import assistant as AS
     import time as _t
+    from datetime import datetime, timedelta
+    from meshpool_harness import cron as CRN
     calls = []
-    def fake(t, after=None):
+    def fake(expr, after):
         calls.append(after)
-        return _t.time() - 30 if len(calls) == 1 else _t.time() + 3600
-    monkeypatch.setattr(AS, "_next_run", fake)
+        return datetime.now() - timedelta(seconds=30) if len(calls) == 1 else datetime.now() + timedelta(hours=1)
+    monkeypatch.setattr(CRN, "next_after", fake)
     assert AS.next_run({"when": "cron", "cron": "0 1 * * *"}) > _t.time() and len(calls) == 2
 
 

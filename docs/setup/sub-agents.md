@@ -26,4 +26,6 @@ You are a strict reviewer. Report bugs and missing tests only, each with a file 
 
 Tools can be meshpool's names (`read_file`, `grep`, `bash`) or Claude Code's (`Read`, `Grep`, `Bash`). A definition can only narrow what a sub-agent may do: its tools are picked from the chat's own, and every action is checked the same way as the chat's.
 
-The chat sees the list of saved sub-agents in its instructions. In the terminal, `/agents` lists them. With `isolation: worktree`, a sub-agent that edits code works in its own git worktree (see [worktrees](worktrees.md)).
+The chat sees the list of saved sub-agents in its instructions. In the terminal, `/agents` lists them.
+
+When two or more sub-agents may edit files, each works in its own isolated copy of the project, and the chat applies their changes one by one when they finish (see [worktrees](worktrees.md)). There is no setting for this in a definition.

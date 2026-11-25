@@ -292,6 +292,8 @@ def safe_read(cmd: str, root) -> bool:
     if not w or re.match(r"^[A-Za-z_]\w*=", w[0]):
         return False
     prog, rest = os.path.basename(w[0]), w[1:]
+    if prog == "git" and not T.git_config_safe(root):
+        return False                      # the repository's own config can run programs (fsmonitor, pager, hooks)
     pos = [a for a in rest if not a.startswith("-")]
     if prog == "tree" and any(a.startswith("-") and not a.startswith("--") and "o" in a for a in rest):
         return False

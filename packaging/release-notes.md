@@ -5,6 +5,51 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Release builds are sturdier.** LibreOffice is downloaded from the main site when the archive site is down, still checked against its pinned checksum. The release smoke test now makes a real tool call: the v0.0.16 smoke test passed on a reply that held a tool error.
 - **The benchmark pages say what was measured.** The README and BENCHMARKS now carry the 0.0.16 office results against Codex (cheaper per solved task on every suite, fewer tasks solved on SpreadsheetBench and OfficeBench) instead of the older "not cheaper yet" line.
 - **Measured and left out.** A set of further office checks (a firmer second formula note, extracted values written as values, the unchanged named cell, a stricter re-run rule) was measured on Office-7, SpreadsheetBench and OfficeBench and did not beat 0.0.16 on cost per solved task, so it is not in this release. The agent itself is the same as in 0.0.16, and so are its results below.
+- **A project's own servers wait for your trust too.** The MCP servers a project lists in `.mcp.json` or `.meshpool/mcp.json` start only once you trust the folder, like its hooks and allow rules. The app now shows a note at the top of the chat with Trust this folder, and `meshpool trust`, `meshpool trust --revoke` and `meshpool trust --list` manage trusted folders from the command line.
+- **Always in this folder.** An approval can now save a narrow rule for this folder (this command, file edits, or one tool) in your own settings, so the next chat there does not ask again.
+- **Rules that always ask.** Next to allow and deny, a saved rule can now always ask, even with full access or an allow rule. Add one in Settings, Permissions.
+- **See the model think.** When the model sends its reasoning, meshpool's own agent shows it as it comes, in a Thinking block in the app and on the status line in the terminal.
+- **Live command output.** A command that is still running shows its output under its step as it comes, with keys and tokens hidden.
+- **Code blocks you can use.** Code in replies is coloured, with the language shown and a Copy button.
+- **Pictures in replies.** An image a reply names (a chart, a screenshot) shows in the reply; click it to open it.
+- **Faster typing.** `@` in the message box lists matching files in the chat's folder, and functions and classes after them. Up and Down in an empty box bring back what you sent. A long paste becomes a chip. A one-line message starting with `# ` is saved to memory. In the terminal: Up reaches prompts from earlier sessions in the same folder, Ctrl+R searches them, Ctrl+S stashes the prompt, Alt with an arrow moves by word, and `!command` runs a command and passes its output to the agent.
+- **Search inside files.** The Files panel search finds lines inside text files, not only file names.
+- **Continue after a restart.** If meshpool closed while a task ran, the note in the chat has a Continue button.
+- **meshpool in Excel, PowerPoint and Word (new, not yet checked in real Office).** A meshpool panel on the Home tab: ask about your selection, then insert the answer at the selection, in a new sheet, as a new slide, or in place of the selected text. Set it up in Settings, Plugins, Office apps, or with `meshpool office install`. It needs Microsoft 365, Office 2021 or later, or Office on the web.
+- **Git panel.** Stage and unstage single files, commit only what is staged, and see recent commits.
+- **Saved sub-agents.** Markdown files in `agents/`, `.claude/agents/` or `.meshpool/agents/` define named helpers with their own instructions, tools and model. They can preload skills, set an effort level, or work without the project's instructions. `/agents` lists them.
+- **Secrets stay off the screen.** Keys, tokens and passwords in tool output are hidden on screen and in saved chats. The model still reads the real output.
+- **Instructions in subfolders.** A subfolder's own `AGENTS.md` or `CLAUDE.md` applies the first time work reaches that folder.
+- **No idle sleep during a task**, and `/compact what to keep` tells the summary what to keep in full. The terminal prints what a session took when you leave. Search and the `@` picker leave out files git ignores.
+- **Ask on the side, work in two folders.** `/btw` asks a quick question without touching the running task. `/add-dir` lets the agent work in a second folder.
+- **Try again keeps the old answer.** Arrows under the reply switch between versions.
+- **Rules for some files only.** A rules file with `paths:` or `globs:` applies only when work touches a matching file.
+- **Safer outside content.** You can list the sites agents may read, and the sites they must never read. What the web and connected apps return is marked as untrusted. A connector can be set to read only.
+- **Smaller things.**
+  - Scheduled tasks take a cron expression.
+  - Chats can be kept for a set number of days.
+  - The agent can read MCP resources.
+  - Errors name the provider's request id.
+  - A reply cut off by a dropped connection is kept.
+  - You can set a line to add at the end of the agent's commits.
+  - The terminal can show your own status line.
+  - The Diff panel has a side-by-side view.
+- **Terminal.** Esc stops the agent while it works, and what you type meanwhile is kept for the next prompt. New commands: `/context`, `/export` and `/copy`.
+- **More instruction files.** `MESHPOOL.local.md` and `CLAUDE.local.md`, every file in `.meshpool/rules`, `.claude/rules` and `.cursor/rules`, and another agent's file (`GEMINI.md`, `.cursorrules`, `.github/copilot-instructions.md` and similar) when a project has none of its own.
+- **Hooks.** `SubagentStart`, `PostToolUseFailure`, `PostCompact`, `Notification`, `SessionEnd`, `PermissionDenied`, `StopFailure`, `DirectoryAdded` and `InstructionsLoaded` now run, and so do `WorktreeCreate` and `WorktreeRemove` when meshpool makes or removes an isolated copy. A hook can run a program directly with `args` (no shell), in the background with `async`, once a chat with `once`, and can change a tool call's arguments with `updatedInput` (your rules then judge the changed call). `SessionStart` also runs after a long chat is summarised. Settings, Run hooks turns every hook off. See docs/setup/hooks.md.
+- **Skills you can shape.** In a skill's front matter: `when_to_use`, `disable-model-invocation` (only when you ask for it with `$name`), `user-invocable: false`, arguments (`$ARGUMENTS`, `$1`), `disallowed-tools` and `paths`. A skill never grants itself permissions. See docs/setup/skills.md.
+- **Scripts and CI.** `--system-prompt` and `--system-prompt-file`, `--append-system-prompt-file`, `--session-id`, `--fork-session`, `--no-session-persistence`, `--settings`, `--mcp-config` and `--strict-mcp-config`, `--subagent` (work as one of your saved sub-agents), `--disable-slash-commands`, `-n` (`--name`), `meshpool mcp add-json` and `meshpool completion bash|zsh|fish`. See docs/setup/terminal.md.
+- **Check your setup.** `meshpool doctor` (or `/doctor`) finds broken settings, hooks, rules, MCP server lists, skills and sub-agents. It also names risky lines in skills you add or import, such as a download piped into a shell, and never opens key or credential files.
+- **Reviews.** `/review quick`, `/review` and `/review deep` report up to 5, 10 or 25 findings (`--max N` to change it), and `/simplify` makes changed code simpler without changing what it does. In the terminal and the app.
+- **Take back a message.** A message you send while the agent works can be taken back into the message box until the agent reads it.
+- **Plans as files.** Each plan from plan mode is also saved as a Markdown file. `/plan file` shows where.
+- **Connected apps.** A server's prompts work as commands (`/mcp__server__prompt`). A tool its server marks as one that deletes or overwrites data asks first in every mode.
+- **The agent import** can bring command hooks from Claude Code, unchecked until you pick them.
+- **Appearance.** Hide the model's reasoning, turn off code colours, or stop Esc from stopping a running task. Table previews sort by any column and filter rows.
+- **More settings.** Your own instructions for the summary of a long chat, instruction files to skip, a plans folder, and extra headers or query parameters for the model provider. The terminal window's title shows the folder and the chat. Search skips `.jj` and `.sl` folders.
+- **Steadier agent.** Search skips files git ignores and binary files, and every agent is told that what tools bring back is data, not instructions.
+
+Not in this version, though earlier notes or the ledger may suggest otherwise: a phone app, a hosted web app, sync across devices, voice input and read aloud, and a per-request cost from the meshpool endpoint (asked of the gateway team).
 
 **New in 0.0.16**
 - **Hundreds of bugs fixed.** A full audit of the app, the agent, the terminal and every engine found and fixed several hundred problems, each with a test. Among them: undo of a rename that only changes letter case, Stop on a helper agent no longer throws away a report it already finished, the Look question is asked again, Anthropic keys work when the saved address differs, and slides, intro pages, merger heatmaps and DCF sheets no longer overflow or point at the wrong cell.

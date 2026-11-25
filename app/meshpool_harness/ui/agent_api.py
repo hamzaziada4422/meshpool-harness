@@ -2814,6 +2814,10 @@ def thread_action(sid: str, body: dict) -> dict:
         except Exception:  # noqa: BLE001
             pass
     elif act == "delete":                             # soft: the server purges it after the grace, page or no page
+        import sys as _sys                            # the Office panel's token stops reaching it at once
+        _sv = _sys.modules.get("meshpool_harness.ui.server")
+        if _sv is not None and hasattr(_sv, "OFFICE_CHATS"):
+            _sv.OFFICE_CHATS.discard(sid)
         with _DEL_LOCK:
             if sid in DELETED:
                 raise KeyError("That chat no longer exists. Refresh the list.")
@@ -3129,7 +3133,7 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
             continue
         if last < cutoff:
             try:
-                thread_action(sid, {"action": "delete"})
+                _purge(sid, force=True)                  # no undo window: the user asked for chats this old to go
                 gone.append(sid)
             except Exception:  # noqa: BLE001
                 continue
