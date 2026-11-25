@@ -356,3 +356,132 @@ def test_compaction_keeps_what_the_user_asked_for():                          # 
                  {"role": "tool", "tool_call_id": f"c{i}", "content": "out " * 50}]
     r = CP.compact_history(msgs, client=Fake(), model="m", focus="the API design decisions")
     assert r and seen and seen[0].endswith("keep, in full detail: the API design decisions")
+
+
+def test_a_side_question_is_answered_and_kept_out_of_the_chat(env, monkeypatch):    # /btw
+    (env / "p").mkdir()
+    a = core.Agent(str(env / "p"), mode="auto")
+    a.messages += [{"role": "user", "content": "add retries"},
+                   {"role": "assistant", "content": "I put the retry logic in net/retry.py."}]
+    before = list(a.messages)
+    sent = []
+
+    def post(self, base, key, body, stream):
+        sent.append(body)
+        return {"choices": [{"message": {"content": "It is in net/retry.py."}}], "usage": {"prompt_tokens": 10}}, False
+    monkeypatch.setattr(core.Agent, "_post", post)
+    assert a.side_question("where is the retry logic?") == "It is in net/retry.py."
+    assert a.messages == before and "tools" not in sent[0]
+    assert "net/retry.py" in sent[0]["messages"][1]["content"] and sent[0]["messages"][1]["content"].endswith(
+        "where is the retry logic?")
+    with pytest.raises(ValueError, match="Ask something"):
+        a.side_question("  ")
+
+
+def test_commit_attribution_is_opt_in(env, monkeypatch):                        # GIT-058
+    (env / "p").mkdir()
+    monkeypatch.delenv("MH_COMMIT_TRAILER", raising=False)
+    assert "# Commits" not in core.Agent(str(env / "p"), mode="auto").system_prompt()
+    monkeypatch.setenv("MH_COMMIT_TRAILER", "Co-Authored-By: meshpool <noreply@example.com>")
+    sp = core.Agent(str(env / "p"), mode="auto").system_prompt()
+    assert "# Commits" in sp and sp.count("Co-Authored-By: meshpool <noreply@example.com>") == 1
+
+
+def test_add_dir_lets_the_agent_read_and_edit_another_folder(env):               # /add-dir
+    (env / "p").mkdir()
+    other = env / "shared-lib"
+    other.mkdir()
+    (other / "util.py").write_text("x = 1\n")
+    a = core.Agent(str(env / "p"), approve=lambda *x: ("no", ""), mode="ask")
+    assert a._outside("read_file", {"path": str(other / "util.py")})              # asks before
+    with pytest.raises(T.ToolError):
+        a.ws.write_file(str(other / "new.py"), "y = 2\n")
+    assert a.add_dir(str(other)) == str(other.resolve())
+    assert a._outside("read_file", {"path": str(other / "util.py")}) == ""
+    a.ws.write_file(str(other / "new.py"), "y = 2\n")
+    assert (other / "new.py").read_text() == "y = 2\n"
+    with pytest.raises(T.ToolError):                                                # never its .git
+        (other / ".git").mkdir()
+        a.ws.write_file(str(other / ".git" / "config"), "x")
+    with pytest.raises(ValueError):
+        a.add_dir(str(env / "missing"))
+
+
+@pytest.mark.parametrize("which", ["home_parent", "ssh", "meshpool_home", "git"])
+def test_add_dir_refuses_broad_private_and_own_folders(env, monkeypatch, which):   # third review, 5
+    (env / "p").mkdir()
+    home = env / "users" / "me"
+    (home / ".ssh").mkdir(parents=True)
+    monkeypatch.setattr(core.Path, "home", staticmethod(lambda: home))
+    (env / "repo" / ".git").mkdir(parents=True)
+    a = core.Agent(str(env / "p"), mode="auto")
+    target = {"home_parent": env / "users", "ssh": home / ".ssh", "meshpool_home": env / "home",
+              "git": env / "repo" / ".git"}[which]
+    with pytest.raises(ValueError):
+        a.add_dir(str(target))
+
+
+def test_add_dir_is_relative_to_the_project_kept_after_a_restart_and_safe_mid_turn(env):
+    (env / "p" / "libs" / "shared").mkdir(parents=True)
+    a = core.Agent(str(env / "p"), mode="auto")
+    got = a.add_dir("libs/shared")
+    assert got == str((env / "p" / "libs" / "shared").resolve())
+    b = core.Agent.resume(str(env / "p"), session_id=a.id)
+    assert b is not None and [str(x) for x in b.ws.extra_roots] == [got]       # kept after a restart
+    (env / "other").mkdir()
+    a._running = True                                                       # a turn is running: no message in between
+    n = len(a.messages)
+    a.add_dir(str(env / "other"))
+    assert len(a.messages) == n and a._inbox and "other" in a._inbox[-1][0]
+
+
+def test_a_side_question_does_not_take_over_stop(env, monkeypatch):              # third review, 7
+    (env / "p").mkdir()
+    a = core.Agent(str(env / "p"), mode="auto")
+    a._live = "the turn's stream"
+    a.last_request_id = "req_turn"
+    def post(self, base, key, body, stream):
+        assert getattr(core._AUX, "on", False)
+        return {"choices": [{"message": {"content": "ok"}}], "usage": {}}, False
+    monkeypatch.setattr(core.Agent, "_post", post)
+    assert a.side_question("what file?") == "ok"
+    assert a._live == "the turn's stream" and a.last_request_id == "req_turn" and not core._AUX.on
+
+
+def test_old_partial_text_never_joins_a_new_turn(env, monkeypatch):               # third review, 8
+    (env / "p").mkdir()
+    events = []
+    a = core.Agent(str(env / "p"), mode="auto", emit=events.append)
+    a._partial_text = "left over from a stopped turn"
+    def post(self, base, key, body, stream):
+        return {"choices": [{"message": {"content": "fresh"}, "finish_reason": "stop"}], "usage": {}}, False
+    monkeypatch.setattr(core.Agent, "_post", post)
+    a.send("hi")
+    assert not any("left over" in str(m.get("content")) for m in a.messages)
+
+
+def test_a_next_run_is_never_in_the_past(monkeypatch):                            # third review, 12
+    from meshpool_harness import assistant as AS
+    import time as _t
+    calls = []
+    def fake(t, after=None):
+        calls.append(after)
+        return _t.time() - 30 if len(calls) == 1 else _t.time() + 3600
+    monkeypatch.setattr(AS, "_next_run", fake)
+    assert AS.next_run({"when": "cron", "cron": "0 1 * * *"}) > _t.time() and len(calls) == 2
+
+
+def test_status_line_waits_for_trust_in_a_repo_whose_git_runs_programs(env, monkeypatch):   # third review, 10
+    import subprocess as _sp
+    from meshpool_harness.agent import tui as TUI
+    r = env / "repo"
+    r.mkdir()
+    _sp.run(["git", "init", "-q", str(r)], check=True)
+    _sp.run(["git", "-C", str(r), "config", "core.fsmonitor", "touch pwned"], check=True)
+    t = TUI.Terminal.__new__(TUI.Terminal)
+    t.cwd = str(r)
+    assert t._statusline_ok() is False
+    t2 = TUI.Terminal.__new__(TUI.Terminal)
+    t2.cwd = str(env / "p")
+    (env / "p").mkdir(exist_ok=True)
+    assert t2._statusline_ok() is True

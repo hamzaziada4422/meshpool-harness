@@ -468,7 +468,14 @@ function setupComposer() {
     if (e.key === "Escape" && !pop && cfg().busy && !$(".scrim")) { e.preventDefault(); stopNow(); }
   });
   inp.addEventListener("paste", e => {
-    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); }
+    const files = [...(e.clipboardData?.files || [])]; if (files.length) { e.preventDefault(); addAttachments(files); return; }
+    const t = e.clipboardData?.getData("text") || "", lines = t.split("\n").length;
+    if (t.length > 3000 || lines > 60) {                // a long paste: a chip that goes with the message, not a wall of text
+      e.preventDefault();
+      const n = S.attachments.filter(a => a.pasted).length + 1;
+      S.attachments.push({name: `Pasted text ${n} (${lines} line${lines === 1 ? "" : "s"})`, pasted: true, text: t});
+      renderAttach();
+    }
   });
   const c = $("#composer");
   c.addEventListener("dragover", e => { e.preventDefault(); c.classList.add("drag"); });
@@ -516,7 +523,11 @@ async function addAttachments(files) {
   renderAttach();
 }
 function renderAttach() {
-  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip">${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $("#attachRow").innerHTML = S.attachments.map((a, i) => `<span class="att-chip"${a.pasted ? ` title="${esc(a.text.slice(0, 600))}" data-paste="${i}"` : ""}>${a.image ? `<img src="data:${a.mime};base64,${a.data}" alt="">` : ICON.file}<span>${esc(a.name)}</span><button data-i="${i}" aria-label="Remove ${esc(a.name)}">×</button></span>`).join("");
+  $$("#attachRow [data-paste] > span").forEach(x => x.onclick = () => {     // put a pasted block back in the box
+    const i = +x.parentElement.dataset.paste, a = S.attachments[i], inp = $("#input");
+    S.attachments.splice(i, 1); inp.value += (inp.value ? "\n" : "") + a.text; inp.dispatchEvent(new Event("input")); renderAttach();
+  });
   $$("#attachRow button").forEach(b => b.onclick = () => { S.attachments.splice(+b.dataset.i, 1); renderAttach(); });
 }
 async function stopNow() {
@@ -536,6 +547,11 @@ async function sendNow(interrupt) {
   S.recall = null; rememberSent(typed);
   const busy = cfg().busy;
   if (text.startsWith("/") && await runSlash(text)) { inp.value = ""; inp.dispatchEvent(new Event("input")); return; }
+  if (/^#\s+\S/.test(text) && !text.includes("\n") && !S.attachments.length) {   // "# a fact": saved to memory, not sent
+    try { const r = await post("/api/memory", {action: "add", text: text.replace(/^#\s+/, "")}); inp.value = ""; inp.dispatchEvent(new Event("input")); toast(r.created ? "Saved to memory." : "Already in memory.", 3000, {label: "Memory", fn: () => goPage("memory")}); }
+    catch (e) { toast(e.message, 5000); }
+    return;
+  }
   if (!S.settings?.ready) { S.pendingGoal = null; showOnboarding(); return; }
   if (!S.cur && S.mode === "code" && !S.draft.project) { toast("Choose a folder or a repository first."); $("#envSel")?.click(); return; }
   const atts = S.attachments; S.attachments = []; renderAttach();
@@ -551,7 +567,8 @@ async function sendNow(interrupt) {
       openThread(v.id, true);
     }
     const cur = S.cur, root = curRoot();          // before any wait: the user may open another chat meanwhile
-    const files = atts.filter(a => !a.image);
+    for (const a of atts.filter(a => a.pasted)) text += `\n\n[${a.name}]\n\`\`\`\n${a.text}\n\`\`\``;
+    const files = atts.filter(a => !a.image && !a.pasted);
     if (files.length) {
       const saved = [];
       for (const f of files) { const r = await post("/api/attach", {root, name: f.name, data: f.data}); saved.push(r.path); }
@@ -586,6 +603,18 @@ const SLASH = [
   ["/usage", "Usage, by model and by chat", () => openSettings("usage")],
   ["/review", "Review this branch's changes for bugs (/review what to focus on)", arg => sendCmd(REVIEW_PROMPT + (arg ? ` Focus on: ${arg}.` : ""))],
   ["/qa", "Click through your app and report UI and UX problems (/qa address)", arg => sendCmd(qaPrompt(arg))],
+  ["/add-dir", "Let the agent read and edit in another folder too (/add-dir path)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    if (!arg) return toast("Type the folder's path after /add-dir.");
+    try { const r = await post(`/api/agent/${S.cur.id}/add_dir`, {path: arg}); toast(`The agent may now work in ${r.folder} too.`, 5000); } catch (e) { toast(e.message, 6000); }
+  }],
+  ["/btw", "A quick side question about this chat; the answer is not added to it (/btw your question)", async arg => {
+    if (!S.cur) return toast("Open a chat first.");
+    if (!arg) return toast("Type your question after /btw.");
+    toast("Asking on the side…", 2500);
+    try { const r = await post(`/api/agent/${S.cur.id}/btw`, {question: arg}); await ask({title: "By the way", text: r.answer, ok: "Close", cancel: "Copy"}) === false && navigator.clipboard?.writeText(r.answer); }
+    catch (e) { toast(e.message, 6000); }
+  }],
   ["/compact", "Summarize the earlier steps to free up room (/compact what to keep in full)", async arg => {
     if (!S.cur) return toast("Open a chat first.");
     try { const r = await post(`/api/agent/${S.cur.id}/compact`, {focus: arg || ""}); toast(r.compacted ? `Summarized ${r.compacted.removed} earlier messages.` : "Nothing to summarize yet."); } catch (e) { toast(e.message); }
@@ -686,15 +715,19 @@ function mentionPop(inp, v, pos, q) {
   if (!root) { if ($("#pop.inline")) closePop(); return; }
   clearTimeout(MENTION_T); MENTION_Q = q;
   MENTION_T = setTimeout(async () => {
-    let r; try { r = await api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`); } catch (e) { return; }
+    const sym = (q || "").length >= 2 ? api(`/api/fs/symbols?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q)}`).catch(() => ({results: []})) : Promise.resolve({results: []});
+    let r, s; try { [r, s] = await Promise.all([api(`/api/fs/search?root=${encodeURIComponent(root)}&q=${encodeURIComponent(q || ".")}`), sym]); } catch (e) { return; }
     if (MENTION_Q !== q || $("#input") !== inp) return;
-    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, 8);
-    if (!hits.length) { if ($("#pop.inline")) closePop(); return; }
-    inlinePop(hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => {
+    const put = text => {
       const cur = inp.value, p2 = inp.selectionStart, start = cur.lastIndexOf("@", p2 - 1);
-      inp.value = cur.slice(0, start) + "@" + h.path + " " + cur.slice(p2); inp.focus();
-      const c = start + h.path.length + 2; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
-    }})));
+      inp.value = cur.slice(0, start) + text + " " + cur.slice(p2); inp.focus();
+      const c = start + text.length + 1; inp.setSelectionRange(c, c); inp.dispatchEvent(new Event("input"));
+    };
+    const hits = (r.results || []).sort((a, b) => a.path.length - b.path.length).slice(0, (s.results || []).length ? 5 : 8);
+    const syms = (s.results || []).slice(0, 5);          // functions and classes: @path:line (name)
+    if (!hits.length && !syms.length) { if ($("#pop.inline")) closePop(); return; }
+    inlinePop([...hits.map(h => ({label: "@" + h.path, desc: h.dir ? "folder" : "", fn: () => put("@" + h.path)})),
+      ...syms.map(x => ({label: `${x.name}`, desc: `${x.kind} · ${x.path}:${x.line}`, fn: () => put(`@${x.path}:${x.line} (${x.kind} ${x.name})`)}))]);
   }, 120);
 }
 /* Up and Down in an empty composer walk back through the messages you sent (newest first), as in a terminal. */
@@ -1198,7 +1231,7 @@ function applyEv(ev) {
       if (String(ev.text).trim() === RESUME_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Picking up where it left off</span>`, "goalturn"); break; }
       if (String(ev.text).trim() === GOAL_NEXT) { closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; add(`${ICON.bolt}<span>Continuing toward the goal</span>`, "goalturn"); break; }
       if (ev.steer) { closeGroup(); add(`<div class="b"><span class="tag">Added while working</span><br>${esc(ev.text)}</div>`, "msg-user"); $("#queuedChip")?.remove(); break; }
-      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = [];
+      closeGroup(); cur.thought = null; cur.plan = null; cur.turn += 1; cur.activity = "Thinking"; cur.tpaths = []; cur.lastAi = null; cur.lastText = "";
       add(`<div class="macts" aria-hidden="false"><span class="mts">${cur.ready ? "just now" : ""}</span><button class="iconbtn" data-ma="edit" data-tip="Edit and send again" data-tip-pos="below" aria-label="Edit and send again">${ICON.pencil}</button><button class="iconbtn" data-ma="copy" data-tip="Copy" data-tip-pos="below" aria-label="Copy">${ICON.copy}</button></div><div class="b">${ev.plan ? `<span class="tag">Plan mode</span><br>` : ""}${esc(ev.text)}${ev.images && ev.images.length ? `<span class="att">${ICON.clip} ${ev.images.map(esc).join(", ")}</span>` : ""}</div>`, "msg-user");
       break; }
     case "text_delta":
@@ -1207,8 +1240,8 @@ function applyEv(ev) {
     case "stream_reset": if (cur.live) { cur.live.remove(); cur.live = null; cur.liveDirty = false; } break;
     case "assistant":
       { const txt = stripGoal(ev.text);
-      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
-      else if (txt) { closeGroup(); mdRender(add("", "msg-ai"), txt); } }
+      if (cur.live) { if (txt) { mdRender(cur.live, txt); easeEnd(cur.live); cur.lastAi = cur.live; } else cur.live.remove(); cur.live = null; cur.liveDirty = false; }
+      else if (txt) { closeGroup(); cur.lastAi = add("", "msg-ai"); mdRender(cur.lastAi, txt); } }
       cur.lastText = ev.text || cur.lastText;
       break;
     case "tool_start": {
@@ -1602,9 +1635,10 @@ async function panelDiff(body) {
   const turns = S.cur.view?.turns || [];
   const sel = S.diffTurn ?? "";
   body.innerHTML = `<div class="pbar"><select id="dturn" aria-label="Which changes"><option value="">All changes in this chat</option>${turns.slice().reverse().map(t => `<option value="${t.n}" ${+sel === t.n ? "selected" : ""}>Reply ${t.n}${t.title ? ": " + esc(clip(t.title, 50)) : ""}</option>`).join("")}</select>
-    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
+    <button class="btn" id="dref" title="Refresh">${ICON.refresh}</button><button class="btn" id="dsplit" aria-pressed="${store("diffSplit") === "1"}" title="Show old and new next to each other">${store("diffSplit") === "1" ? "Unified" : "Side by side"}</button>${sel && (turns.find(t => t.n === +sel)?.changed || []).length ? `<button class="btn danger" id="dundo">${ICON.undo} Undo</button>` : ""}</div><div id="dbody" class="pbody"><div class="pnote">Loading...</div></div>`;
   $("#dturn").onchange = () => { S.diffTurn = $("#dturn").value ? +$("#dturn").value : null; renderPanel(); };
   $("#dref").onclick = renderPanel;
+  $("#dsplit").onclick = () => { store("diffSplit", store("diffSplit") === "1" ? "0" : "1"); renderPanel(); };
   $("#dundo")?.addEventListener("click", () => undoTurn(+sel));
   try {
     const d = await api(`/api/agent/${S.cur.id}/diff${sel ? "?turn=" + sel : ""}`);
@@ -1612,9 +1646,39 @@ async function panelDiff(body) {
     const add = d.files.reduce((a, f) => a + (f.add || 0), 0), del = d.files.reduce((a, f) => a + (f.del || 0), 0);
     $("#dbody").innerHTML = `<div class="pnote" style="padding:8px 12px">${d.files.length} file${d.files.length === 1 ? "" : "s"} · <span style="color:var(--add)">+${add}</span> <span style="color:var(--del)">−${del}</span></div>
       <ul class="flist">${d.files.map((f, i) => `<li data-i="${i}"><span class="badge ${f.status}">${f.status[0].toUpperCase()}</span><span class="p">${esc(String(f.path).replace(/^"|"$/g, ""))}</span><span class="a">+${f.add || 0}</span><span class="r">−${f.del || 0}</span></li>`).join("")}</ul>
-      <pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`;
+      ${store("diffSplit") === "1" ? `<div class="sbs-wrap" id="patch">${splitHTML(d.patch)}</div>` : `<pre class="patch" id="patch">${patchHTML(d.patch)}</pre>`}`;
     $$("#dbody .flist li").forEach(li => li.onclick = () => { const f = d.files[+li.dataset.i]; const el = $(`#patch [data-file="${CSS.escape(f.path)}"]`); el?.scrollIntoView({block: "start"}); });
   } catch (e) { $("#dbody").innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
+}
+/* The same patch with old and new next to each other: removed lines on the left, added on the right, paired in
+   order within each run of changes; unchanged lines on both sides. */
+function splitHTML(p) {
+  const rows = []; let o = 0, n = 0, dels = [], adds = [];
+  const cell = (num, text, cls) => `<td class="ln">${num ?? ""}</td><td class="tx ${cls}">${text === null ? "" : esc(text) || " "}</td>`;
+  const flush = () => {
+    for (let i = 0; i < Math.max(dels.length, adds.length); i++) {
+      const d = dels[i], a = adds[i];
+      rows.push(`<tr>${d ? cell(d[0], d[1], "d") : cell(null, null, "e")}${a ? cell(a[0], a[1], "a") : cell(null, null, "e")}</tr>`);
+    }
+    dels = []; adds = [];
+  };
+  for (const l of String(p || "").split("\n")) {
+    if (l.startsWith("--- a/") || l.startsWith("--- /dev/null")) continue;
+    if (l.startsWith("+++ ") || l.startsWith("diff --meshpool")) {
+      flush();
+      const f = l.startsWith("+++ ") ? l.slice(4).replace(/^b\//, "") : (l.split(" b/")[1] || l);
+      rows.push(`<tr class="f" data-file="${esc(f)}"><td colspan="4">${esc(f)}</td></tr>`); continue;
+    }
+    const h = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+    if (h) { flush(); o = +h[1]; n = +h[2]; rows.push(`<tr class="h"><td colspan="4">${esc(l)}</td></tr>`); continue; }
+    if (l.startsWith("-")) { dels.push([o++, l.slice(1)]); continue; }
+    if (l.startsWith("+")) { adds.push([n++, l.slice(1)]); continue; }
+    flush();
+    if (l.startsWith("\\") || !l) continue;
+    const t = l.slice(1); rows.push(`<tr>${cell(o++, t, "")}${cell(n++, t, "")}</tr>`);
+  }
+  flush();
+  return `<table class="sbs">${rows.join("")}</table>`;
 }
 function patchHTML(p) {
   return String(p || "").split("\n").map(l => {
@@ -2004,7 +2068,8 @@ async function renderSection(sec) {
         <div class="sform">
           <input id="tsName" placeholder="Name, for example Morning AI news" spellcheck="false">
           <textarea id="tsPrompt" rows="3" placeholder="What should it do? For example: Find the 5 most important AI infrastructure news stories from the last 24 hours and summarize each in two sentences with links."></textarea>
-          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option></select>
+          <div class="srow"><select id="tsWhen" aria-label="How often"><option value="daily">Every day</option><option value="weekdays">Every weekday</option><option value="weekly">Every week</option><option value="hourly">Every hour</option><option value="once">Once</option><option value="cron">Custom (cron)</option></select>
+          <input id="tsCron" aria-label="Cron expression" placeholder="30 8 * * 1-5" spellcheck="false" style="max-width:150px">
           <select id="tsDay" aria-label="Day">${["mon", "tue", "wed", "thu", "fri", "sat", "sun"].map(d => `<option value="${d}">${d[0].toUpperCase() + d.slice(1)}</option>`).join("")}</select>
           <input id="tsTime" aria-label="Time" type="time" value="08:30"><input id="tsAt" aria-label="Date and time" type="datetime-local">
           <select id="tsKind" aria-label="Mode"><option value="cowork">Work</option><option value="code">Code</option></select>
@@ -2012,10 +2077,10 @@ async function renderSection(sec) {
           <label class="chk" id="tsWtRow" hidden><input type="checkbox" id="tsWt"> Each run in a new worktree (its own checkout and branch, so runs never change your working copy)</label>
           <button class="btn primary" id="tsAdd">Add task</button></div><div class="res" id="tsRes"></div>`;
       done();
-      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsWtRow").hidden = !$("#tsFolder").value; if ($("#tsWtRow").hidden) $("#tsWt").checked = false; };
+      const sync = () => { const w = $("#tsWhen").value; $("#tsDay").hidden = w !== "weekly"; $("#tsTime").hidden = !["daily", "weekdays", "weekly"].includes(w); $("#tsAt").hidden = w !== "once"; $("#tsCron").hidden = w !== "cron"; $("#tsWtRow").hidden = !$("#tsFolder").value; if ($("#tsWtRow").hidden) $("#tsWt").checked = false; };
       $("#tsWhen").onchange = sync; $("#tsFolder").onchange = sync; sync();
       const act = async body => { try { draw(await post("/api/assistant", body)); } catch (e) { RES("tsRes").className = "res bad"; RES("tsRes").textContent = e.message; } };
-      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, worktree: $("#tsWt").checked});
+      $("#tsAdd").onclick = () => !$("#tsPrompt").value.trim() ? (RES("tsRes").className = "res bad", RES("tsRes").textContent = "Write what the task should do.", $("#tsPrompt").focus()) : act({action: "task_add", name: $("#tsName").value.trim(), prompt: $("#tsPrompt").value.trim(), when: $("#tsWhen").value, day: $("#tsDay").value, time: $("#tsTime").value, at: $("#tsAt").value, kind: $("#tsKind").value, folder: $("#tsFolder").value, worktree: $("#tsWt").checked, cron: $("#tsCron").value.trim()});
       $$("[data-ton]", b).forEach(x => x.onchange = () => act({action: "task_update", id: x.dataset.ton, enabled: x.checked}));
       $$("[data-tdel]", b).forEach(x => x.onclick = async () => { if (await ask({title: "Delete this scheduled task?", text: "It won't run again. Chats from earlier runs stay.", ok: "Delete task", danger: true})) act({action: "task_delete", id: x.dataset.tdel}); });
       $$("[data-trun]", b).forEach(x => x.onclick = async () => { try { const r = await post("/api/assistant", {action: "task_run", id: x.dataset.trun}); $(".scrim")?.remove(); await loadThreads(); openThread(r.thread); } catch (e) { toast(e.message); } });
@@ -2048,7 +2113,7 @@ async function renderSection(sec) {
     const row = c => {
       const cat = c.connected ? "Connected" : c.custom ? "Yours" : c.category || "Yours";
       const own = c.needs_client && !c.own_client && !c.connected;
-      const btn = c.connected ? `<label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
+      const btn = c.connected ? `<label class="chk" title="Chats can read from it but not change anything: its create, update, delete and send tools are left out"><input type="checkbox" data-ro="${esc(c.id)}" ${c.read_only ? "checked" : ""}> Read only</label><label class="switch" title="Use in new chats"><input type="checkbox" data-on="${esc(c.id)}" ${c.enabled ? "checked" : ""} aria-label="Use ${esc(c.name)}"><span></span></label><button class="btn" data-test="${esc(c.id)}">Test</button><button class="btn" data-off="${esc(c.id)}">${c.auth === "none" ? "Turn off" : "Disconnect"}</button>`
         : c.auth === "none" ? `<button class="btn primary" data-turnon="${esc(c.id)}">Turn on</button>`
         : c.auth === "oauth" && !own ? `<button class="btn primary" data-go="${esc(c.id)}">${c.expired ? "Sign in again" : "Connect"}</button>` : "";
       return `<li data-id="${esc(c.id)}" data-cat="${esc(cat)}" data-text="${esc((c.name + " " + c.description + " " + (c.category || "")).toLowerCase())}"><span class="tg"><b>${esc(c.name)}</b>${c.connected ? ` <span class="badge added">${c.auth === "none" ? "On" : "Connected"}</span>` : c.expired ? ` <span class="badge deleted">Sign in again</span>` : c.auth === "none" ? ` <span class="badge">No sign-in</span>` : ""}<small>${esc(c.description)}</small>
@@ -2137,6 +2202,7 @@ async function renderSection(sec) {
       });
       $$("[data-save]", b).forEach(x => x.onclick = async () => { const v = $(`[data-tok="${x.dataset.save}"]`, b).value.trim(); if (!v) return; const r = await act({action: "token", id: x.dataset.save, token: v}); if (r) { S.connCache = r.connectors; draw(r.connectors); const t = await act({action: "check", id: x.dataset.save}); if (t) say(t.ok ? `Connected: ${t.tools.length} tools.` : t.error, t.ok ? "ok" : "bad"); } });
       $$("[data-on]", b).forEach(x => x.onchange = async () => { const r = await act({action: "enable", id: x.dataset.on, on: x.checked}); if (r) draw(r.connectors); });
+      $$("[data-ro]", b).forEach(x => x.onchange = async () => { const r = await act({action: "read_only", id: x.dataset.ro, on: x.checked}); if (r) { draw(r.connectors); say(x.checked ? "Read only: new chats get only its read tools." : "New chats get all its tools again.", "ok"); } });
       $$("[data-off]", b).forEach(x => x.onclick = async () => { if (!await ask({title: "Disconnect this app?", text: "Chats stop using it. You can connect it again any time.", ok: "Disconnect", danger: true})) return; const r = await act({action: "disconnect", id: x.dataset.off}); if (r) draw(r.connectors); });
     };
     draw((await api("/api/connectors")).connectors);

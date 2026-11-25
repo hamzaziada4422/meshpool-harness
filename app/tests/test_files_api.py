@@ -241,3 +241,17 @@ def test_search_leaves_out_what_git_ignores(tmp_path, monkeypatch):
     assert got == ["app.py", "src/app_util.py"]
     monkeypatch.setenv("MH_PICKER_IGNORED", "1")
     assert "build/app_out.py" in [h["path"] for h in FA2.search(str(tmp_path), "app")["results"]]
+
+
+def test_symbols_for_the_at_picker(tmp_path, monkeypatch):
+    from meshpool_harness.ui import files_api as FA2
+    monkeypatch.setattr(FA2, "safe", lambda r, p: (Path(r), Path(r) / p))
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("class AuthClient:\n    def refresh_token(self):\n        pass\n\ndef login(u):\n    pass\n")
+    (tmp_path / "src" / "ui.ts").write_text("export async function loadUser(id) {}\nexport const tokenStore = (x) => x;\ninterface TokenInfo {}\n")
+    (tmp_path / "notes.md").write_text("def refresh_token in a doc does not count\n")
+    got = {(h["name"], h["kind"], h["path"], h["line"]) for h in FA2.symbols(str(tmp_path), "token")["results"]}
+    assert got == {("refresh_token", "def", "src/auth.py", 2), ("tokenStore", "function", "src/ui.ts", 2),
+                   ("TokenInfo", "interface", "src/ui.ts", 3)}
+    assert [h["name"] for h in FA2.symbols(str(tmp_path), "auth")["results"]] == ["AuthClient"]
+    assert FA2.symbols(str(tmp_path), "a")["results"] == []                   # two letters at least

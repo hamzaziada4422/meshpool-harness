@@ -294,6 +294,16 @@ function acts010(n, text) {
   const w = document.createElement("span"); w.className = "racts010";
   w.innerHTML = `<button class="iconbtn" data-ra="copy" data-tip="Copy reply" data-tip-pos="above" aria-label="Copy reply">${ICON.copy}</button><button class="iconbtn" data-ra="check" data-tip="Check this" data-tip-pos="above" aria-label="Check this: have an independent reviewer check the result">${ICON.check2}</button><button class="iconbtn" data-ra="retry" data-tip="Try again" data-tip-pos="above" aria-label="Try again">${ICON.refresh}</button><button class="iconbtn" data-ra="up" data-tip="Good reply" data-tip-pos="above" aria-label="Good reply" aria-pressed="false">${UP}</button><button class="iconbtn" data-ra="down" data-tip="Not good" data-tip-pos="above" aria-label="Not good" aria-pressed="false">${DOWN}</button>`;
   f.appendChild(w);
+  const older = (S.cur?.view?.versions || {})[String(n)] || [];
+  const body = S.cur?.lastAi;
+  if (older.length && body && text) {                // Try again kept the earlier answers: page through them
+    const all = [...older, text]; let at = all.length - 1;
+    const v = document.createElement("span"); v.className = "ver010";
+    v.innerHTML = `<button class="iconbtn" data-vv="-1" aria-label="Earlier answer">‹</button><span class="vn" title="Earlier answers to this message. The chat goes on from the newest."></span><button class="iconbtn" data-vv="1" aria-label="Later answer">›</button>`;
+    const show = () => { $(".vn", v).textContent = `${at + 1}/${all.length}`; mdRender(body, all[at]); body.classList.toggle("oldver", at < all.length - 1); };
+    v.onclick = e => { const b = e.target.closest("[data-vv]"); if (!b) return; at = Math.max(0, Math.min(all.length - 1, at + +b.dataset.vv)); show(); };
+    w.prepend(v); $(".vn", v).textContent = `${all.length}/${all.length}`;
+  }
   w.onclick = async e => {
     const b = e.target.closest("[data-ra]"); if (!b) return;
     if (b.dataset.ra === "copy") return navigator.clipboard.writeText(text || "").then(() => toast("Copied"), () => toast("Could not copy."));
@@ -304,15 +314,18 @@ function acts010(n, text) {
     if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
-async function rewind010(n) {
-  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9});
+async function rewind010(n, keepVersions) {
+  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9, keep_versions: !!keepVersions});
   renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); await poll(); if (S.panel === "diff") renderPanel();
 }
 async function retry010(n) {
   const asked = threadLog().filter(e => e.type === "user" && !e.steer)[n - 1]?.text || "";
   if (!S.cur || S.cur.busy) return toast("Wait for it to finish, or stop it first.");
   if (!asked) return toast("Could not find the message to send again.");
-  try { await rewind010(n); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+  const log = threadLog(), users = log.map((e, i) => e.type === "user" && !e.steer ? i : -1).filter(i => i >= 0);
+  const reply = log.slice(users[n - 1], users[n] ?? log.length).filter(e => e.type === "assistant" && (e.text || "").trim()).pop()?.text || "";
+  if (reply) { try { await post(`/api/threads/${S.cur.id}`, {action: "keep_version", turn: n, text: reply}); } catch (e) { /* the retry still runs */ } }
+  try { await rewind010(n, true); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;

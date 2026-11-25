@@ -635,10 +635,50 @@ def _sse_spec(spec: dict) -> bool:
 
 # ---------- one server ---------------------------------------------------------------------------------------------
 
+RES_LIST, RES_READ = "mcp__meshpool_resources__list_resources", "mcp__meshpool_resources__read_resource"
+_READ_WORDS = {"get", "list", "search", "read", "fetch", "find", "query", "describe", "view", "show", "lookup",
+               "count", "retrieve", "browse", "check", "inspect", "status", "info", "stats", "preview", "explain",
+               "summarize", "summary", "download", "export", "resolve", "estimate", "validate", "analyze", "lookup"}
+_WRITE_VERBS = {"create", "update", "delete", "remove", "send", "post", "write", "add", "set", "put", "patch", "edit",
+                "move", "merge", "archive", "close", "reopen", "assign", "invite", "upload", "publish", "cancel",
+                "approve", "reply", "comment", "insert", "modify", "rename", "transfer", "trigger", "run", "execute",
+                "exec", "start", "stop", "pause", "resume", "mark", "label", "draft", "schedule", "share", "duplicate",
+                "enable", "disable", "batch", "bulk", "forward", "trash", "untrash", "apply", "deploy", "push", "fork",
+                "buy", "submit", "kill", "revoke", "rotate", "restore", "reset", "upsert", "import", "commit",
+                "complete", "replace", "connect", "disconnect", "purchase", "pay", "charge", "refund", "migrate",
+                "drop", "truncate", "grant", "unlock", "lock", "login", "logout", "register", "subscribe",
+                "unsubscribe", "save", "store", "toggle", "rerun", "retry", "invoke", "call", "generate", "make",
+                "build", "install", "uninstall", "configure", "provision", "terminate", "rollback", "promote",
+                "release", "sync", "clone", "copy", "attach", "detach", "link", "unlink", "react", "vote", "follow",
+                "unfollow", "block", "unblock", "mute", "unmute", "pin", "unpin", "star", "unstar", "accept",
+                "decline", "reject", "dismiss", "resolve_thread", "rate", "tag", "untag", "notify", "email", "message",
+                "book", "order", "sign", "request", "convert", "clear", "flush", "purge", "wipe", "erase"}
+
+
+def _words(name: str) -> list[str]:
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name or ""))     # createIssue -> create_Issue
+    return [w for w in re.split(r"[^A-Za-z0-9]+", s.lower()) if w]
+
+
+def read_only_tools(tools: list[dict]) -> list[dict]:
+    """The tools of a connector in read-only mode. The server's own readOnlyHint decides when it gives one; else a
+    tool stays only when its name has a read word (get, list, search...) and no word that changes something
+    (create, push, deploy, apply...): an allow list, so an unknown verb is left out, not let through."""
+    def ok(t):
+        ann = t.get("annotations") or {}
+        if ann.get("readOnlyHint") is True and ann.get("destructiveHint") is not True:
+            return True
+        if ann.get("readOnlyHint") is False or ann.get("destructiveHint") is True:
+            return False
+        w = _words(t.get("name"))
+        return bool(set(w) & _READ_WORDS) and not (set(w) & _WRITE_VERBS)
+    return [t for t in tools if ok(t)]
+
+
 class Server:
     def __init__(self, name: str, spec: dict, log_dir: Path, roots: list[str]):
         self.name, self.spec = name, _expand(spec)
-        self.status, self.error, self.tools, self.info = "starting", "", [], {}
+        self.status, self.error, self.tools, self.info, self.caps = "starting", "", [], {}, {}
         self._id = 0
         self._lock = threading.Lock()
         self._conn = threading.RLock()         # one reconnect or token refresh at a time
@@ -678,6 +718,7 @@ class Server:
     def _handshake(self, timeout):
         res = self._rpc("initialize", self._init_params(), timeout)
         self.info = res.get("serverInfo") or {}
+        self.caps = res.get("capabilities") or {}
         if isinstance(self.t, _Http):
             self.t.version = res.get("protocolVersion") or PROTOCOL
         self.t.notify("notifications/initialized")
@@ -745,6 +786,8 @@ class Server:
                 if self.cancelled:                 # the caller gave up waiting: stay an error, do not appear late
                     raise MCPError(self.error or "cancelled")
                 self.tools = [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"), str)]
+                if self.spec.get("read_only"):     # Settings, Connectors: read only
+                    self.tools = read_only_tools(self.tools)
                 self.status = "connected"
         except Exception as e:
             with self._lock:
@@ -892,10 +935,67 @@ class Manager:
                 desc = (t.get("description") or t.get("title") or t["name"]).strip()
                 out.append({"type": "function", "function": {
                     "name": fname, "description": f"[MCP server '{s.name}'] {desc}"[:1024], "parameters": params}})
-        return out
+        return out + self._resource_schemas()
 
     def has(self, name: str) -> bool:
-        return name in self.map
+        return name in self.map or (name in (RES_LIST, RES_READ) and bool(self._resource_servers()))
+
+    # ---- resources (files, records, docs a server offers to read) ------------------------------------------------
+    def _resource_servers(self) -> list:
+        return [s for s in list(self.servers.values()) if s.status == "connected" and "resources" in (getattr(s, "caps", None) or {})]
+
+    def _resource_schemas(self) -> list[dict]:
+        if not self._resource_servers():
+            return []
+        names = ", ".join(s.name for s in self._resource_servers())
+        return [{"type": "function", "function": {"name": RES_LIST, "description": (
+                    f"List the resources (files, records, documents) the connected MCP servers offer to read: {names}. "
+                    "Then read one with " + RES_READ + "."), "parameters": {"type": "object", "properties": {
+                        "server": {"type": "string", "description": "Only this server (optional)"}}}}},
+                {"type": "function", "function": {"name": RES_READ, "description": "Read one MCP resource by its "
+                    "server and URI (from " + RES_LIST + ").", "parameters": {"type": "object", "properties": {
+                        "server": {"type": "string"}, "uri": {"type": "string"}}, "required": ["server", "uri"]}}}]
+
+    def _resources(self, args: dict) -> tuple[str, bool]:
+        want = str(args.get("server") or "")
+        lines = []
+        for s in self._resource_servers():
+            if want and s.name != want:
+                continue
+            cursor, n = None, 0
+            try:
+                for _ in range(5):
+                    r = s._rpc("resources/list", {"cursor": cursor} if cursor else {}, 60)
+                    for x in r.get("resources") or []:
+                        n += 1
+                        if n <= 200:
+                            lines.append(f"{s.name}: {x.get('uri', '')}  {x.get('name') or ''}"
+                                         + (f" ({x.get('mimeType')})" if x.get("mimeType") else "")
+                                         + (f" - {str(x.get('description'))[:120]}" if x.get("description") else ""))
+                    cursor = r.get("nextCursor")
+                    if not cursor:
+                        break
+            except MCPError as e:
+                lines.append(f"{s.name}: could not list resources ({redact(e)})")
+            if n > 200:
+                lines.append(f"{s.name}: and {n - 200} more")
+        return ("\n".join(lines) or "No resources." if lines or not want else f"No server named {want} offers resources."), False
+
+    def _read_resource(self, args: dict) -> tuple[str, bool]:
+        s = self.servers.get(str(args.get("server") or ""))
+        if s is None or s not in self._resource_servers():
+            return f"No connected server named {args.get('server')!r} offers resources.", True
+        try:
+            r = s._rpc("resources/read", {"uri": str(args.get("uri") or "")}, float(s.spec.get("timeout", 120)))
+        except MCPError as e:
+            return f"MCP error from '{s.name}': {redact(e)}", True
+        parts = []
+        for c in r.get("contents") or []:
+            if c.get("text") is not None:
+                parts.append(str(c["text"]))
+            elif c.get("blob"):
+                parts.append(f"[{c.get('mimeType') or 'binary'} content, {len(c['blob']) * 3 // 4} bytes, not shown]")
+        return ("\n\n".join(parts) or "(empty)")[:200000], False
 
     def call(self, name: str, args: dict) -> tuple[str, bool]:
         """Run a tool. Images it returned are left in self.last_images for the agent to show the model."""
@@ -904,6 +1004,10 @@ class Manager:
 
     def call_with_images(self, name: str, args: dict):
         """call() without the shared last_images: ((text, failed), images), safe from several threads."""
+        if name == RES_LIST and name not in self.map:
+            return self._resources(args), []
+        if name == RES_READ and name not in self.map:
+            return self._read_resource(args), []
         sname, tool = self.map[name]
         s = self.servers[sname]
         if s.status != "connected":

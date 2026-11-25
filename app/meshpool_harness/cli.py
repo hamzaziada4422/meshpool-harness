@@ -158,6 +158,8 @@ def _agent_parser():
     ap.add_argument("-w", "--worktree", nargs="?", const="", default=None, metavar="NAME",
                     help="work in a new git worktree of this repo (.meshpool/worktrees/NAME on branch meshpool/NAME)")
     ap.add_argument("--effort", choices=["auto", "low", "medium", "high"], help="how hard the model thinks (auto: Meshpool decides)")
+    ap.add_argument("-n", "--name", help="a name for this session (shown in /resume and the app)")
+    ap.add_argument("--mcp-config", help="MCP servers for this run only: a JSON file, or JSON text, with mcpServers")
     from meshpool_harness import __version__
     ap.add_argument("-v", "--version", action="version", version=f"meshpool {__version__}")
     return ap
@@ -295,6 +297,10 @@ def main(argv=None):
             os.environ["MH_MAX_STEPS"] = str(a.max_turns)
         if a.effort:
             os.environ["MH_EFFORT"] = a.effort
+        if a.name:
+            os.environ["MH_SESSION_NAME"] = a.name.strip()[:80]
+        if a.mcp_config:
+            os.environ["MH_MCP_CONFIG"] = a.mcp_config
         if a.worktree and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,60}", a.worktree) and a.request is None:
             a.request, a.worktree = a.worktree, ""       # meshpool -w "fix the tests": a request, not a name
         if a.worktree is not None:

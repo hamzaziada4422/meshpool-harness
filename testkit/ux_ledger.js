@@ -129,6 +129,39 @@ const results = []; const check = (name, ok, detail = "") => { results.push([nam
   await p.click("#rulesBox [data-rule='bash:git push*']"); await p.waitForTimeout(600);
   check("and removed again", !(await p.$("#rulesBox [data-rule='bash:git push*']")));
   await p.keyboard.press("Escape");
+  // a long paste becomes a chip; it goes with the message as a block
+  const chip = await p.evaluate(() => {
+    const inp = document.querySelector("#input"); inp.value = "";
+    const dt = new DataTransfer(); dt.setData("text/plain", Array.from({length: 80}, (_, i) => "line " + i).join("\n"));
+    inp.dispatchEvent(new ClipboardEvent("paste", {clipboardData: dt, bubbles: true, cancelable: true}));
+    return [inp.value, document.querySelector("#attachRow")?.textContent || "", S.attachments.length];
+  });
+  check("a long paste becomes a chip, not a wall of text", chip[0] === "" && /Pasted text 1 \(80 lines\)/.test(chip[1]) && chip[2] === 1, chip.join(" | "));
+  await p.evaluate(() => { S.attachments = []; renderAttach(); });
+  // side by side: removed on the left, added on the right, unchanged on both
+  const sbs = await p.evaluate(() => {
+    const d = document.createElement("div");
+    d.innerHTML = splitHTML("diff --meshpool a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n keep\n-old line\n+new line\n tail");
+    const rows = [...d.querySelectorAll("tr")].map(r => [...r.querySelectorAll("td.tx")].map(c => c.className.replace("tx", "").trim() + ":" + c.textContent));
+    return JSON.stringify(rows.filter(r => r.length));
+  });
+  check("side by side pairs old and new lines", sbs === JSON.stringify([[":keep", ":keep"], ["d:old line", "a:new line"], [":tail", ":tail"]]), sbs);
+  // "# a fact" in the box saves it to memory instead of sending it
+  await p.fill("#input", "# I deploy on Fridays"); await p.keyboard.press("Enter"); await p.waitForTimeout(800);
+  const mem = await p.evaluate(async () => (await api("/api/memory")).facts?.map(f => f.text) || []);
+  check("# in the message box saves to memory", mem.some(t => /deploy on Fridays/i.test(t)) && !(await p.inputValue("#input")), mem.slice(0, 5).join(" | "));
+  // Try again keeps the earlier answer: 2/2 under the new reply, and the arrow goes back to 1/2
+  await p.evaluate(dir => newThread(dir), proj); await p.waitForTimeout(500);
+  await send("show python code");
+  await p.waitForFunction(() => S.cur?.view?.state === "idle", null, {timeout: 60000}).catch(() => {});
+  const ends0 = await p.evaluate(() => (S.cur.log || []).filter(e => e.type === "turn_end").length);
+  await p.click(".racts010 [data-ra=retry]");
+  await p.waitForFunction(n => S.cur?.view?.state === "idle" && (S.cur.log || []).filter(e => e.type === "turn_end").length >= n, ends0, {timeout: 60000}).catch(() => {});
+  await p.waitForSelector(".ver010 .vn", {timeout: 15000}).catch(() => {});
+  const v1 = await p.textContent(".ver010 .vn").catch(() => "");
+  await p.click(".ver010 [data-vv='-1']").catch(() => {});
+  const v2 = await p.textContent(".ver010 .vn").catch(() => "");
+  check("Try again keeps the earlier answer, and the arrows switch versions", v1 === "2/2" && v2 === "1/2", `${v1} -> ${v2}`);
   check("no page errors", !errs.length, errs.join(" | "));
   await b.close();
   const ok = results.filter(r => r[1]).length; console.log(`\n${ok}/${results.length} passed`);

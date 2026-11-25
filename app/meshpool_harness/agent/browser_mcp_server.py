@@ -165,6 +165,7 @@ class Browser:
             if why:
                 raise ToolFailed(why)
         if self.ctx is not None and self._alive():
+            self._guard_sites()
             return
         own = mode == "meshpool" and bundled.packaged()     # the app's own Chromium (app/vendor/browsers)
         if own:
@@ -187,6 +188,45 @@ class Browser:
         self.ctx.set_default_timeout(20000)
         if self.page is None or self.page.is_closed():
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self._guard_sites()
+
+    def _guard_sites(self):
+        """The user's site lists (Settings) for every page the browser goes to: links, redirects, scripts, Back."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or getattr(self, "_guarded", None) is self.ctx:
+            return
+        from meshpool_harness import web as WEB
+
+        def check(route, request):
+            u = request.url
+            if request.is_navigation_request() and u.lower().startswith(("http:", "https:")):
+                try:
+                    WEB.check_domain(u)
+                except WEB.WebError:
+                    return route.abort("blockedbyclient")
+            return route.continue_()
+        try:
+            self.ctx.route("**/*", check)
+            self._guarded = self.ctx
+        except Exception:  # noqa: BLE001 - a browser that cannot route keeps the first-page check only
+            pass
+
+    def _check_where(self):
+        """Where the page ended up (a server redirect is not seen by the route check) must be on the user's site
+        lists too; if not, the page is closed before anything of it reaches the agent."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or self.page is None:
+            return
+        u = self.page.url or ""
+        if not u.lower().startswith(("http:", "https:")):
+            return
+        from meshpool_harness import web as WEB
+        try:
+            WEB.check_domain(u)
+        except WEB.WebError as e:
+            try:
+                self.page.goto("about:blank")
+            except Exception:  # noqa: BLE001
+                pass
+            raise ToolFailed(f"The page went to a site your lists do not allow, so it was closed: {e}")
 
     def _launch(self, prof: Path, **kw):
         prof.mkdir(parents=True, exist_ok=True)
@@ -297,6 +337,7 @@ class Browser:
 
     def snapshot(self, note: str = "") -> str:
         self.settle()
+        self._check_where()
         if os.environ.get("MH_BROWSER_STATES") == "1":
             self.page.evaluate("() => { window.__mpStates = true; }")
         s = self.page.evaluate(SNAPSHOT_JS)
@@ -323,11 +364,15 @@ B = Browser()
 
 
 def browser_open(url: str) -> str:
+    u = url.strip()
+    if "://" not in u and not u.startswith(("about:", "file:", "//")):
+        u = "https://" + u
+    if u.lower().startswith(("http:", "https:")):          # the user's site lists (Settings) apply here too
+        from meshpool_harness import web as WEB
+        WEB.check_domain(u)
+
     def go():
         B.ensure()
-        u = url.strip()
-        if "://" not in u and not u.startswith(("about:", "file:")):
-            u = "https://" + u
         B.page.goto(u, wait_until="domcontentloaded", timeout=45000)
         return B.snapshot()
     return B.run(go)
@@ -440,6 +485,7 @@ def browser_screenshot(full_page: bool = False) -> list:
     def go():
         B.ensure()
         B.settle()
+        B._check_where()                                  # never a picture of a site the lists do not allow
         png = B.page.screenshot(full_page=bool(full_page), type="png")
         out = Path(os.environ.get("MESHPOOL_PROJECT") or os.getcwd()) / "Meshpool outputs" / "screenshots"
         try:

@@ -69,7 +69,7 @@ WORK_ITEM = re.compile(r"(?i)\b(to-?do|todo list|backlog|feature request|bug to 
 
 MAX_MEMORY = 12000
 DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-WHEN = ("once", "hourly", "daily", "weekdays", "weekly", "every")
+WHEN = ("once", "hourly", "daily", "weekdays", "weekly", "every", "cron")
 _LOCK = threading.Lock()
 BAD = re.compile(r"ignore (all|previous|the above)|system prompt|disregard (all|previous)|you are now|api[_ ]?key|"
                  r"password|secret|token\s*[:=]", re.I)
@@ -472,6 +472,17 @@ def _hm(s: str) -> tuple[int, int]:
 
 
 def next_run(t: dict, after: datetime | None = None) -> float | None:
+    """The next time a task runs, as a timestamp after now. Local wall-clock times that a clock change makes
+    ambiguous are stepped past, so a task never fires on every tick of the repeated hour."""
+    nxt = _next_run(t, after)
+    tries = 0
+    while nxt is not None and nxt <= time.time() and tries < 4 and t.get("when") != "once":
+        tries += 1
+        nxt = _next_run(t, datetime.fromtimestamp(time.time()) + timedelta(minutes=61 * tries))
+    return nxt
+
+
+def _next_run(t: dict, after: datetime | None = None) -> float | None:
     now = (after or datetime.now()).replace(second=0, microsecond=0)
     w = t.get("when")
     if w == "once":
@@ -485,6 +496,13 @@ def next_run(t: dict, after: datetime | None = None) -> float | None:
     if w == "every":
         mins = max(15, int(t.get("minutes") or 60))
         return (now + timedelta(minutes=mins)).timestamp()
+    if w == "cron":
+        from meshpool_harness import cron as CR
+        try:
+            nxt = CR.next_after(t.get("cron") or "", now)
+        except CR.CronError:
+            return None
+        return nxt.timestamp() if nxt else None
     h, mi = _hm(t.get("time", "09:00"))
     cand = now.replace(hour=h, minute=mi)
     for i in range(0, 8):
@@ -507,6 +525,12 @@ def _check_task(t: dict) -> dict:
     if not str(t.get("prompt") or "").strip():
         raise ValueError("Write what the task should do.")
     t["prompt"] = str(t["prompt"]).strip()
+    if when == "cron":
+        from meshpool_harness import cron as CR
+        try:
+            t["cron"] = CR.validate(t.get("cron") or "")
+        except CR.CronError as e:
+            raise ValueError(str(e))
     if when == "once":
         try:
             datetime.fromisoformat(str(t.get("at") or ""))
@@ -534,10 +558,10 @@ def _check_task(t: dict) -> dict:
 
 def add_task(name: str, prompt: str, when: str, time_: str = "09:00", day: str = "mon", at: str = "",
              minutes: int = 60, folder: str = "", harness: str = "", kind: str = "cowork",
-             only_on_change: bool = False, worktree: bool = False) -> dict:
+             only_on_change: bool = False, worktree: bool = False, cron: str = "") -> dict:
     t = _check_task({"id": uuid.uuid4().hex[:8], "name": name, "prompt": prompt, "when": when, "time": time_,
                      "day": day, "at": at, "minutes": minutes, "folder": folder, "harness": harness, "kind": kind,
-                     "only_on_change": bool(only_on_change), "worktree": bool(worktree), "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
+                     "only_on_change": bool(only_on_change), "worktree": bool(worktree), "cron": cron, "enabled": True, "created": time.time(), "last_run": None, "last_thread": None})
     t["next_run"] = next_run(t)
     with _tasks_lock():
         rows = tasks()
@@ -553,11 +577,11 @@ def update_task(tid: str, **kw) -> dict:
             if t["id"] == tid:
                 new = dict(t)
                 for k in ("name", "prompt", "when", "time", "day", "at", "minutes", "folder", "harness", "kind", "enabled",
-                          "only_on_change", "worktree"):
+                          "only_on_change", "worktree", "cron"):
                     if k in kw and kw[k] is not None:
                         new[k] = kw[k]
                 _check_task(new)                                     # same rules as add_task; nothing saved on error
-                if new.get("when") != t.get("when") or new.get("at") != t.get("at"):
+                if new.get("when") != t.get("when") or new.get("at") != t.get("at") or new.get("cron") != t.get("cron"):
                     new["last_run"] = None                           # a new time: a fired one-time task runs again
                 new["next_run"] = next_run(new) if new.get("enabled") else None
                 rows[n] = new
@@ -606,6 +630,8 @@ def describe(t: dict) -> str:
         s = f"every {t.get('minutes')} minutes"
     elif w == "weekly":
         s = f"every {t.get('day', 'mon').title()} at {t.get('time')}"
+    elif w == "cron":
+        s = f"on the schedule {t.get('cron')}"
     else:
         s = f"{'every weekday' if w == 'weekdays' else 'every day'} at {t.get('time')}"
     nr = t.get("next_run")

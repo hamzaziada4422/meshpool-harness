@@ -106,3 +106,33 @@ def test_a_subfolders_instructions_join_the_first_time_work_reaches_it(tmp_path,
     out = run("read_file", {"path": "pkg/sub/x.py"})
     assert "Pkg uses tabs" in out and "Sub is legacy" in out and out.index("Pkg uses tabs") < out.index("Sub is legacy")
     assert "Instructions from" not in run("read_file", {"path": "pkg/sub/x.py"})    # once only
+
+
+def test_path_scoped_rules_apply_only_to_matching_files(tmp_path, monkeypatch):
+    import json as _json
+    import subprocess as _sp
+    from meshpool_harness.agent import core as K
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(K, "SESSIONS", tmp_path / "sessions")
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
+    proj = tmp_path / "proj"
+    (proj / ".claude" / "rules").mkdir(parents=True)
+    (proj / ".cursor" / "rules").mkdir(parents=True)
+    _sp.run(["git", "init", "-q", str(proj)], check=True)
+    (proj / ".claude" / "rules" / "always.md").write_text("Always use British spelling.")
+    (proj / ".claude" / "rules" / "api.md").write_text("---\npaths:\n  - \"src/api/**/*.ts\"\n---\nAPI handlers validate input.")
+    (proj / ".cursor" / "rules" / "tests.mdc").write_text("---\nglobs: *.test.ts\nalwaysApply: false\n---\nTests use vitest.")
+    (proj / "src" / "api" / "v1").mkdir(parents=True)
+    (proj / "src" / "api" / "v1" / "users.ts").write_text("x")
+    (proj / "src" / "a.test.ts").write_text("x")
+    (proj / "README.md").write_text("x")
+    a = Agent(str(proj), mode="auto")
+    a._turn_no = 1
+    run = lambda name, args: a._run_tool({"id": "c", "type": "function", "function": {"name": name, "arguments": _json.dumps(args)}})
+    sysp = a.messages[0]["content"]
+    assert "British spelling" in sysp and "validate input" not in sysp and "vitest" not in sysp
+    assert "Rules from" not in run("read_file", {"path": "README.md"})
+    out = run("read_file", {"path": "src/api/v1/users.ts"})
+    assert "API handlers validate input" in out and "vitest" not in out
+    assert "Tests use vitest" in run("read_file", {"path": "src/a.test.ts"})
+    assert "Rules from" not in run("read_file", {"path": "src/api/v1/users.ts"})        # once

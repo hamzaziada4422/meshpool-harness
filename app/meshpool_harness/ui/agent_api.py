@@ -1363,7 +1363,7 @@ class Session:
                           getattr(a, "model", None) or a.agent_info.get("name", self.harness["name"])),
                 "harness_models": getattr(a, "available_models", None), "plan": self.plan, "goal": self.goal,
                 "style": self.style_id() or _default_style(), "incognito": bool(self.incognito),
-                "effort": getattr(a, "effort", None),
+                "effort": getattr(a, "effort", None), "versions": meta.get("versions") or {},
                 "epoch": self.epoch, "turns": self.cp.turns() if self.cp else [],
                 "checkpoints_note": self.cp.disabled if self.cp else "",
                 "events": evs, "total": since + len(evs) if since <= n else n,
@@ -1749,6 +1749,13 @@ def thread_action(sid: str, body: dict) -> dict:
         write_meta(sid, pinned=act == "pin")
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
+    elif act == "keep_version":                      # Try again: the answer being replaced stays viewable
+        turn, text = int(body.get("turn") or 0), str(body.get("text") or "")[:20000]
+        if turn < 1 or not text.strip():
+            raise ValueError("Give the reply's turn and text.")
+        vs = {k: v for k, v in (read_meta(sid).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
+        vs[str(turn)] = ((read_meta(sid).get("versions") or {}).get(str(turn)) or [])[-3:] + [text]
+        write_meta(sid, versions=vs)
     elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
         write_meta(sid, unread=act == "unseen")
     elif act == "move":                               # into a project, or out of it (project_id empty)
@@ -1943,9 +1950,51 @@ def probe_mcp():
         pass
 
 
+def prune_old_chats(days: float | None = None, now: float | None = None) -> list[str]:
+    """Settings, Keep chats for: deletes chats not touched for that many days (the same way Delete does), except
+    pinned ones and chats that are running. Returns the ids deleted. 0 or unset: nothing is deleted."""
+    if days is None:
+        try:
+            days = float(os.environ.get("MH_KEEP_DAYS") or C.read().get("MH_KEEP_DAYS") or 0)
+        except ValueError:
+            days = 0
+    days = int(days or 0)
+    if days < 1 or not SESSIONS.is_dir():
+        return []
+    cutoff = (now or time.time()) - days * 86400
+    gone = []
+    for d in list(SESSIONS.iterdir()):
+        if not d.is_dir() or d.name.startswith((".", "_")):
+            continue
+        sid = d.name
+        if sid.startswith("sub-") or sid in LIVE:      # a sub-agent's own record, or a chat that is open now
+            continue
+        meta = read_meta(sid)
+        if meta.get("pinned"):
+            continue
+        try:
+            last = max(f.stat().st_mtime for f in d.iterdir()) if any(d.iterdir()) else d.stat().st_mtime
+        except OSError:
+            continue
+        if last < cutoff:
+            try:
+                thread_action(sid, {"action": "delete"})
+                gone.append(sid)
+            except Exception:  # noqa: BLE001
+                continue
+    return gone
+
+
 def scheduler_loop():
     from meshpool_harness import assistant as AS
+    last_prune = 0.0
     while True:
+        if time.time() - last_prune > 86400:          # Keep chats for N days: at start, then once a day
+            last_prune = time.time()
+            try:
+                prune_old_chats()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             for t in AS.due():
                 try:

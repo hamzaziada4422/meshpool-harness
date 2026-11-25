@@ -87,9 +87,71 @@ def instruction_files(root: Path) -> list[tuple[str, Path]]:
         base = top / rd
         if base.is_dir():
             for f in sorted(base.rglob("*.md")) + sorted(base.rglob("*.mdc")):
-                if f.is_file() and not f.is_symlink():
+                if f.is_file() and not f.is_symlink() and not rule_globs(f):   # path-scoped ones come later
                     out.append((f"{top} ({rd})", f))
     return out
+
+
+def rule_globs(f: Path) -> list[str]:
+    """The file patterns a rules file is limited to: paths: (Claude Code) or globs: (Cursor), unless it says
+    alwaysApply: true. Empty: it always applies."""
+    from meshpool_harness import skills as SK
+    text = _read(f)
+    if not text.startswith("---"):
+        return []
+    meta, _ = SK.parse(text)
+    if str(meta.get("alwaysApply", "")).strip().lower() == "true":
+        return []
+    manual = str(meta.get("alwaysApply", "")).strip().lower() == "false" and not (meta.get("globs") or meta.get("paths")
+                                                                                  or "\npaths:" in text)
+    raw = meta.get("paths") or meta.get("globs") or ""
+    if not raw and text.find("\npaths:") > 0:            # a YAML list under paths:
+        try:
+            import yaml
+            doc = yaml.safe_load(text[3:text.find("\n---", 3)])
+            raw = doc.get("paths") or doc.get("globs") or "" if isinstance(doc, dict) else ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+    items = raw if isinstance(raw, list) else str(raw).strip("[]").split(",")
+    out = [str(x).strip().strip("'\"") for x in items if str(x).strip().strip("'\"")]
+    return out or (["(only when asked for)"] if manual else [])     # a manual Cursor rule: never loaded by itself
+
+
+def _glob_match(rel: str, pat: str) -> bool:
+    import fnmatch
+    pat = pat.removeprefix("./").lstrip("/")
+    if fnmatch.fnmatchcase(rel, pat) or fnmatch.fnmatchcase(rel, pat.replace("**/", "")):
+        return True
+    return "/" not in pat and fnmatch.fnmatchcase(rel.rsplit("/", 1)[-1], pat)   # *.ts matches at any depth
+
+
+def scoped_rules(root: Path, path: str, seen: set) -> str:
+    """Path-scoped rules files whose patterns match path, the first time work touches a matching file."""
+    root = Path(root).resolve()
+    try:
+        p = Path(path).expanduser()
+        p = (p if p.is_absolute() else root / p).resolve()
+        top = _git_root(root)
+        rel = p.relative_to(top).as_posix()
+    except (OSError, RuntimeError, ValueError):
+        return ""
+    out = []
+    for rd in RULE_DIRS:
+        base = top / rd
+        if not base.is_dir():
+            continue
+        for f in sorted(base.rglob("*.md")) + sorted(base.rglob("*.mdc")):
+            if f.is_symlink() or not f.is_file() or f.resolve() in seen:
+                continue
+            pats = rule_globs(f)
+            if pats and any(_glob_match(rel, g) for g in pats):
+                seen.add(f.resolve())
+                from meshpool_harness import skills as SK
+                body = SK.parse(_imports(_read(f), f.parent, {f.resolve()}))[1].strip()
+                if body:
+                    out.append(f"[Rules from {f.relative_to(top).as_posix()} for files like {', '.join(pats)} "
+                               f"(follow them for {rel}):]\n{body[:MAX_FILE]}")
+    return "\n\n".join(out)
 
 
 def instruction_text(root: Path) -> str:

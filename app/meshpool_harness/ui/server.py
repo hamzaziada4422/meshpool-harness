@@ -139,11 +139,11 @@ def assistant_action(b: dict) -> dict:
         AS.add_task(b.get("name", ""), b.get("prompt", ""), b.get("when", "daily"), b.get("time", "09:00"),
                     b.get("day", "mon"), b.get("at", ""), int(b.get("minutes") or 60), b.get("folder", ""),
                     b.get("harness", ""), b.get("kind", "cowork"), bool(b.get("only_on_change")),
-                    bool(b.get("worktree")))
+                    bool(b.get("worktree")), str(b.get("cron") or ""))
     elif act == "task_update":
         AS.update_task(b.get("id", ""), **{k: b.get(k) for k in ("name", "prompt", "when", "time", "day", "at",
                                                                    "minutes", "folder", "harness", "kind", "enabled",
-                                                                   "only_on_change", "worktree")})
+                                                                   "only_on_change", "worktree", "cron")})
     elif act == "task_delete":
         AS.delete_task(b.get("id", ""))
     elif act == "task_run":
@@ -978,6 +978,8 @@ class Handler(BaseHTTPRequestHandler):
                     CN.set_token(cid, tok)
                 elif act == "enable":
                     CN.set_enabled(cid, bool(b.get("on")))
+                elif act == "read_only":
+                    CN.set_read_only(cid, bool(b.get("on")))
                 elif act == "disconnect":
                     CN.disconnect(cid)
                 C.load_into_env(override=True)
@@ -1004,6 +1006,18 @@ class Handler(BaseHTTPRequestHandler):
             m = re.fullmatch(r"/api/threads/([\w-]+)", u.path)
             if m:
                 return self._send(200, A.thread_action(m.group(1), self._json()))
+            m = re.fullmatch(r"/api/agent/([\w-]+)/add_dir", u.path)    # /add-dir: another folder for this chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "add_dir"):
+                    raise ValueError("Adding a folder works with Meshpool's own agents.")
+                return self._send(200, {"folder": s_.agent.add_dir(str(self._json().get("path") or ""))})
+            m = re.fullmatch(r"/api/agent/([\w-]+)/btw", u.path)        # a side question, kept out of the chat
+            if m:
+                s_ = A.get(m.group(1))
+                if not hasattr(s_.agent, "side_question"):
+                    raise ValueError("Side questions work with Meshpool's own agents.")
+                return self._send(200, {"answer": s_.agent.side_question(str(self._json().get("question") or ""))})
             m = re.fullmatch(r"/api/agent/([\w-]+)/fork", u.path)       # branch: a new chat from this one's history
             if m:
                 return self._send(200, A.fork(m.group(1), int(self._json().get("turn") or 0)))
@@ -1031,6 +1045,10 @@ class Handler(BaseHTTPRequestHandler):
                     s_.set_effort(b.get("effort", ""))
                 else:
                     s_.revert(int(b.get("turn", 0)), str(b.get("what") or "both"))
+                    if not b.get("keep_versions"):   # Undo or Edit: the earlier answers belonged to that message
+                        vs = {k: v for k, v in (A.read_meta(s_.id).get("versions") or {}).items()
+                              if k.isdigit() and int(k) < int(b.get("turn", 0))}
+                        A.write_meta(s_.id, versions=vs)
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:

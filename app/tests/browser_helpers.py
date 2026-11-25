@@ -59,6 +59,8 @@ class _H(BaseHTTPRequestHandler):
             who = re.search(r"mp_session=(\w+)", self.headers.get("Cookie", ""))
             return self._send(200, f"<title>Dashboard</title><h1>Dashboard</h1><p>"
                                    f"{'Signed in as ' + who.group(1) if who else 'Signed out'}</p>")
+        if u.path == "/hop":                       # a redirect to any address (site-list tests)
+            return self._send(302, "", headers=[("Location", parse_qs(u.query).get("to", ["/"])[0])])
         if u.path == "/api/late":
             return self._send(200, "Late content arrived", "text/plain")
         if u.path == "/echo":
