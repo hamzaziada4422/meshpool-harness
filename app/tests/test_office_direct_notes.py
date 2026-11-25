@@ -104,6 +104,7 @@ def test_edit_note_in_office_direct_names_libraries_not_absent_tools():
 
 
 def _office_agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("MH_WORK_OFFICE_STYLE", "lean")   # the lean office route's notes and checks (default: c171)
     import json as _json
     from meshpool_harness.agent.core import Agent
     from meshpool_harness.hrouter import profiles as PROF
