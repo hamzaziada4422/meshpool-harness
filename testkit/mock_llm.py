@@ -83,14 +83,19 @@ def plan(messages, tools):
             return ("tool", "fetch_url", {"url": url})
         return ("text", "Fetched the slow page.")
     if "count slowly" in u:                               # a command that prints over a few seconds (live output)
+        cmd = "for i in 1 2 3 4 5 6; do echo tick $i; sleep 1; done"
         if step == 0 and "bash" in names:
-            return ("tool", "bash", {"command": "for i in 1 2 3 4 5 6; do echo tick $i; sleep 1; done"})
+            return ("tool", "bash", {"command": cmd})
+        if step == 0 and "shell" in names:                 # a Code chat: Codex's shell tool
+            return ("tool", "shell", {"command": ["bash", "-lc", cmd]})
         return ("text", "Counted.")
     if "long task" in u and "stopped your previous request" not in u:
         if step == 0 and "bash" in names:
             return ("tool", "bash", {"command": "sleep 25; echo slept"})
         if step == 0 and "terminal" in names:
             return ("tool", "terminal", {"command": "sleep 25; echo slept"})
+        if step == 0 and "shell" in names:
+            return ("tool", "shell", {"command": ["bash", "-lc", "sleep 25; echo slept"]})
         return ("text", "Long task finished.")
     if "say hello in french" in u:                      # a skill's instructions reached the model (Pi, ACP agents)
         return ("text", "Bonjour! (the claude-skill instructions were applied)")
