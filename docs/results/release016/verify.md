@@ -135,3 +135,16 @@ BAR: cost FAIL, quality FAIL, time FAIL -> NOT MET
 ```
 
 Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $6.38.
+
+## office_9cd021c0 pooled (final office run; mp-work; codex rows from office_1c0b6df5)
+```
+tasks: mp-work 17, codex 17, paired 17
+   mp-work: solved 29/34 (85.3%)  $ 0.2981  $/solved 0.01028  median s 30.1  errors 0
+     codex: solved 33/34 (97.1%)  $ 0.2689  $/solved 0.00815  median s 37.4  errors 0
+solve-rate diff -11.8 pts (95% CI -29.4 to +2.9)
+cost per solved ratio 1.26x (95% CI 0.93-1.64)
+median per-task time ratio 0.84x (95% CI 0.70-1.49)
+BAR: cost FAIL, quality FAIL, time PASS -> NOT MET
+```
+
+Billed through the gateway (X-Litellm-Key-Spend) for the whole round including swe7: $6.66.
