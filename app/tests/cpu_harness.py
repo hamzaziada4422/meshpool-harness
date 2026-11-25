@@ -45,6 +45,43 @@ def install(page, chats=5, events=EVENTS_N):
     return counts
 
 
+def count_requests(page, pattern):
+    """A live count of the page's requests whose URL matches the regex (works with or without page.route)."""
+    box = {"n": 0}
+    rx = re.compile(pattern)
+    page.on("request", lambda r: box.__setitem__("n", box["n"] + 1) if rx.search(r.url) else None)
+    return box
+
+
+def hide(page):
+    """Make the page believe its tab is hidden (headless pages are always visible)."""
+    page.evaluate("Object.defineProperty(document, 'hidden', {get: () => true, configurable: true}); Object.defineProperty(document, 'visibilityState', {get: () => 'hidden', configurable: true}); document.dispatchEvent(new Event('visibilitychange'))")
+
+
+def show(page):
+    page.evaluate("Object.defineProperty(document, 'hidden', {get: () => false, configurable: true}); Object.defineProperty(document, 'visibilityState', {get: () => 'visible', configurable: true}); document.dispatchEvent(new Event('visibilitychange'))")
+
+
+# Stream frames as server.py _event_stream sends them while a reply is written: only text, no goal or title.
+STREAM_FRAMES = """
+(n) => { const c = S.cur; const base = {id: c.id, state: 'working', epoch: c.epoch, turn_started: null};
+  for (let k = 0; k < n; k++) ingest(c, {...base, total: c.total + 1, events: [{i: c.total, type: 'text_delta', text: 'ab '}]}); }
+"""
+
+# Count reads of scrollHeight under a selector (each read after a write forces a layout of the page).
+SCROLL_READS = """
+(sel) => { window.__reads = 0; const d = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollHeight'); window.__readsOff = () => Object.defineProperty(Element.prototype, 'scrollHeight', d);
+  Object.defineProperty(Element.prototype, 'scrollHeight', {configurable: true, get() { if (this.closest && this.closest(sel)) window.__reads++; return d.get.call(this); }}); }
+"""
+
+# Time one forced layout after the live reply grows (what each animation frame of a streaming reply costs).
+LAYOUT_PER_CHANGE = """
+() => { const col = document.querySelector('#col'), conv = document.querySelector('#conv');
+  const d = document.createElement('div'); d.className = 'msg-ai'; d.textContent = 'x'; col.appendChild(d); conv.scrollTop = conv.scrollHeight; void d.offsetHeight;
+  const t0 = performance.now(); for (let k = 0; k < 100; k++) { d.textContent += ' word' + k; void d.offsetHeight; }
+  const ms = (performance.now() - t0) / 100; d.remove(); return ms; }
+"""
+
 COUNTERS = """
 (() => {
   window.__c = {raf: 0, timeouts: 0, intervals: 0};

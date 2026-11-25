@@ -1070,7 +1070,11 @@ details .keyrow input{flex:1;min-width:0;padding:7px 10px;border:1px solid var(-
 
 
 /* long chats: off-screen messages skip layout and paint; mixed-direction text aligns per paragraph */
-#col > .msg-ai, #col > .msg-user, #col > details.work { content-visibility: auto; contain-intrinsic-size: auto 96px; }
+#col > .msg-ai, #col > .msg-user, #col > details.work, .hist > .msg-ai, .hist > .msg-user, .hist > details.work { content-visibility: auto; contain-intrinsic-size: auto 96px; }
+/* older items in blocks of about 100 (foldHistory in app.js): skipped as one while off screen. A block ends before a
+   message of the user, whose top margin is the larger one, so the last item's bottom margin is dropped. */
+.hist { content-visibility: auto; contain-intrinsic-size: auto 2000px; }
+.hist > :last-child { margin-bottom: 0; }
 .msg-ai p, .msg-ai li, .msg-ai h3, .msg-ai blockquote, .msg-user .b, .sidelist .tt, .tt { unicode-bidi: plaintext; text-align: start; }
 /* In-app files: the folder tree and the editor (editor.js). Colours come from the theme tokens, so both themes work. */
 .fs-search{padding:8px 10px;border-bottom:1px solid var(--line-2);background:var(--surface);position:sticky;top:0;z-index:1}

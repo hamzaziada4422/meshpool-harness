@@ -976,6 +976,43 @@ function commitStage(cur) {
   for (const n of col.children) n.classList.remove("enter");
   S.pinned = true; scrollConv(true);
   if (cur.live) easeStart(cur.live);
+  foldHistory(col);
+}
+/* Long chats: with thousands of items directly in #col, every frame of a streaming reply laid out, hit-tested and
+   paint-walked all of them, even though each skips its own content (content-visibility): a 3000-event chat used a
+   whole core while a reply streamed (CPU audit). Older items are moved, in order, into blocks of about FOLD_SIZE, and
+   the blocks into one outer block; the browser skips each block as a unit while it is off screen (.hist in app.css),
+   so at the end of the chat the whole history costs one skipped box, and scrolling up opens only the blocks in view.
+   (Blocks straight under #col, once drawn, still cost ~30 us each per layout; under one outer block they cost nothing.)
+   A block ends before a message of the user where it can, so the space between items stays what it was. The newest
+   FOLD_KEEP items always stay where they are. */
+const FOLD_AT = 160, FOLD_KEEP = 40, FOLD_SIZE = 100;
+function foldHistory(col) {
+  if (!col || col.childElementCount < FOLD_AT) return 0;
+  const kids = []; for (const n of col.children) if (!n.classList.contains("hist") && n.id !== "trustBar") kids.push(n);
+  if (kids.length < FOLD_AT) return 0;
+  const limit = kids.length - FOLD_KEEP, spans = [];
+  for (let a = 0, i = 1; i <= limit; i++) {
+    const n = i - a;
+    if ((n >= FOLD_SIZE && kids[i].classList.contains("msg-user")) || n >= FOLD_SIZE * 3) { spans.push([a, i]); a = i; }
+  }
+  if (!spans.length) return 0;
+  const conv = $("#conv"), fromEnd = conv ? conv.scrollHeight - conv.scrollTop : 0, made = [];
+  for (const [a, b] of spans) {
+    const w = document.createElement("div"); w.className = "hist"; w.style.cssText = "content-visibility:visible;contain:layout";
+    col.insertBefore(w, kids[a]);
+    for (const n of kids.slice(a, b)) { n.classList.remove("enter"); w.appendChild(n); }
+    made.push(w);
+  }
+  const hs = made.map(w => w.offsetHeight);       // one layout: the size each block keeps while it is skipped
+  made.forEach((w, k) => { w.style.cssText = `contain-intrinsic-size:auto ${hs[k]}px`; });
+  let outer = col.querySelector(":scope > .hist.histo");
+  if (!outer) { outer = document.createElement("div"); outer.className = "hist histo"; outer.dataset.h = "0"; col.insertBefore(outer, made[0]); }
+  const h = Number(outer.dataset.h || 0) + hs.reduce((x, y) => x + y, 0);
+  for (const w of made) outer.appendChild(w);
+  outer.dataset.h = String(h); outer.style.cssText = `contain-intrinsic-size:auto ${h}px`;
+  if (conv) conv.scrollTop = S.pinned ? conv.scrollHeight : conv.scrollHeight - fromEnd;
+  return made.length;
 }
 function openThread(id, fresh) {
   clearColHandlers(); window.navPush?.("chat:" + id);
@@ -1051,16 +1088,20 @@ function ingest(cur, v) {
   if (got) wakeFrame();
   if (cur.stage || document.hidden) { flushQ(cur); }          // history, or a hidden tab (no animation frames): apply at once
   if (cur.stage) commitStage(cur);
+  else if (got) foldHistory($("#col"));                       // a long run keeps its column short too (cheap until FOLD_AT)
   if (!cur.q.length) reconcileOpen(cur, v);
   if (got || prevState !== v.state) progressSoon();
   const busy = ["starting", "working", "waiting"].includes(v.state);
   cur.busy = busy; cur.working = v.state === "working";
   if (v.state === "working") { if (!cur.since) cur.since = v.turn_started ? v.turn_started * 1000 : Date.now(); } else cur.since = null;
-  if (first || prevState !== v.state || prevGoal !== v.goal || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
+  // A stream frame of only text carries no goal or title (server.py _event_stream): it must not redraw the header, which
+  // asked the server for git status on every frame of a code chat (CPU audit: ~80 /api/git requests a second while streaming).
+  if (first || prevState !== v.state || ("goal" in v && prevGoal !== v.goal) || (v.title && v.title !== cur.shownTitle)) { cur.shownTitle = v.title; renderTop(); renderBar(); }
   renderTrust(cur);
   if (first && S.panel) renderPanel();
   if (first) scrollConv(true);
   if (!cur.ready) setTimeout(() => { if (S.cur === cur && !cur.stage) cur.ready = true; }, 50);
+  if (prevState && prevState !== v.state && S.panel === "session") S.spTick?.();     // 4 s while it works, 15 s while idle
   if (prevState && prevState !== v.state && !busy) { loadThreads(); renderBranch(); if (S.panel === "diff") renderPanel(); }
   return false;
 }
@@ -1149,7 +1190,7 @@ function drainQ(cur, all) {
       if (budget <= 0) break;
       if (ev.text.length > budget) { const head = ev.text.slice(0, budget); ev.text = ev.text.slice(budget); const part = {type: "text_delta", text: head}; cur.log.push(part); applyEv(part); break; }
       q.shift(); budget -= ev.text.length;
-    } else { q.shift(); evs++; }
+    } else { q.shift(); if (!(ev.type === "thought" && ev.delta)) evs++; }   // reasoning pieces are text: they use up no step
     cur.log.push(ev); applyEv(ev);
   }
 }
@@ -1159,7 +1200,8 @@ function flushLive(cur) {
   try { mdRender(cur.live, cur.liveText); }
   catch (e) { console.warn("meshpool: could not draw the reply", e); try { cur.live.textContent = cur.liveText; } catch (_) {} }
 }
-function flushQ(cur) { drainQ(cur, true); flushLive(cur); }
+function flushThought(cur) { const td = cur.thoughtScroll; if (td) { cur.thoughtScroll = null; if (td.isConnected) td.scrollTop = td.scrollHeight; } }
+function flushQ(cur) { drainQ(cur, true); flushLive(cur); flushThought(cur); }
 // The frame loop only runs at display rate while there is something to animate (queued events, a reply easing open).
 // Otherwise it ticks slowly (the elapsed-time label needs about once a second), and not at all while the tab is hidden.
 let frameR = 0, frameT = 0;
@@ -1168,7 +1210,7 @@ function frame() {
   frameR = 0; frameT = 0;
   const cur = S.cur;
   // Never let one bad event or reply stop the loop: the live reply, the easing and the timer all run from here.
-  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); } } catch (e) { console.warn("meshpool: frame", e); }
+  try { if (cur && !cur.stage) { if (cur.q.length) drainQ(cur); flushLive(cur); flushThought(cur); } } catch (e) { console.warn("meshpool: frame", e); }
   try { easeAll(); workTick(cur); } catch (e) { console.warn("meshpool: frame", e); }
   const active = !document.hidden && cur && !cur.stage && (cur.q.length || cur.liveDirty) || EASE.size;
   if (active && !document.hidden) frameR = requestAnimationFrame(frame);
@@ -1232,16 +1274,27 @@ function mdBlocks(text) {
   return out;
 }
 function mdRoot(node) { let r = node.firstElementChild; if (!r || !r.classList.contains("mdh")) { r = document.createElement("div"); r.className = "mdh"; node.textContent = ""; node.appendChild(r); node._blocks = []; } return r; }
+// The code of a fence that is still open (the reply is streaming it), when its language line is complete.
+function openFence(src) { const parts = src.split("```"); if (parts.length % 2) return null; const p = parts[parts.length - 1]; return /^[\w+.#-]*\n/.test(p) ? p : null; }
+const CODE_RECOLOUR_MS = 300;
 function mdRender(node, text) {
   const root = mdRoot(node), prev = node._blocks || (node._blocks = []), srcs = mdBlocks(text);
   for (let i = 0; i < srcs.length; i++) {
     if (prev[i] && prev[i].src === srcs[i]) continue;
+    // A code block that streams grows by a few characters a frame: colouring all of it again every frame cost a
+    // tokenizer pass and a rebuild of every span (CPU audit). The new text is added as plain text and the block is
+    // coloured again at most every CODE_RECOLOUR_MS, and in full once its fence closes or the reply ends.
+    const pv = prev[i], add = pv && srcs[i].startsWith(pv.src) ? srcs[i].slice(pv.src.length) : null;
+    if (add && i === srcs.length - 1 && !add.includes("`") && Date.now() - (pv.hl || 0) < CODE_RECOLOUR_MS && openFence(pv.src) != null) {
+      const last = pv.nodes[pv.nodes.length - 1], code = last?.classList?.contains("codewrap") ? last.querySelector("pre > code") : null;
+      if (code) { code.appendChild(document.createTextNode(add)); pv.src = srcs[i]; continue; }
+    }
     const t = document.createElement("template"); t.innerHTML = linkFiles(md(srcs[i]));
     const nodes = [...t.content.childNodes], old = prev[i]?.nodes || [];
     const ref = old.length ? old[0] : (prev[i + 1]?.nodes[0] || null);
     for (const n of nodes) root.insertBefore(n, ref && ref.parentNode === root ? ref : null);
     for (const n of old) n.remove();
-    prev[i] = {src: srcs[i], nodes};
+    prev[i] = {src: srcs[i], nodes, hl: Date.now()};
   }
   while (prev.length > srcs.length) { for (const n of prev.pop().nodes) n.remove(); }
   return node;
@@ -1459,7 +1512,11 @@ function applyEvRaw(ev) {
         break; }
       if (ev.delta) { cur.thoughtLive = true; cur.thoughtSeen = (cur.thoughtSeen || "") + ev.text; }
       if (!cur.thought || !cur.thought.isConnected) { closeGroup(); cur.thought = add(`<details ${S.steps ? "open" : ""}><summary>Thinking</summary><div></div></details>`, "think"); }
-      const td = $("div", cur.thought); td.textContent += ev.text; td.scrollTop = td.scrollHeight; cur.activity = "Thinking"; break; }
+      // Appended, not rewritten, and scrolled once per frame (frame()): reading scrollHeight here forced a layout of the
+      // whole chat for every streamed piece of reasoning.
+      const td = $("div", cur.thought), tn = td.lastChild;
+      if (tn && tn.nodeType === 3) tn.appendData(ev.text); else td.appendChild(document.createTextNode(ev.text));
+      cur.thoughtScroll = td; cur.activity = "Thinking"; break; }
     case "plan": { cur.planEv = ev; planSoon(); break; }       // shown in the Session panel and as one line above the composer
     case "subagent": {      // delegate_task progress: one row per sub-agent, live (agent/delegate.py)
       cur.subs = cur.subs || {};
@@ -2092,15 +2149,25 @@ async function panelSession(body) {
   const sid = S.cur.id, root = curRoot();
   S.spPr = S.spPr?.sid === sid ? S.spPr : {sid, t: 0, data: null};
   body.innerHTML = `<div class="pnote">Loading...</div>`;
+  // Each refresh runs git several times on the server. It refreshes every 4 s while the agent works, every 15 s while the
+  // chat is idle, not at all while the tab is hidden, and at once when the tab or window comes back or the chat starts
+  // or stops working (S.spTick). The same answer twice is not drawn again.
+  let busy = false;
   const tick = async first => {
-    if (S.panel !== "session" || S.cur?.id !== sid) return;
+    clearTimeout(S.spT);
+    if (S.panel !== "session" || S.cur?.id !== sid || S.spTick !== tick) return;
+    if (document.hidden && !first) return;            // visibilitychange calls S.spTick again
+    if (busy) return; busy = true;
     try {
       if (!S.spPr.data || Date.now() - S.spPr.t > 30000) { api(`/api/session/${sid}/pr`).then(r => { S.spPr = {sid, t: Date.now(), data: r}; if (S.panel === "session") spDraw(sid, root, last); }).catch(() => {}); S.spPr.t = Date.now(); }
-      const d = await api(`/api/session/${sid}/panel`); last = d; spDraw(sid, root, d);
+      const d = await api(`/api/session/${sid}/panel`), j = JSON.stringify(d);
+      last = d; if (first || j !== lastJ || !$("#pbody .spw")) { spDraw(sid, root, d); if (S.spLast === d) lastJ = j; }
     } catch (e) { if (first) body.innerHTML = `<div class="pnote">${esc(e.message)}</div>`; }
-    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), 4000);
+    finally { busy = false; }
+    if (S.spTick !== tick) return;
+    clearTimeout(S.spT); S.spT = setTimeout(() => tick(false), S.cur?.busy ? 4000 : 15000);
   };
-  let last = null; clearTimeout(S.spT); tick(true);
+  let last = null, lastJ = ""; clearTimeout(S.spT); S.spTick = tick; tick(true);
 }
 function spDraw(sid, root, d) {
   const body = $("#pbody"); if (!body || !d || S.panel !== "session" || S.cur?.id !== sid) return;
@@ -3001,7 +3068,7 @@ async function restartApp(bootBefore) {
   document.addEventListener("click", e => { const b = e.target.closest(".flink, .outs [data-open]"); if (!b || !b.classList.contains("flink")) return;
     openPreview(curRoot(), b.dataset.open); });
   // New items in an open thread ease in; a thread being opened shows at once (no wave of animations).
-  new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working") n.classList.add("enter"); })
+  new MutationObserver(ms => { if (!S.cur?.ready) return; for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && n.id !== "working" && !n.classList.contains("hist")) n.classList.add("enter"); })
     .observe($("#col"), {childList: true});
   try { await Promise.all([loadSettings(), loadProjects(), loadHarnesses(), loadSkills(), loadPj()]); }
   catch (e) { $("#col").innerHTML = `<div class="hero"><h1>Meshpool could not start</h1><p class="sub">${esc(e.message)}</p></div>`; return; }
@@ -3029,7 +3096,8 @@ async function restartApp(bootBefore) {
   // The sidebar list: every 4 s while something runs, every 20 s otherwise, never while the tab is hidden.
   let thT = 0;
   setInterval(() => { if (document.hidden) return; const run = S.threads.some(t => ["working", "waiting"].includes(t.state)); if (Date.now() - thT < (run ? 3500 : 20000)) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); }, 4000);
-  document.addEventListener("visibilitychange", () => { if (document.hidden) return; thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
+  window.addEventListener("focus", () => { if (!document.hidden) S.spTick?.(); });     // back from an editor: the Session panel shows its edits
+  document.addEventListener("visibilitychange", () => { if (document.hidden) return; S.spTick?.(); thT = Date.now(); Promise.resolve(loadThreads()).catch(() => {}); wakeFrame(); const c = S.cur; if (c && !c.stage) { clearTimeout(c.pollT); c.quiet = 0; poll(); } });
 })();
 
 /* ---------- pull requests: the repository's pull requests, one in full with its diff, checks, runs and deployments ---------- */
