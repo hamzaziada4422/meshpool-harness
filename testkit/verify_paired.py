@@ -32,6 +32,11 @@ def load(paths):
     return rows
 
 
+def passed(r):
+    """Code suites record "pass"; office suites (bench3) record "ok"."""
+    return bool(r.get("pass") if "pass" in r else r.get("ok"))
+
+
 def cost(r):
     for k in ("usd", "cost", "cost_usd"):
         if r.get(k) is not None:
@@ -72,7 +77,7 @@ def main():
     for arm in (a.a, a.b):
         rs = [r for t in common for r in by[(arm, t)]]
         errs = [r for r in rs if r.get("error")]
-        solved = sum(1 for r in rs if r.get("pass"))
+        solved = sum(1 for r in rs if passed(r))
         usd = sum(cost(r) for r in rs)
         print(f"{arm:>10}: solved {solved}/{len(rs)} ({100 * solved / max(1, len(rs)):.1f}%)  $ {usd:.4f}  "
               f"$/solved {usd / max(1, solved):.5f}  median s {statistics.median(r.get('secs') or 0 for r in rs):.1f}  "
@@ -84,8 +89,8 @@ def main():
         tr = []
         for t in ts:
             ra, rb = by[(a.a, t)], by[(a.b, t)]
-            sa += sum(1 for r in ra if r.get("pass"))
-            sb += sum(1 for r in rb if r.get("pass"))
+            sa += sum(1 for r in ra if passed(r))
+            sb += sum(1 for r in rb if passed(r))
             na += len(ra)
             nb += len(rb)
             ca += sum(cost(r) for r in ra)
