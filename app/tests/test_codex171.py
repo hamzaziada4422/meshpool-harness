@@ -107,7 +107,11 @@ def test_mh_profile_c171_reaches_a_chat_routed_on_its_first_message(tmp_path, mo
     assert [t["function"]["name"] for t in a.bodies[0]["tools"]] == ["exec_command"]
 
 
-def test_other_profiles_are_unchanged(tmp_path):
+def test_other_profiles_are_unchanged(tmp_path, monkeypatch):
+    a = Agent(str(_proj(tmp_path)), mode="auto")
+    a.set_route(_route("core"), "x")
+    assert a._c171()                                       # the default code lane now sends Codex 0.171's request
+    monkeypatch.setenv("MH_SMALL_REPO_STYLE", "core")      # opt back into the lean core
     for profile, tools in (("codex", ["shell", "apply_patch", "update_plan"]), ("core", ["shell", "apply_patch",
                                                                                           "update_plan"])):
         a = Agent(str(_proj(tmp_path)), mode="auto")

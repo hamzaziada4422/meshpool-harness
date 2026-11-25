@@ -1275,7 +1275,7 @@ class Agent:
         CLI 0.171 sends. Its base instructions (prompt-171.md), one tool, exec_command (core/tools.py), plus the user's
         own MCP tools, and its <environment_context> as a user message of its own (_c171_env). Like _bare_codex: no
         preload, re-check, keep or requirement notes, route card or grader. The loop guards and compaction stay.
-        Default for a lean-core code chat in a repo too large to preload (MH_LARGE_REPO_STYLE, default "c171"): swe7
+        Default for every lean-core code chat (MH_SMALL_REPO_STYLE and MH_LARGE_REPO_STYLE, default "c171"): swe7
         (swe_sympy, 12 tasks x 2, docs/results/swe7) c171 solved 22/24 vs Codex 21/24 at 0.73x its cost per solved
         task (CI 0.57-0.90), 0.93x its time; the lean core there solved 20/24 at 1.86x. MH_LARGE_REPO_STYLE=codex
         keeps the plain Codex design (_bare_codex), =core the lean core."""
@@ -1284,8 +1284,14 @@ class Agent:
                 return False
             if self.hsettings().get("codex171"):
                 return True
-            return (os.environ.get("MH_LARGE_REPO_STYLE", "c171") == "c171"
-                    and bool(self.hsettings().get("lean_core")) and self._large_repo())
+            if not self.hsettings().get("lean_core"):
+                return False
+            if self._large_repo():
+                return os.environ.get("MH_LARGE_REPO_STYLE", "c171") == "c171"
+            # every other code chat too (MH_SMALL_REPO_STYLE, default "c171"; =core keeps the lean core): frozen round on
+            # 1c0b6df5, v2_dev code (21 tasks x 2), the lean core solved 34/42 vs Codex 38/42; its losses were short
+            # runs that stopped before checking edge cases Codex checked
+            return os.environ.get("MH_SMALL_REPO_STYLE", "c171") == "c171"
         except Exception:  # noqa: BLE001
             return False
 

@@ -225,7 +225,9 @@ def test_large_repo_style_codex_switch(tmp_path, monkeypatch):
                           settings=PR.settings("core")), "fix it")
         return a
     d = chat(big)                                               # default: Codex 0.171's request on a large repo
-    assert d._c171() and not d._lean() and chat(small)._lean() and not chat(small)._c171()
+    assert d._c171() and not d._lean() and chat(small)._c171()          # every code chat: Codex 0.171's request
+    monkeypatch.setenv("MH_SMALL_REPO_STYLE", "core")
+    assert chat(small)._lean() and not chat(small)._c171()
     assert d.tool_schemas()[0]["function"]["name"] == "exec_command"
     monkeypatch.setenv("MH_LARGE_REPO_STYLE", "core")
     assert chat(big)._lean() and chat(small)._lean()           # =core: both lean
