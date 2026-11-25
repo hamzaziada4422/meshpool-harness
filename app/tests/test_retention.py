@@ -26,3 +26,14 @@ def test_old_chats_go_and_pinned_ones_stay(tmp_path, monkeypatch):
     gone = A.prune_old_chats(30)
     assert gone == ["old1"] and not (tmp_path / "old1").exists()
     assert (tmp_path / "old2").exists() and (tmp_path / "new1").exists()
+
+
+def test_sub_agents_open_chats_and_short_values_are_spared(tmp_path, monkeypatch):    # third review, 9
+    monkeypatch.setattr(A, "SESSIONS", tmp_path)
+    monkeypatch.setattr(A, "LIVE", {"open1": object()})
+    _chat(tmp_path, "sub-abc", 40)
+    _chat(tmp_path, "open1", 40)
+    _chat(tmp_path, "old3", 40)
+    assert A.prune_old_chats(0.01) == []                                  # under a day: off
+    assert A.prune_old_chats(30) == ["old3"]
+    assert (tmp_path / "sub-abc").exists() and (tmp_path / "open1").exists()

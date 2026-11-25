@@ -1737,11 +1737,11 @@ def thread_action(sid: str, body: dict) -> dict:
     elif act in ("archive", "unarchive"):
         write_meta(sid, archived=act == "archive")
     elif act == "keep_version":                      # Try again: the answer being replaced stays viewable
-        turn, text = int(body.get("turn") or 0), str(body.get("text") or "")[:100000]
+        turn, text = int(body.get("turn") or 0), str(body.get("text") or "")[:20000]
         if turn < 1 or not text.strip():
             raise ValueError("Give the reply's turn and text.")
         vs = {k: v for k, v in (read_meta(sid).get("versions") or {}).items() if k.isdigit() and int(k) < turn}
-        vs[str(turn)] = ((read_meta(sid).get("versions") or {}).get(str(turn)) or [])[-8:] + [text]
+        vs[str(turn)] = ((read_meta(sid).get("versions") or {}).get(str(turn)) or [])[-3:] + [text]
         write_meta(sid, versions=vs)
     elif act in ("seen", "unseen"):                   # the blue dot: a finished chat nobody has opened yet
         write_meta(sid, unread=act == "unseen")
@@ -1941,7 +1941,8 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
             days = float(os.environ.get("MH_KEEP_DAYS") or C.read().get("MH_KEEP_DAYS") or 0)
         except ValueError:
             days = 0
-    if not days or days <= 0 or not SESSIONS.is_dir():
+    days = int(days or 0)
+    if days < 1 or not SESSIONS.is_dir():
         return []
     cutoff = (now or time.time()) - days * 86400
     gone = []
@@ -1949,11 +1950,10 @@ def prune_old_chats(days: float | None = None, now: float | None = None) -> list
         if not d.is_dir() or d.name.startswith((".", "_")):
             continue
         sid = d.name
-        live = LIVE.get(sid)
-        if live is not None and live.state in ("working", "waiting"):
+        if sid.startswith("sub-") or sid in LIVE:      # a sub-agent's own record, or a chat that is open now
             continue
         meta = read_meta(sid)
-        if meta.get("pinned") or meta.get("scheduled") and live is not None:
+        if meta.get("pinned"):
             continue
         try:
             last = max(f.stat().st_mtime for f in d.iterdir()) if any(d.iterdir()) else d.stat().st_mtime

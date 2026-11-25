@@ -13,6 +13,13 @@ def test_read_only_keeps_read_tools():
                                                              "runReport"]
 
 
+def test_read_only_is_an_allow_list():                                      # third review, 1
+    names = ["apply_migration", "push_files", "deploy_edge_function", "buy_domain", "sandbox_exec", "createIssue",
+             "sendMessage", "deletePage", "fork_repository", "getIssue", "listProjects", "search_code", "frobnicate"]
+    assert [t["name"] for t in M.read_only_tools([{"name": n} for n in names])] == ["getIssue", "listProjects",
+                                                                                    "search_code"]
+
+
 def test_the_setting_reaches_the_server_spec(tmp_path, monkeypatch):
     monkeypatch.setenv("MESHPOOL_HOME", str(tmp_path))
     from meshpool_harness import mcp_apps as CN

@@ -189,6 +189,13 @@ w = call(f"/api/agent/{fid}/fork", {"turn": 0})
 check("a branch of the whole chat has all of it", [e.get("text") for e in w.get("events", []) if e.get("type") == "user"] == ou)
 check("a turn that is not there is refused", call(f"/api/agent/{fid}/fork", {"turn": 9}).get("_http") == 400)
 
+# ---- reply versions: Try again keeps them; Undo or Edit of that message clears them
+call(f"/api/threads/{fid}", {"action": "keep_version", "turn": 2, "text": "an earlier answer"})
+call(f"/api/agent/{fid}/revert", {"turn": 2, "what": "chat", "keep_versions": True})
+check("Try again keeps the earlier answer", (call(f"/api/agent/{fid}?since=1000000").get("versions") or {}).get("2") == ["an earlier answer"])
+call(f"/api/agent/{fid}/revert", {"turn": 1, "what": "chat"})
+check("Undo clears the kept answers of the messages it removes", not call(f"/api/agent/{fid}?since=1000000").get("versions"))
+
 ok = sum(1 for _, x in RESULTS if x)
 print(f"\n{ok}/{len(RESULTS)} passed")
 sys.exit(0 if ok == len(RESULTS) else 1)

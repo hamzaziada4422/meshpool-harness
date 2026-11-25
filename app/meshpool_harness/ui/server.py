@@ -1044,6 +1044,10 @@ class Handler(BaseHTTPRequestHandler):
                     s_.set_effort(b.get("effort", ""))
                 else:
                     s_.revert(int(b.get("turn", 0)), str(b.get("what") or "both"))
+                    if not b.get("keep_versions"):   # Undo or Edit: the earlier answers belonged to that message
+                        vs = {k: v for k, v in (A.read_meta(s_.id).get("versions") or {}).items()
+                              if k.isdigit() and int(k) < int(b.get("turn", 0))}
+                        A.write_meta(s_.id, versions=vs)
                 return self._send(200, s_.view(int(b.get("since", 10**9))))
             m = re.fullmatch(r"/api/agent/([\w-]+)/reply", u.path)     # an answer to an ask_user question
             if m:

@@ -65,17 +65,35 @@ def _check_ip(url: str, host: str, ip) -> None:
 
 
 def _domains(key: str) -> list[str]:
-    return [d.strip().lower().lstrip(".").removeprefix("*.") for d in os.environ.get(key, "").split(",") if d.strip()]
+    return [d.strip().lower().lstrip(".").removeprefix("*.").rstrip(".") for d in os.environ.get(key, "").split(",")
+            if d.strip()]
 
 
 def _covers(host: str, domain: str) -> bool:
     return host == domain or host.endswith("." + domain)
 
 
+def _host_of(url: str) -> str:
+    """The host a browser or HTTP client would reach, normalised (IDNA, case, trailing dots); "" when unclear."""
+    u = str(url or "").strip()
+    if "\\" in u or u.startswith("//") or "://" not in u or re.search(r"[\x00-\x20]", u.split("#")[0]):
+        return ""
+    host = (urllib.parse.urlsplit(u).hostname or "").strip()
+    try:
+        host = host.encode("idna").decode("ascii") if host and not host.isascii() else host
+    except UnicodeError:
+        return ""
+    return host.rstrip(".").lower()
+
+
 def check_domain(url: str) -> None:
     """The user's site lists: never the blocked sites; only the allowed ones when there are any."""
-    host = (urllib.parse.urlparse(url).hostname or "").rstrip(".").lower()
     deny, allow = _domains("MH_FETCH_DENY"), _domains("MH_FETCH_ALLOW")
+    if not deny and not allow:
+        return
+    host = _host_of(url)
+    if not host:
+        raise WebError(f"refused {url[:120]}: its address is unclear, and your site lists need a clear host.")
     if any(_covers(host, d) for d in deny):
         raise WebError(f"refused {url}: {host} is on your list of sites agents never read (Settings, MH_FETCH_DENY).")
     if allow and not any(_covers(host, d) for d in allow):
@@ -646,6 +664,7 @@ def fetch(url: str, refresh: bool = False) -> dict:
         url = "https://" + url if re.match(r"[\w.-]+\.[a-z]{2,}(/|$)", url, re.I) else url
     if not re.match(r"https?://", url, re.I):
         raise WebError("url must start with http:// or https://")
+    check_domain(url)                                 # before the cache: a site blocked since is never served
     with _LOCK:
         hit = _CACHE.get(url)
     if hit and not refresh and time.time() - hit[0] < 900:

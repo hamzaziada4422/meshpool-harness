@@ -102,6 +102,8 @@ def rule_globs(f: Path) -> list[str]:
     meta, _ = SK.parse(text)
     if str(meta.get("alwaysApply", "")).strip().lower() == "true":
         return []
+    manual = str(meta.get("alwaysApply", "")).strip().lower() == "false" and not (meta.get("globs") or meta.get("paths")
+                                                                                  or "\npaths:" in text)
     raw = meta.get("paths") or meta.get("globs") or ""
     if not raw and text.find("\npaths:") > 0:            # a YAML list under paths:
         try:
@@ -111,12 +113,13 @@ def rule_globs(f: Path) -> list[str]:
         except Exception:  # noqa: BLE001
             raw = ""
     items = raw if isinstance(raw, list) else str(raw).strip("[]").split(",")
-    return [str(x).strip().strip("'\"") for x in items if str(x).strip().strip("'\"")]
+    out = [str(x).strip().strip("'\"") for x in items if str(x).strip().strip("'\"")]
+    return out or (["(only when asked for)"] if manual else [])     # a manual Cursor rule: never loaded by itself
 
 
 def _glob_match(rel: str, pat: str) -> bool:
     import fnmatch
-    pat = pat.lstrip("./")
+    pat = pat.removeprefix("./").lstrip("/")
     if fnmatch.fnmatchcase(rel, pat) or fnmatch.fnmatchcase(rel, pat.replace("**/", "")):
         return True
     return "/" not in pat and fnmatch.fnmatchcase(rel.rsplit("/", 1)[-1], pat)   # *.ts matches at any depth

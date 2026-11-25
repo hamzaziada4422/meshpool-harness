@@ -355,6 +355,8 @@ def test_a_status_line_command_shows_in_the_footer(tmp_path, monkeypatch):
     script.chmod(0o755)
     monkeypatch.setenv("MH_STATUSLINE", str(script))
     t, out, clk = S.make_terminal()
+    t.cwd = str(tmp_path)
+    t._sl_ok = True                                                         # the folder check has its own test
     t.footer_line()
     for _ in range(40):
         if getattr(t, "_sl_text", ""):

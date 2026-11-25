@@ -50,7 +50,7 @@ def parse(expr: str) -> tuple:
     mins, hours, dom, months, dow = (_field(p, lo, hi, n) for p, (lo, hi), n in
                                      zip(parts, _RANGES, ({}, {}, {}, _MONTHS, _DAYS)))
     dow = {0 if d == 7 else d for d in dow}
-    return mins, hours, dom, months, dow, parts[2] != "*", parts[4] != "*"
+    return mins, hours, dom, months, dow, not parts[2].startswith("*"), not parts[4].startswith("*")
 
 
 def validate(expr: str, min_gap_minutes: int = 15) -> str:
@@ -60,6 +60,8 @@ def validate(expr: str, min_gap_minutes: int = 15) -> str:
     gaps = [b - a for a, b in zip(ms, ms[1:])] + [60 - ms[-1] + ms[0]]
     if len(ms) > 1 and min(gaps) < min_gap_minutes:
         raise CronError(f"That runs more often than every {min_gap_minutes} minutes.")
+    if next_after(expr, datetime(2026, 1, 1)) is None:
+        raise CronError("That date never comes (like 30 February).")
     return " ".join(str(expr).split())
 
 
@@ -73,8 +75,9 @@ def next_after(expr: str, after: datetime) -> datetime | None:
             t = (t.replace(day=1, hour=0, minute=0) + timedelta(days=32)).replace(day=1)
             continue
         cron_dow = (t.weekday() + 1) % 7               # Python: Monday 0; cron: Sunday 0
+        # both day fields restricted: either one (cron's rule); one starting with *: both must match (Vixie cron)
         day_ok = ((t.day in dom) or (cron_dow in dow)) if (dom_set and dow_set) else \
-            (t.day in dom if dom_set else True) and (cron_dow in dow if dow_set else True)
+            (t.day in dom and cron_dow in dow)
         if not day_ok:
             t = t.replace(hour=0, minute=0) + timedelta(days=1)
             continue

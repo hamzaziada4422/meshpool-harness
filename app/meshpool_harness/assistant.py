@@ -472,6 +472,17 @@ def _hm(s: str) -> tuple[int, int]:
 
 
 def next_run(t: dict, after: datetime | None = None) -> float | None:
+    """The next time a task runs, as a timestamp after now. Local wall-clock times that a clock change makes
+    ambiguous are stepped past, so a task never fires on every tick of the repeated hour."""
+    nxt = _next_run(t, after)
+    tries = 0
+    while nxt is not None and nxt <= time.time() and tries < 4 and t.get("when") != "once":
+        tries += 1
+        nxt = _next_run(t, datetime.fromtimestamp(time.time()) + timedelta(minutes=61 * tries))
+    return nxt
+
+
+def _next_run(t: dict, after: datetime | None = None) -> float | None:
     now = (after or datetime.now()).replace(second=0, microsecond=0)
     w = t.get("when")
     if w == "once":

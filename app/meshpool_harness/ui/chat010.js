@@ -314,8 +314,8 @@ function acts010(n, text) {
     if (on) { b.setAttribute("aria-pressed", "true"); b.classList.add("on"); feedback010(b.dataset.ra); toast(b.dataset.ra === "up" ? "Thanks." : "Thanks. Meshpool will use agents like this less for this kind of task.", 3500); }
   };
 }
-async function rewind010(n) {
-  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9});
+async function rewind010(n, keepVersions) {
+  await post(`/api/agent/${S.cur.id}/revert`, {turn: n, since: 1e9, keep_versions: !!keepVersions});
   renderBranch(); clearTimeout(S.cur.pollT); resetChat(S.cur); await poll(); if (S.panel === "diff") renderPanel();
 }
 async function retry010(n) {
@@ -325,7 +325,7 @@ async function retry010(n) {
   const log = threadLog(), users = log.map((e, i) => e.type === "user" && !e.steer ? i : -1).filter(i => i >= 0);
   const reply = log.slice(users[n - 1], users[n] ?? log.length).filter(e => e.type === "assistant" && (e.text || "").trim()).pop()?.text || "";
   if (reply) { try { await post(`/api/threads/${S.cur.id}`, {action: "keep_version", turn: n, text: reply}); } catch (e) { /* the retry still runs */ } }
-  try { await rewind010(n); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
+  try { await rewind010(n, true); feedback010("retry"); $("#input").value = asked; sendNow(false); } catch (e) { toast(e.message); }
 }
 document.addEventListener("click", async e => {
   const b = e.target.closest('[data-ma="edit"]'); if (!b || !S.cur) return;

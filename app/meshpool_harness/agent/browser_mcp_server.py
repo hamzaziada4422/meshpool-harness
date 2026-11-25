@@ -165,6 +165,7 @@ class Browser:
             if why:
                 raise ToolFailed(why)
         if self.ctx is not None and self._alive():
+            self._guard_sites()
             return
         own = mode == "meshpool" and bundled.packaged()     # the app's own Chromium (app/vendor/browsers)
         if own:
@@ -187,8 +188,27 @@ class Browser:
         self.ctx.set_default_timeout(20000)
         if self.page is None or self.page.is_closed():
             self.page = self.ctx.pages[0] if self.ctx.pages else self.ctx.new_page()
+        self._guard_sites()
 
-    def _launch(self, prof: Path, **kw):
+    def _guard_sites(self):
+        """The user's site lists (Settings) for every page the browser goes to: links, redirects, scripts, Back."""
+        if not (os.environ.get("MH_FETCH_ALLOW") or os.environ.get("MH_FETCH_DENY")) or getattr(self, "_guarded", None) is self.ctx:
+            return
+        from meshpool_harness import web as WEB
+
+        def check(route, request):
+            u = request.url
+            if request.is_navigation_request() and u.lower().startswith(("http:", "https:")):
+                try:
+                    WEB.check_domain(u)
+                except WEB.WebError:
+                    return route.abort("blockedbyclient")
+            return route.continue_()
+        try:
+            self.ctx.route("**/*", check)
+            self._guarded = self.ctx
+        except Exception:  # noqa: BLE001 - a browser that cannot route keeps the first-page check only
+            pass
         prof.mkdir(parents=True, exist_ok=True)
         return self.pw.chromium.launch_persistent_context(
             str(prof), headless=kw.pop("headless"), no_viewport=True,
@@ -324,7 +344,7 @@ B = Browser()
 
 def browser_open(url: str) -> str:
     u = url.strip()
-    if "://" not in u and not u.startswith(("about:", "file:")):
+    if "://" not in u and not u.startswith(("about:", "file:", "//")):
         u = "https://" + u
     if u.lower().startswith(("http:", "https:")):          # the user's site lists (Settings) apply here too
         from meshpool_harness import web as WEB

@@ -636,22 +636,42 @@ def _sse_spec(spec: dict) -> bool:
 # ---------- one server ---------------------------------------------------------------------------------------------
 
 RES_LIST, RES_READ = "mcp__meshpool_resources__list_resources", "mcp__meshpool_resources__read_resource"
-_WRITE_WORDS = re.compile(r"(^|[_\-.])(create|update|delete|remove|send|post|write|add|set|put|patch|edit|move|merge|"
-                          r"archive|close|reopen|assign|invite|upload|publish|cancel|approve|reply|comment|insert|"
-                          r"modify|rename|transfer|trigger|run|execute|start|stop|pause|resume|mark|label|draft|"
-                          r"schedule|share|duplicate|enable|disable|batch|bulk|forward|trash|untrash)([_\-.]|$)", re.I)
+_READ_WORDS = {"get", "list", "search", "read", "fetch", "find", "query", "describe", "view", "show", "lookup",
+               "count", "retrieve", "browse", "check", "inspect", "status", "info", "stats", "preview", "explain",
+               "summarize", "summary", "download", "export", "resolve", "estimate", "validate", "analyze", "lookup"}
+_WRITE_VERBS = {"create", "update", "delete", "remove", "send", "post", "write", "add", "set", "put", "patch", "edit",
+                "move", "merge", "archive", "close", "reopen", "assign", "invite", "upload", "publish", "cancel",
+                "approve", "reply", "comment", "insert", "modify", "rename", "transfer", "trigger", "run", "execute",
+                "exec", "start", "stop", "pause", "resume", "mark", "label", "draft", "schedule", "share", "duplicate",
+                "enable", "disable", "batch", "bulk", "forward", "trash", "untrash", "apply", "deploy", "push", "fork",
+                "buy", "submit", "kill", "revoke", "rotate", "restore", "reset", "upsert", "import", "commit",
+                "complete", "replace", "connect", "disconnect", "purchase", "pay", "charge", "refund", "migrate",
+                "drop", "truncate", "grant", "unlock", "lock", "login", "logout", "register", "subscribe",
+                "unsubscribe", "save", "store", "toggle", "rerun", "retry", "invoke", "call", "generate", "make",
+                "build", "install", "uninstall", "configure", "provision", "terminate", "rollback", "promote",
+                "release", "sync", "clone", "copy", "attach", "detach", "link", "unlink", "react", "vote", "follow",
+                "unfollow", "block", "unblock", "mute", "unmute", "pin", "unpin", "star", "unstar", "accept",
+                "decline", "reject", "dismiss", "resolve_thread", "rate", "tag", "untag", "notify", "email", "message",
+                "book", "order", "sign", "request", "convert", "clear", "flush", "purge", "wipe", "erase"}
+
+
+def _words(name: str) -> list[str]:
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", str(name or ""))     # createIssue -> create_Issue
+    return [w for w in re.split(r"[^A-Za-z0-9]+", s.lower()) if w]
 
 
 def read_only_tools(tools: list[dict]) -> list[dict]:
-    """The tools of a connector in read-only mode: those the server marks readOnlyHint, and, when it marks none,
-    those whose names do not say they change something (create, update, delete, send...)."""
+    """The tools of a connector in read-only mode. The server's own readOnlyHint decides when it gives one; else a
+    tool stays only when its name has a read word (get, list, search...) and no word that changes something
+    (create, push, deploy, apply...): an allow list, so an unknown verb is left out, not let through."""
     def ok(t):
         ann = t.get("annotations") or {}
-        if ann.get("readOnlyHint") is True:
+        if ann.get("readOnlyHint") is True and ann.get("destructiveHint") is not True:
             return True
         if ann.get("readOnlyHint") is False or ann.get("destructiveHint") is True:
             return False
-        return not _WRITE_WORDS.search(str(t.get("name") or ""))
+        w = _words(t.get("name"))
+        return bool(set(w) & _READ_WORDS) and not (set(w) & _WRITE_VERBS)
     return [t for t in tools if ok(t)]
 
 

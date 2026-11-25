@@ -709,15 +709,13 @@ def test_a_cut_off_reply_is_kept_and_the_request_id_shown(tmp_path, monkeypatch)
     assert a.last_request_id == "req_abc123"
     srv.shutdown()
     events = []
+    monkeypatch.setenv("MESHPOOL_API_KEY", "k")
     b = Agent(str(tmp_path), mode="auto", emit=events.append)
-    b._partial_text = "Half of the answer"
 
-    def fail(*x, **k):
-        raise RuntimeError("HTTP 0: connection problem (timed out)")
+    def fail(self, *x, **k):
+        self._keep_partial(["Half of the answer"])           # the stream dropped after some text, every time
+        raise RuntimeError("HTTP 400: the endpoint could not take this request")
     monkeypatch.setattr(Agent, "_post", fail)
-    monkeypatch.setattr(Agent, "_await_endpoint", lambda *x, **k: False, raising=False)
-    import meshpool_harness.agent.core as K
-    monkeypatch.setattr(K.GW, "health", lambda *x, **k: type("H", (), {"check": lambda self, *a, **kw: "down"})())
     b.send("go")
     kept = [e for e in events if e["type"] == "assistant"]
     assert kept and kept[-1]["text"].startswith("Half of the answer") and "cut off" in kept[-1]["text"]
