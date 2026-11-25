@@ -859,3 +859,21 @@ def test_concurrent_sub_agents_share_the_chats_usage_task(_env):
     for t in ts:
         t.join()
     assert len({id(t) for t in got}) == 1
+
+
+def test_parallel_sub_agents_share_one_parent_task_outside_a_turn(monkeypatch, _env):
+    """CI 3.12 on be4cb764: two sub-agent threads each made the chat's usage task, and one's calls went uncounted."""
+    import time as _t
+    from meshpool_harness.core import usage as U
+    real = U.start_task
+
+    def slow(*a, **kw):
+        _t.sleep(0.05)                                     # widen the window the race needed
+        return real(*a, **kw)
+    monkeypatch.setattr(U, "start_task", slow)
+    fake(monkeypatch, lambda b: _msg("ok"))
+    a = _agent(_env)
+    for _ in range(3):
+        a._task, before = None, dict(a.usage)
+        D.run_tool(a, {"tasks": [{"goal": f"Research company {n} pricing"} for n in ("A", "B", "C")]})
+        assert a.usage["calls"] - before["calls"] == 3

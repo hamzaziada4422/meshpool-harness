@@ -34,3 +34,12 @@ def test_wrapper_programs_are_never_granted_for_the_chat():
         assert PR.grant_patterns(cmd) == [], prog
         assert not PR.granted(cmd, [prog]), prog
     assert PR.granted("git status", ["git status"]) and PR.granted("pytest -q", ["pytest"])
+
+
+def test_reads_outside_the_project_still_resolve(tmp_path):
+    """1e954486 ran relative_to(root) on every path, so reading an attached file outside the project raised."""
+    from meshpool_harness.core.tools import Workspace
+    (tmp_path / "proj").mkdir()
+    (tmp_path / "up.txt").write_text("x")
+    ws = Workspace(str(tmp_path / "proj"), str(tmp_path / "run"))
+    assert ws._path(str(tmp_path / "up.txt")) == (tmp_path / "up.txt").resolve()
