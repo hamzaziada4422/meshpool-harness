@@ -1,0 +1,341 @@
+From 7e4c961ee09b5c7c83e68de1265537ef84ee0817 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 25 Nov 2026 03:27:59 +0000
+Subject: [PATCH] Office direct: notes name the libraries, not engine tools;
+ make_deck/make_spreadsheet save_as
+
+---
+ .../agent/office_mcp_server.py                | 53 +++++++++++---
+ app/meshpool_harness/assistant.py             | 17 ++++-
+ app/meshpool_harness/capabilities.py          | 25 ++++++-
+ app/meshpool_harness/ui/agent_api.py          | 17 ++++-
+ app/tests/test_office_direct_notes.py         | 73 +++++++++++++++++++
+ 5 files changed, 165 insertions(+), 20 deletions(-)
+ create mode 100644 app/tests/test_office_direct_notes.py
+
+diff --git a/app/meshpool_harness/agent/office_mcp_server.py b/app/meshpool_harness/agent/office_mcp_server.py
+index 7e361ede..ebdcece6 100644
+--- a/app/meshpool_harness/agent/office_mcp_server.py
++++ b/app/meshpool_harness/agent/office_mcp_server.py
+@@ -78,8 +78,36 @@ def _run_job(jid: str, should_stop=None):
+     OJ.run(jid, should_stop=should_stop)
+ 
+ 
+-def _report(jid: str) -> tuple[str, bool]:
+-    return OJ.report(jid)
++SAVE_AS: dict[str, str] = {}   # job id -> the file name the user asked for (save_as)
++
++
++def _report(jid: str, reused: str = "") -> tuple[str, bool]:
++    text, failed = OJ.report(jid, reused=reused)
++    want = SAVE_AS.get(jid)
++    if want and not failed and OJ.JOBS.get(jid, {}).get("done"):
++        text += _save_copy(jid, want)
++    return text, failed
++
++
++def _save_copy(jid: str, want: str) -> str:
++    """Copy the job's file to the name the user asked for (save_as), in the project folder. office3 trace (pptx_chart):
++    the deck stayed at "Meshpool outputs/<job>/deck.pptx", the user's ./deck.pptx never existed and the task failed.
++    An existing file is not replaced (_dest picks "name (2).ext"); the same job is copied once."""
++    import shutil
++    ext = Path(want).suffix.lower()
++    made = [m for m in OJ._made(OJ.JOBS[jid]) if m.suffix.lower() == ext]
++    if not ext or not made:
++        return f"\nNot saved as {want}: the job made no {ext or 'such'} file."
++    done = OJ.JOBS[jid].get("saved_as")
++    if not done:
++        dest = _dest(want, made[0].name, ext, named=True)
++        shutil.copy2(made[0], dest)
++        done = OJ.JOBS[jid]["saved_as"] = str(dest)
++    try:
++        shown = str(Path(done).relative_to(_project()))
++    except ValueError:
++        shown = done
++    return f"\nSaved as: {shown} (the file the user asked for; the job folder keeps the build)."
+ 
+ 
+ def _scope() -> str:
+@@ -87,7 +115,7 @@ def _scope() -> str:
+     return os.environ.get("MH_CHAT_ID") or f"pid{os.getpid()}"
+ 
+ 
+-def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
++def _engine(engine: str, request: str, files: list | None, save_as: str | None = None) -> tuple[str, bool]:
+     paths, missing = OJ.resolve_files(_project(), files)
+     if missing:
+         return f"Input file not found: {missing}", True
+@@ -98,8 +126,10 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
+                            model=getattr(_CALL, "model", None) or None)   # the chat's model, as office_task passes it
+     if reused == "refused":
+         return OJ.refusal_text(jid), False
++    if save_as and str(save_as).strip():
++        SAVE_AS[jid] = str(save_as).strip()
+     if reused == "done":
+-        return OJ.report(jid, reused=reused)
++        return _report(jid, reused=reused)
+     if reused == "running":
+         OJ.JOBS[jid]["event"].wait(WAIT)
+         return _report(jid)
+@@ -113,7 +143,7 @@ def _engine(engine: str, request: str, files: list | None) -> tuple[str, bool]:
+ def make_deck(request: str, files: list | None = None, audience: str | None = None, purpose: str | None = None,
+               density: str | None = None, slides: int | None = None, theme: str | None = None,
+               opening: str | None = None, closing: str | None = None, sources: str | None = None,
+-              brief_ok: bool = False, icon_set: str | None = None):
++              brief_ok: bool = False, icon_set: str | None = None, save_as: str | None = None):
+     """Settle the brief first (engines/forge/brief.py): if the request and fields leave audience, density, length
+     or look open, return the questions (BRIEF NEEDED) instead of building. brief_ok, "use defaults" in the request,
+     or a headless run (MH_ASK_AUTO=1) builds with the recommended answers."""
+@@ -126,11 +156,11 @@ def make_deck(request: str, files: list | None = None, audience: str | None = No
+             sys.path.insert(0, str(APP))
+         from engines.forge import brief as BR
+     except Exception:  # noqa: BLE001  engines not shipped: build from the request as it is
+-        return _engine("slides", request, files)
++        return _engine("slides", request, files, save_as)
+     qs = BR.questions(request, files, fields)
+     if qs and not (brief_ok or BR.wants_defaults(request) or os.environ.get("MH_ASK_AUTO") == "1"):
+         return BR.needed_text(qs, "make_deck"), False
+-    return _engine("slides", BR.complete(request, files, fields), files)
++    return _engine("slides", BR.complete(request, files, fields), files, save_as)
+ 
+ 
+ def add_slides(deck: str, request: str, slides: int = 1, files: list | None = None):
+@@ -141,8 +171,8 @@ def add_slides(deck: str, request: str, slides: int = 1, files: list | None = No
+                    [deck] + [f for f in files or [] if f != deck])
+ 
+ 
+-def make_spreadsheet(request: str, files: list | None = None):
+-    return _engine("sheets", request, files)
++def make_spreadsheet(request: str, files: list | None = None, save_as: str | None = None):
++    return _engine("sheets", request, files, save_as)
+ 
+ 
+ def analyze_data(request: str, files: list | None = None):
+@@ -932,11 +962,12 @@ TOOLS = {
+                   {"request": S, "files": FILES, "audience": S, "purpose": S,
+                    "density": {"type": "string", "enum": ["present", "balanced", "read"]},
+                    "slides": {"type": "integer"}, "theme": S, "icon_set": S, "opening": S, "closing": S,
+-                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"}},
++                   "sources": S, "brief_ok": {"type": "boolean", "description": "Build with the recommendations"},
++                   "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}},
+                   ["request"]),
+     "make_spreadsheet": (make_spreadsheet, "Build a new .xlsx with live formulas (model, budget, tracker). Not for "
+                          "changing a file that exists: use edit_office_file. 2 to 6 minutes.",
+-                         {"request": S, "files": FILES}, ["request"]),
++                         {"request": S, "files": FILES, "save_as": {"type": "string", "description": "The file name the user asked for, e.g. deck.pptx"}}, ["request"]),
+     "analyze_data": (analyze_data, "Analyze CSV or Excel data into charts, tables and a summary.",
+                      {"request": S, "files": FILES}, ["request", "files"]),
+     "make_document": (make_document, "Save Markdown as a .docx. Saved as `filename` in the project folder.",
+diff --git a/app/meshpool_harness/assistant.py b/app/meshpool_harness/assistant.py
+index a6f2ab05..7c3030f1 100644
+--- a/app/meshpool_harness/assistant.py
++++ b/app/meshpool_harness/assistant.py
+@@ -32,6 +32,14 @@ ENGINES = ("Slides and workbooks come from the Meshpool office tools: make_deck
+            "hand with python-pptx, openpyxl, xlsxwriter or pptxgenjs; pass the user's facts and files in the request. "
+            "To change a file the user already has (.docx, .xlsx, .pptx), use edit_office_file: it keeps their "
+            "formatting and formulas.")
++# Office direct (a lean Work chat, core._office_direct_on): the agent writes small office files itself, as Codex does.
++# office3 trace (xlsx_budget, 2 reps): told "never write a .xlsx by hand" while the hand-build guard was off and the
++# engines were not the way, one rep read Meshpool's own source for 27 calls looking for a way (59 calls); the rep that
++# wrote it with openpyxl took 7.
++ENGINES_DIRECT = ("Office files: write a new workbook, document, deck or PDF yourself with openpyxl, python-docx, "
++                  "python-pptx or reportlab, in the project folder under the name the user gave; formulas stay live "
++                  "formulas and charts stay native charts. To change a file the user already has (.docx, .xlsx, "
++                  ".pptx), use edit_office_file: it keeps their formatting and formulas.")
+ 
+ import contextlib
+ import difflib
+@@ -399,8 +407,11 @@ def context_block(task: str = "", root: str = "", project_id: str = "", chat_id:
+     return build_context(task, root, project_id, chat_id, incognito, exclude, record, lookup, rules, tools, office)["text"]
+ 
+ 
+-def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
+-    """The "Notes from Meshpool" paragraph: only the tools the agent has are named."""
++def _notes(tools: str, office, mem_on: bool, incognito: bool) -> str:
++    """The "Notes from Meshpool" paragraph: only the tools the agent has are named. office: True (the engines'
++    rules), "direct" (the agent writes office files itself, ENGINES_DIRECT) or False."""
++    if office == "direct":
++        return _notes(tools, False, mem_on, incognito).rstrip() + " " + ENGINES_DIRECT
+     if tools == "none":
+         return "Notes from Meshpool: cite sources with links." + ((" " + ENGINES) if office else "")
+     if tools == "deferred":
+@@ -420,7 +431,7 @@ def _notes(tools: str, office: bool, mem_on: bool, incognito: bool) -> str:
+         t += "This chat is incognito: do not call memory_save or project_note. "
+     t += ("Use schedule_task for work that should happen later or on a schedule, and delegate_task (or run_subtasks) "
+           "to run independent parts of a large job in parallel. ")
+-    return t + ENGINES
++    return t + (ENGINES if office else "")
+ 
+ 
+ def build_context(task: str = "", root: str = "", project_id: str = "", chat_id: str = "", incognito: bool = False,
+diff --git a/app/meshpool_harness/capabilities.py b/app/meshpool_harness/capabilities.py
+index 4ad78487..91414d01 100644
+--- a/app/meshpool_harness/capabilities.py
++++ b/app/meshpool_harness/capabilities.py
+@@ -119,20 +119,39 @@ EDIT_NOTE = (SEP + "[Meshpool] To change a file that exists, use edit_office_fil
+              "make_spreadsheet, make_deck or office_task.")
+ 
+ 
+-def note(caps, harness: dict | None = None) -> str:
++# How the agent makes each file itself when it writes office files directly (office direct, a lean Work chat).
++DIRECT = {
++    "presentation": "python-pptx (native charts through chart_data, not pictures)",
++    "document": "python-docx",
++    "spreadsheet": "openpyxl (live formulas, not typed results)",
++    "pdf": "reportlab",
++}
++
++
++def note(caps, harness: dict | None = None, direct: bool = False) -> str:
+     """The hidden note that goes with a message asking for a file: the agent can make it, with which tools, and must
+-    not answer that it cannot."""
++    not answer that it cannot. direct: the agent writes the file itself (office direct), so the note names the
++    library, not an engine tool it may not have (office3 xlsx_budget: 27 calls spent looking for make_spreadsheet)."""
+     if list(caps or []) == ["edit"]:
+         return EDIT_NOTE
+     caps = [c for c in caps if c in CAPS]
+     if not caps:
+         return ""
++    if direct:
++        how = "; ".join(f"{CAPS[c][0]}: {DIRECT[c]}" for c in caps)
++        return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Write "
++                + ("these files" if len(caps) > 1 else "this file")
++                + f" yourself ({how}) in the project folder under the exact name the user gave, check it once "
++                "(reopen it; recalculate formulas with LibreOffice headless) and say where it is. Do not answer that "
++                "you cannot, or hand over code to paste. For open details pick sensible defaults and say which. Fix "
++                "real defects only.")
+     how = "; ".join(f"{CAPS[c][0]}: {CAPS[c][1]}" for c in caps)
+     return (SEP + f"[Meshpool] The user asks for {labels(caps)}. Make "
+             + ("these files" if len(caps) > 1 else "this file")
+             + f" with the office tools ({how}), save in the project folder under the name the user gave, check it, "
+             "and say where it is. Do not answer that you cannot, or hand over code to paste. For open details use "
+-            "the recommended defaults (make_deck: brief_ok=true) and say which; ask at most one question, only if "
++            "the recommended defaults (make_deck: brief_ok=true; make_deck and make_spreadsheet: save_as with the "
++            "user's file name) and say which; ask at most one question, only if "
+             "it changes the whole file. Fix real defects only; rebuild at most once.")
+ 
+ 
+diff --git a/app/meshpool_harness/ui/agent_api.py b/app/meshpool_harness/ui/agent_api.py
+index 55e35db6..d240eff0 100644
+--- a/app/meshpool_harness/ui/agent_api.py
++++ b/app/meshpool_harness/ui/agent_api.py
+@@ -894,6 +894,16 @@ class Session:
+             raise ValueError("This agent does not ask questions.")
+         self.agent.reply(str(question_id or ""), answers)
+ 
++    def _office_direct(self) -> bool:
++        """The agent writes office files itself (core.Agent._office_direct: a lean Work chat, MH_OFFICE_DIRECT on), so
++        the notes name the libraries, not engine tools. MH_OFFICE_DIRECT_NOTE=0 keeps the engine notes."""
++        if os.environ.get("MH_OFFICE_DIRECT_NOTE", "1") == "0" or self.harness.get("type") in ("acp", "pi"):
++            return False
++        try:
++            return bool(self.agent._office_direct())
++        except Exception:  # noqa: BLE001
++            return False
++
+     def _body(self, text: str, images: list | None) -> str:
+         body = text
+         try:                                         # every agent: a skill named with $ is attached now, so the
+@@ -1387,7 +1397,7 @@ class Session:
+                 body = self._body(text, images)
+                 if caps:                                # a file the agent can make: say so, with the tools for it
+                     from meshpool_harness import capabilities as CAP
+-                    body += CAP.note(caps, self.harness)
++                    body += CAP.note(caps, self.harness, direct=self._office_direct())
+                 from meshpool_harness import pace as PACE
+                 quick = (not self.plan and not self.scheduled and not self.goal
+                          and PACE.classify(text, bool(images)) == "quick")
+@@ -1434,8 +1444,9 @@ class Session:
+                             lookup=not m0.get("project_unbound"), rules=outside, tools=tools,
+                             # Pi: the office rules ride on the message that asks for a file (capabilities.note),
+                             # not on every chat's first message
+-                            office=(tools != "none" and tools != "deferred") or (
+-                                bool(getattr(self.agent, "office_on", False)) and not caps))
++                            office=("direct" if self._office_direct() else True) if (
++                                tools != "none" and tools != "deferred") or (
++                                bool(getattr(self.agent, "office_on", False)) and not caps) else False)
+ 
+                         def spend_ctx(pid=pid, ex=ex):
+                             self.ctx_pending = False
+diff --git a/app/tests/test_office_direct_notes.py b/app/tests/test_office_direct_notes.py
+new file mode 100644
+index 00000000..ef7c45de
+--- /dev/null
++++ b/app/tests/test_office_direct_notes.py
+@@ -0,0 +1,73 @@
++"""Office direct: the notes name the libraries the agent writes with, not engine tools; engine builds land under the
++file name the user asked for (save_as). office3 traces: xlsx_budget 59 calls, pptx_chart deck.pptx missing."""
++import shutil
++import threading
++from pathlib import Path
++
++from meshpool_harness import assistant as AS
++from meshpool_harness import capabilities as CAP
++from meshpool_harness.agent import office_jobs as OJ
++from meshpool_harness.agent import office_mcp_server as S
++
++
++def test_direct_note_names_libraries_not_engine_tools():
++    n = CAP.note(["spreadsheet"], direct=True)
++    assert "openpyxl" in n and "make_spreadsheet" not in n and "office_task" not in n
++    n = CAP.note(["presentation", "pdf"], direct=True)
++    assert "python-pptx" in n and "reportlab" in n and "make_deck" not in n
++
++
++def test_engine_note_unchanged_and_mentions_save_as():
++    n = CAP.note(["spreadsheet"])
++    assert "make_spreadsheet" in n and "save_as" in n
++
++
++def test_direct_notes_never_forbid_writing_by_hand():
++    t = AS._notes("all", "direct", True, False)
++    assert "Never write a .pptx or .xlsx by hand" not in t and "openpyxl" in t and "edit_office_file" in t
++    assert "Never write a .pptx or .xlsx by hand" in AS._notes("all", True, True, False)
++    assert "make_spreadsheet" not in AS._notes("all", False, True, False)
++
++
++def test_save_as_copies_the_built_file_into_the_project(tmp_path, monkeypatch):
++    monkeypatch.setattr(S, "_project", lambda: tmp_path)
++    out = tmp_path / "Meshpool outputs" / "job"
++    out.mkdir(parents=True)
++    (out / "deck.pptx").write_bytes(b"pptx")
++    jid = "j1"
++    OJ.JOBS[jid] = {"engine": "slides", "out": out, "done": True, "result": {"ok": True, "steps": []},
++                    "inputs": set(), "started": 0, "event": threading.Event()}
++    S.SAVE_AS[jid] = "deck.pptx"
++    try:
++        text, failed = S._report(jid)
++        assert not failed and (tmp_path / "deck.pptx").read_bytes() == b"pptx"
++        assert "Saved as: deck.pptx" in text
++        S._report(jid)                                   # a second status call copies nothing new
++        assert not (tmp_path / "deck (2).pptx").exists()
++    finally:
++        OJ.JOBS.pop(jid, None)
++        S.SAVE_AS.pop(jid, None)
++
++
++def test_save_as_never_replaces_an_existing_file(tmp_path, monkeypatch):
++    monkeypatch.setattr(S, "_project", lambda: tmp_path)
++    out = tmp_path / "Meshpool outputs" / "job"
++    out.mkdir(parents=True)
++    (out / "budget.xlsx").write_bytes(b"new")
++    (tmp_path / "budget.xlsx").write_bytes(b"user")
++    jid = "j2"
++    OJ.JOBS[jid] = {"engine": "sheets", "out": out, "done": True, "result": {"ok": True, "steps": []},
++                    "inputs": set(), "started": 0, "event": threading.Event()}
++    S.SAVE_AS[jid] = "budget.xlsx"
++    try:
++        S._report(jid)
++        assert (tmp_path / "budget.xlsx").read_bytes() == b"user"
++        assert (tmp_path / "budget (2).xlsx").read_bytes() == b"new"
++    finally:
++        OJ.JOBS.pop(jid, None)
++        S.SAVE_AS.pop(jid, None)
++
++
++def test_schemas_offer_save_as():
++    for name in ("make_deck", "make_spreadsheet"):
++        assert "save_as" in S.TOOLS[name][2]
+-- 
+2.43.0
+
