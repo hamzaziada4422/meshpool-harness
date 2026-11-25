@@ -18,16 +18,16 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   | v2_eval + build, debug, deep, hard | 78 x 2 | 144 vs 145 | 0.71x (0.65-0.78) | 1.03x |
   | Work: DABench + v2_dev data tasks | 27 x 2 | 45 vs 44 | 0.51x (0.44-0.58) | 0.81x |
   | Office-7 (decks, documents, workbooks) | 7 x 6 | 42 vs 41 | 0.94x (0.72-1.18) | 0.76x |
-  | SpreadsheetBench (public sample) | 6 x 6 | 31 vs 35 | 1.04x (0.68-1.54) | 0.96x |
+  | SpreadsheetBench (public sample) | 6 x 6 | 31 vs 35 | 0.90x (0.74-1.05) | 1.07x |
   | OfficeBench (public sample) | 4 x 6 | 21 vs 24 | 0.83x (0.60-1.06) | 0.87x |
 
   Where Meshpool loses: SpreadsheetBench and OfficeBench solved fewer tasks than Codex (31 vs 35, 21 vs 24), and
-  SpreadsheetBench cost 1.04x Codex per solved task. A second SpreadsheetBench run, with an earlier version of the check
-  that now catches a TODAY() formula in place of a year the request names, solved 29 of 36 at 1.16x. v2_eval ran 3% slower at the
-  median. The office suites are small and were run six times each, so their intervals are still wide. The office rows
-  were measured before the last review and security fixes (permissions, the app's page token, bounded file checks). The
-  Work row was measured before the last office-file changes, which only act when a chat writes a Word, Excel or
-  PowerPoint file.
+  SpreadsheetBench ran 7% slower at the median and v2_eval 3% slower. The SpreadsheetBench row is the shipped build,
+  with the date and formula checks, against Codex's runs from the hour before; two earlier SpreadsheetBench runs
+  without the formula check came out at 1.04x and 1.16x Codex's cost per solved task. The office suites are small and
+  were run six times each, so their intervals are still wide. The Office-7 and OfficeBench rows were measured before
+  the last review and security fixes (permissions, the app's page token, bounded file checks). The Work row was
+  measured before the last office-file changes, which only act when a chat writes a Word, Excel or PowerPoint file.
 
   v2_eval and v2_dev shaped Meshpool's prompts; the other suites did not.
 

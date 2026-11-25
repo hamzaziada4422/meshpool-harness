@@ -81,23 +81,23 @@ sandbox, loop guards (a call refused or failing repeatedly with nothing changed 
 
 ## Office results
 
-Six runs per task, same model, gateway and hour as Codex (raw rows in `docs/results/release016/office_final6/` on the
-audit branch).
+Six runs per task, same model and gateway as Codex (raw rows in `docs/results/release016/` on the audit branch).
 
 | Suite | Solved, Meshpool vs Codex | Cost per solved vs Codex (95% CI) | Median time vs Codex |
 |---|---|---|---|
 | Office-7 (decks, documents, workbooks) | 42/42 vs 41/42 | 0.94x (0.72-1.18) | 0.76x |
-| SpreadsheetBench (public sample) | 31/36 vs 35/36 | 1.04x (0.68-1.54) | 0.96x |
+| SpreadsheetBench (public sample) | 31/36 vs 35/36 | 0.90x (0.74-1.05) | 1.07x |
 | OfficeBench (public sample) | 21/24 vs 24/24 | 0.83x (0.60-1.06) | 0.87x |
 
-Office costs less on Office-7 and OfficeBench, and about the same as Codex on SpreadsheetBench. On spending alone
-Meshpool is close to Codex there; the gap is in tasks solved (31 vs 35), and cost per solved charges every failed run
-to the successes. Four of the five SpreadsheetBench failures are on two tasks: sb-39515, where three runs wrote
-`YEAR(TODAY())-1` for "the previous year (2022)", and sb-56921, the longest task in the suite. The release adds a
-pre-answer check for the first (a workbook formula that calls TODAY() or NOW() when the request names its years). A
-re-run with an earlier version of that fix took sb-39515 from 3 of 6 to 5 of 6, but the whole suite came out at
-29/36 and 1.16x, which is within the run-to-run spread of a 6-task suite: SpreadsheetBench is not yet cheaper than Codex
-per solved task.
+Office costs less than Codex per solved task on all three (point estimates; each interval reaches past 1x), but
+solves fewer tasks on SpreadsheetBench (31 vs 35)
+and OfficeBench (21 vs 24). The SpreadsheetBench row is the shipped build (`docs/results/release016/sb_f70ea3ca/`),
+against Codex's runs from the hour before. It adds two pre-answer checks aimed at the failures of the first run: a
+workbook formula that calls TODAY() or NOW() when the request names its years (sb-39515: three runs wrote
+`YEAR(TODAY())-1` for "the previous year (2022)"), and a recalculation through LibreOffice of the formulas the turn
+changed, sent back once when one comes out as an Excel error or gives the result the user called wrong (sb-56921).
+Two earlier SpreadsheetBench runs without the formula check came out at 1.04x and 1.16x, so with six tasks the
+run-to-run spread is about as large as the gap to Codex.
 
 Office savings come from the same place as code: a short prompt and only the tools the request needs. Before this
 release, office edits went through Meshpool's deck and spreadsheet engines, which took 33 and 84 calls in two runs of
@@ -118,7 +118,7 @@ Measured and dropped or kept off:
 - The gateway bills about 2x the list price for this model. The ratios above do not depend on the price level,
   because both agents pay the same prices.
 - Office suites are small (7, 6 and 4 tasks, six runs each), so their intervals are wide.
-- The benchmark ran Meshpool from source, where it did not find LibreOffice; the app bundles it. The formula
-  recalculation check and other LibreOffice-based checks were therefore not part of the measured office runs.
+- Until the last SpreadsheetBench run the benchmark ran Meshpool from source without LibreOffice, which the app
+  bundles, so LibreOffice-based checks were not part of the Office-7 and OfficeBench runs.
 - The office run was measured before the last review and security fixes (permissions, the app's page token,
   bounded file checks).
