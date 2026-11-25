@@ -608,3 +608,25 @@ def test_icon_cache_planted_by_another_user_is_not_used(tmp_path, monkeypatch):
     got = IC.path("phosphor:coin")
     assert got is not None and cache not in got.parents
     assert got.read_text(encoding="utf-8") == real
+
+
+def test_forge_caches_are_private_and_skip_a_planted_folder(tmp_path, monkeypatch):
+    """PA-engines-31 (rest): the forge's icon, template and brand caches sat at predictable names in the shared temp
+    folder, so another user could plant a file there first. They now live in one per-user folder that is used only
+    when it is this user's own and not a link; otherwise a private random folder is used."""
+    import engines.icons as IC
+    import tempfile as _tf
+    monkeypatch.setattr(_tf, "tempdir", str(tmp_path))
+    monkeypatch.setattr(IC, "_PRIVATE", {})
+    mine = IC.forge_cache()
+    assert mine.parent == tmp_path and (mine.stat().st_mode & 0o777) == 0o700
+    target = tmp_path / "elsewhere"
+    target.mkdir()
+    mine.rmdir()
+    mine.symlink_to(target)                                               # a planted link at the predictable name
+    got = IC.forge_cache()
+    assert got != mine and target not in got.parents and got != target and (got.stat().st_mode & 0o777) == 0o700
+    from engines.forge import render as R, template as TP
+    monkeypatch.setattr(R, "ICON_CACHE", None)
+    assert got in R._icon_cache().parents
+    assert TP.CACHE.parent == Path(".")                                   # a name only: built inside forge_cache()

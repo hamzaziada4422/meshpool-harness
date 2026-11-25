@@ -54,11 +54,11 @@ CACHE = Path(os.environ.get("MESHPOOL_ICON_CACHE") or Path(tempfile.gettempdir()
 _PRIVATE: dict = {}                     # the private folder used when CACHE is not this user's own (made once)
 
 
-def _cache_root() -> Path:
-    """CACHE when it is this user's own folder, with no group or other access (fixed if the user owns it). A per-user
-    name in a shared temp folder is still predictable: another local user can make it first and plant SVGs in it.
+def private_dir(d: Path, prefix: str = "meshpool_icons_") -> Path:
+    """d when it is this user's own folder, with no group or other access (fixed if the user owns it). A per-user
+    name in a shared temp folder is still predictable: another local user can make it first and plant files in it.
     Such a folder (another owner, or a link) is never used; a fresh private temp folder is used instead."""
-    d = CACHE
+    d = Path(d)
     if os.name == "nt":                             # per-user %TEMP%: no other local user can write there
         return d
     try:
@@ -70,9 +70,19 @@ def _cache_root() -> Path:
             return d
     except OSError:
         pass
-    if "dir" not in _PRIVATE:
-        _PRIVATE["dir"] = Path(tempfile.mkdtemp(prefix="meshpool_icons_"))      # mkdtemp: 0700, a random name
-    return _PRIVATE["dir"]
+    key = (str(d), prefix)
+    if key not in _PRIVATE:
+        _PRIVATE[key] = Path(tempfile.mkdtemp(prefix=prefix))      # mkdtemp: 0700, a random name
+    return _PRIVATE[key]
+
+
+def _cache_root() -> Path:
+    return private_dir(CACHE)
+
+
+def forge_cache() -> Path:
+    """The forge's own cache folder (rendered icons, built templates and brand masters), private to this user."""
+    return private_dir(Path(tempfile.gettempdir()) / f"meshpool_forge_{_user_tag()}", "meshpool_forge_")
 
 _LUCIDE = {"family": "lucide", "license": "ISC", "license_file": ENGINES / "slides" / "icons" / "LICENSE-lucide.txt",
            "version": "0.460.0", "source": "https://lucide.dev (npm lucide-static)"}
