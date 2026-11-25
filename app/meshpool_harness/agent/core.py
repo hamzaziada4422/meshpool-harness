@@ -985,8 +985,9 @@ def _bash_segments_match(cmd: str, pattern: str, deny: bool = False) -> bool:
     parts = [x.strip() for x in _CHAIN.split(cmd) if x.strip()]
     if len(parts) <= 1:
         return fnmatch.fnmatchcase(cmd, pattern)
-    if _CHAIN.search(pattern) and fnmatch.fnmatchcase(cmd, pattern):
-        return True                                # the rule itself names that exact chain
+    if _CHAIN.search(pattern):                     # the rule itself names a chain: part by part, same number of
+        pp = [x.strip() for x in _CHAIN.split(pattern) if x.strip()]   # parts, so a trailing * never covers a
+        return len(pp) == len(parts) and all(fnmatch.fnmatchcase(x, y) for x, y in zip(parts, pp))  # part added
     return all(fnmatch.fnmatchcase(x, pattern) for x in parts)
 
 

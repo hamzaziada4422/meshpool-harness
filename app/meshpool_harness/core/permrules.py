@@ -14,7 +14,11 @@ from meshpool_harness import fsio
 
 _SUBCMD = frozenset("git npm npx pnpm yarn bun cargo go docker kubectl make uv pip pip3 poetry dotnet gradle mvn gh "
                     "brew terraform helm".split())
-_NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ssh perl ruby php".split())
+# Programs that run another program or code given to them: a chat grant on one would cover whatever it runs
+# ("Allow timeout" then covers `timeout 5 bash -c "rm -rf ~"`; "Allow find" covers `find . -exec rm -rf {} ;`).
+_NO_GRANT = frozenset("bash sh zsh dash fish eval exec env xargs sudo su doas ssh perl ruby php "
+                      "timeout nice nohup command time stdbuf watch find awk gawk mawk sed parallel "
+                      "busybox chroot unshare nsenter setsid script strace ltrace".split())
 _RUNNERS = {"npm", "yarn", "pnpm"}
 _OKREDIR = re.compile(r"\d?>\s*/dev/null|\d?>&\d|&>\s*/dev/null")
 
@@ -239,6 +243,11 @@ def granted(cmd: str, patterns) -> bool:
     c = cmd.strip()
     if not patterns or not c or "$" in c or compound(c) or writes(c):
         return False                    # any $ (ANSI-C $'...' quoting can hide a ; from the compound check)
+    w = _tokens(c)
+    while w and re.match(r"^[A-Za-z_]\w*=", w[0]):
+        w = w[1:]
+    if not w or os.path.basename(w[0]) in _NO_GRANT:
+        return False                    # a wrapper runs whatever follows it: never covered by a grant
     return any(c == p or c.startswith(p + " ") for p in patterns)
 
 
