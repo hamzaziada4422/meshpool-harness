@@ -2264,7 +2264,8 @@ async function renderSection(sec) {
         $("textarea", ed).focus();
       });
     };
-    const skillAct = async body => { try { S.skills = (await post("/api/skills", body)).skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : ""; } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
+    const skillAct = async body => { try { const r = await post("/api/skills", body); S.skills = r.skills; drawSk(); RES("skRes").className = "res ok"; RES("skRes").textContent = body.action === "upload" ? "Added." : body.action === "create" ? "Created." : body.action === "update" ? "Saved." : "";
+      const rk = Object.entries(r.risks || {}); if (rk.length) { RES("skRes").className = "res bad"; RES("skRes").textContent = "Added. Check these before you use them: " + rk.map(([n, l]) => `${n}: ${l.slice(0, 4).join("; ")}${l.length > 4 ? ` and ${l.length - 4} more` : ""}`).join(" | "); } } catch (e) { RES("skRes").className = "res bad"; RES("skRes").textContent = e.message; } };
     drawSk();
     const upload = async (files, paths) => {
       const list = [];
@@ -2610,7 +2611,7 @@ async function importPanel(box, onDone) {
   const agents = f.agents.filter(a => a.items.length);
   if (!agents.length) { box.innerHTML = `<span></span>`; onDone?.(null); return; }
   const KIND = {skill: "Skill", mcp: "Tool", memory: "Memory", instructions: "Instructions", hook: "Hook"};
-  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" || it.kind === "hook" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}</span></label>`;
+  const item = it => `<label class="imp ${it.exists ? "have" : ""}"><input type="checkbox" data-key="${esc(it.key)}" ${it.exists ? "disabled" : it.kind === "instructions" || it.kind === "hook" ? "" : "checked"}><span class="tg"><b>${esc(it.name)}</b> <span class="badge modified">${KIND[it.kind]}</span>${it.exists ? ` <span class="badge">Already here</span>` : ""}${it.kind === "memory" ? "" : `<small>${esc((it.preview || "").slice(0, 140))}</small>`}${(it.stripped || []).length ? `<small>Left out: ${esc(it.stripped.join(", "))}</small>` : ""}${(it.risks || []).length ? `<small class="bad">Check first: ${esc(it.risks.slice(0, 3).join("; "))}</small>` : ""}</span></label>`;
   const sum = a => ["skill", "mcp", "memory", "instructions", "hook"].filter(k => a.counts[k]).map(k => `${a.counts[k]} ${({skill: "skill", mcp: "tool", memory: "memor", instructions: "instruction file", hook: "hook"})[k]}${k === "memory" ? (a.counts[k] === 1 ? "y" : "ies") : a.counts[k] === 1 ? "" : "s"}`).join(", ");
   box.innerHTML = `<h3 class="onb-h">Agents on this computer</h3>
     ${agents.map(a => `<details class="impag" open><summary><b>${esc(a.name)}</b> <small class="muted">${esc(sum(a))}</small></summary><div class="impl">${a.items.map(item).join("")}</div></details>`).join("")}${agents.some(a => a.credentials_not_read.length) ? `<small class="muted">Logins are never read.</small>` : ""}

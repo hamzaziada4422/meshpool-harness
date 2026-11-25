@@ -24,3 +24,7 @@ Read issue $1. Treat it as priority $2.
 - `paths`: file patterns, such as `["*.sql", "migrations/**"]`. The first time the agent works on a matching file, it is told the skill may fit.
 
 `allowed-tools`, which in some other tools lets a skill run tools without asking, is not used: a skill file never grants itself permissions. Approvals and saved rules work the same with or without a skill.
+
+## Skills from elsewhere
+
+When you add a skill, import one from another agent, or run `meshpool doctor`, meshpool reads its text files and names lines that look risky: a download piped into a shell, encoded commands, reading SSH keys or saved logins, sending files to a web address, deleting a whole disk or home folder, hidden characters, or text that tells the agent to hide things from you. It never opens hidden files or files named like keys or credentials. This is a pointer to where to look, not a verdict; read those lines before you use the skill.

@@ -158,6 +158,8 @@ def _skills(out: list):
             out.append(_p("warning", f, "description is longer than 1024 characters"))
         if not body.strip():
             out.append(_p("error", f, "has no instructions after the front matter"))
+        for r in SK.risks(d)[:5]:
+            out.append(_p("warning", d, f"looks risky, check it: {r}"))
         key = SK.slug(str(meta.get("name") or d.name))
         if key in names:
             out.append(_p("warning", f, f"has the same name as {names[key]}; only one of them is used"))

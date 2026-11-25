@@ -437,7 +437,13 @@ def add_files(files: list[tuple[str, bytes]]) -> list[dict]:
         added.append(d.name)
     if not added:
         raise ValueError("No skill found. Add a folder or .zip that contains a SKILL.md, or a SKILL.md file.")
-    return [get(a) for a in added if get(a)]
+    out = []
+    for a in added:
+        s = get(a)
+        if s:
+            s["risks"] = risks(Path(s["path"]).parent)
+            out.append(s)
+    return out
 
 
 def _from_zip(data: bytes) -> list[str]:
@@ -460,6 +466,60 @@ def _from_zip(data: bytes) -> list[str]:
             p.write_bytes(z.read(n))
         out.append(d.name)
     return out
+
+
+# ---------- risky content in skills from elsewhere -------------------------------------------------------------------
+_RISKS = [
+    (re.compile(r"\b(curl|wget|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b", re.I),
+     "pipes a download straight into a shell"),
+    (re.compile(r"\b(iex|invoke-expression)\b\s*\(?\s*(irm|iwr|invoke-restmethod|new-object)", re.I),
+     "runs a downloaded PowerShell script"),
+    (re.compile(r"base64\s+(-d|--decode)[^\n]*\|\s*(ba|z)?sh\b|powershell[^\n]*\s-(e|enc|encodedcommand)\s", re.I),
+     "runs encoded commands"),
+    (re.compile(r"\brm\s+-[a-z]*r[a-z]*f?[a-z]*\s+(--no-preserve-root\s+)?(/|~|\$HOME)(\s|$)|\bmkfs\.|\bdd\s+if=[^\n]*of=/dev/", re.I),
+     "deletes or overwrites a whole disk or home folder"),
+    (re.compile(r"(~|\$HOME|%USERPROFILE%)[/\\]\.(ssh|aws|gnupg|netrc|docker/config\.json|kube/config)|\bid_(rsa|ed25519)\b|"
+                r"\.config/gh/hosts|login\.keychain|\bsecurity\s+find-generic-password", re.I),
+     "reads keys or saved logins"),
+    (re.compile(r"\b(curl|wget)\b[^\n]*(--data(-binary)?|-d|-F|--upload-file|-T)\s+@|\b(printenv|env)\b[^\n]*\|\s*(curl|nc|wget)\b", re.I),
+     "sends files or settings to a web address"),
+    (re.compile(r"ignore\s+(all\s+)?(the\s+)?(previous|prior|above|earlier)\s+(instructions|rules)|"
+                r"(do\s+not|don'?t|never)\s+(tell|inform|show)\s+the\s+user\s+(about|that\s+you|what\s+you|you\s+(ran|read|sent))|"
+                r"without\s+telling\s+the\s+user|(keep|hide)\s+(this|it)\s+(secret\s+|hidden\s+)?from\s+the\s+user|"
+                r"(disable|turn\s+off|bypass)\s+(the\s+)?(safety|sandbox|approvals?|guard(s|rails)?|permission\s+checks)", re.I),
+     "tells the agent to skip or hide things from you"),
+    (re.compile("[\u200b-\u200f\u202a-\u202e\u2066-\u2069]"), "contains hidden or direction-changing characters"),
+]
+_SECRETISH = re.compile(r"(?i)(credential|secret|token|passw|auth\.json|\.pem$|\.key$|id_(rsa|ed25519|ecdsa)|\.env$|"
+                        r"\.p12$|\.pfx$|keychain|cookies?)")
+_TEXT_EXT = {".md", ".txt", ".sh", ".bash", ".zsh", ".ps1", ".py", ".js", ".ts", ".rb", ".pl", ".bat", ".cmd", ".json",
+             ".yaml", ".yml", ".toml", ""}
+
+
+def risks(path) -> list[str]:
+    """What looks risky in a skill folder (or one SKILL.md): ["file:line: what it does"]. Advice, not a verdict: a
+    skill can have a good reason, so this only says where to look before trusting it."""
+    p = Path(path)
+    files = [p] if p.is_file() else sorted(
+        f for f in p.rglob("*") if f.is_file() and not f.is_symlink() and f.suffix.lower() in _TEXT_EXT
+        and not any(part.startswith(".") for part in f.relative_to(p).parts)        # .env, .ssh/...: never opened
+        and not _SECRETISH.search(f.name))[:60]
+    out = []
+    for f in files:
+        try:
+            if f.stat().st_size > 300_000:
+                continue
+            text = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rel = f.name if p.is_file() else f.relative_to(p).as_posix()
+        for i, line in enumerate(text.splitlines(), 1):
+            for rx, what in _RISKS:
+                if rx.search(line):
+                    out.append(f"{rel}:{i}: {what}")
+        if len(out) > 40:
+            break
+    return list(dict.fromkeys(out))[:40]
 
 
 def toggle(sid: str, on: bool):

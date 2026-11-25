@@ -271,8 +271,10 @@ def scan(only: list[str] | None = None) -> dict:
                     m = re.search(r"(?im)^description:\s*(.+)$", head)
                     if m:
                         desc = m.group(1).strip().strip("\"'")
+                    from meshpool_harness import skills as SKR
                     items.append({"key": f"skill:{aid}:{sk.name}", "kind": "skill", "name": sk.name, "path": str(sk),
                                   "preview": desc or head[:200].replace("\n", " "), "exists": _slug(sk.name) in have_s,
+                                  "risks": SKR.risks(sk),
                                   "files": sum(1 for _ in sk.rglob("*") if _.is_file())})
         for name, raw in _servers(a, base, h):
             spec = _norm_server(raw if isinstance(raw, dict) else {})
@@ -468,6 +470,8 @@ def cli(args: list[str]) -> int:
         for it in a["items"]:
             mark = "already here" if it["exists"] else "new"
             extra = f"  (leaves out: {', '.join(it['stripped'])})" if it.get("stripped") else ""
+            if it.get("risks"):
+                extra += f"  (check first: {'; '.join(it['risks'][:3])})"
             if it["kind"] == "hook" and not with_hooks and not it["exists"]:
                 mark = "add --hooks to import it"
             print(f"  [{it['kind']}] {it['name'][:60]}: {mark}{extra}")

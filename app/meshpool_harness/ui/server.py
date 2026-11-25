@@ -906,7 +906,9 @@ class Handler(BaseHTTPRequestHandler):
                     SK.remove(b.get("id", ""))
                 elif act == "upload":
                     import base64
-                    SK.add_files([(f["name"], base64.b64decode(f["data"])) for f in b.get("files") or []])
+                    got = SK.add_files([(f["name"], base64.b64decode(f["data"])) for f in b.get("files") or []])
+                    return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder()),
+                                            "risks": {s["name"]: s["risks"] for s in got if s.get("risks")}})
                 elif act == "open":                       # the page shows the folder in its own file tree
                     SK.folder().mkdir(parents=True, exist_ok=True)
                 return self._send(200, {"skills": SK.load_all(), "folder": str(SK.folder())})
