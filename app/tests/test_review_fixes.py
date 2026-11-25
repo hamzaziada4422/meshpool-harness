@@ -2,6 +2,7 @@
 import json
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -339,9 +340,14 @@ def test_no_worktrees_in_a_repo_whose_git_runs_programs(env):                   
     r.mkdir()
     subprocess.run("git init -q && git -c user.email=t@t -c user.name=t commit -q --allow-empty -m i", shell=True,
                    cwd=r, check=True)
-    subprocess.run(["git", "-C", str(r), "config", "core.fsmonitor", "touch pwned"], check=True)
+    subprocess.run(["git", "-C", str(r), "config", "filter.x.smudge", "touch pwned"], check=True)  # runs on checkout
     with pytest.raises(WT.WorktreeError, match="run programs"):
         WT.create(r, owner_kind="cli")                  # 0.0.17: main's worktrees, the same refusal
+    subprocess.run(["git", "-C", str(r), "config", "--unset", "filter.x.smudge"], check=True)
+    subprocess.run(["git", "-C", str(r), "config", "core.fsmonitor", "touch pwned"], check=True)
+    rec = WT.create(r, owner_kind="cli")                 # fsmonitor and hooks are turned off on every worktree call
+    assert not (r / "pwned").exists() and not (Path(rec["path"]) / "pwned").exists()
+    WT.discard(rec["id"])
 
 
 

@@ -432,12 +432,13 @@ def test_read_file_binary_check_closes_the_file(env):
     proj.mkdir()
     (proj / "blob.bin").write_bytes(b"\x00\x01\x02" * 5000)
     ws = Workspace(str(proj), str(env / "out"))
+    gc.collect()                                   # leftovers of earlier tests are not this test's warnings
     with warnings.catch_warnings(record=True) as got:
         warnings.simplefilter("always")
         with pytest.raises(ToolError, match="binary file"):
             ws.read_file("blob.bin")
         gc.collect()
-    assert not [w for w in got if issubclass(w.category, ResourceWarning)]
+    assert not [w for w in got if issubclass(w.category, ResourceWarning) and "blob.bin" in str(w.message)]
 
 
 # ---------------------------------------------------------------------------------------------------- cli and schedules

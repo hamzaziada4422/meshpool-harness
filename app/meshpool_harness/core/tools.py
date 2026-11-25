@@ -327,6 +327,25 @@ _GIT_SAFE_KEY = re.compile(
     re.I)                                                  # anything else in a repo's own config: the shortcut is off
 
 
+def git_config_runs_programs(root) -> bool:
+    """True when the repository's own config names a program that a checkout, a diff or a merge would run (a filter,
+    an external diff or textconv, an include, an ssh command). Narrower than git_config_safe: submodules and unknown
+    keys are fine here, and fsmonitor and hooks are not counted because worktrees.py turns them off on every call."""
+    try:
+        r = subprocess.run(["git", "-C", str(root), "config", "--name-only", "--list", "--show-scope"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if r.returncode not in (0, 1):
+        return True
+    for line in r.stdout.splitlines():
+        scope, _, key = line.partition("\t")
+        if scope in ("local", "worktree") and _GIT_RISKY_CONFIG.search(key) and \
+                not re.search(r"fsmonitor|hookspath", key, re.I):
+            return True
+    return False
+
+
 def git_config_safe(root) -> bool:
     """False when the repository's own config (.git/config, which a downloaded project can ship) names a program
     git would run on a read: core.fsmonitor, a pager, an external diff, a textconv, an include, an alias."""

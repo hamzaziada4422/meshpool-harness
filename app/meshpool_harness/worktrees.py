@@ -408,7 +408,7 @@ def create(source, *, owner_kind: str = "cli", owner_id: str = "", title: str = 
     top = toplevel(src)
     if top:
         from meshpool_harness.core import tools as _TT
-        if not _TT.git_config_safe(top):           # filters, an external diff or a pager would run its programs
+        if _TT.git_config_runs_programs(top):           # filters, an external diff or a pager would run its programs
             raise WorktreeError("This repository's own git settings run programs (filters, fsmonitor, an external "
                                 "diff), so meshpool does not make isolated copies of it. Trust and review them first.")
     while True:                                     # an id whose branch name is free: clean-up may delete that branch
