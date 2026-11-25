@@ -3112,7 +3112,9 @@ class Agent:
                 isinstance(args, dict) and isinstance(args.get("path"), str):
             try:                                           # a subfolder's own AGENTS.md / CLAUDE.md, the first time
                 from meshpool_harness.agent import extras as EXN
-                more = EXN.nested_instructions(self.root, args["path"], self.__dict__.setdefault("_nested_seen", set()))
+                seen = self.__dict__.setdefault("_nested_seen", set())
+                more = "\n\n".join(x for x in (EXN.nested_instructions(self.root, args["path"], seen),
+                                                EXN.scoped_rules(self.root, args["path"], seen)) if x)
                 if more:
                     out = out + "\n\n" + more
             except Exception:  # noqa: BLE001
