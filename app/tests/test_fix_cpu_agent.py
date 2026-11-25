@@ -139,9 +139,11 @@ def test_chat_without_document_request_never_starts_the_reader(tmp_path, monkeyp
     monkeypatch.setattr(M._Stdio, "__init__", lambda self, *a, **k: (spawns.append(1), real_init(self, *a, **k))[1])
     M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60).close()
     spawns.clear()
+    before = {k.pid for k in _kids()}              # leftovers of earlier tests (a zombie from 26 minutes before, CI)
     chat = M.Manager(roots=[str(tmp_path)], extra=office_extra(str(tmp_path))).start(timeout=60)
     time.sleep(1)
-    assert spawns == [] and not _kids()
+    new = [k for k in _kids() if k.pid not in before and k.status() != psutil.STATUS_ZOMBIE]
+    assert spawns == [] and not new
     chat.close()
 
 
