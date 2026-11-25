@@ -104,13 +104,17 @@ def test_settings_test_connection_azure_and_custom_header(home, monkeypatch):
     try:
         r = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": "Bearer " + KEY32, "MH_MODEL": "dd"})
         assert r["ok"], r
-        chat = lambda: [x["path"] for x in f.log if "/chat/completions" in x["path"]][-1]   # a background /models
-        assert chat() == "/openai/v1/chat/completions"     # lookup may land after it  # 0.0.14: bare Azure -> v1 route
+        # a background /models lookup may land in the log during or after a call: read the chat paths the call itself
+        # made, from a copy of the log (CI run 78 read a half-written entry on Python 3.12)
+        chats = lambda n=0: [str(x.get("path", "")) for x in list(f.log)[n:]   # noqa: E731
+                             if "/chat/completions" in str(x.get("path", ""))]
+        assert "/openai/v1/chat/completions" in chats()    # 0.0.14: bare Azure -> v1 route
         bad = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": "0" * 32, "MH_MODEL": "dd"})
         assert not bad["ok"] and "key was rejected" in bad["detail"]
+        n = len(f.log)
         r = SV.test_connection({"MESHPOOL_BASE_URL": f.url, "MESHPOOL_API_KEY": KEY32, "MH_MODEL": "dd",
                                 "MH_API_KIND": "azure-classic", "MH_API_VERSION": "2025-04-01-preview"})
-        assert r["ok"] and chat() == "/openai/deployments/dd/chat/completions?api-version=2025-04-01-preview"
+        assert r["ok"] and "/openai/deployments/dd/chat/completions?api-version=2025-04-01-preview" in chats(n)
     finally:
         f.close()
 
