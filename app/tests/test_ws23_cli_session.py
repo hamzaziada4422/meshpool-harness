@@ -349,7 +349,8 @@ def test_terminal_chat_shows_in_the_app(tmp_path):
     (mh / "meshpool.config").write_text(f"MESHPOOL_API_KEY=test-key-1234\nMESHPOOL_BASE_URL=http://127.0.0.1:{mport}/v1\n")
     env = {k: v for k, v in os.environ.items() if not re.match(r"(OPENAI_|CODEX_|MESHPOOL_|MH_)", k)}
     env.update(HOME=str(home), MESHPOOL_HOME=str(mh), PYTHONPATH=str(repo / "app"), PYTHONUTF8="1", MH_CLARITY="0",
-               MH_SLOTS_DIR=str(tmp_path / "slots"), MH_LEARN="0", MH_GRADER="0", MH_AUTO_ROUTE="0")
+               MH_SLOTS_DIR=str(tmp_path / "slots"), MH_LEARN="0", MH_GRADER="0", MH_AUTO_ROUTE="0",
+               MH_UI_OPEN_PAGE="1")   # the page without the launch key, as the rest of the suite (conftest)
     mock = subprocess.Popen([sys.executable, str(repo / "testkit" / "mock_llm.py"), str(mport), str(tmp_path / "m.jsonl")],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ui = None

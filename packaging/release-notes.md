@@ -9,7 +9,7 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
 - **Decks built on the company's own filings.** For a public company, research now reads its latest earnings release, 10-Q and 10-K for forward capex, buyback, dividend and credit-facility figures, each cited to the filing. Cash-floor slides anchor on the stated borrowing capacity. Set `MH_RESEARCH_GUIDANCE=0` to turn it off. Headline figures on the cover and two extra consistency checks are available as opt-in switches.
 - **A coding agent built on Codex's own design.** Code chats send the request Codex CLI 0.171 sends: its prompt, its single command tool and its environment context, with Meshpool's permissions, sandbox, loop guards and compaction around it. On the code suites below it solved within one task of Codex (39 vs 38, 144 vs 145, 22 vs 22) at 0.71-0.79x Codex's cost per solved task. Set `MH_SMALL_REPO_STYLE=core` to use Meshpool's own lean prompt on small repositories instead.
 - **Office files done the direct way.** In a Work chat, a change to an existing workbook, document or deck, or a new file you name ("make budget.xlsx"), is written with the file's own library, keeping formulas and styles. The deck, report and model engines are used for an open-ended deliverable ("a 10-slide pitch deck for investors"). Before answering, the agent is held to its own checks: a failed assertion, or a deck with a different number of slides than asked for, means the job is not done.
-- **Measured against Codex 0.171.** Same model (deepseek-v4.1-flash), gateway and hour, two runs per task, cost per solved task as a multiple of Codex's (95% interval). Losses are listed with the wins.
+- **Measured against Codex 0.171.** Same model (deepseek-v4.1-flash), gateway and hour, two runs per task (six for the office suites), cost per solved task as a multiple of Codex's (95% interval). Losses are listed with the wins.
 
   | Suite | Tasks x runs | Solved, Meshpool vs Codex | Cost per solved vs Codex (95% CI) | Median time vs Codex |
   |---|---|---|---|---|
@@ -17,14 +17,17 @@ The first public beta of Meshpool: one desktop agent for code, documents, spread
   | v2_dev code | 21 x 2 | 39 vs 38 | 0.79x (0.69-0.90) | 0.99x |
   | v2_eval + build, debug, deep, hard | 78 x 2 | 144 vs 145 | 0.71x (0.65-0.78) | 1.03x |
   | Work: DABench + v2_dev data tasks | 27 x 2 | 45 vs 44 | 0.51x (0.44-0.58) | 0.81x |
-  | Office-7 (decks, documents, workbooks) | 7 x 2 | 13 vs 13 | 0.89x (0.66-1.15) | 0.50x |
-  | SpreadsheetBench (public sample) | 6 x 2 | 10 vs 12 | 0.96x (0.59-1.95) | 1.46x |
-  | OfficeBench (public sample) | 4 x 2 | 7 vs 8 | 0.80x (0.43-1.46) | 0.94x |
+  | Office-7 (decks, documents, workbooks) | 7 x 6 | 42 vs 41 | 0.94x (0.72-1.18) | 0.76x |
+  | SpreadsheetBench (public sample) | 6 x 6 | 31 vs 35 | 1.04x (0.68-1.54) | 0.96x |
+  | OfficeBench (public sample) | 4 x 6 | 21 vs 24 | 0.83x (0.60-1.06) | 0.87x |
 
-  Where Meshpool loses: SpreadsheetBench and OfficeBench solved fewer tasks than Codex (10 vs 12, 7 vs 8),
-  SpreadsheetBench ran 1.46x slower at the median and v2_eval 3% slower. The office suites are small, so their
-  intervals are wide. The Work row was measured on the build before the last office-file changes, which only act
-  when a chat writes a Word, Excel or PowerPoint file.
+  Where Meshpool loses: SpreadsheetBench and OfficeBench solved fewer tasks than Codex (31 vs 35, 21 vs 24), and
+  SpreadsheetBench cost 1.04x Codex per solved task. A second SpreadsheetBench run, with an earlier version of the check
+  that now catches a TODAY() formula in place of a year the request names, solved 29 of 36 at 1.16x. v2_eval ran 3% slower at the
+  median. The office suites are small and were run six times each, so their intervals are still wide. The office rows
+  were measured before the last review and security fixes (permissions, the app's page token, bounded file checks). The
+  Work row was measured before the last office-file changes, which only act when a chat writes a Word, Excel or
+  PowerPoint file.
 
   v2_eval and v2_dev shaped Meshpool's prompts; the other suites did not.
 

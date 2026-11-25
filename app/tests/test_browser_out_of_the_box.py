@@ -111,7 +111,8 @@ def test_a_real_page_opens_from_a_cold_start(tmp_path):
     page.write_text("<html><body><h1>Hello UX</h1><button>Go</button><input aria-label=Name></body></html>")
     code = ("from meshpool_harness.agent import browser_mcp_server as B\n"
             f"print(B.browser_open('file://{page}'))\nprint(B.browser_snapshot())\nB.browser_close()\n")
-    env = dict(os.environ, MESHPOOL_HOME=str(tmp_path / "home"), MH_BROWSER_HEADLESS="1")
+    env = dict(os.environ, MESHPOOL_HOME=str(tmp_path / "home"), MH_BROWSER_HEADLESS="1",
+               MESHPOOL_PROJECT=str(tmp_path))   # the agent browser opens files inside the project only
     r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=240,
                        cwd=str(Path(__file__).resolve().parents[1]))
     assert r.returncode == 0, r.stderr[-400:]

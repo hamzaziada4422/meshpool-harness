@@ -81,7 +81,28 @@ sandbox, loop guards (a call refused or failing repeatedly with nothing changed 
 
 ## Office results
 
-{OFFICE}
+Six runs per task, same model, gateway and hour as Codex (raw rows in `docs/results/release016/office_final6/` on the
+audit branch).
+
+| Suite | Solved, Meshpool vs Codex | Cost per solved vs Codex (95% CI) | Median time vs Codex |
+|---|---|---|---|
+| Office-7 (decks, documents, workbooks) | 42/42 vs 41/42 | 0.94x (0.72-1.18) | 0.76x |
+| SpreadsheetBench (public sample) | 31/36 vs 35/36 | 1.04x (0.68-1.54) | 0.96x |
+| OfficeBench (public sample) | 21/24 vs 24/24 | 0.83x (0.60-1.06) | 0.87x |
+
+Office costs less on Office-7 and OfficeBench, and about the same as Codex on SpreadsheetBench. On spending alone
+Meshpool is close to Codex there; the gap is in tasks solved (31 vs 35), and cost per solved charges every failed run
+to the successes. Four of the five SpreadsheetBench failures are on two tasks: sb-39515, where three runs wrote
+`YEAR(TODAY())-1` for "the previous year (2022)", and sb-56921, the longest task in the suite. The release adds a
+pre-answer check for the first (a workbook formula that calls TODAY() or NOW() when the request names its years). A
+re-run with an earlier version of that fix took sb-39515 from 3 of 6 to 5 of 6, but the whole suite came out at
+29/36 and 1.16x, which is within the run-to-run spread of a 6-task suite: SpreadsheetBench is not yet cheaper than Codex
+per solved task.
+
+Office savings come from the same place as code: a short prompt and only the tools the request needs. Before this
+release, office edits went through Meshpool's deck and spreadsheet engines, which took 33 and 84 calls in two runs of
+a deck task that Codex finished with one Python script. The settings in the Work chats table above make Meshpool write the file the way Codex
+does, and the pre-answer checks and caps stop the re-checking loops that made up most of the remaining extra calls.
 
 ## What did not save money
 
@@ -96,4 +117,6 @@ Measured and dropped or kept off:
 - v2_eval and v2_dev were used while shaping the prompts; the other suites were not.
 - The gateway bills about 2x the list price for this model. The ratios above do not depend on the price level,
   because both agents pay the same prices.
-- Office suites are small (14, 12 and 8 tasks), so their intervals are wide.
+- Office suites are small (7, 6 and 4 tasks, six runs each), so their intervals are wide.
+- The office run was measured before the last review and security fixes (permissions, the app's page token,
+  bounded file checks).

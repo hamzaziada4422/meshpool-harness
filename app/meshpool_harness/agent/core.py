@@ -1256,6 +1256,46 @@ def _off_slide_miss(root, since: float) -> str:
             "check again.")
 
 
+_NOW_WORDS = re.compile(r"\b(?:today|now|current\s+(?:date|day|month|year|time)|this\s+(?:year|month)|"
+                        r"as\s+of\s+(?:today|now)|live\s+date|dynamic)\b", re.I)
+_VOLATILE = re.compile(r"\b(?:TODAY|NOW)\s*\(", re.I)
+
+
+def _volatile_date_miss(asked: str, root, since: float) -> str:
+    """A workbook written this turn whose formulas call TODAY() or NOW() when the request never asks for the current
+    date: as a note; else "". The harness tells the model today's date, and a formula built on it drifts from the
+    years the request names. SpreadsheetBench sb-39515 (f133d912, 6 reps): 3 reps wrote YEAR(TODAY())-1 for "the
+    previous year (2022)", which is 2025 on the day of the run, and all 3 failed; the 3 that kept 2022/2023 passed.
+    Replayed on the 102 office runs of f133d912 it fires on exactly those 3."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    text = str(asked or "").split(_SEP)[0]
+    if _NOW_WORDS.search(text) and not re.search(r"\b(?:19|20)\d{2}\b", text):
+        return ""                              # "today's date": asked for; a named year ("the current year (2023)") wins
+    hits = []
+    try:
+        import openpyxl
+        for f in _recent_office(root, since, ".xlsx"):
+            if "Meshpool outputs" in f.parts:
+                continue
+            wb = openpyxl.load_workbook(f, read_only=True)
+            try:
+                for ws in wb.worksheets:
+                    hit = next((c.coordinate for row in ws.iter_rows() for c in row
+                                if isinstance(getattr(c, "value", None), str) and c.value.startswith("=")
+                                and _VOLATILE.search(c.value)), None)
+                    if hit:
+                        hits.append(f"{f.name}!{ws.title}!{hit}")
+            finally:
+                wb.close()
+    except Exception:  # noqa: BLE001 - a check never breaks the answer
+        return ""
+    if not hits:
+        return ""
+    return ("The job is not done: " + ", ".join(hits[:3]) + " use TODAY() or NOW(), but the request never asks for the "
+            "current date. Put the years, dates and labels the request names into the formula as literal values "
+            "(for example 2022, not YEAR(TODAY())-1), save, and check again.")
+
+
 def _unchanged_output_miss(asked: str, root, since: float) -> str:
     """An edit request whose workbook output, written this turn, holds the same cell values as the input it names:
     as a note; else "". SpreadsheetBench sb-374-31 (4 runs, 0 passes): it read "blank rows above Code" as rows blank
@@ -2398,7 +2438,8 @@ class Agent:
                                            ("total", lambda: _total_row_miss(ask, self.root, t0)),
                                            ("template", lambda: _template_format_miss(ask, self.root, t0)),
                                            ("offslide", lambda: _off_slide_miss(self.root, t0)),
-                                           ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0))):
+                                           ("unchanged", lambda: _unchanged_output_miss(ask, self.root, t0)),
+                                           ("volatile", lambda: _volatile_date_miss(ask, self.root, t0))):
                             if key not in done:
                                 miss = check()
                                 if miss:
