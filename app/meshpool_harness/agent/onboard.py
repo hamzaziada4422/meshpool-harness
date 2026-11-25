@@ -226,14 +226,18 @@ def _key_step(st, header: bool, n: int | None, custom: bool) -> bool:
             _p(f"    {st.green('✓')} Connected. {r['model']} answered in {r['seconds']} s.")
             return True
         msg = r["detail"]
-        if "rejected the API key" in msg or "401" in msg or "403" in msg:
+        # ping() moves the status out of the text ("meshpool HTTP 400: ..." becomes status=400 and the plain words)
+        status = int(r.get("status") or 0)
+        if not status:
+            import re
+            m = re.search(r"HTTP (\d{3})", msg)
+            status = int(m.group(1)) if m else 0
+        if status in (401, 403) or "rejected the API key" in msg:
             _p(st.red("    That key did not work. Check you copied all of it, then paste it again."))
             continue
-        import re
-        m = re.search(r"HTTP (\d{3})", msg)
-        if m and m.group(1) != "000" and int(m.group(1)) != 0:
+        if status:
             # The endpoint answered, so the network is fine: a wrong model id or address, or no quota. Do not save it.
-            _p(st.red(f"    The endpoint answered with an error (HTTP {m.group(1)}): {msg[:200]}"))
+            _p(st.red(f"    The endpoint answered with an error (HTTP {status}): {msg[:200]}"))
             _p(st.dim("    Check the model name and address, then try again."))
             continue
         # The key may be fine and the network is the problem: keep it, say what happened.
@@ -250,7 +254,7 @@ def _use(which: str) -> None:
     HR.use_provider(which)
 
 
-SUBS = {"chatgpt": ("ChatGPT", "ChatGPT Plus, Pro or Business", "@openai/codex@latest")}
+SUBS = {"chatgpt": ("ChatGPT", "ChatGPT Plus, Pro or Business", None)}   # None: the pinned harnesses.CODEX_CLI
 
 
 def sub_step(st, which: str) -> bool:
@@ -259,6 +263,7 @@ def sub_step(st, which: str) -> bool:
     import subprocess
     from meshpool_harness import harnesses as HR
     name, plans, pkg = SUBS[which]
+    pkg = pkg or HR.CODEX_CLI                     # one pinned version, never @latest (PA-core-05)
     login = HR.LOGINS[which]
     if HR.signed_in(login):
         _p(f"    {st.green('✓')} You are already signed in to {name} on this computer.")
