@@ -369,7 +369,7 @@ def test_hidden_notes_do_not_switch_on_office_or_browser_tools(tmp_path, monkeyp
     assert a.browser_on
 
 
-def test_failed_check_note_only_when_the_last_command_failed(tmp_path, monkeypatch):
+def test_failed_check_note_cleared_by_a_later_passing_check(tmp_path, monkeypatch):
     """Office-7 on 1812e40d: an earlier throwaway assert failed, the agent fixed and saved through a script, a later
     check passed, and the note still sent it back (6 of 14 runs). Only a failing last command counts now."""
     import json as _json
@@ -382,7 +382,7 @@ def test_failed_check_note_only_when_the_last_command_failed(tmp_path, monkeypat
     a.set_route(Route(spec="data", family="data", base="work", profile="core", settings=PROF.settings("core")), "x")
     sh = lambda cid, cmd: {"role": "assistant", "content": "", "tool_calls": [{"id": cid, "type": "function",  # noqa: E731
                            "function": {"name": "shell", "arguments": _json.dumps({"command": ["bash", "-lc", cmd]})}}]}
-    replies = iter([sh("c1", "python3 -c 'assert 1 == 2'"), sh("c2", "python3 -c 'print(1)'"),
+    replies = iter([sh("c1", "python3 -c 'assert 1 == 2'"), sh("c2", "python3 -c 'assert 1 == 1'"),
                     {"role": "assistant", "content": "Done."}])
     a._post = lambda base, key, body, stream: ({"choices": [{"message": next(replies), "finish_reason": "stop"}],
                                                 "usage": {"prompt_tokens": 1, "completion_tokens": 1}}, True)

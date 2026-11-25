@@ -2332,14 +2332,17 @@ class Agent:
                         # SpreadsheetBench (38f57ffb), sb-374-31: the agent's own assert failed, it printed the rows
                         # and answered "Done" without changing the file. A failed assertion this turn with no later
                         # save is not a finished job: say so once.
-                        # only the LAST command of the turn counts: an earlier throwaway assert that failed, then a
-                        # fix saved by a script and a passing check, is a finished job (Office-7 on 1812e40d: 6 of 14
-                        # runs sent back by an earlier failed assert, every one a false alarm)
+                        # a failed check counts until a later check passes: an earlier throwaway assert, then a fix
+                        # and a passing check, is a finished job (Office-7 on 1812e40d: 6 of 14 runs sent back, all
+                        # false alarms); a failed assert explained away with no passing check after it is not
+                        # (326cb618, invoices_fx: "my scratch assertion was wrong", and the file was wrong)
                         cmds = self.ws.commands[g.get("cmds0", 0):]
-                        last = cmds[-1] if cmds else {}
-                        if last and last.get("code") not in (0, None) and (
-                                "AssertionError" in str(last.get("tail", ""))
-                                or re.search(r"\bassert\b", str(last.get("cmd", "")))):
+                        checks = lambda c: re.search(r"\bassert\b|\bcheck|\bverify|\bpytest\b",  # noqa: E731
+                                                     str(c.get("cmd", "")), re.I)
+                        bad = [i for i, c in enumerate(cmds) if c.get("code") not in (0, None)
+                               and ("AssertionError" in str(c.get("tail", "")) or re.search(r"\bassert\b",
+                                                                                         str(c.get("cmd", ""))))]
+                        if bad and not any(c.get("code") == 0 and checks(c) for c in cmds[bad[-1] + 1:]):
                             g["office_check_nudged"] = True
                             self.messages.append({"role": "user", "content": (
                                 "[Meshpool] Your own check failed and the file has not been saved "
