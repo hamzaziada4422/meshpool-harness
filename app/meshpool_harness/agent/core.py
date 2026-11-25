@@ -1298,6 +1298,74 @@ def _volatile_date_miss(asked: str, root, since: float) -> str:
             "(for example 2022, not YEAR(TODAY())-1), save, and check again.")
 
 
+_ADD_TEXT = re.compile(r"\b(?:add|insert|append|copy|paste|put|include)\b", re.I)
+_REWORD = re.compile(r"\b(?:summar\w*|rewrite|rephrase|paraphras\w*|translat\w*|condens\w*|shorten|reformat\w*|"
+                     r"cit(?:e|ation)\s+style|apa|mla|chicago|harvard|based on|draft|outline)\b", re.I)
+
+
+def _norm_text(t: str) -> str:
+    """Case, spacing and curly quotes aside: the words in order."""
+    t = str(t or "").replace("\u201c", '"').replace("\u201d", '"').replace("\u2018", "'").replace("\u2019", "'")
+    return " ".join(t.lower().split())
+
+
+def _docx_hidden_text_miss(asked: str, root, since: float) -> str:
+    """A text file the request names, whose text a Word document written this turn does not show: as a note; else "".
+    Two ways it goes missing, both from OfficeBench ob-1-15-2 ("Retrieve reference text from reference.txt and add it
+    to the end of project_report.docx"), 4 of 12 runs on Codex's request, while Codex's 12 runs all appended it as given:
+    - hidden: the text sits only inside a content control (w:sdt, a Word placeholder block), where programs that read
+      the document's paragraphs (python-docx, converters, OfficeBench's grader) do not see it (1 run);
+    - reworded: asked to add the file's text, the run rewrote it in the document's citation style, "Arjovsky, M., Shah,
+      A." for "Martin Arjovsky, Amar Shah" (3 runs). Only when the request says to add, insert, append, copy, paste or put
+      the text and does not ask to summarise, rewrite, translate or restyle it."""
+    from meshpool_harness.capabilities import SEP as _SEP
+    text = str(asked or "").split(_SEP)[0]
+    names = re.findall(r"[\w][\w.()-]*\.(?:txt|md)\b", text)
+    if not names:
+        return ""
+    verbatim = bool(_ADD_TEXT.search(text)) and not _REWORD.search(text)
+    try:
+        import docx
+        snippets = []
+        for n in names[:4]:
+            fp = Path(root) / n
+            if not fp.is_file():
+                hits = list(Path(root).glob(f"*/{n}"))[:1]          # ./data/reference.txt (the task names the file only)
+                fp = hits[0] if hits else fp
+            if fp.is_file() and fp.stat().st_size <= 200_000:
+                body = _norm_text(fp.read_text(errors="replace"))
+                if len(body) >= 15:
+                    snippets.append((fp.name, body[:40]))
+        if not snippets:
+            return ""
+        W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        for f in _recent_office(root, since, ".docx"):
+            d = docx.Document(str(f))
+            seen = [p.text for p in d.paragraphs]
+            for t in d.tables:
+                seen += [c.text for row in t.rows for c in row.cells]
+            visible = _norm_text(" ".join(seen))
+            raw = _norm_text(" ".join("".join(x.text or "" for x in el.iter(W + "t"))
+                                      for el in d.element.body.iter(W + "p")))
+            for src, sn in snippets:
+                if sn in visible:
+                    continue
+                if sn in raw:
+                    return (f"The job is not done: the text from {src} is in {f.name} only inside a content control (a "
+                            "Word placeholder block), so programs that read the document's paragraphs do not see it. Put "
+                            "it in a normal body paragraph where the request says (for the end of the document: after "
+                            "the last paragraph of the body, outside any content control), save, and check that "
+                            "python-docx's Document(...).paragraphs shows it.")
+                if verbatim:
+                    return (f"The job is not done: the request asks to add the text of {src}, and {f.name} does not "
+                            f"contain it as {src} gives it (it was reworded or restyled). Put the text in exactly as the "
+                            "file has it, in a normal body paragraph where the request says, save, and check that "
+                            "python-docx's Document(...).paragraphs shows it.")
+    except Exception:  # noqa: BLE001 - a check never breaks the answer
+        return ""
+    return ""
+
+
 def _unchanged_output_miss(asked: str, root, since: float) -> str:
     """An edit request whose workbook output, written this turn, holds the same cell values as the input it names:
     as a note; else "". SpreadsheetBench sb-374-31 (4 runs, 0 passes): it read "blank rows above Code" as rows blank
@@ -2599,6 +2667,16 @@ class Agent:
                                     done.add(key)
                                     break
                         if miss:
+                            self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
+                            continue
+                    if (getattr(self, "office_c171", False) or self._office_direct()) \
+                            and os.environ.get("MH_OFFICE_FINISH_CHECK", "1") != "0" \
+                            and "hidden" not in g.setdefault("office_checks", set()):
+                        # on Codex's request too: it speaks only when the file is wrong for every reader that goes by
+                        # the document's paragraphs (OfficeBench ob-1-15-2, 4 of 12 runs)
+                        miss = _docx_hidden_text_miss(getattr(self, "_asked_text", ""), self.root, g.get("t0", 0))
+                        if miss:
+                            g["office_checks"].add("hidden")
                             self.messages.append({"role": "user", "content": "[Meshpool] " + miss})
                             continue
                     route = getattr(self, "route", None)
